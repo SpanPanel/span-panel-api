@@ -1,0 +1,61 @@
+version: 2
+updates:
+  # Enable version updates for Python dependencies
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    allow:
+      - dependency-type: "all"
+    groups:
+      # Group development dependencies together
+      dev-dependencies:
+        patterns:
+          - "pytest*"
+          - "mypy"
+          - "ruff"
+          - "black"
+          - "pre-commit"
+          - "isort"
+          - "twine"
+          - "*-cov"
+      # Group documentation dependencies
+      docs-dependencies:
+        patterns:
+          - "mkdocs*"
+          - "mkdocstrings"
+      # Group core runtime dependencies
+      runtime-dependencies:
+        patterns:
+          - "httpx"
+          - "pydantic"
+          - "typing-extensions"
+    reviewers:
+      - "cayossarian"
+    assignees:
+      - "cayossarian"
+
+  # Enable version updates for Python dependencies (generated client)
+  - package-ecosystem: "pip"
+    directory: "/generated_client"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    allow:
+      - dependency-type: "all"
+    reviewers:
+      - "cayossarian"
+    assignees:
+      - "cayossarian"
+
+  # Enable version updates for GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "cayossarian"
+    assignees:
+      - "cayossarian"

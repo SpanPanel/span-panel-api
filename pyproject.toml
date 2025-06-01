@@ -1,0 +1,115 @@
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "span-panel-api"
+version = "0.1.0"
+description = "Python client library for SPAN Panel REST API"
+authors = ["SPANPanel Integration Team"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/SpanPanel/span-panel-api"
+repository = "https://github.com/SpanPanel/span-panel-api"
+documentation = "https://github.com/SpanPanel/span-panel-api"
+keywords = [
+    "span",
+    "electrical",
+    "smart-panel",
+    "home-automation",
+    "api-client",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+packages = [{include = "span_panel_api", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+httpx = "^0.28.1"
+pydantic = "^2.11.5"  # This will resolve to the latest compatible version
+typing-extensions = "^4.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-asyncio = "^1.0.0"
+pytest-httpx = "^0.35.0"
+pytest-cov = "^6.0.0"
+mypy = "^1.0.0"
+ruff = "^0.11.12"
+black = "^25.1.0"
+pre-commit = "^4.2.0"
+isort = "^6.0.1"
+twine = "^6.0.0"
+
+[tool.poetry.group.docs.dependencies]
+mkdocs = "^1.6.0"
+mkdocs-material = "^9.0.0"
+mkdocstrings = {extras = ["python"], version = "^0.29.0"}
+
+[tool.poetry.group.generate.dependencies]
+datamodel-code-generator = "^0.30.1"
+openapi-generator-cli = "^7.0.0"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "F",  # pyflakes
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501", # line too long, handled by black
+    "E",    # all pycodestyle errors, handled by black
+    "W",    # all pycodestyle warnings, handled by black
+    "B008", # do not perform function calls in argument defaults
+    "C901", # too complex
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"generated_client/**" = ["ALL"]  # Ignore all rules for generated client
+
+[tool.black]
+target-version = ["py311"]
+line-length = 88
+
+[tool.mypy]
+python_version = "3.11"
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--disable-warnings",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", "generated_client"]
+skips = ["B101"]  # Skip assert_used test

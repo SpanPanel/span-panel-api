@@ -18,6 +18,9 @@ python-dateutil = "^2.8.0"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
 pytest-asyncio = "^0.21.0"
+pytest-cov = "^6.0.0"
+bandit = "^1.8.0"
+twine = "^5.0.0"
 pre-commit = "^3.0.0"
 ruff = "^0.11.0"
 mypy = "^1.15.0"
@@ -59,3 +62,31 @@ ignore_missing_imports = true
 module = "span_panel_api.generated_client.*"
 follow_imports = "skip"
 ignore_errors = true
+
+[tool.coverage.run]
+source = ["src/span_panel_api"]
+omit = [
+    "src/span_panel_api/generated_client/*",
+    "tests/*",
+    "*/tests/*",
+    "*/.venv/*",
+    "*/venv/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.bandit]
+# Security linter configuration
+exclude_dirs = ["tests", "src/span_panel_api/generated_client"]

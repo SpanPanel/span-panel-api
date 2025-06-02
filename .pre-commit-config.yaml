@@ -44,7 +44,7 @@ repos:
     rev: v0.11.12
     hooks:
       # Run the linter only
-      - id: ruff
+      - id: ruff-check
         args: ['--fix']
         exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
 
@@ -77,3 +77,15 @@ repos:
       - id: poetry-check
       - id: poetry-lock
         args: ['--check']
+
+  # Quick coverage check (total only, no details)
+  - repo: local
+    hooks:
+      - id: pytest-cov-summary
+        name: coverage summary
+        entry: bash
+        language: system
+        args: ['-c', 'output=$(poetry run pytest tests/ --cov=src/span_panel_api --cov-config=pyproject.toml -q 2>&1); if echo "$output" | grep -q "FAILED"; then echo "$output"; exit 1; else echo "$output" | grep -E "(passed|TOTAL)" | tr "\n" " " | sed "s/=*//g"; echo; fi']
+        pass_filenames: false
+        always_run: true
+        verbose: true

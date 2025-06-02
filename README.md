@@ -121,9 +121,24 @@ status = asyncio.run(get_status())
 2. **Regenerate Client**: Run `poetry run python generate_client.py`
 3. **Update Wrapper**: Modify `src/span_panel_api/` if needed (⚠️ currently needs updating for httpx client)
 4. **Test**: Run tests with `poetry run pytest`
-5. **Build**: Create package with `poetry build`
+5. **Coverage**: Check test coverage (see below)
+6. **Build**: Create package with `poetry build`
 
-> **Note**: The wrapper client in `src/span_panel_api/` was written for the previous urllib3-based generated client and needs updating to work with the new httpx-based client. For now, use the generated client directly from `generated_client/`.
+### Coverage Commands
+
+```bash
+# Quick coverage check (minimal output)
+python scripts/coverage.py
+
+# Full detailed coverage report with missing lines
+python scripts/coverage.py --full
+
+# Just check if coverage meets threshold (80% default)
+python scripts/coverage.py --check
+
+# Custom threshold
+python scripts/coverage.py --check --threshold 90
+```
 
 ## Advanced Configuration
 

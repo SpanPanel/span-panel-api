@@ -16,12 +16,12 @@ attrs = ">=22.2.0"
 python-dateutil = "^2.8.0"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.0.0"
-pytest-asyncio = "^0.21.0"
+pytest = "^8.4.0"
+pytest-asyncio = "^0.26.0"
 pytest-cov = "^6.0.0"
 bandit = "^1.8.0"
-twine = "^5.0.0"
-pre-commit = "^3.0.0"
+twine = "^6.1.0"
+pre-commit = "^4.2.0"
 ruff = "^0.11.0"
 mypy = "^1.15.0"
 

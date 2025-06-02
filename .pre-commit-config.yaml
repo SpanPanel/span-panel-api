@@ -4,15 +4,23 @@ repos:
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
       - id: end-of-file-fixer
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
       - id: check-yaml
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
       - id: check-toml
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
       - id: check-json
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
       - id: check-added-large-files
       - id: check-merge-conflict
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
       - id: debug-statements
+        exclude: '^src/span_panel_api/generated_client/.*|tests/.*|\..*_cache/.*|dist/.*|venv/.*'
       - id: mixed-line-ending
         args: ['--fix=lf']
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # Black for code formatting
   - repo: https://github.com/psf/black
@@ -21,6 +29,7 @@ repos:
       - id: black
         language_version: python3
         args: ['--line-length=88']
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # isort for import sorting
   - repo: https://github.com/pycqa/isort
@@ -28,6 +37,7 @@ repos:
     hooks:
       - id: isort
         args: ['--profile=black', '--line-length=88']
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # Ruff for linting only (Black handles formatting)
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -36,6 +46,7 @@ repos:
       # Run the linter only
       - id: ruff
         args: ['--fix']
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # MyPy for type checking
   - repo: https://github.com/pre-commit/mirrors-mypy
@@ -47,8 +58,8 @@ repos:
           - pydantic
           - typing-extensions
           - pytest
-        args: ['--ignore-missing-imports']
-        exclude: ^(generated_client/|tests/|docs/)
+        args: ['--ignore-missing-imports', '--config-file=pyproject.toml']
+        exclude: '^src/span_panel_api/generated_client/.*|tests/.*|docs/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # Check for common security issues
   - repo: https://github.com/PyCQA/bandit
@@ -57,7 +68,7 @@ repos:
       - id: bandit
         args: ['-c', 'pyproject.toml']
         additional_dependencies: ['bandit[toml]']
-        exclude: ^(tests/|generated_client/)
+        exclude: '^tests/.*|^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # Poetry check for pyproject.toml validation
   - repo: https://github.com/python-poetry/poetry

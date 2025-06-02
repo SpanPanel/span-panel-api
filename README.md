@@ -1,159 +1,202 @@
-# span-panel-api - SPAN Panel API Client
+# SPAN Panel OpenAPI Client
 
-A modern, type-safe Python client library for the SPAN Panel REST API.
+A modern httpx-based Python client library for accessing the SPAN Panel API, generated from OpenAPI specifications.
 
-[![PyPI version](https://badge.fury.io/py/span-panel-api.svg)](https://badge.fury.io/py/span-panel-api)
-[![GitHub license](https://img.shields.io/github/license/SpanPanel/span-panel-api.svg)](https://github.com/SpanPanel/span-panel-api/blob/main/LICENSE)
-[![Python Versions](https://img.shields.io/pypi/pyversions/span-panel-api.svg)](https://pypi.org/project/span-panel-api/)
+## Development Setup
 
-## About
+### Prerequisites
+- Python 3.11+
+- [Poetry](https://python-poetry.org/) for dependency management
 
-The `span-panel-api` is a Python client library for interacting with SPAN smart electrical panels. It's maintained by the [SpanPanel](https://github.com/SpanPanel) organization.
+### 1. Install Dependencies
 
-[![PyPI Downloads](https://img.shields.io/pypi/dm/span-panel-api.svg)](https://pypi.org/project/span-panel-api/)
-[![GitHub Stars](https://img.shields.io/github/stars/SpanPanel/span-panel-api.svg)](https://github.com/SpanPanel/span-panel-api/stargazers)
-[![GitHub Issues](https://img.shields.io/github/issues/SpanPanel/span-panel-api.svg)](https://github.com/SpanPanel/span-panel-api/issues)
-
-## Features
-
-- **Type Safety**: Full Pydantic models generated from OpenAPI specification
-- **Async Support**: Built on httpx for high-performance async operations
-- **Validation**: Automatic request/response validation
-
-## Installation
-
-### From PyPI (Recommended)
+First, install the project dependencies using Poetry:
 
 ```bash
-# Install from PyPI
-pip install span-panel-api
+# Install all dependencies including development tools
+poetry install
+
+# Install with specific groups
+poetry install --with dev,generate
 ```
 
-### From GitHub (Latest Development Version)
+### 2. Generate the Client
+
+The client is generated from the OpenAPI specification using `openapi-python-client`. Use the provided generation script:
 
 ```bash
-# Install the latest development version
-pip install git+https://github.com/SpanPanel/span-panel-api.git
+# Generate the httpx-based client from openapi.json
+poetry run python generate_client.py
 ```
 
-### For Development
+This will:
+- Clean any existing `generated_client/` directory
+- Generate a new httpx-based client in `generated_client/`
+- Handle naming conflicts and formatting issues automatically
+
+### 3. Build the Package
+
+After generation, you can build the package:
 
 ```bash
-# Clone the repository
-git clone https://github.com/SpanPanel/span-panel-api.git
-cd span-panel-api
+# Build wheel and source distribution
+poetry build
 
-# Install with Poetry
+# Install in development mode
 poetry install
 ```
 
-## Quick Start
+## Project Structure
+
+```
+span_openapi/
+├── generate_client.py          # Root generation script
+├── generated_client/           # Raw OpenAPI generated files (httpx-based)
+│   ├── client.py              # Client and AuthenticatedClient classes
+│   ├── api/default/           # API endpoint functions
+│   ├── models/                # Pydantic data models
+│   └── types.py               # Type definitions
+├── src/span_panel_api/        # Wrapper client library
+├── tests/                     # Test files
+├── openapi.json               # OpenAPI specification
+└── pyproject.toml             # Poetry configuration
+```
+
+## Usage
+
+### Basic Client Usage
+
+```python
+from generated_client import Client
+
+client = Client(base_url="https://your-span-panel.local")
+```
+
+For authenticated endpoints, use `AuthenticatedClient`:
+
+```python
+from generated_client import AuthenticatedClient
+
+client = AuthenticatedClient(
+    base_url="https://your-span-panel.local",
+    token="your-api-token"
+)
+```
+
+### API Calls
+
+All API endpoints are available as functions with both sync and async variants:
+
+```python
+from generated_client.api.default import system_status_api_v1_status_get
+
+# Synchronous
+with client as client:
+    status = system_status_api_v1_status_get.sync(client=client)
+
+    # Or with detailed response info
+    response = system_status_api_v1_status_get.sync_detailed(client=client)
+    print(f"Status: {response.status_code}")
+    print(f"Data: {response.parsed}")
+```
+
+### Async Usage
 
 ```python
 import asyncio
-from span_panel_api import SpanPanelClient
+from generated_client.api.default import system_status_api_v1_status_get
 
-async def main():
-    async with SpanPanelClient("192.168.1.100") as client:
-        # Authenticate
-        token = await client.authenticate("my-client", "Description")
+async def get_status():
+    async with client as client:
+        status = await system_status_api_v1_status_get.asyncio(client=client)
+        return status
 
-        # Get panel status
-        status = await client.get_status()
-        print(f"Panel: {status.system.manufacturer} {status.system.model}")
-
-        # Get all circuits
-        circuits = await client.get_circuits()
-        for circuit_id, circuit in circuits.circuits.items():
-            print(f"Circuit {circuit_id}: {circuit.name} - {circuit.instant_power_w}W")
-
-asyncio.run(main())
+# Run async function
+status = asyncio.run(get_status())
 ```
 
-## API Coverage
+## Development Workflow
 
-This client provides access to a range of SPAN Panel REST API endpoints (some API's may be restricted based on proper authentication):
+1. **Update OpenAPI Spec**: Update `openapi.json` with latest API changes
+2. **Regenerate Client**: Run `poetry run python generate_client.py`
+3. **Update Wrapper**: Modify `src/span_panel_api/` if needed (⚠️ currently needs updating for httpx client)
+4. **Test**: Run tests with `poetry run pytest`
+5. **Build**: Create package with `poetry build`
 
-### Authentication
+> **Note**: The wrapper client in `src/span_panel_api/` was written for the previous urllib3-based generated client and needs updating to work with the new httpx-based client. For now, use the generated client directly from `generated_client/`.
 
-- Register new API clients
-- Manage existing clients
+## Advanced Configuration
 
-### Panel Operations
+### SSL Configuration
 
-- System status and hardware info
-- Real-time power and energy data
-- Main relay control
-- Emergency reconnect
+```python
+from generated_client import AuthenticatedClient
 
-### Circuit Management
+# Custom certificate bundle
+client = AuthenticatedClient(
+    base_url="https://your-span-panel.local",
+    token="your-token",
+    verify_ssl="/path/to/certificate_bundle.pem",
+)
 
-- Get all circuits and individual circuit data
-- Control circuit relays and priorities
-- Power consumption and production monitoring
+# Disable SSL verification (not recommended for production)
+client = AuthenticatedClient(
+    base_url="https://your-span-panel.local",
+    token="your-token",
+    verify_ssl=False
+)
+```
 
-### Storage & Battery
+### Custom httpx Configuration
 
-- Battery state of energy (SOE)
-- Storage thresholds configuration
+```python
+from generated_client import Client
 
-### Network Features
+client = Client(
+    base_url="https://your-span-panel.local",
+    httpx_args={
+        "timeout": 30.0,
+        "event_hooks": {
+            "request": [lambda req: print(f"Request: {req.method} {req.url}")],
+            "response": [lambda resp: print(f"Response: {resp.status_code}")]
+        }
+    },
+)
+```
 
-- WiFi scanning and configuration
-- Network connectivity status
-- Grid islanding state detection
+## API Reference
 
-## Development
+The generated client provides:
 
-### Setting Up Local Development Environment
+- **Client Classes**: `Client` and `AuthenticatedClient` for different authentication needs
+- **API Functions**: Located in `generated_client.api.default.*` with sync/async variants
+- **Models**: Pydantic models in `generated_client.models.*` for type-safe data handling
+- **Types**: Common types and response wrappers in `generated_client.types`
+
+Each API function provides four variants:
+1. `sync()`: Blocking request returning parsed data or None
+2. `sync_detailed()`: Blocking request returning full Response object
+3. `asyncio()`: Async version of sync()
+4. `asyncio_detailed()`: Async version of sync_detailed()
+
+## Building / Publishing
+
+This project uses [Poetry](https://python-poetry.org/) for dependency management and packaging:
 
 ```bash
-# Clone the repository
-git clone https://github.com/SpanPanel/span-panel-api.git
-cd span-panel-api
-
-# Install development dependencies
-poetry install
-
-# Install pre-commit hooks
-poetry run pre-commit install
+# Update version in pyproject.toml, then:
+poetry build
+poetry publish  # For PyPI
+# or
+poetry publish -r your-private-repo  # For private repository
 ```
 
-### Development Workflow
-
-The client models are generated from the OpenAPI specification. After making changes to the OpenAPI spec:
+For development installation in other projects:
 
 ```bash
-# Regenerate models from OpenAPI specification
-poetry run openapi-generator-cli generate -i openapi.json -g python -o generated_client
+# In target project using Poetry:
+poetry add /path/to/span_openapi
 
-# Run the test suite
-poetry run pytest
-
-# Check code quality
-poetry run mypy src/
-poetry run ruff check src/
+# Or install wheel directly:
+pip install dist/span_openapi-*.whl
 ```
-
-## Requirements
-
-- Python 3.11+
-- httpx 0.28.1+
-- pydantic 2.11.5+
-- typing-extensions 4.0.0+
-
-## License
-
-MIT License - see [LICENSE](https://github.com/SpanPanel/span-panel-api/blob/main/LICENSE) file for details.
-
-## Issues
-
-If you encounter any issues or have feature requests, please [open an issue](https://github.com/SpanPanel/span-panel-api/issues) on our GitHub repository.
-
-## Disclaimer
-
-This is an independent client library not officially affiliated with or endorsed by SPAN.IO Inc. The span-panel-api library is based on the SPAN Panel OpenAPI.
-
-### No Warranty
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

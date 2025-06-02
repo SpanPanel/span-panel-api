@@ -1,12 +1,12 @@
-"""High-level async client for SPAN Panel API."""
+"""SPAN Panel API Client.
+
+This module provides a high-level async client for the SPAN Panel REST API.
+It wraps the generated OpenAPI client to provide a more convenient interface.
+"""
 
 from __future__ import annotations
 
-import os
-import sys
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -17,30 +17,34 @@ from .exceptions import (
     SpanPanelTimeoutError,
 )
 
-# Add the generated client to the path
-generated_client_path = os.path.join(
-    os.path.dirname(__file__), "..", "..", "generated_client"
-)
-sys.path.insert(0, os.path.abspath(generated_client_path))
-
 try:
-    from span_panel_api_client import ApiClient, Configuration
-    from span_panel_api_client.api.default_api import DefaultApi
-    from span_panel_api_client.models import (
+    from .generated_client import AuthenticatedClient, Client
+    from .generated_client.api.default import (
+        generate_jwt_api_v1_auth_register_post,
+        get_circuits_api_v1_circuits_get,
+        get_panel_state_api_v1_panel_get,
+        get_storage_soe_api_v1_storage_soe_get,
+        set_circuit_state_api_v_1_circuits_circuit_id_post,
+        system_status_api_v1_status_get,
+    )
+    from .generated_client.models import (
         AuthIn,
         AuthOut,
-        CircuitNameIn,
+        BatteryStorage,
+        BodySetCircuitStateApiV1CircuitsCircuitIdPost,
         CircuitsOut,
+        PanelState,
+        Priority,
         PriorityIn,
+        RelayState,
         RelayStateIn,
         StatusOut,
-        WifiConnectIn,
-        WifiScanOut,
     )
+    from .generated_client.models.http_validation_error import HTTPValidationError
 except ImportError as e:
     raise ImportError(
         f"Could not import the generated client: {e}. "
-        "Make sure the generated_client directory is present in the project root."
+        "Make sure the generated_client is properly installed as part of span_panel_api."
     ) from e
 
 
@@ -48,7 +52,7 @@ class SpanPanelClient:
     """Modern async client for SPAN Panel REST API.
 
     This client provides a clean, async interface to the SPAN Panel API
-    using the generated OpenAPI client as the underlying transport.
+    using the generated httpx-based OpenAPI client as the underlying transport.
 
     Example:
         async with SpanPanelClient("192.168.1.100") as client:
@@ -61,7 +65,7 @@ class SpanPanelClient:
 
             # Get circuits
             circuits = await client.get_circuits()
-            for circuit_id, circuit in circuits.circuits.items():
+            for circuit_id, circuit in circuits.circuits.additional_properties.items():
                 print(f"{circuit.name}: {circuit.instant_power_w}W")
     """
 
@@ -89,35 +93,35 @@ class SpanPanelClient:
         scheme = "https" if use_ssl else "http"
         self._base_url = f"{scheme}://{host}:{port}"
 
-        # Generated API client components
-        self._config: Configuration | None = None
-        self._api_client: ApiClient | None = None
-        self._api: DefaultApi | None = None
+        # HTTP client - starts as unauthenticated, upgrades to authenticated after login
+        self._client: Client | AuthenticatedClient | None = None
         self._access_token: str | None = None
 
-    @asynccontextmanager
-    async def _get_api(self) -> AsyncGenerator[DefaultApi, None]:
-        """Get the API client, initializing if needed."""
-        if self._api is None:
-            self._config = Configuration(host=self._base_url)
-            if self._access_token:
-                self._config.access_token = self._access_token
+    def _get_client(self) -> AuthenticatedClient | Client:
+        """Get the appropriate HTTP client based on whether we have an access token."""
+        if self._access_token:
+            # We have a token, use authenticated client
+            if self._client is None or not isinstance(
+                self._client, AuthenticatedClient
+            ):
+                self._client = AuthenticatedClient(
+                    base_url=self._base_url,
+                    token=self._access_token,
+                    timeout=httpx.Timeout(self._timeout),
+                    verify_ssl=self._use_ssl,
+                )
+            return self._client
+        else:
+            # No token, use unauthenticated client
+            return self._get_unauthenticated_client()
 
-            self._api_client = ApiClient(self._config)
-            self._api = DefaultApi(self._api_client)
-
-        try:
-            yield self._api
-        except httpx.ConnectError as e:
-            raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
-        except httpx.TimeoutException as e:
-            raise SpanPanelTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from e
-        except Exception as e:
-            if "401" in str(e) or "Unauthorized" in str(e):
-                raise SpanPanelAuthError("Authentication failed") from e
-            raise SpanPanelAPIError(f"API error: {e}") from e
+    def _get_unauthenticated_client(self) -> Client:
+        """Get an unauthenticated client for operations that don't require auth."""
+        return Client(
+            base_url=self._base_url,
+            timeout=httpx.Timeout(self._timeout),
+            verify_ssl=self._use_ssl,
+        )
 
     async def __aenter__(self) -> SpanPanelClient:
         """Async context manager entry."""
@@ -129,14 +133,40 @@ class SpanPanelClient:
 
     async def close(self) -> None:
         """Close the client and cleanup resources."""
-        if self._api_client:
-            await self._api_client.close()
+        if self._client:
+            # The generated client has async context manager support
+            try:
+                await self._client.__aexit__(None, None, None)
+            except Exception:  # nosec B110
+                # Ignore errors during cleanup
+                pass
+            self._client = None
 
     def set_access_token(self, token: str) -> None:
         """Set the access token for API authentication."""
         self._access_token = token
-        if self._config:
-            self._config.access_token = token
+        # Reset client to force recreation with new token
+        self._client = None
+
+    def _get_client_for_endpoint(
+        self, requires_auth: bool = True
+    ) -> AuthenticatedClient | Client:
+        """Get the appropriate client for an endpoint.
+
+        Args:
+            requires_auth: Whether the endpoint requires authentication
+
+        Returns:
+            AuthenticatedClient if authentication is required or available,
+            Client if no authentication is needed
+        """
+        if requires_auth and not self._access_token:
+            # Endpoint requires auth but we don't have a token
+            raise SpanPanelAuthError(
+                "This endpoint requires authentication. Call authenticate() first."
+            )
+
+        return self._get_client()
 
     # Authentication Methods
     async def authenticate(self, name: str, description: str = "") -> AuthOut:
@@ -149,51 +179,131 @@ class SpanPanelClient:
         Returns:
             AuthOut containing access token
         """
-        async with self._get_api() as api:
+        # Use authenticated client (with empty token) for registration
+        client = self._get_client()
+        async with client:
             auth_in = AuthIn(name=name, description=description)
-            response = await api.generate_jwt_api_v1_auth_register_post(auth_in)
-
-            # Store the token for future requests
-            self.set_access_token(response.access_token)
-            return response
+            try:
+                # Type cast needed because generated API has overly strict type hints
+                response = await generate_jwt_api_v1_auth_register_post.asyncio(
+                    client=cast(AuthenticatedClient, client), body=auth_in
+                )
+                # Handle response - could be AuthOut, HTTPValidationError, or None
+                if response is None:
+                    raise SpanPanelAPIError("Authentication failed - no response")
+                elif isinstance(response, HTTPValidationError):
+                    raise SpanPanelAPIError(
+                        f"Validation error during authentication: {response}"
+                    )
+                elif hasattr(response, "access_token"):
+                    # Store the token for future requests (works for both AuthOut and mocks)
+                    self.set_access_token(response.access_token)
+                    return response
+                else:
+                    raise SpanPanelAPIError(
+                        f"Unexpected response type: {type(response)}"
+                    )
+            except httpx.ConnectError as e:
+                raise SpanPanelConnectionError(
+                    f"Failed to connect to {self._host}"
+                ) from e
+            except httpx.TimeoutException as e:
+                raise SpanPanelTimeoutError(
+                    f"Request timed out after {self._timeout}s"
+                ) from e
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e):
+                    raise SpanPanelAuthError("Authentication failed") from e
+                raise SpanPanelAPIError(f"API error: {e}") from e
 
     # Panel Status and Info
-    async def get_status(self) -> StatusOut:
-        """Get complete panel system status."""
-        async with self._get_api() as api:
-            return await api.system_status_api_v1_status_get()
+    async def get_status(self) -> StatusOut | None:
+        """Get complete panel system status (does not require authentication)."""
+        client = self._get_client_for_endpoint(requires_auth=False)
+        async with client:
+            try:
+                # Status endpoint works with both authenticated and unauthenticated clients
+                return await system_status_api_v1_status_get.asyncio(
+                    client=cast(AuthenticatedClient, client)
+                )
+            except httpx.ConnectError as e:
+                raise SpanPanelConnectionError(
+                    f"Failed to connect to {self._host}"
+                ) from e
+            except httpx.TimeoutException as e:
+                raise SpanPanelTimeoutError(
+                    f"Request timed out after {self._timeout}s"
+                ) from e
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e):
+                    raise SpanPanelAuthError("Authentication required") from e
+                raise SpanPanelAPIError(f"API error: {e}") from e
 
-    async def get_panel_state(self) -> Any:
-        """Get detailed panel state including power and energy data."""
-        async with self._get_api() as api:
-            return await api.get_panel_state_api_v1_panel_get()
+    async def get_panel_state(self) -> PanelState | None:
+        """Get panel state information."""
+        client = self._get_client()
+        async with client:
+            try:
+                # Type cast needed because generated API has overly strict type hints
+                return await get_panel_state_api_v1_panel_get.asyncio(
+                    client=cast(AuthenticatedClient, client)
+                )
+            except httpx.ConnectError as e:
+                raise SpanPanelConnectionError(
+                    f"Failed to connect to {self._host}"
+                ) from e
+            except httpx.TimeoutException as e:
+                raise SpanPanelTimeoutError(
+                    f"Request timed out after {self._timeout}s"
+                ) from e
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e):
+                    raise SpanPanelAuthError("Authentication required") from e
+                raise SpanPanelAPIError(f"API error: {e}") from e
 
-    async def get_panel_power(self) -> Any:
-        """Get current panel power measurements."""
-        async with self._get_api() as api:
-            return await api.get_panel_power_api_v1_panel_power_get()
-
-    async def get_panel_meter(self) -> Any:
-        """Get panel meter energy data."""
-        async with self._get_api() as api:
-            return await api.get_panel_meter_api_v1_panel_meter_get()
-
-    # Circuit Management
-    async def get_circuits(self) -> CircuitsOut:
+    async def get_circuits(self) -> CircuitsOut | None:
         """Get all circuits and their current state."""
-        async with self._get_api() as api:
-            return await api.get_circuits_api_v1_circuits_get()
+        client = self._get_client()
+        async with client:
+            try:
+                # Type cast needed because generated API has overly strict type hints
+                return await get_circuits_api_v1_circuits_get.asyncio(
+                    client=cast(AuthenticatedClient, client)
+                )
+            except httpx.ConnectError as e:
+                raise SpanPanelConnectionError(
+                    f"Failed to connect to {self._host}"
+                ) from e
+            except httpx.TimeoutException as e:
+                raise SpanPanelTimeoutError(
+                    f"Request timed out after {self._timeout}s"
+                ) from e
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e):
+                    raise SpanPanelAuthError("Authentication required") from e
+                raise SpanPanelAPIError(f"API error: {e}") from e
 
-    async def get_circuit(self, circuit_id: str) -> Any:
-        """Get specific circuit information.
-
-        Args:
-            circuit_id: Circuit identifier
-        """
-        async with self._get_api() as api:
-            return await api.get_circuit_state_api_v1_circuits_circuit_id_get(
-                circuit_id
-            )
+    async def get_storage_soe(self) -> BatteryStorage | None:
+        """Get storage state of energy (SOE) data."""
+        client = self._get_client()
+        async with client:
+            try:
+                # Type cast needed because generated API has overly strict type hints
+                return await get_storage_soe_api_v1_storage_soe_get.asyncio(
+                    client=cast(AuthenticatedClient, client)
+                )
+            except httpx.ConnectError as e:
+                raise SpanPanelConnectionError(
+                    f"Failed to connect to {self._host}"
+                ) from e
+            except httpx.TimeoutException as e:
+                raise SpanPanelTimeoutError(
+                    f"Request timed out after {self._timeout}s"
+                ) from e
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e):
+                    raise SpanPanelAuthError("Authentication required") from e
+                raise SpanPanelAPIError(f"API error: {e}") from e
 
     async def set_circuit_relay(self, circuit_id: str, state: str) -> Any:
         """Control circuit relay state.
@@ -202,112 +312,73 @@ class SpanPanelClient:
             circuit_id: Circuit identifier
             state: Relay state ("OPEN" or "CLOSED")
         """
-        async with self._get_api() as api:
-            relay_in = RelayStateIn(relay_state=state)
-            body = {"relayStateIn": relay_in}
-            return await api.set_circuit_state_api_v1_circuits_circuit_id_post(
-                circuit_id, body
-            )
+        client = self._get_client()
+        async with client:
+            try:
+                # Convert string to enum
+                relay_state = (
+                    RelayState.OPEN if state.upper() == "OPEN" else RelayState.CLOSED
+                )
+                relay_in = RelayStateIn(relay_state=relay_state)
+
+                # Create the body object with just the relay state
+                body = BodySetCircuitStateApiV1CircuitsCircuitIdPost(
+                    relay_state_in=relay_in
+                )
+
+                # Type cast needed because generated API has overly strict type hints
+                return await set_circuit_state_api_v_1_circuits_circuit_id_post.asyncio(
+                    client=cast(AuthenticatedClient, client),
+                    circuit_id=circuit_id,
+                    body=body,
+                )
+            except httpx.ConnectError as e:
+                raise SpanPanelConnectionError(
+                    f"Failed to connect to {self._host}"
+                ) from e
+            except httpx.TimeoutException as e:
+                raise SpanPanelTimeoutError(
+                    f"Request timed out after {self._timeout}s"
+                ) from e
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e):
+                    raise SpanPanelAuthError("Authentication required") from e
+                raise SpanPanelAPIError(f"API error: {e}") from e
 
     async def set_circuit_priority(self, circuit_id: str, priority: str) -> Any:
-        """Set circuit priority level.
+        """Set circuit priority.
 
         Args:
             circuit_id: Circuit identifier
-            priority: Priority level ("MUST_HAVE", "NICE_TO_HAVE", "NON_ESSENTIAL")
+            priority: Priority level
         """
-        async with self._get_api() as api:
-            priority_in = PriorityIn(priority=priority)
-            body = {"priorityIn": priority_in}
-            return await api.set_circuit_state_api_v1_circuits_circuit_id_post(
-                circuit_id, body
-            )
+        client = self._get_client()
+        async with client:
+            try:
+                # Convert string to enum - handle various priority formats
+                priority_enum = Priority(priority.upper())
+                priority_in = PriorityIn(priority=priority_enum)
 
-    async def set_circuit_name(self, circuit_id: str, name: str) -> Any:
-        """Set circuit name.
+                # Create the body object with just the priority
+                body = BodySetCircuitStateApiV1CircuitsCircuitIdPost(
+                    priority_in=priority_in
+                )
 
-        Args:
-            circuit_id: Circuit identifier
-            name: New circuit name
-        """
-        async with self._get_api() as api:
-            name_in = CircuitNameIn(name=name)
-            body = {"circuitNameIn": name_in}
-            return await api.set_circuit_state_api_v1_circuits_circuit_id_post(
-                circuit_id, body
-            )
-
-    # Main Panel Control
-    async def get_main_relay_state(self) -> Any:
-        """Get main panel relay state."""
-        async with self._get_api() as api:
-            return await api.get_main_relay_state_api_v1_panel_grid_get()
-
-    async def set_main_relay_state(self, state: str) -> Any:
-        """Set main panel relay state.
-
-        Args:
-            state: Relay state ("OPEN" or "CLOSED")
-        """
-        async with self._get_api() as api:
-            relay_in = RelayStateIn(relay_state=state)
-            return await api.set_main_relay_state_api_v1_panel_grid_post(relay_in)
-
-    async def emergency_reconnect(self) -> Any:
-        """Run emergency reconnect procedure."""
-        async with self._get_api() as api:
-            return (
-                await api.run_panel_emergency_reconnect_api_v1_panel_emergency_reconnect_post()
-            )
-
-    # Storage / Battery
-    async def get_storage_soe(self) -> Any:
-        """Get battery state of energy."""
-        async with self._get_api() as api:
-            return await api.get_storage_soe_api_v1_storage_soe_get()
-
-    async def get_storage_thresholds(self) -> Any:
-        """Get storage nice-to-have thresholds."""
-        async with self._get_api() as api:
-            return (
-                await api.get_storage_nice_to_have_threshold_api_v1_storage_nice_to_have_thresh_get()
-            )
-
-    # WiFi Management
-    async def scan_wifi(self) -> WifiScanOut:
-        """Scan for available WiFi networks."""
-        async with self._get_api() as api:
-            return await api.get_wifi_scan_api_v1_wifi_scan_get()
-
-    async def connect_wifi(self, ssid: str, password: str) -> Any:
-        """Connect to a WiFi network.
-
-        Args:
-            ssid: Network SSID
-            password: Network password
-        """
-        async with self._get_api() as api:
-            wifi_in = WifiConnectIn(ssid=ssid, psk=password)
-            return await api.run_wifi_connect_api_v1_wifi_connect_post(wifi_in)
-
-    # Grid Islanding
-    async def get_islanding_state(self) -> Any:
-        """Get grid islanding state."""
-        async with self._get_api() as api:
-            return await api.get_islanding_state_api_v1_islanding_state_get()
-
-    # Client Management
-    async def get_auth_clients(self) -> Any:
-        """Get all registered auth clients."""
-        async with self._get_api() as api:
-            return await api.get_all_clients_api_v1_auth_clients_get()
-
-    async def get_auth_client(self, name: str) -> Any:
-        """Get specific auth client by name."""
-        async with self._get_api() as api:
-            return await api.get_client_api_v1_auth_clients_name_get(name)
-
-    async def delete_auth_client(self, name: str) -> Any:
-        """Delete an auth client by name."""
-        async with self._get_api() as api:
-            return await api.delete_client_api_v1_auth_clients_name_delete(name)
+                # Type cast needed because generated API has overly strict type hints
+                return await set_circuit_state_api_v_1_circuits_circuit_id_post.asyncio(
+                    client=cast(AuthenticatedClient, client),
+                    circuit_id=circuit_id,
+                    body=body,
+                )
+            except httpx.ConnectError as e:
+                raise SpanPanelConnectionError(
+                    f"Failed to connect to {self._host}"
+                ) from e
+            except httpx.TimeoutException as e:
+                raise SpanPanelTimeoutError(
+                    f"Request timed out after {self._timeout}s"
+                ) from e
+            except Exception as e:
+                if "401" in str(e) or "Unauthorized" in str(e):
+                    raise SpanPanelAuthError("Authentication required") from e
+                raise SpanPanelAPIError(f"API error: {e}") from e

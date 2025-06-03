@@ -234,9 +234,39 @@ class SpanPanelClient:
                 # Preserve the existing httpx async client to avoid double context issues
                 if old_async_client is not None:
                     self._client._async_client = old_async_client
+                    # CRITICAL FIX: Update the Authorization header on the existing httpx client
+                    header_value = f"{self._client.prefix} {self._client.token}"
+                    print(
+                        f"DEBUG: Upgrading to AuthenticatedClient, setting header: {self._client.auth_header_name}={header_value}"
+                    )
+                    old_async_client.headers[self._client.auth_header_name] = (
+                        header_value
+                    )
+                    print(
+                        f"DEBUG: Updated old_async_client headers: {dict(old_async_client.headers)}"
+                    )
             else:
                 # Already an AuthenticatedClient, just update the token
                 self._client.token = token
+                # CRITICAL FIX: Update the Authorization header on existing httpx clients
+                header_value = f"{self._client.prefix} {self._client.token}"
+                print(
+                    f"DEBUG: Updating auth header on existing AuthenticatedClient: {self._client.auth_header_name}={header_value}"
+                )
+                if self._client._async_client is not None:
+                    self._client._async_client.headers[
+                        self._client.auth_header_name
+                    ] = header_value
+                    print(
+                        f"DEBUG: Updated _async_client headers: {dict(self._client._async_client.headers)}"
+                    )
+                if self._client._client is not None:
+                    self._client._client.headers[self._client.auth_header_name] = (
+                        header_value
+                    )
+                    print(
+                        f"DEBUG: Updated _client headers: {dict(self._client._client.headers)}"
+                    )
 
     def _handle_unexpected_status(self, e: UnexpectedStatus) -> None:
         """Convert UnexpectedStatus to appropriate SpanPanel exception.

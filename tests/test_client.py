@@ -9,6 +9,8 @@ from span_panel_api.exceptions import (
     SpanPanelAPIError,
     SpanPanelAuthError,
     SpanPanelConnectionError,
+    SpanPanelRetriableError,
+    SpanPanelServerError,
     SpanPanelTimeoutError,
 )
 
@@ -70,9 +72,14 @@ class TestSpanPanelClient:
         ) as mock_auth:
             import httpx
 
+            # Create a proper mock response with status_code
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_request = MagicMock()
+
             mock_auth.asyncio = AsyncMock(
                 side_effect=httpx.HTTPStatusError(
-                    "401 Unauthorized", request=MagicMock(), response=MagicMock()
+                    "401 Unauthorized", request=mock_request, response=mock_response
                 )
             )
 
@@ -103,6 +110,7 @@ class TestSpanPanelClient:
     async def test_get_panel_state_success(self):
         """Test successful panel state retrieval."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.get_panel_state_api_v1_panel_get"
@@ -122,6 +130,7 @@ class TestSpanPanelClient:
     async def test_get_storage_soe_success(self):
         """Test successful storage SOE retrieval."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.get_storage_soe_api_v1_storage_soe_get"
@@ -141,6 +150,7 @@ class TestSpanPanelClient:
     async def test_set_circuit_priority_success(self):
         """Test successful circuit priority setting."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
@@ -159,6 +169,7 @@ class TestSpanPanelClient:
     async def test_get_circuits_success(self):
         """Test successful circuits retrieval."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.get_circuits_api_v1_circuits_get"
@@ -179,6 +190,7 @@ class TestSpanPanelClient:
     async def test_set_circuit_relay_success(self):
         """Test successful circuit relay setting."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
@@ -211,6 +223,7 @@ class TestSpanPanelClient:
     async def test_get_storage_soe_connection_error(self):
         """Test storage SOE retrieval with connection error."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.get_storage_soe_api_v1_storage_soe_get"
@@ -229,6 +242,7 @@ class TestSpanPanelClient:
     async def test_set_circuit_priority_invalid_priority(self):
         """Test circuit priority setting with invalid priority."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         # Test invalid priority enum value - should be wrapped in SpanPanelAPIError
         with pytest.raises(SpanPanelAPIError, match="API error.*not a valid Priority"):
@@ -520,6 +534,7 @@ class TestSpanPanelClientAdditionalCoverage:
     async def test_get_panel_state_api_error(self):
         """Test get_panel_state with API error."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.get_panel_state_api_v1_panel_get"
@@ -533,6 +548,7 @@ class TestSpanPanelClientAdditionalCoverage:
     async def test_get_circuits_api_error(self):
         """Test get_circuits with API error."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.get_circuits_api_v1_circuits_get"
@@ -546,6 +562,7 @@ class TestSpanPanelClientAdditionalCoverage:
     async def test_get_storage_soe_api_error(self):
         """Test get_storage_soe with API error."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.get_storage_soe_api_v1_storage_soe_get"
@@ -559,6 +576,7 @@ class TestSpanPanelClientAdditionalCoverage:
     async def test_set_circuit_relay_api_error(self):
         """Test set_circuit_relay with API error."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
@@ -572,6 +590,7 @@ class TestSpanPanelClientAdditionalCoverage:
     async def test_set_circuit_priority_api_error(self):
         """Test set_circuit_priority with API error."""
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         with patch(
             "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
@@ -593,6 +612,7 @@ class TestSpanPanelClientAdditionalCoverage:
         import httpx
 
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         # Test get_panel_state timeout
         with patch(
@@ -636,6 +656,7 @@ class TestSpanPanelClientAdditionalCoverage:
         import httpx
 
         client = SpanPanelClient("192.168.1.100")
+        client.set_access_token("test-token")
 
         # Test get_panel_state connection error
         with patch(
@@ -676,3 +697,320 @@ class TestSpanPanelClientAdditionalCoverage:
             )
             with pytest.raises(SpanPanelConnectionError):
                 await client.set_circuit_priority("circuit-1", "MUST_HAVE")
+
+
+class TestHTTPStatusErrorHandling:
+    """Test HTTP status error handling and categorization."""
+
+    @pytest.mark.asyncio
+    async def test_401_unauthorized_error(self):
+        """Test 401 Unauthorized error handling."""
+        import httpx
+
+        client = SpanPanelClient("192.168.1.100")
+        # Set a token so we get past the auth check
+        client.set_access_token("test-token")
+
+        with patch(
+            "span_panel_api.client.get_panel_state_api_v1_panel_get"
+        ) as mock_panel:
+            # Create a mock response with 401 status
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_request = MagicMock()
+
+            http_error = httpx.HTTPStatusError(
+                "401 Unauthorized", request=mock_request, response=mock_response
+            )
+            mock_panel.asyncio = AsyncMock(side_effect=http_error)
+
+            with pytest.raises(SpanPanelAuthError, match="Authentication required"):
+                await client.get_panel_state()
+
+    @pytest.mark.asyncio
+    async def test_403_forbidden_error(self):
+        """Test 403 Forbidden error handling."""
+        import httpx
+
+        client = SpanPanelClient("192.168.1.100")
+        # Set a token so we get past the auth check
+        client.set_access_token("test-token")
+
+        with patch(
+            "span_panel_api.client.get_panel_state_api_v1_panel_get"
+        ) as mock_panel:
+            # Create a mock response with 403 status
+            mock_response = MagicMock()
+            mock_response.status_code = 403
+            mock_request = MagicMock()
+
+            http_error = httpx.HTTPStatusError(
+                "403 Forbidden", request=mock_request, response=mock_response
+            )
+            mock_panel.asyncio = AsyncMock(side_effect=http_error)
+
+            with pytest.raises(SpanPanelAuthError, match="Authentication required"):
+                await client.get_panel_state()
+
+    @pytest.mark.asyncio
+    async def test_500_internal_server_error(self):
+        """Test 500 Internal Server Error handling (non-retriable)."""
+        import httpx
+
+        client = SpanPanelClient("192.168.1.100")
+        # Set a token so we get past the auth check
+        client.set_access_token("test-token")
+
+        with patch(
+            "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
+        ) as mock_api:
+            # Create a mock response with 500 status
+            mock_response = MagicMock()
+            mock_response.status_code = 500
+            mock_request = MagicMock()
+
+            http_error = httpx.HTTPStatusError(
+                "500 Internal Server Error",
+                request=mock_request,
+                response=mock_response,
+            )
+            mock_api.asyncio = AsyncMock(side_effect=http_error)
+
+            with pytest.raises(SpanPanelServerError) as exc_info:
+                await client.set_circuit_priority("circuit-1", "MUST_HAVE")
+
+            # Verify the error contains the status code and is marked as non-retriable
+            assert exc_info.value.status_code == 500
+            assert "Server error 500" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_502_bad_gateway_error(self):
+        """Test 502 Bad Gateway error handling (retriable)."""
+        import httpx
+
+        client = SpanPanelClient("192.168.1.100")
+        # Set a token so we get past the auth check
+        client.set_access_token("test-token")
+
+        with patch(
+            "span_panel_api.client.get_panel_state_api_v1_panel_get"
+        ) as mock_panel:
+            # Create a mock response with 502 status
+            mock_response = MagicMock()
+            mock_response.status_code = 502
+            mock_request = MagicMock()
+
+            http_error = httpx.HTTPStatusError(
+                "502 Bad Gateway", request=mock_request, response=mock_response
+            )
+            mock_panel.asyncio = AsyncMock(side_effect=http_error)
+
+            with pytest.raises(SpanPanelRetriableError) as exc_info:
+                await client.get_panel_state()
+
+            # Verify the error contains the status code and is marked as retriable
+            assert exc_info.value.status_code == 502
+            assert "Retriable server error 502" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_503_service_unavailable_error(self):
+        """Test 503 Service Unavailable error handling (retriable)."""
+        import httpx
+
+        client = SpanPanelClient("192.168.1.100")
+        # Set a token so we get past the auth check
+        client.set_access_token("test-token")
+
+        with patch(
+            "span_panel_api.client.get_circuits_api_v1_circuits_get"
+        ) as mock_circuits:
+            # Create a mock response with 503 status
+            mock_response = MagicMock()
+            mock_response.status_code = 503
+            mock_request = MagicMock()
+
+            http_error = httpx.HTTPStatusError(
+                "503 Service Unavailable", request=mock_request, response=mock_response
+            )
+            mock_circuits.asyncio = AsyncMock(side_effect=http_error)
+
+            with pytest.raises(SpanPanelRetriableError) as exc_info:
+                await client.get_circuits()
+
+            # Verify the error contains the status code and is marked as retriable
+            assert exc_info.value.status_code == 503
+            assert "Retriable server error 503" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_504_gateway_timeout_error(self):
+        """Test 504 Gateway Timeout error handling (retriable)."""
+        import httpx
+
+        client = SpanPanelClient("192.168.1.100")
+        # Set a token so we get past the auth check
+        client.set_access_token("test-token")
+
+        with patch(
+            "span_panel_api.client.get_storage_soe_api_v1_storage_soe_get"
+        ) as mock_storage:
+            # Create a mock response with 504 status
+            mock_response = MagicMock()
+            mock_response.status_code = 504
+            mock_request = MagicMock()
+
+            http_error = httpx.HTTPStatusError(
+                "504 Gateway Timeout", request=mock_request, response=mock_response
+            )
+            mock_storage.asyncio = AsyncMock(side_effect=http_error)
+
+            with pytest.raises(SpanPanelRetriableError) as exc_info:
+                await client.get_storage_soe()
+
+            # Verify the error contains the status code and is marked as retriable
+            assert exc_info.value.status_code == 504
+            assert "Retriable server error 504" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_other_http_error(self):
+        """Test other HTTP error handling (like 404, 400, etc.)."""
+        import httpx
+
+        client = SpanPanelClient("192.168.1.100")
+        # Set a token so we get past the auth check
+        client.set_access_token("test-token")
+
+        with patch(
+            "span_panel_api.client.get_panel_state_api_v1_panel_get"
+        ) as mock_panel:
+            # Create a mock response with 404 status
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            mock_request = MagicMock()
+
+            http_error = httpx.HTTPStatusError(
+                "404 Not Found", request=mock_request, response=mock_response
+            )
+            mock_panel.asyncio = AsyncMock(side_effect=http_error)
+
+            with pytest.raises(SpanPanelAPIError) as exc_info:
+                await client.get_panel_state()
+
+            # Verify the error contains the status code
+            assert exc_info.value.status_code == 404
+            assert "HTTP 404" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_authenticate_http_errors(self):
+        """Test HTTP error handling in authenticate method."""
+        import httpx
+
+        client = SpanPanelClient("192.168.1.100")
+
+        # Test 401 during authentication
+        with patch(
+            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
+        ) as mock_auth:
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_request = MagicMock()
+
+            http_error = httpx.HTTPStatusError(
+                "401 Unauthorized", request=mock_request, response=mock_response
+            )
+            mock_auth.asyncio = AsyncMock(side_effect=http_error)
+
+            with pytest.raises(SpanPanelAuthError, match="Authentication failed"):
+                await client.authenticate("test-app", "Test Application")
+
+        # Test 500 during authentication
+        with patch(
+            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
+        ) as mock_auth:
+            mock_response = MagicMock()
+            mock_response.status_code = 500
+            mock_request = MagicMock()
+
+            http_error = httpx.HTTPStatusError(
+                "500 Internal Server Error",
+                request=mock_request,
+                response=mock_response,
+            )
+            mock_auth.asyncio = AsyncMock(side_effect=http_error)
+
+            with pytest.raises(SpanPanelServerError) as exc_info:
+                await client.authenticate("test-app", "Test Application")
+
+            assert exc_info.value.status_code == 500
+
+        # Test 502 during authentication (retriable)
+        with patch(
+            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
+        ) as mock_auth:
+            mock_response = MagicMock()
+            mock_response.status_code = 502
+            mock_request = MagicMock()
+
+            http_error = httpx.HTTPStatusError(
+                "502 Bad Gateway", request=mock_request, response=mock_response
+            )
+            mock_auth.asyncio = AsyncMock(side_effect=http_error)
+
+            with pytest.raises(SpanPanelRetriableError) as exc_info:
+                await client.authenticate("test-app", "Test Application")
+
+            assert exc_info.value.status_code == 502
+
+
+class TestErrorCategorization:
+    """Test that errors are properly categorized for retry logic."""
+
+    def test_exception_inheritance(self):
+        """Test that new exception types inherit properly."""
+        from span_panel_api.exceptions import (
+            SpanPanelAPIError,
+            SpanPanelRetriableError,
+            SpanPanelServerError,
+        )
+
+        # Test inheritance chain
+        assert issubclass(SpanPanelRetriableError, SpanPanelAPIError)
+        assert issubclass(SpanPanelServerError, SpanPanelAPIError)
+
+        # Test that they can be instantiated with status codes
+        retriable_error = SpanPanelRetriableError("Test retriable error", 502)
+        assert retriable_error.status_code == 502
+
+        server_error = SpanPanelServerError("Test server error", 500)
+        assert server_error.status_code == 500
+
+    def test_status_code_constants(self):
+        """Test that status code constants are properly defined."""
+        from span_panel_api.const import (
+            AUTH_ERROR_CODES,
+            HTTP_BAD_GATEWAY,
+            HTTP_FORBIDDEN,
+            HTTP_GATEWAY_TIMEOUT,
+            HTTP_INTERNAL_SERVER_ERROR,
+            HTTP_SERVICE_UNAVAILABLE,
+            HTTP_UNAUTHORIZED,
+            RETRIABLE_ERROR_CODES,
+            SERVER_ERROR_CODES,
+        )
+
+        # Test individual constants
+        assert HTTP_UNAUTHORIZED == 401
+        assert HTTP_FORBIDDEN == 403
+        assert HTTP_INTERNAL_SERVER_ERROR == 500
+        assert HTTP_BAD_GATEWAY == 502
+        assert HTTP_SERVICE_UNAVAILABLE == 503
+        assert HTTP_GATEWAY_TIMEOUT == 504
+
+        # Test categorized constants
+        assert AUTH_ERROR_CODES == (401, 403)
+        assert RETRIABLE_ERROR_CODES == (502, 503, 504)
+        assert SERVER_ERROR_CODES == (500,)
+
+        # Test no overlap between categories
+        assert not set(AUTH_ERROR_CODES) & set(RETRIABLE_ERROR_CODES)
+        assert not set(AUTH_ERROR_CODES) & set(SERVER_ERROR_CODES)
+        assert not set(RETRIABLE_ERROR_CODES) & set(SERVER_ERROR_CODES)

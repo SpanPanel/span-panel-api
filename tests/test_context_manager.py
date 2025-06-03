@@ -1,0 +1,327 @@
+"""Tests for the context manager fix that resolves the "Cannot open a client instance more than once" error."""
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+
+from span_panel_api import SpanPanelClient
+from span_panel_api.const import RETRY_MAX_ATTEMPTS
+from span_panel_api.exceptions import SpanPanelAPIError, SpanPanelTimeoutError
+
+
+class TestContextManagerFix:
+    """Test suite for the context manager lifecycle fix."""
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_requests_work_properly(self):
+        """Test that unauthenticated requests (like get_status) work both inside and outside context managers."""
+        client = SpanPanelClient("192.168.1.100", timeout=5.0)
+
+        with patch(
+            "span_panel_api.client.system_status_api_v1_status_get"
+        ) as mock_status:
+            # Setup mock response for status endpoint
+            mock_status.asyncio = AsyncMock(
+                return_value=MagicMock(system=MagicMock(manufacturer="SPAN"))
+            )
+
+            # Test unauthenticated call OUTSIDE context manager
+            # This should work without any access token set
+            assert client._access_token is None
+            status_outside_context = await client.get_status()
+            assert status_outside_context is not None
+            assert status_outside_context.system.manufacturer == "SPAN"
+
+            # Test unauthenticated call INSIDE context manager WITHOUT setting token
+            async with client:
+                assert client._in_context is True
+                assert client._access_token is None  # Still no token set
+
+                status_inside_context = await client.get_status()
+                assert status_inside_context is not None
+                assert status_inside_context.system.manufacturer == "SPAN"
+
+            # Test unauthenticated call INSIDE context manager WITH token set
+            # (status endpoint should still work even if token is set since it doesn't require auth)
+            async with client:
+                client.set_access_token("test-token")
+                assert client._access_token == "test-token"
+
+                status_with_token = await client.get_status()
+                assert status_with_token is not None
+                assert status_with_token.system.manufacturer == "SPAN"
+
+            # Verify calls were made to the unauthenticated endpoint
+            assert mock_status.asyncio.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_context_manager_multiple_api_calls(self):
+        """Test that multiple API calls work within a single context manager without double context errors."""
+        client = SpanPanelClient("192.168.1.100", timeout=5.0)
+
+        # Mock all the API functions
+        with (
+            patch(
+                "span_panel_api.client.system_status_api_v1_status_get"
+            ) as mock_status,
+            patch(
+                "span_panel_api.client.get_circuits_api_v1_circuits_get"
+            ) as mock_circuits,
+            patch(
+                "span_panel_api.client.get_panel_state_api_v1_panel_get"
+            ) as mock_panel,
+            patch(
+                "span_panel_api.client.get_storage_soe_api_v1_storage_soe_get"
+            ) as mock_storage,
+        ):
+            # Setup mock responses
+            mock_status.asyncio = AsyncMock(
+                return_value=MagicMock(system=MagicMock(manufacturer="SPAN"))
+            )
+            mock_circuits.asyncio = AsyncMock(
+                return_value=MagicMock(circuits=MagicMock(additional_properties={}))
+            )
+            mock_panel.asyncio = AsyncMock(
+                return_value=MagicMock(main_relay_state="CLOSED")
+            )
+            mock_storage.asyncio = AsyncMock(
+                return_value=MagicMock(soe=MagicMock(to_dict=lambda: {"soe": 0.85}))
+            )
+
+            # Test multiple calls within a single context manager
+            async with client:
+                # Verify we're in context
+                assert client._in_context is True
+                assert client._client is not None
+
+                # Multiple calls should not cause "Cannot open a client instance more than once"
+                # These calls are unauthenticated (status endpoint doesn't require auth)
+                status1 = await client.get_status()
+                assert status1 is not None
+
+                status2 = await client.get_status()
+                assert status2 is not None
+
+                # Set access token for authenticated calls
+                client.set_access_token("test-token")
+
+                circuits = await client.get_circuits()
+                assert circuits is not None
+
+                panel = await client.get_panel_state()
+                assert panel is not None
+
+                storage = await client.get_storage_soe()
+                assert storage is not None
+
+            # Verify we exited context properly
+            assert client._in_context is False
+
+    @pytest.mark.asyncio
+    async def test_context_manager_with_authentication_flow(self):
+        """Test that authentication within a context manager doesn't break the context."""
+        client = SpanPanelClient("192.168.1.100", timeout=5.0)
+
+        with (
+            patch(
+                "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
+            ) as mock_auth,
+            patch(
+                "span_panel_api.client.get_circuits_api_v1_circuits_get"
+            ) as mock_circuits,
+            patch(
+                "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
+            ) as mock_set_circuit,
+        ):
+            # Setup mock responses
+            auth_response = MagicMock(
+                access_token="test-token-12345", token_type="Bearer"
+            )
+            mock_auth.asyncio = AsyncMock(return_value=auth_response)
+            mock_circuits.asyncio = AsyncMock(
+                return_value=MagicMock(circuits=MagicMock(additional_properties={}))
+            )
+            mock_set_circuit.asyncio = AsyncMock(
+                return_value=MagicMock(priority="MUST_HAVE")
+            )
+
+            async with client:
+                # Verify initial state
+                assert client._in_context is True
+                assert client._access_token is None
+                initial_client = client._client
+                initial_async_client = getattr(initial_client, "_async_client", None)
+
+                # Authenticate - this WILL upgrade the client to AuthenticatedClient within context
+                auth_result = await client.authenticate("test-app", "Test Application")
+                assert auth_result.access_token == "test-token-12345"
+                assert client._access_token == "test-token-12345"
+
+                # Client should be upgraded to AuthenticatedClient but preserve the httpx async client
+                from span_panel_api.generated_client import AuthenticatedClient
+
+                assert isinstance(client._client, AuthenticatedClient)
+                # The underlying httpx async client should be preserved to avoid double context issues
+                assert (
+                    getattr(client._client, "_async_client", None)
+                    is initial_async_client
+                )
+
+                # Post-authentication calls should work
+                circuits = await client.get_circuits()
+                assert circuits is not None
+
+                set_result = await client.set_circuit_priority("circuit_1", "MUST_HAVE")
+                assert set_result is not None
+
+            # Verify clean exit
+            assert client._in_context is False
+
+    @pytest.mark.asyncio
+    async def test_context_manager_error_handling_preserves_state(self):
+        """Test that errors within the context don't break the context manager state."""
+        client = SpanPanelClient("192.168.1.100", timeout=5.0)
+
+        with patch(
+            "span_panel_api.client.system_status_api_v1_status_get"
+        ) as mock_status:
+            # First call succeeds, next calls fail (with retry attempts)
+            # The retry logic will attempt up to RETRY_MAX_ATTEMPTS times for TimeoutException
+            side_effects = [
+                MagicMock(system=MagicMock(manufacturer="SPAN")),  # First call succeeds
+                # Generate RETRY_MAX_ATTEMPTS timeout exceptions for the retries
+                *([httpx.TimeoutException("Request timeout")] * RETRY_MAX_ATTEMPTS),
+            ]
+            mock_status.asyncio = AsyncMock(side_effect=side_effects)
+
+            async with client:
+                # First call should succeed
+                status1 = await client.get_status()
+                assert status1 is not None
+
+                # Second call should fail but not break context
+                with pytest.raises(SpanPanelTimeoutError):
+                    await client.get_status()
+
+                # Client should still be in context and functional
+                assert client._in_context is True
+                assert client._client is not None
+
+            # Should exit cleanly even after error
+            assert client._in_context is False
+
+    @pytest.mark.asyncio
+    async def test_set_access_token_behavior_in_context(self):
+        """Test that set_access_token properly upgrades client when in context."""
+        client = SpanPanelClient("192.168.1.100")
+
+        # Test outside context first
+        client.set_access_token("token1")
+        assert client._access_token == "token1"
+        assert client._client is None  # Should be reset when not in context
+
+        async with client:
+            initial_client = client._client
+            initial_async_client = getattr(initial_client, "_async_client", None)
+            assert initial_client is not None
+            assert client._in_context is True
+
+            # Setting token within context should upgrade to AuthenticatedClient
+            # but preserve the underlying httpx async client
+            client.set_access_token("token2")
+            assert client._access_token == "token2"
+
+            # Client should be upgraded to AuthenticatedClient
+            from span_panel_api.generated_client import AuthenticatedClient
+
+            assert isinstance(client._client, AuthenticatedClient)
+            # But the underlying httpx async client should be preserved
+            assert (
+                getattr(client._client, "_async_client", None) is initial_async_client
+            )
+
+        assert client._in_context is False
+
+    @pytest.mark.asyncio
+    async def test_context_manager_lifecycle_integrity(self):
+        """Test the complete context manager lifecycle integrity."""
+        client = SpanPanelClient("192.168.1.100")
+
+        # Initially not in context
+        assert client._in_context is False
+        assert client._client is None
+
+        async with client:
+            # Should be in context with client
+            assert client._in_context is True
+            assert client._client is not None
+            context_client = client._client
+
+            # Client should be consistent across calls
+            endpoint_client = client._get_client_for_endpoint(requires_auth=False)
+            assert endpoint_client is context_client
+
+        # Should cleanly exit context
+        assert client._in_context is False
+        # Client should be cleaned up but access token preserved
+        assert client._client is None
+
+    @pytest.mark.asyncio
+    async def test_context_manager_exception_during_exit(self):
+        """Test that exceptions during context exit are handled gracefully."""
+        client = SpanPanelClient("192.168.1.100")
+
+        with patch.object(client, "_client") as mock_client:
+            # Make the __aexit__ raise an exception
+            mock_client.__aexit__ = AsyncMock(side_effect=Exception("Exit error"))
+
+            async with client:
+                assert client._in_context is True
+
+            # Should still mark as not in context despite exit error
+            assert client._in_context is False
+
+    @pytest.mark.asyncio
+    async def test_client_none_in_context_error(self):
+        """Test that we get a clear error if client becomes None while in context."""
+        client = SpanPanelClient("192.168.1.100")
+
+        async with client:
+            # Artificially set client to None to simulate the error condition
+            client._client = None
+
+            # Should raise a clear error
+            with pytest.raises(
+                SpanPanelAPIError, match="Client is None while in context"
+            ):
+                client._get_client_for_endpoint(requires_auth=False)
+
+    @pytest.mark.asyncio
+    async def test_multiple_context_managers_not_allowed(self):
+        """Test that we can't enter the same client context multiple times."""
+        client = SpanPanelClient("192.168.1.100")
+
+        async with client:
+            # Trying to enter context again should fail at the httpx level
+            with pytest.raises(
+                RuntimeError, match="Cannot open a client instance more than once"
+            ):
+                async with client:
+                    pass
+
+    def test_context_tracking_flag_behavior(self):
+        """Test the _in_context flag behavior in various scenarios."""
+        client = SpanPanelClient("192.168.1.100")
+
+        # Initially false
+        assert client._in_context is False
+
+        # Should stay false when not in context
+        client.set_access_token("test-token")
+        assert client._in_context is False
+
+        # get_client_for_endpoint should work outside context
+        endpoint_client = client._get_client_for_endpoint(requires_auth=False)
+        assert endpoint_client is not None
+        assert client._in_context is False  # Still false after getting client

@@ -31,3 +31,15 @@ class SpanPanelAPIError(SpanPanelError):
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class SpanPanelServerError(SpanPanelAPIError):
+    """Raised when SPAN Panel returns a 5xx server error (non-retriable)."""
+
+    pass
+
+
+class SpanPanelRetriableError(SpanPanelAPIError):
+    """Raised when SPAN Panel returns a retriable server error (502, 503, 504)."""
+
+    pass

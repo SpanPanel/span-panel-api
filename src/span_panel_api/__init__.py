@@ -10,6 +10,8 @@ from .exceptions import (
     SpanPanelAuthError,
     SpanPanelConnectionError,
     SpanPanelError,
+    SpanPanelRetriableError,
+    SpanPanelServerError,
     SpanPanelTimeoutError,
 )
 
@@ -23,4 +25,6 @@ __all__ = [
     "SpanPanelAuthError",
     "SpanPanelTimeoutError",
     "SpanPanelAPIError",
+    "SpanPanelServerError",
+    "SpanPanelRetriableError",
 ]

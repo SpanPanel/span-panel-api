@@ -1,15 +1,7 @@
 # SPAN Panel OpenAPI Client
 
-A modern Python client library for accessing the SPAN Panel API, specifically designed for Home Assistant integration with robust error handling and retry logic.
+A Python client library for accessing the SPAN Panel API.
 
-## Features
-
-- **Home Assistant Ready**: Designed specifically for HA integration patterns
-- **Smart Error Handling**: Distinguishes between retriable and non-retriable errors
-- **Modern Async**: Built on httpx with proper async/await support
-- **Type Safe**: Full type hints and Pydantic model validation
-- **Well Tested**: 96% test coverage with comprehensive error scenarios
-- **OpenAPI Generated**: Auto-generated from official SPAN Panel API specs
 
 ## Installation
 
@@ -53,16 +45,16 @@ async def main():
 asyncio.run(main())
 ```
 
-### Long-Lived Pattern (Home Assistant Integration)
+### Long-Lived Pattern (Services and Integrations)
 
-**Best for**: Home Assistant integrations, long-running services, persistent connections
+**Best for**: Long-running services, persistent connections, integration platforms
 
 ```python
 import asyncio
 from span_panel_api import SpanPanelClient
 
 class SpanPanelIntegration:
-    """Example Home Assistant integration pattern."""
+    """Example long-running service integration pattern."""
 
     def __init__(self, host: str):
         # Create client but don't use context manager
@@ -73,16 +65,16 @@ class SpanPanelIntegration:
         """Initialize the integration (called once)."""
         try:
             # Authenticate once during setup
-            await self.client.authenticate("home-assistant", "Home Assistant Integration")
+            await self.client.authenticate("my-service", "Panel Integration Service")
             self._authenticated = True
         except Exception as e:
             await self.client.close()  # Clean up on setup failure
             raise
 
     async def update_data(self) -> dict:
-        """Update all data (called periodically by HA coordinator)."""
+        """Update all data (called periodically by coordinator)."""
         if not self._authenticated:
-            await self.client.authenticate("home-assistant", "Home Assistant Integration")
+            await self.client.authenticate("my-service", "Panel Integration Service")
             self._authenticated = True
 
         try:
@@ -103,9 +95,9 @@ class SpanPanelIntegration:
             raise
 
     async def set_circuit_priority(self, circuit_id: str, priority: str) -> None:
-        """Set circuit priority (called by HA service)."""
+        """Set circuit priority (called by service)."""
         if not self._authenticated:
-            await self.client.authenticate("home-assistant", "Home Assistant Integration")
+            await self.client.authenticate("my-service", "Panel Integration Service")
             self._authenticated = True
 
         await self.client.set_circuit_priority(circuit_id, priority)
@@ -114,18 +106,18 @@ class SpanPanelIntegration:
         """Cleanup when integration is unloaded."""
         await self.client.close()
 
-# Usage in Home Assistant
+# Usage in long-running service
 async def main():
     integration = SpanPanelIntegration("192.168.1.100")
 
     try:
         await integration.setup()
 
-        # Simulate HA coordinator updates
+        # Simulate coordinator updates
         for i in range(10):
             data = await integration.update_data()
             print(f"Update {i}: {len(data['circuits'].circuits.additional_properties)} circuits")
-            await asyncio.sleep(30)  # HA typically updates every 30 seconds
+            await asyncio.sleep(30)  # Service typically updates every 30 seconds
 
     finally:
         await integration.cleanup()
@@ -169,12 +161,12 @@ asyncio.run(manual_example())
 | Pattern | Use Case | Pros | Cons |
 |---------|----------|------|------|
 | **Context Manager** | Scripts, one-off tasks, testing | Automatic cleanup • Exception safe • Simple code | Creates/destroys connection each time • Not efficient for frequent calls |
-| **Long-Lived** | Home Assistant, services, daemons | Efficient connection reuse • Better performance • Authentication persistence | Manual lifecycle management • Must handle cleanup |
+| **Long-Lived** | Services, daemons, integration platforms | Efficient connection reuse • Better performance • Authentication persistence | Manual lifecycle management • Must handle cleanup |
 | **Manual** | Custom requirements, debugging | Full control • Custom error handling | Must remember to call close() • More error-prone |
 
-## Error Handling for Home Assistant
+## Error Handling
 
-The client provides sophisticated error categorization designed for Home Assistant's retry logic:
+The client provides error categorization for different retry strategies:
 
 ### Exception Types
 
@@ -192,8 +184,8 @@ from span_panel_api.exceptions import (
 
 ### HTTP Error Code Mapping
 
-| Status Code | Exception | Retry? | Description | HA Action |
-|-------------|-----------|--------|-------------|-----------|
+| Status Code | Exception | Retry? | Description | Action |
+|-------------|-----------|--------|-------------|--------|
 | **Authentication Errors** |
 | 401, 403    | `SpanPanelAuthError` | Once (after re-auth) | Authentication required/failed | Re-authenticate and retry once |
 | **Non-Retriable Server Errors** |
@@ -208,35 +200,35 @@ from span_panel_api.exceptions import (
 | Connection failures | `SpanPanelConnectionError` | Yes | Network connectivity issues | Retry with backoff |
 | Timeouts | `SpanPanelTimeoutError` | Yes | Request timed out | Retry with backoff |
 
-### Retry Strategy for HA
+### Retry Strategy
 
 ```python
-async def ha_friendly_request():
-    """Example showing HA-appropriate error handling."""
+async def example_request_with_retry():
+    """Example showing appropriate error handling."""
     try:
         return await client.get_circuits()
     except SpanPanelAuthError:
         # Re-authenticate and retry once
-        await client.authenticate("ha", "Home Assistant")
+        await client.authenticate("my-app", "My Application")
         return await client.get_circuits()
     except SpanPanelRetriableError as e:
-        # Temporary server issues - HA should retry with backoff
+        # Temporary server issues - should retry with backoff
         # 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout
         logger.warning(f"Retriable error {e.status_code}, will retry: {e}")
-        raise  # Let HA handle the retry
+        raise  # Let retry logic handle the retry
     except SpanPanelServerError as e:
         # Application bugs on SPAN side - DO NOT retry
         # 500 Internal Server Error (SPAN Panel bug, not your fault!)
         logger.error(f"Server error {e.status_code}, not retrying: {e}")
-        raise  # HA will show notification but won't waste resources retrying
+        raise  # Show notification but don't waste resources retrying
     except (SpanPanelConnectionError, SpanPanelTimeoutError):
-        # Network issues - HA should retry
+        # Network issues - should retry
         raise
 ```
 
 ### Exception Handling
 
-The client properly configures the underlying OpenAPI client with `raise_on_unexpected_status=True`, ensuring that HTTP errors (especially 500 responses) are converted to appropriate exceptions rather than being silently ignored.
+The client configures the underlying OpenAPI client with `raise_on_unexpected_status=True`, ensuring that HTTP errors (especially 500 responses) are converted to appropriate exceptions rather than being silently ignored.
 
 ## API Reference
 
@@ -257,9 +249,9 @@ client = SpanPanelClient(
 # Register a new API client (one-time setup)
 auth = await client.authenticate(
     name="my-integration",           # Required: client name
-    description="My Home Assistant"  # Optional: description
+    description="My Application"  # Optional: description
 )
-# Token is automatically stored and used for subsequent requests
+# Token is stored and used for subsequent requests
 ```
 
 ### Panel Information
@@ -301,6 +293,49 @@ await client.set_circuit_priority("circuit-1", "MUST_HAVE")
 await client.set_circuit_priority("circuit-1", "NICE_TO_HAVE")
 ```
 
+## Timeout and Retry Control
+
+The SPAN Panel API client provides timeout and retry configuration:
+
+- `timeout` (float, default: 30.0): The maximum time (in seconds) to wait for a response from the panel for each attempt.
+- `retries` (int, default: 0): The number of times to retry a failed request due to network or retriable server errors. `retries=0` means no retries (1 total attempt), `retries=1` means 1 retry (2 total attempts), etc.
+- `retry_timeout` (float, default: 0.5): The base wait time (in seconds) between retries, with exponential backoff.
+- `retry_backoff_multiplier` (float, default: 2.0): The multiplier for exponential backoff between retries.
+
+### Example Usage
+
+```python
+# No retries (default, fast feedback)
+client = SpanPanelClient("192.168.1.100", timeout=10.0)
+
+# Add retries for production
+client = SpanPanelClient("192.168.1.100", timeout=10.0, retries=2, retry_timeout=1.0)
+
+# Full retry configuration
+client = SpanPanelClient(
+    "192.168.1.100",
+    timeout=10.0,
+    retries=3,
+    retry_timeout=0.5,
+    retry_backoff_multiplier=2.0
+)
+
+# Change retry settings at runtime
+client.retries = 3
+client.retry_timeout = 2.0
+client.retry_backoff_multiplier = 1.5
+```
+
+### What does 'retries' mean?
+
+| retries | Total Attempts | Description         |
+|---------|---------------|---------------------|
+| 0       | 1             | No retries (default) |
+| 1       | 2             | 1 retry             |
+| 2       | 3             | 2 retries           |
+
+Retry and timeout settings can be queried and changed at runtime.
+
 ## Development Setup
 
 ### Prerequisites
@@ -338,48 +373,7 @@ span_openapi/
 └── pyproject.toml            # Poetry configuration
 ```
 
-## Home Assistant Integration
 
-This client is specifically designed for Home Assistant integrations:
-
-### Entity Updates
-
-```python
-async def update_entities():
-    """Update all HA entities from SPAN Panel."""
-    try:
-        circuits = await client.get_circuits()
-        panel_state = await client.get_panel_state()
-        storage = await client.get_storage_soe()
-
-        # Update your HA entities here
-
-    except SpanPanelRetriableError:
-        # Temporary issue - HA will retry automatically
-        raise UpdateFailed("SPAN Panel temporarily unavailable")
-    except SpanPanelServerError:
-        # Don't retry server errors
-        raise UpdateFailed("SPAN Panel server error")
-    except SpanPanelAuthError:
-        # Re-authenticate and retry once
-        await client.authenticate("ha", "Home Assistant")
-        # Then retry the update...
-```
-
-### Service Calls
-
-```python
-async def set_circuit_state(circuit_id: str, state: str):
-    """HA service call to control circuit."""
-    try:
-        await client.set_circuit_relay(circuit_id, state)
-    except SpanPanelRetriableError:
-        # Let HA handle retries
-        raise HomeAssistantError("Temporary error, will retry")
-    except SpanPanelServerError:
-        # Don't retry
-        raise HomeAssistantError("SPAN Panel error, please try again later")
-```
 
 ## Advanced Usage
 
@@ -432,13 +426,36 @@ poetry run pytest --cov=span_panel_api tests/
     GET <https://span-panel-ip/api/v1/openapi.json>
 
 2. Regenerate client: `poetry run python generate_client.py`
-3. Update wrapper client in `src/span_panel_api/` if needed
+3. Update wrapper client in `src/span_panel_api/client.py` if needed
 4. Add tests for new functionality
-5. Ensure coverage stays above 95%
-6. Update this README if adding new features
+5. Update this README if adding new features
 
 ## License
 
 MIT License - see LICENSE file for details.
 
----
+## SPAN Integration Configuration
+
+The SPAN Home Assistant integration uses different timeout and retry settings depending on the operation:
+
+### Configuration and Setup Operations
+During panel discovery, configuration, and authentication:
+- **Timeout**: 15 seconds (for quick user feedback)
+- **Retries**: 0 (no retries to avoid long waits during setup)
+
+### Normal Operations
+During regular data polling and control operations:
+- **Timeout**: 30 seconds (default)
+- **Retries**: 3 (configurable, with exponential backoff)
+- **Retry Timeout**: 0.5 seconds (configurable base delay)
+- **Retry Backoff Multiplier**: 2.0 (configurable exponential factor)
+
+### User Configuration Options
+Users can configure retry behavior in the integration options:
+- **API Retries** (0-10): Number of retry attempts for failed requests
+- **API Retry Timeout** (0.1-10.0s): Base wait time between retries
+- **API Retry Backoff Multiplier** (1.0-5.0): Exponential backoff multiplier
+
+These settings only apply to normal operations, not configuration flows.
+
+## Timeout and Retry Control

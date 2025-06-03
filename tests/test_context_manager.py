@@ -325,3 +325,113 @@ class TestContextManagerFix:
         endpoint_client = client._get_client_for_endpoint(requires_auth=False)
         assert endpoint_client is not None
         assert client._in_context is False  # Still false after getting client
+
+
+class TestContextManagerEdgeCases:
+    """Test context manager edge cases for better coverage."""
+
+    @pytest.mark.asyncio
+    async def test_context_entry_failure_with_client_error(self):
+        """Test context manager entry failure when client.__aenter__ fails."""
+        client = SpanPanelClient("192.168.1.100")
+
+        # Mock the client to fail on __aenter__
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(side_effect=Exception("Client enter failed"))
+
+        with patch.object(client, "_get_client", return_value=mock_client):
+            with pytest.raises(RuntimeError, match="Failed to enter client context"):
+                async with client:
+                    pass
+
+            # Verify state was reset
+            assert not client._in_context
+            assert not client._httpx_client_owned
+
+    @pytest.mark.asyncio
+    async def test_context_manager_when_client_is_none_error(self):
+        """Test _get_client_for_endpoint when client is None in context."""
+        client = SpanPanelClient("192.168.1.100")
+        client._in_context = True
+        client._client = None
+        client._access_token = "test-token"  # Set token so auth check passes
+
+        with pytest.raises(SpanPanelAPIError, match="Client is None while in context"):
+            client._get_client_for_endpoint()
+
+    @pytest.mark.asyncio
+    async def test_context_manager_client_type_mismatch(self):
+        """Test client type mismatch error in context."""
+        from span_panel_api.generated_client import Client
+
+        client = SpanPanelClient("192.168.1.100")
+        client._in_context = True
+        client._access_token = "test-token"
+
+        # Create a regular Client when we need AuthenticatedClient
+        unauthenticated_client = Client(
+            base_url="http://test",
+            timeout=httpx.Timeout(30.0),
+            verify_ssl=False,
+            raise_on_unexpected_status=True,
+        )
+        client._client = unauthenticated_client
+
+        with pytest.raises(SpanPanelAPIError, match="Client type mismatch"):
+            client._get_client_for_endpoint(requires_auth=True)
+
+    @pytest.mark.asyncio
+    async def test_context_manager_cleanup_with_client(self):
+        """Test context manager cleanup with existing client."""
+        client = SpanPanelClient("192.168.1.100")
+
+        # Mock a client
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch.object(client, "_get_client", return_value=mock_client):
+            async with client:
+                # Should set the client during context entry
+                assert client._client is mock_client
+                assert client._in_context is True
+
+            # Should clean up after context exit
+            assert client._in_context is False
+
+    @pytest.mark.asyncio
+    async def test_context_manager_cleanup_with_exception(self):
+        """Test context manager cleanup when an exception occurs."""
+        client = SpanPanelClient("192.168.1.100")
+
+        # Mock a client that doesn't throw during cleanup
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch.object(client, "_get_client", return_value=mock_client):
+            with pytest.raises(ValueError, match="Test exception"):
+                async with client:
+                    assert client._in_context is True
+                    raise ValueError("Test exception")
+
+            # Should still clean up properly even with exception
+            assert client._in_context is False
+
+    @pytest.mark.asyncio
+    async def test_context_manager_entry_exit(self):
+        """Test context manager entry and exit behavior."""
+        client = SpanPanelClient("192.168.1.100")
+
+        # Mock client
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch.object(client, "_get_client", return_value=mock_client):
+            async with client as context_client:
+                assert context_client is client
+                assert client._in_context is True
+                assert client._httpx_client_owned is True
+
+            assert client._in_context is False

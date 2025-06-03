@@ -7,18 +7,11 @@ It wraps the generated OpenAPI client to provide a more convenient interface.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 import httpx
 
-from .const import (
-    AUTH_ERROR_CODES,
-    RETRIABLE_ERROR_CODES,
-    RETRY_BACKOFF_MULTIPLIER,
-    RETRY_INITIAL_DELAY,
-    RETRY_MAX_ATTEMPTS,
-    SERVER_ERROR_CODES,
-)
+from .const import AUTH_ERROR_CODES, RETRIABLE_ERROR_CODES, SERVER_ERROR_CODES
 from .exceptions import (
     SpanPanelAPIError,
     SpanPanelAuthError,
@@ -60,6 +53,9 @@ except ImportError as e:
     ) from e
 
 
+# Remove the RetryConfig class - using simple parameters instead
+
+
 class SpanPanelClient:
     """Modern async client for SPAN Panel REST API.
 
@@ -87,6 +83,10 @@ class SpanPanelClient:
         port: int = 80,
         timeout: float = 30.0,
         use_ssl: bool = False,
+        # Retry configuration - simple parameters
+        retries: int = 0,  # Default to 0 retries for simplicity
+        retry_timeout: float = 0.5,  # How long to wait between retry attempts
+        retry_backoff_multiplier: float = 2.0,
     ) -> None:
         """Initialize the SPAN Panel client.
 
@@ -95,11 +95,26 @@ class SpanPanelClient:
             port: Port number (default: 80)
             timeout: Request timeout in seconds (default: 30.0)
             use_ssl: Whether to use HTTPS (default: False)
+            retries: Number of retries (0 = no retries, 1 = 1 retry, etc.)
+            retry_timeout: Timeout between retry attempts in seconds
+            retry_backoff_multiplier: Exponential backoff multiplier
         """
         self._host = host
         self._port = port
         self._timeout = timeout
         self._use_ssl = use_ssl
+
+        # Simple retry configuration - validate and store
+        if retries < 0:
+            raise ValueError("retries must be non-negative")
+        if retry_timeout < 0:
+            raise ValueError("retry_timeout must be non-negative")
+        if retry_backoff_multiplier < 1:
+            raise ValueError("retry_backoff_multiplier must be at least 1")
+
+        self._retries = retries
+        self._retry_timeout = retry_timeout
+        self._retry_backoff_multiplier = retry_backoff_multiplier
 
         # Build base URL
         scheme = "https" if use_ssl else "http"
@@ -112,6 +127,43 @@ class SpanPanelClient:
         # Context tracking - critical for preventing "Cannot open a client instance more than once"
         self._in_context: bool = False
         self._httpx_client_owned: bool = False
+
+    # Properties for querying and setting retry configuration
+    @property
+    def retries(self) -> int:
+        """Get the number of retries."""
+        return self._retries
+
+    @retries.setter
+    def retries(self, value: int) -> None:
+        """Set the number of retries."""
+        if value < 0:
+            raise ValueError("retries must be non-negative")
+        self._retries = value
+
+    @property
+    def retry_timeout(self) -> float:
+        """Get the timeout between retries in seconds."""
+        return self._retry_timeout
+
+    @retry_timeout.setter
+    def retry_timeout(self, value: float) -> None:
+        """Set the timeout between retries in seconds."""
+        if value < 0:
+            raise ValueError("retry_timeout must be non-negative")
+        self._retry_timeout = value
+
+    @property
+    def retry_backoff_multiplier(self) -> float:
+        """Get the exponential backoff multiplier."""
+        return self._retry_backoff_multiplier
+
+    @retry_backoff_multiplier.setter
+    def retry_backoff_multiplier(self, value: float) -> None:
+        """Set the exponential backoff multiplier."""
+        if value < 1:
+            raise ValueError("retry_backoff_multiplier must be at least 1")
+        self._retry_backoff_multiplier = value
 
     def _get_client(self) -> AuthenticatedClient | Client:
         """Get the appropriate HTTP client based on whether we have an access token."""
@@ -234,41 +286,26 @@ class SpanPanelClient:
                 # Preserve the existing httpx async client to avoid double context issues
                 if old_async_client is not None:
                     self._client._async_client = old_async_client
-                    # CRITICAL FIX: Update the Authorization header on the existing httpx client
+                    # Update the Authorization header on the existing httpx client
                     header_value = f"{self._client.prefix} {self._client.token}"
-                    print(
-                        f"DEBUG: Upgrading to AuthenticatedClient, setting header: {self._client.auth_header_name}={header_value}"
-                    )
                     old_async_client.headers[self._client.auth_header_name] = (
                         header_value
-                    )
-                    print(
-                        f"DEBUG: Updated old_async_client headers: {dict(old_async_client.headers)}"
                     )
             else:
                 # Already an AuthenticatedClient, just update the token
                 self._client.token = token
-                # CRITICAL FIX: Update the Authorization header on existing httpx clients
+                # Update the Authorization header on existing httpx clients
                 header_value = f"{self._client.prefix} {self._client.token}"
-                print(
-                    f"DEBUG: Updating auth header on existing AuthenticatedClient: {self._client.auth_header_name}={header_value}"
-                )
                 if self._client._async_client is not None:
                     self._client._async_client.headers[
                         self._client.auth_header_name
                     ] = header_value
-                    print(
-                        f"DEBUG: Updated _async_client headers: {dict(self._client._async_client.headers)}"
-                    )
                 if self._client._client is not None:
                     self._client._client.headers[self._client.auth_header_name] = (
                         header_value
                     )
-                    print(
-                        f"DEBUG: Updated _client headers: {dict(self._client._client.headers)}"
-                    )
 
-    def _handle_unexpected_status(self, e: UnexpectedStatus) -> None:
+    def _handle_unexpected_status(self, e: UnexpectedStatus) -> NoReturn:
         """Convert UnexpectedStatus to appropriate SpanPanel exception.
 
         Args:
@@ -349,7 +386,9 @@ class SpanPanelClient:
             The final exception if all retries are exhausted
         """
         retry_status_codes = set(RETRIABLE_ERROR_CODES)  # Retriable HTTP status codes
-        max_attempts = RETRY_MAX_ATTEMPTS
+        max_attempts = (
+            self._retries + 1
+        )  # retries=0 means 1 attempt, retries=1 means 2 attempts, etc.
 
         for attempt in range(max_attempts):
             try:
@@ -357,8 +396,8 @@ class SpanPanelClient:
             except UnexpectedStatus as e:
                 # Only retry specific HTTP status codes that are typically transient
                 if e.status_code in retry_status_codes and attempt < max_attempts - 1:
-                    delay = RETRY_INITIAL_DELAY * (
-                        RETRY_BACKOFF_MULTIPLIER**attempt
+                    delay = self._retry_timeout * (
+                        self._retry_backoff_multiplier**attempt
                     )  # Exponential backoff
                     await asyncio.sleep(delay)
                     continue
@@ -370,8 +409,8 @@ class SpanPanelClient:
                     e.response.status_code in retry_status_codes
                     and attempt < max_attempts - 1
                 ):
-                    delay = RETRY_INITIAL_DELAY * (
-                        RETRY_BACKOFF_MULTIPLIER**attempt
+                    delay = self._retry_timeout * (
+                        self._retry_backoff_multiplier**attempt
                     )  # Exponential backoff
                     await asyncio.sleep(delay)
                     continue
@@ -380,8 +419,8 @@ class SpanPanelClient:
             except (httpx.ConnectError, httpx.TimeoutException):
                 # Network/timeout errors are always retriable
                 if attempt < max_attempts - 1:
-                    delay = RETRY_INITIAL_DELAY * (
-                        RETRY_BACKOFF_MULTIPLIER**attempt
+                    delay = self._retry_timeout * (
+                        self._retry_backoff_multiplier**attempt
                     )  # Exponential backoff
                     await asyncio.sleep(delay)
                     continue
@@ -480,18 +519,11 @@ class SpanPanelClient:
             return await self._retry_with_backoff(_get_status_operation)
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
-            # The above function will raise an exception, this line will never be reached
-            # But we add it for static type checkers
-            raise SpanPanelAPIError(
-                "Unexpected status code", getattr(e, "status_code", None)
-            )
         except httpx.HTTPStatusError as e:
             unexpected_status = UnexpectedStatus(
                 e.response.status_code, e.response.content
             )
             self._handle_unexpected_status(unexpected_status)
-            # This will never be reached
-            raise
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
@@ -556,15 +588,11 @@ class SpanPanelClient:
             return await self._retry_with_backoff(_get_circuits_operation)
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
-            raise SpanPanelAPIError(
-                "Unexpected status code", getattr(e, "status_code", None)
-            )
         except httpx.HTTPStatusError as e:
             unexpected_status = UnexpectedStatus(
                 e.response.status_code, e.response.content
             )
             self._handle_unexpected_status(unexpected_status)
-            raise
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
@@ -592,15 +620,11 @@ class SpanPanelClient:
             return await self._retry_with_backoff(_get_storage_soe_operation)
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
-            raise SpanPanelAPIError(
-                "Unexpected status code", getattr(e, "status_code", None)
-            )
         except httpx.HTTPStatusError as e:
             unexpected_status = UnexpectedStatus(
                 e.response.status_code, e.response.content
             )
             self._handle_unexpected_status(unexpected_status)
-            raise
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
@@ -663,15 +687,11 @@ class SpanPanelClient:
             return await self._retry_with_backoff(_set_circuit_relay_operation)
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
-            raise SpanPanelAPIError(
-                "Unexpected status code", getattr(e, "status_code", None)
-            )
         except httpx.HTTPStatusError as e:
             unexpected_status = UnexpectedStatus(
                 e.response.status_code, e.response.content
             )
             self._handle_unexpected_status(unexpected_status)
-            raise
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
@@ -734,15 +754,11 @@ class SpanPanelClient:
             return await self._retry_with_backoff(_set_circuit_priority_operation)
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
-            raise SpanPanelAPIError(
-                "Unexpected status code", getattr(e, "status_code", None)
-            )
         except httpx.HTTPStatusError as e:
             unexpected_status = UnexpectedStatus(
                 e.response.status_code, e.response.content
             )
             self._handle_unexpected_status(unexpected_status)
-            raise
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:

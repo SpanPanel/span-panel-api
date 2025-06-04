@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "span-panel-api"
-version = "0.1.0"
+version = "1.0.0"
 description = "A client library for SPAN Panel API"
 authors = ["SpanPanel"]
 readme = "README.md"

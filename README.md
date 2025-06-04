@@ -380,7 +380,8 @@ span_openapi/
 ### SSL Configuration
 
 ```python
-# For panels with custom certificates
+# For panels that support SSL locally
+# Note: We do not currently observe panels supporting SSL for local access
 client = SpanPanelClient(
     host="span-panel.local",
     use_ssl=True,
@@ -433,29 +434,3 @@ poetry run pytest --cov=span_panel_api tests/
 ## License
 
 MIT License - see LICENSE file for details.
-
-## SPAN Integration Configuration
-
-The SPAN Home Assistant integration uses different timeout and retry settings depending on the operation:
-
-### Configuration and Setup Operations
-During panel discovery, configuration, and authentication:
-- **Timeout**: 15 seconds (for quick user feedback)
-- **Retries**: 0 (no retries to avoid long waits during setup)
-
-### Normal Operations
-During regular data polling and control operations:
-- **Timeout**: 30 seconds (default)
-- **Retries**: 3 (configurable, with exponential backoff)
-- **Retry Timeout**: 0.5 seconds (configurable base delay)
-- **Retry Backoff Multiplier**: 2.0 (configurable exponential factor)
-
-### User Configuration Options
-Users can configure retry behavior in the integration options:
-- **API Retries** (0-10): Number of retry attempts for failed requests
-- **API Retry Timeout** (0.1-10.0s): Base wait time between retries
-- **API Retry Backoff Multiplier** (1.0-5.0): Exponential backoff multiplier
-
-These settings only apply to normal operations, not configuration flows.
-
-## Timeout and Retry Control

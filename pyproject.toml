@@ -2,12 +2,15 @@
 name = "span-panel-api"
 version = "0.1.0"
 description = "A client library for SPAN Panel API"
-authors = []
+authors = ["SpanPanel"]
 readme = "README.md"
 packages = [
     {include = "span_panel_api", from = "src"},
 ]
 
+[tool.poetry.urls]
+Homepage = "https://github.com/SpanPanel/span-panel-api"
+Issues = "https://github.com/SpanPanel/span-panel-api/issues"
 
 [tool.poetry.dependencies]
 python = "^3.9"

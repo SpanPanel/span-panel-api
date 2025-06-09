@@ -487,12 +487,20 @@ class TestTimeoutBehavior:
 
     @pytest.mark.asyncio
     async def test_real_timeout_to_unreachable_host(self):
-        """Test actual timeout to an unreachable host."""
-        # Use a non-routable IP that will definitely timeout quickly
-        client = SpanPanelClient("192.0.2.1", timeout=0.001)  # Very short timeout
+        """Test timeout behavior with mocked connection timeout."""
+        client = SpanPanelClient("192.168.1.100", timeout=0.001)  # Very short timeout
 
-        with pytest.raises((SpanPanelTimeoutError, SpanPanelConnectionError)):
-            await client.get_status()
+        with patch(
+            "span_panel_api.client.system_status_api_v1_status_get"
+        ) as mock_status:
+            mock_status.asyncio = AsyncMock(
+                side_effect=httpx.TimeoutException("Connection timeout")
+            )
+
+            with pytest.raises(
+                SpanPanelTimeoutError, match="Request timed out after 0.001s"
+            ):
+                await client.get_status()
 
 
 class TestAPIMethodErrors:

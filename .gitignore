@@ -9,6 +9,7 @@ dist/
 
 # Environments
 .env
+.envrc
 .venv
 
 # mypy

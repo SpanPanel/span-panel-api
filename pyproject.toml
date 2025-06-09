@@ -130,3 +130,6 @@ exclude_lines = [
 [tool.bandit]
 # Security linter configuration
 exclude_dirs = ["tests", "src/span_panel_api/generated_client"]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"

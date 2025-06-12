@@ -7,12 +7,12 @@ This creates the raw generated client in generated_client/ which is then used
 by the wrapper in src/span_panel_api/
 """
 
+from pathlib import Path
 import subprocess  # nosec B404
 import sys
-from pathlib import Path
 
 
-def main():
+def main() -> int:
     """Generate the OpenAPI client."""
     print("🚀 Generating SPAN Panel OpenAPI Client")
     print("=" * 50)
@@ -27,9 +27,7 @@ def main():
     generated_dir = Path("src/span_panel_api/generated_client")
     if generated_dir.exists():
         print(f"🧹 Removing existing generated client: {generated_dir}")
-        subprocess.run(
-            ["rm", "-rf", str(generated_dir)], check=True
-        )  # nosec B603, B607
+        subprocess.run(["rm", "-rf", str(generated_dir)], check=True)  # nosec B603, B607
 
     # Generate the client
     print("⚙️  Running openapi-python-client...")
@@ -49,11 +47,7 @@ def main():
     result = subprocess.run(cmd, capture_output=True, text=True)  # nosec B603
 
     # Check what was created regardless of exit code (might fail on ruff but files still generated)
-    created_dirs = [
-        d
-        for d in Path(".").iterdir()
-        if d.is_dir() and d.name.startswith(("span", "generated"))
-    ]
+    created_dirs = [d for d in Path(".").iterdir() if d.is_dir() and d.name.startswith(("span", "generated"))]
 
     if created_dirs:
         created_dir = created_dirs[0]
@@ -69,16 +63,10 @@ def main():
         if result.returncode == 0:
             print("✅ Generation completed successfully!")
         else:
-            print(
-                "⚠️  Generation completed with warnings (likely ruff formatting issues)"
-            )
+            print("⚠️  Generation completed with warnings (likely ruff formatting issues)")
             if "ruff failed" in result.stderr:
-                print(
-                    "   The files were generated but ruff found some formatting issues."
-                )
-                print(
-                    "   This is expected due to OpenAPI naming conflicts and can be ignored."
-                )
+                print("   The files were generated but ruff found some formatting issues.")
+                print("   This is expected due to OpenAPI naming conflicts and can be ignored.")
 
         print("✅ Client ready in src/span_panel_api/generated_client/")
         return 0

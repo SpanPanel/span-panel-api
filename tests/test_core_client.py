@@ -56,9 +56,7 @@ class TestClientInitialization:
     def test_imports_work(self):
         """Test that all expected imports are available."""
         from span_panel_api.generated_client import AuthenticatedClient, Client
-        from span_panel_api.generated_client.api.default import (
-            system_status_api_v1_status_get,
-        )
+        from span_panel_api.generated_client.api.default import system_status_api_v1_status_get
 
         assert AuthenticatedClient is not None
         assert Client is not None
@@ -83,13 +81,7 @@ class TestRetryConfiguration:
 
     def test_custom_constructor_configuration(self):
         """Test custom retry configuration via constructor."""
-        client = SpanPanelClient(
-            "192.168.1.100",
-            timeout=15.0,
-            retries=3,
-            retry_timeout=1.0,
-            retry_backoff_multiplier=1.5,
-        )
+        client = SpanPanelClient("192.168.1.100", timeout=15.0, retries=3, retry_timeout=1.0, retry_backoff_multiplier=1.5)
         assert client._timeout == 15.0
         assert client.retries == 3
         assert client.retry_timeout == 1.0
@@ -126,9 +118,7 @@ class TestRetryConfiguration:
     def test_validation_backoff_multiplier(self):
         """Test validation of retry_backoff_multiplier parameter."""
         client = SpanPanelClient("192.168.1.100")
-        with pytest.raises(
-            ValueError, match="retry_backoff_multiplier must be at least 1"
-        ):
+        with pytest.raises(ValueError, match="retry_backoff_multiplier must be at least 1"):
             client.retry_backoff_multiplier = 0.5
 
     def test_constructor_validation(self):
@@ -139,9 +129,7 @@ class TestRetryConfiguration:
         with pytest.raises(ValueError, match="retry_timeout must be non-negative"):
             SpanPanelClient("192.168.1.100", retry_timeout=-1.0)
 
-        with pytest.raises(
-            ValueError, match="retry_backoff_multiplier must be at least 1"
-        ):
+        with pytest.raises(ValueError, match="retry_backoff_multiplier must be at least 1"):
             SpanPanelClient("192.168.1.100", retry_backoff_multiplier=0.5)
 
 
@@ -175,9 +163,7 @@ class TestClientInternals:
 
         assert isinstance(unauthenticated_client, Client)
 
-    def test_get_unauthenticated_client_when_not_in_context_and_no_existing_client(
-        self,
-    ):
+    def test_get_unauthenticated_client_when_not_in_context_and_no_existing_client(self):
         """Test _get_unauthenticated_client when not in context and no existing client."""
         client = SpanPanelClient("192.168.1.100")
 
@@ -205,9 +191,7 @@ class TestClientInternals:
         assert client._client is None
         assert client._httpx_client_owned is False
 
-    def test_get_unauthenticated_client_when_not_in_context_but_has_existing_client(
-        self,
-    ):
+    def test_get_unauthenticated_client_when_not_in_context_but_has_existing_client(self):
         """Test _get_unauthenticated_client when not in context but already has client."""
         client = SpanPanelClient("192.168.1.100")
         client._in_context = False
@@ -229,9 +213,7 @@ class TestAPIMethodsSuccess:
         """Test successful status retrieval."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # Mock status response
             status_response = MagicMock()
             status_response.system = MagicMock(manufacturer="SPAN")
@@ -248,9 +230,7 @@ class TestAPIMethodsSuccess:
         client = SpanPanelClient("192.168.1.100")
         client.set_access_token("test-token")
 
-        with patch(
-            "span_panel_api.client.get_panel_state_api_v1_panel_get"
-        ) as mock_panel:
+        with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
             # Mock panel state response
             panel_response = MagicMock()
             panel_response.main_relay_state = "CLOSED"
@@ -268,14 +248,10 @@ class TestAPIMethodsSuccess:
         client = SpanPanelClient("192.168.1.100")
         client.set_access_token("test-token")
 
-        with patch(
-            "span_panel_api.client.get_circuits_api_v1_circuits_get"
-        ) as mock_circuits:
+        with patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits:
             # Mock circuits response
             circuits_response = MagicMock()
-            circuits_response.circuits = {
-                "1": MagicMock(name="Main", instant_power_w=1500)
-            }
+            circuits_response.circuits = {"1": MagicMock(name="Main", instant_power_w=1500)}
             mock_circuits.asyncio = AsyncMock(return_value=circuits_response)
 
             result = await client.get_circuits()
@@ -289,9 +265,7 @@ class TestAPIMethodsSuccess:
         client = SpanPanelClient("192.168.1.100")
         client.set_access_token("test-token")
 
-        with patch(
-            "span_panel_api.client.get_storage_soe_api_v1_storage_soe_get"
-        ) as mock_storage:
+        with patch("span_panel_api.client.get_storage_soe_api_v1_storage_soe_get") as mock_storage:
             # Mock storage SOE response
             storage_response = MagicMock()
             storage_response.soe = 0.85
@@ -309,9 +283,7 @@ class TestAPIMethodsSuccess:
         client = SpanPanelClient("192.168.1.100")
         client.set_access_token("test-token")
 
-        with patch(
-            "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
-        ) as mock_set_circuit:
+        with patch("span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post") as mock_set_circuit:
             # Mock circuit update response
             circuit_response = MagicMock()
             circuit_response.relay_state = "OPEN"
@@ -328,9 +300,7 @@ class TestAPIMethodsSuccess:
         client = SpanPanelClient("192.168.1.100")
         client.set_access_token("test-token")
 
-        with patch(
-            "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
-        ) as mock_set_circuit:
+        with patch("span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post") as mock_set_circuit:
             # Mock circuit update response
             circuit_response = MagicMock()
             circuit_response.priority = "MUST_HAVE"
@@ -360,16 +330,12 @@ class TestGeneratedClient:
         client = Client(base_url="https://test.example.com")
         assert client is not None
 
-        auth_client = AuthenticatedClient(
-            base_url="https://test.example.com", token="test-token"
-        )
+        auth_client = AuthenticatedClient(base_url="https://test.example.com", token="test-token")
         assert auth_client is not None
 
     def test_api_functions_import(self):
         """Test that API functions can be imported."""
-        from span_panel_api.generated_client.api.default import (
-            system_status_api_v1_status_get,
-        )
+        from span_panel_api.generated_client.api.default import system_status_api_v1_status_get
 
         # This should not raise import errors
         assert system_status_api_v1_status_get is not None
@@ -441,11 +407,7 @@ class TestExceptionInheritance:
 
     def test_status_code_constants(self):
         """Test that status code constants are defined correctly."""
-        from span_panel_api.const import (
-            AUTH_ERROR_CODES,
-            RETRIABLE_ERROR_CODES,
-            SERVER_ERROR_CODES,
-        )
+        from span_panel_api.const import AUTH_ERROR_CODES, RETRIABLE_ERROR_CODES, SERVER_ERROR_CODES
 
         # Auth errors: 401, 403
         assert 401 in AUTH_ERROR_CODES

@@ -18,9 +18,7 @@ def _get_kwargs() -> dict[str, Any]:
     return _kwargs
 
 
-def _parse_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[BatteryStorage]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[BatteryStorage]:
     if response.status_code == 200:
         response_200 = BatteryStorage.from_dict(response.json())
 
@@ -31,9 +29,7 @@ def _parse_response(
         return None
 
 
-def _build_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[BatteryStorage]:
+def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[BatteryStorage]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,

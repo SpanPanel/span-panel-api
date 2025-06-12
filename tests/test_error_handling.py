@@ -30,9 +30,7 @@ class TestHTTPStatusErrorHandling:
         client = SpanPanelClient("192.168.1.100")
         client.set_access_token("test-token")
 
-        with patch(
-            "span_panel_api.client.get_panel_state_api_v1_panel_get"
-        ) as mock_panel:
+        with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
             # Create a proper mock response with status_code
             mock_response = MagicMock()
             mock_response.status_code = 401
@@ -40,9 +38,7 @@ class TestHTTPStatusErrorHandling:
             mock_request = MagicMock()
 
             mock_panel.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "401 Unauthorized", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("401 Unauthorized", request=mock_request, response=mock_response)
             )
 
             with pytest.raises(SpanPanelAuthError, match="Authentication required"):
@@ -54,9 +50,7 @@ class TestHTTPStatusErrorHandling:
         client = SpanPanelClient("192.168.1.100")
         client.set_access_token("test-token")
 
-        with patch(
-            "span_panel_api.client.get_panel_state_api_v1_panel_get"
-        ) as mock_panel:
+        with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
             # Create a proper mock response with status_code
             mock_response = MagicMock()
             mock_response.status_code = 403
@@ -64,9 +58,7 @@ class TestHTTPStatusErrorHandling:
             mock_request = MagicMock()
 
             mock_panel.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "403 Forbidden", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("403 Forbidden", request=mock_request, response=mock_response)
             )
 
             with pytest.raises(SpanPanelAuthError, match="Authentication required"):
@@ -77,9 +69,7 @@ class TestHTTPStatusErrorHandling:
         """Test 500 Internal Server Error handling."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # Create a proper mock response with status_code
             mock_response = MagicMock()
             mock_response.status_code = 500
@@ -87,11 +77,7 @@ class TestHTTPStatusErrorHandling:
             mock_request = MagicMock()
 
             mock_status.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "500 Internal Server Error",
-                    request=mock_request,
-                    response=mock_response,
-                )
+                side_effect=httpx.HTTPStatusError("500 Internal Server Error", request=mock_request, response=mock_response)
             )
 
             with pytest.raises(SpanPanelServerError, match="Server error 500"):
@@ -102,9 +88,7 @@ class TestHTTPStatusErrorHandling:
         """Test 502 Bad Gateway error handling."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # Create a proper mock response with status_code
             mock_response = MagicMock()
             mock_response.status_code = 502
@@ -112,14 +96,10 @@ class TestHTTPStatusErrorHandling:
             mock_request = MagicMock()
 
             mock_status.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "502 Bad Gateway", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("502 Bad Gateway", request=mock_request, response=mock_response)
             )
 
-            with pytest.raises(
-                SpanPanelRetriableError, match="Retriable server error 502"
-            ):
+            with pytest.raises(SpanPanelRetriableError, match="Retriable server error 502"):
                 await client.get_status()
 
     @pytest.mark.asyncio
@@ -127,9 +107,7 @@ class TestHTTPStatusErrorHandling:
         """Test 503 Service Unavailable error handling."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # Create a proper mock response with status_code
             mock_response = MagicMock()
             mock_response.status_code = 503
@@ -137,16 +115,10 @@ class TestHTTPStatusErrorHandling:
             mock_request = MagicMock()
 
             mock_status.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "503 Service Unavailable",
-                    request=mock_request,
-                    response=mock_response,
-                )
+                side_effect=httpx.HTTPStatusError("503 Service Unavailable", request=mock_request, response=mock_response)
             )
 
-            with pytest.raises(
-                SpanPanelRetriableError, match="Retriable server error 503"
-            ):
+            with pytest.raises(SpanPanelRetriableError, match="Retriable server error 503"):
                 await client.get_status()
 
     @pytest.mark.asyncio
@@ -154,9 +126,7 @@ class TestHTTPStatusErrorHandling:
         """Test 504 Gateway Timeout error handling."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # Create a proper mock response with status_code
             mock_response = MagicMock()
             mock_response.status_code = 504
@@ -164,14 +134,10 @@ class TestHTTPStatusErrorHandling:
             mock_request = MagicMock()
 
             mock_status.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "504 Gateway Timeout", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("504 Gateway Timeout", request=mock_request, response=mock_response)
             )
 
-            with pytest.raises(
-                SpanPanelRetriableError, match="Retriable server error 504"
-            ):
+            with pytest.raises(SpanPanelRetriableError, match="Retriable server error 504"):
                 await client.get_status()
 
     @pytest.mark.asyncio
@@ -179,9 +145,7 @@ class TestHTTPStatusErrorHandling:
         """Test other HTTP error handling (e.g., 404)."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # Create a proper mock response with status_code
             mock_response = MagicMock()
             mock_response.status_code = 404
@@ -189,9 +153,7 @@ class TestHTTPStatusErrorHandling:
             mock_request = MagicMock()
 
             mock_status.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "404 Not Found", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("404 Not Found", request=mock_request, response=mock_response)
             )
 
             with pytest.raises(SpanPanelAPIError, match="HTTP 404"):
@@ -316,9 +278,7 @@ class TestRetryLogic:
     @pytest.mark.asyncio
     async def test_retry_with_exponential_backoff(self):
         """Test that exponential backoff delays are calculated correctly."""
-        client = SpanPanelClient(
-            "192.168.1.100", retries=2, retry_timeout=0.1, retry_backoff_multiplier=2.0
-        )
+        client = SpanPanelClient("192.168.1.100", retries=2, retry_timeout=0.1, retry_backoff_multiplier=2.0)
 
         call_count = 0
         start_time = asyncio.get_event_loop().time()
@@ -347,18 +307,15 @@ class TestRetryLogic:
         client = SpanPanelClient("192.168.1.100", retries=2, retry_timeout=0.001)
 
         # Test retriable errors (should retry)
-        retriable_exceptions = [
-            httpx.ConnectError("Connection failed"),
-            httpx.TimeoutException("Request timeout"),
-        ]
+        retriable_exceptions = [httpx.ConnectError("Connection failed"), httpx.TimeoutException("Request timeout")]
 
         for exception in retriable_exceptions:
             call_count = 0
 
-            async def mock_operation():
+            async def mock_operation(err=exception):
                 nonlocal call_count
                 call_count += 1
-                raise exception
+                raise err
 
             with pytest.raises(type(exception)):
                 await client._retry_with_backoff(mock_operation)
@@ -381,9 +338,7 @@ class TestRetryLogic:
             mock_response.status_code = 502
             mock_request = MagicMock()
 
-            raise httpx.HTTPStatusError(
-                "502 Bad Gateway", request=mock_request, response=mock_response
-            )
+            raise httpx.HTTPStatusError("502 Bad Gateway", request=mock_request, response=mock_response)
 
         # The raw httpx exception should be re-raised after retries
         with pytest.raises(httpx.HTTPStatusError):
@@ -399,17 +354,15 @@ class TestRetryLogic:
 
         call_count = 0
 
-        async def mock_operation():
+        async def mock_operation(status_code=400, error_message="400 Bad Request"):
             nonlocal call_count
             call_count += 1
             # Create mock response for 400 error (not retriable)
             mock_response = MagicMock()
-            mock_response.status_code = 400
+            mock_response.status_code = status_code
             mock_request = MagicMock()
 
-            raise httpx.HTTPStatusError(
-                "400 Bad Request", request=mock_request, response=mock_response
-            )
+            raise httpx.HTTPStatusError(error_message, request=mock_request, response=mock_response)
 
         # The raw httpx exception should be re-raised immediately (no retries)
         with pytest.raises(httpx.HTTPStatusError):
@@ -429,13 +382,11 @@ class TestRetryLogic:
         ]
 
         for config in test_configs:
-            client = SpanPanelClient(
-                "192.168.1.100", retries=config["retries"], retry_timeout=0.001
-            )
+            client = SpanPanelClient("192.168.1.100", retries=config["retries"], retry_timeout=0.001)
 
             call_count = 0
 
-            async def mock_operation():
+            async def mock_operation(expected_attempts=config["expected_attempts"]):
                 nonlocal call_count
                 call_count += 1
                 raise httpx.ConnectError("Connection failed")
@@ -443,9 +394,7 @@ class TestRetryLogic:
             with pytest.raises(httpx.ConnectError):
                 await client._retry_with_backoff(mock_operation)
 
-            assert (
-                call_count == config["expected_attempts"]
-            ), f"Failed for config {config}"
+            assert call_count == config["expected_attempts"], f"Failed for config {config}"
 
 
 class TestTimeoutBehavior:
@@ -456,16 +405,10 @@ class TestTimeoutBehavior:
         """Test that mocked timeout exceptions are properly converted."""
         client = SpanPanelClient("192.168.1.100", timeout=1.0)
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
-            mock_status.asyncio = AsyncMock(
-                side_effect=httpx.TimeoutException("Request timeout")
-            )
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
+            mock_status.asyncio = AsyncMock(side_effect=httpx.TimeoutException("Request timeout"))
 
-            with pytest.raises(
-                SpanPanelTimeoutError, match="Request timed out after 1.0s"
-            ):
+            with pytest.raises(SpanPanelTimeoutError, match="Request timed out after 1.0s"):
                 await client.get_status()
 
     @pytest.mark.asyncio
@@ -473,16 +416,10 @@ class TestTimeoutBehavior:
         """Test timeout handling during authentication."""
         client = SpanPanelClient("192.168.1.100", timeout=2.0)
 
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
-            mock_auth.asyncio = AsyncMock(
-                side_effect=httpx.TimeoutException("Auth timeout")
-            )
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
+            mock_auth.asyncio = AsyncMock(side_effect=httpx.TimeoutException("Auth timeout"))
 
-            with pytest.raises(
-                SpanPanelTimeoutError, match="Request timed out after 2.0s"
-            ):
+            with pytest.raises(SpanPanelTimeoutError, match="Request timed out after 2.0s"):
                 await client.authenticate("test-app", "Test Application")
 
     @pytest.mark.asyncio
@@ -490,16 +427,10 @@ class TestTimeoutBehavior:
         """Test timeout behavior with mocked connection timeout."""
         client = SpanPanelClient("192.168.1.100", timeout=0.001)  # Very short timeout
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
-            mock_status.asyncio = AsyncMock(
-                side_effect=httpx.TimeoutException("Connection timeout")
-            )
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
+            mock_status.asyncio = AsyncMock(side_effect=httpx.TimeoutException("Connection timeout"))
 
-            with pytest.raises(
-                SpanPanelTimeoutError, match="Request timed out after 0.001s"
-            ):
+            with pytest.raises(SpanPanelTimeoutError, match="Request timed out after 0.001s"):
                 await client.get_status()
 
 
@@ -512,12 +443,8 @@ class TestAPIMethodErrors:
         client = SpanPanelClient("192.168.1.100")
         client.set_access_token("test-token")
 
-        with patch(
-            "span_panel_api.client.get_storage_soe_api_v1_storage_soe_get"
-        ) as mock_storage:
-            mock_storage.asyncio = AsyncMock(
-                side_effect=httpx.ConnectError("Failed to connect")
-            )
+        with patch("span_panel_api.client.get_storage_soe_api_v1_storage_soe_get") as mock_storage:
+            mock_storage.asyncio = AsyncMock(side_effect=httpx.ConnectError("Failed to connect"))
 
             with pytest.raises(SpanPanelConnectionError, match="Failed to connect"):
                 await client.get_storage_soe()
@@ -536,16 +463,10 @@ class TestAPIMethodErrors:
         """Test connection error handling."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
-            mock_status.asyncio = AsyncMock(
-                side_effect=httpx.ConnectError("Connection refused")
-            )
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
+            mock_status.asyncio = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
 
-            with pytest.raises(
-                SpanPanelConnectionError, match="Failed to connect to 192.168.1.100"
-            ):
+            with pytest.raises(SpanPanelConnectionError, match="Failed to connect to 192.168.1.100"):
                 await client.get_status()
 
     @pytest.mark.asyncio
@@ -553,9 +474,7 @@ class TestAPIMethodErrors:
         """Test general API error handling."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             mock_status.asyncio = AsyncMock(side_effect=ValueError("Invalid data"))
 
             with pytest.raises(SpanPanelAPIError, match="API error: Invalid data"):
@@ -566,14 +485,10 @@ class TestAPIMethodErrors:
         """Test get_status API error handling."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             mock_status.asyncio = AsyncMock(side_effect=Exception("General error"))
 
-            with pytest.raises(
-                SpanPanelAPIError, match="Unexpected error: General error"
-            ):
+            with pytest.raises(SpanPanelAPIError, match="Unexpected error: General error"):
                 await client.get_status()
 
     @pytest.mark.asyncio
@@ -581,14 +496,10 @@ class TestAPIMethodErrors:
         """Test ValueError handling in get_status."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             mock_status.asyncio.side_effect = ValueError("Pydantic validation failed")
 
-            with pytest.raises(
-                SpanPanelAPIError, match="API error: Pydantic validation failed"
-            ):
+            with pytest.raises(SpanPanelAPIError, match="API error: Pydantic validation failed"):
                 await client.get_status()
 
     @pytest.mark.asyncio
@@ -596,14 +507,10 @@ class TestAPIMethodErrors:
         """Test generic Exception handling in get_status."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             mock_status.asyncio.side_effect = RuntimeError("Unexpected error")
 
-            with pytest.raises(
-                SpanPanelAPIError, match="Unexpected error: Unexpected error"
-            ):
+            with pytest.raises(SpanPanelAPIError, match="Unexpected error: Unexpected error"):
                 await client.get_status()
 
     @pytest.mark.asyncio
@@ -612,14 +519,10 @@ class TestAPIMethodErrors:
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
-        with patch(
-            "span_panel_api.client.get_circuits_api_v1_circuits_get"
-        ) as mock_circuits:
+        with patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits:
             mock_circuits.asyncio.side_effect = ValueError("Circuit validation failed")
 
-            with pytest.raises(
-                SpanPanelAPIError, match="API error: Circuit validation failed"
-            ):
+            with pytest.raises(SpanPanelAPIError, match="API error: Circuit validation failed"):
                 await client.get_circuits()
 
     @pytest.mark.asyncio
@@ -628,14 +531,10 @@ class TestAPIMethodErrors:
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
-        with patch(
-            "span_panel_api.client.get_storage_soe_api_v1_storage_soe_get"
-        ) as mock_storage:
+        with patch("span_panel_api.client.get_storage_soe_api_v1_storage_soe_get") as mock_storage:
             mock_storage.asyncio.side_effect = KeyError("Missing storage key")
 
-            with pytest.raises(
-                SpanPanelAPIError, match="Unexpected error: 'Missing storage key'"
-            ):
+            with pytest.raises(SpanPanelAPIError, match="Unexpected error: 'Missing storage key'"):
                 await client.get_storage_soe()
 
     @pytest.mark.asyncio
@@ -644,14 +543,10 @@ class TestAPIMethodErrors:
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
-        with patch(
-            "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
-        ) as mock_relay:
+        with patch("span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post") as mock_relay:
             mock_relay.asyncio.side_effect = ValueError("Invalid relay state")
 
-            with pytest.raises(
-                SpanPanelAPIError, match="API error: Invalid relay state"
-            ):
+            with pytest.raises(SpanPanelAPIError, match="API error: Invalid relay state"):
                 await client.set_circuit_relay("circuit-1", "OPEN")
 
     @pytest.mark.asyncio
@@ -660,14 +555,10 @@ class TestAPIMethodErrors:
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
-        with patch(
-            "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
-        ) as mock_priority:
+        with patch("span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post") as mock_priority:
             mock_priority.asyncio.side_effect = AttributeError("Missing attribute")
 
-            with pytest.raises(
-                SpanPanelAPIError, match="Unexpected error: Missing attribute"
-            ):
+            with pytest.raises(SpanPanelAPIError, match="Unexpected error: Missing attribute"):
                 await client.set_circuit_priority("circuit-1", "MUST_HAVE")
 
 
@@ -692,9 +583,7 @@ class TestPropertyValidationEdgeCases:
         """Test retry_backoff_multiplier property validation with value < 1."""
         client = SpanPanelClient("192.168.1.100")
 
-        with pytest.raises(
-            ValueError, match="retry_backoff_multiplier must be at least 1"
-        ):
+        with pytest.raises(ValueError, match="retry_backoff_multiplier must be at least 1"):
             client.retry_backoff_multiplier = 0.5
 
 
@@ -707,12 +596,8 @@ class TestIntegrationScenarios:
         client = SpanPanelClient("192.168.1.100")  # Default: retries=0
 
         # Default config should fail fast without retries
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
-            mock_status.asyncio = AsyncMock(
-                side_effect=httpx.TimeoutException("Timeout")
-            )
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
+            mock_status.asyncio = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
 
             with pytest.raises(SpanPanelTimeoutError):
                 await client.get_status()
@@ -751,12 +636,8 @@ class TestIntegrationScenarios:
         # Fast failure for tests
         client = SpanPanelClient("192.168.1.100", timeout=0.001, retries=0)
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
-            mock_status.asyncio = AsyncMock(
-                side_effect=httpx.TimeoutException("Timeout")
-            )
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
+            mock_status.asyncio = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
 
             with pytest.raises(SpanPanelTimeoutError):
                 await client.get_status()
@@ -766,9 +647,7 @@ class TestIntegrationScenarios:
         """Test context manager with retry configuration."""
         client = SpanPanelClient("192.168.1.100", retries=1, retry_timeout=0.001)
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             call_count = 0
 
             def side_effect(*args, **kwargs):
@@ -814,18 +693,14 @@ class TestHTTPStatusErrorInAPIMethods:
         """Test HTTPStatusError handling in authenticate for auth error codes."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             # Create HTTPStatusError for 401
             mock_response = MagicMock()
             mock_response.status_code = 401
             mock_request = MagicMock()
 
             mock_auth.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "401 Unauthorized", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("401 Unauthorized", request=mock_request, response=mock_response)
             )
 
             with pytest.raises(SpanPanelAuthError, match="Authentication failed"):
@@ -836,18 +711,14 @@ class TestHTTPStatusErrorInAPIMethods:
         """Test HTTPStatusError handling in authenticate for non-auth error codes."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             # Create HTTPStatusError for 404
             mock_response = MagicMock()
             mock_response.status_code = 404
             mock_request = MagicMock()
 
             mock_auth.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "404 Not Found", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("404 Not Found", request=mock_request, response=mock_response)
             )
 
             with pytest.raises(SpanPanelAPIError, match="HTTP 404"):
@@ -858,9 +729,7 @@ class TestHTTPStatusErrorInAPIMethods:
         """Test HTTPStatusError handling in get_status."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # Create HTTPStatusError
             mock_response = MagicMock()
             mock_response.status_code = 500
@@ -868,11 +737,7 @@ class TestHTTPStatusErrorInAPIMethods:
             mock_request = MagicMock()
 
             mock_status.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "500 Internal Server Error",
-                    request=mock_request,
-                    response=mock_response,
-                )
+                side_effect=httpx.HTTPStatusError("500 Internal Server Error", request=mock_request, response=mock_response)
             )
 
             with pytest.raises(SpanPanelServerError, match="Server error 500"):
@@ -884,9 +749,7 @@ class TestHTTPStatusErrorInAPIMethods:
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
-        with patch(
-            "span_panel_api.client.get_panel_state_api_v1_panel_get"
-        ) as mock_panel:
+        with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
             # Create HTTPStatusError
             mock_response = MagicMock()
             mock_response.status_code = 502
@@ -894,14 +757,10 @@ class TestHTTPStatusErrorInAPIMethods:
             mock_request = MagicMock()
 
             mock_panel.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "502 Bad Gateway", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("502 Bad Gateway", request=mock_request, response=mock_response)
             )
 
-            with pytest.raises(
-                SpanPanelRetriableError, match="Retriable server error 502"
-            ):
+            with pytest.raises(SpanPanelRetriableError, match="Retriable server error 502"):
                 await client.get_panel_state()
 
     @pytest.mark.asyncio
@@ -910,9 +769,7 @@ class TestHTTPStatusErrorInAPIMethods:
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
-        with patch(
-            "span_panel_api.client.get_circuits_api_v1_circuits_get"
-        ) as mock_circuits:
+        with patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits:
             # Create HTTPStatusError
             mock_response = MagicMock()
             mock_response.status_code = 503
@@ -920,16 +777,10 @@ class TestHTTPStatusErrorInAPIMethods:
             mock_request = MagicMock()
 
             mock_circuits.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "503 Service Unavailable",
-                    request=mock_request,
-                    response=mock_response,
-                )
+                side_effect=httpx.HTTPStatusError("503 Service Unavailable", request=mock_request, response=mock_response)
             )
 
-            with pytest.raises(
-                SpanPanelRetriableError, match="Retriable server error 503"
-            ):
+            with pytest.raises(SpanPanelRetriableError, match="Retriable server error 503"):
                 await client.get_circuits()
 
     @pytest.mark.asyncio
@@ -938,9 +789,7 @@ class TestHTTPStatusErrorInAPIMethods:
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
-        with patch(
-            "span_panel_api.client.get_storage_soe_api_v1_storage_soe_get"
-        ) as mock_storage:
+        with patch("span_panel_api.client.get_storage_soe_api_v1_storage_soe_get") as mock_storage:
             # Create HTTPStatusError
             mock_response = MagicMock()
             mock_response.status_code = 504
@@ -948,14 +797,10 @@ class TestHTTPStatusErrorInAPIMethods:
             mock_request = MagicMock()
 
             mock_storage.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "504 Gateway Timeout", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("504 Gateway Timeout", request=mock_request, response=mock_response)
             )
 
-            with pytest.raises(
-                SpanPanelRetriableError, match="Retriable server error 504"
-            ):
+            with pytest.raises(SpanPanelRetriableError, match="Retriable server error 504"):
                 await client.get_storage_soe()
 
     @pytest.mark.asyncio
@@ -964,9 +809,7 @@ class TestHTTPStatusErrorInAPIMethods:
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
-        with patch(
-            "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
-        ) as mock_relay:
+        with patch("span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post") as mock_relay:
             # Create HTTPStatusError
             mock_response = MagicMock()
             mock_response.status_code = 400
@@ -974,9 +817,7 @@ class TestHTTPStatusErrorInAPIMethods:
             mock_request = MagicMock()
 
             mock_relay.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "400 Bad Request", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("400 Bad Request", request=mock_request, response=mock_response)
             )
 
             with pytest.raises(SpanPanelAPIError, match="HTTP 400"):
@@ -988,9 +829,7 @@ class TestHTTPStatusErrorInAPIMethods:
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
-        with patch(
-            "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
-        ) as mock_priority:
+        with patch("span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post") as mock_priority:
             # Create HTTPStatusError
             mock_response = MagicMock()
             mock_response.status_code = 422
@@ -998,11 +837,7 @@ class TestHTTPStatusErrorInAPIMethods:
             mock_request = MagicMock()
 
             mock_priority.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "422 Unprocessable Entity",
-                    request=mock_request,
-                    response=mock_response,
-                )
+                side_effect=httpx.HTTPStatusError("422 Unprocessable Entity", request=mock_request, response=mock_response)
             )
 
             with pytest.raises(SpanPanelAPIError, match="HTTP 422"):
@@ -1013,17 +848,11 @@ class TestHTTPStatusErrorInAPIMethods:
         """Test HTTPStatusError vs ConnectError handling in authenticate."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             # Test ConnectError
-            mock_auth.asyncio = AsyncMock(
-                side_effect=httpx.ConnectError("Connection failed")
-            )
+            mock_auth.asyncio = AsyncMock(side_effect=httpx.ConnectError("Connection failed"))
 
-            with pytest.raises(
-                SpanPanelConnectionError, match="Failed to connect to 192.168.1.100"
-            ):
+            with pytest.raises(SpanPanelConnectionError, match="Failed to connect to 192.168.1.100"):
                 await client.authenticate("test-app", "Test Application")
 
     @pytest.mark.asyncio
@@ -1031,15 +860,9 @@ class TestHTTPStatusErrorInAPIMethods:
         """Test TimeoutException handling in authenticate."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             # Test TimeoutException
-            mock_auth.asyncio = AsyncMock(
-                side_effect=httpx.TimeoutException("Request timed out")
-            )
+            mock_auth.asyncio = AsyncMock(side_effect=httpx.TimeoutException("Request timed out"))
 
-            with pytest.raises(
-                SpanPanelTimeoutError, match="Request timed out after 30.0s"
-            ):
+            with pytest.raises(SpanPanelTimeoutError, match="Request timed out after 30.0s"):
                 await client.authenticate("test-app", "Test Application")

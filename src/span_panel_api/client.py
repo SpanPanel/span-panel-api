@@ -7,7 +7,8 @@ It wraps the generated OpenAPI client to provide a more convenient interface.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, NoReturn, cast
+from collections.abc import Awaitable
+from typing import Any, Callable, NoReturn, TypeVar, cast
 
 import httpx
 
@@ -20,6 +21,8 @@ from .exceptions import (
     SpanPanelServerError,
     SpanPanelTimeoutError,
 )
+
+T = TypeVar("T")
 
 try:
     from .generated_client import AuthenticatedClient, Client
@@ -169,9 +172,7 @@ class SpanPanelClient:
         """Get the appropriate HTTP client based on whether we have an access token."""
         if self._access_token:
             # We have a token, use authenticated client
-            if self._client is None or not isinstance(
-                self._client, AuthenticatedClient
-            ):
+            if self._client is None or not isinstance(self._client, AuthenticatedClient):
                 # Create a new authenticated client
                 self._client = AuthenticatedClient(
                     base_url=self._base_url,
@@ -240,11 +241,10 @@ class SpanPanelClient:
         """Close the client and cleanup resources."""
         if self._client:
             # The generated client has async context manager support
-            try:
+            from contextlib import suppress
+
+            with suppress(Exception):
                 await self._client.__aexit__(None, None, None)
-            except Exception:  # nosec B110
-                # Ignore errors during cleanup
-                pass
             self._client = None
         self._in_context = False
 
@@ -288,22 +288,16 @@ class SpanPanelClient:
                     self._client._async_client = old_async_client
                     # Update the Authorization header on the existing httpx client
                     header_value = f"{self._client.prefix} {self._client.token}"
-                    old_async_client.headers[self._client.auth_header_name] = (
-                        header_value
-                    )
+                    old_async_client.headers[self._client.auth_header_name] = header_value
             else:
                 # Already an AuthenticatedClient, just update the token
                 self._client.token = token
                 # Update the Authorization header on existing httpx clients
                 header_value = f"{self._client.prefix} {self._client.token}"
                 if self._client._async_client is not None:
-                    self._client._async_client.headers[
-                        self._client.auth_header_name
-                    ] = header_value
+                    self._client._async_client.headers[self._client.auth_header_name] = header_value
                 if self._client._client is not None:
-                    self._client._client.headers[self._client.auth_header_name] = (
-                        header_value
-                    )
+                    self._client._client.headers[self._client.auth_header_name] = header_value
 
     def _handle_unexpected_status(self, e: UnexpectedStatus) -> NoReturn:
         """Convert UnexpectedStatus to appropriate SpanPanel exception.
@@ -320,19 +314,13 @@ class SpanPanelClient:
         if e.status_code in AUTH_ERROR_CODES:
             raise SpanPanelAuthError("Authentication required") from e
         elif e.status_code in RETRIABLE_ERROR_CODES:
-            raise SpanPanelRetriableError(
-                f"Retriable server error {e.status_code}: {e}", e.status_code
-            ) from e
+            raise SpanPanelRetriableError(f"Retriable server error {e.status_code}: {e}", e.status_code) from e
         elif e.status_code in SERVER_ERROR_CODES:
-            raise SpanPanelServerError(
-                f"Server error {e.status_code}: {e}", e.status_code
-            ) from e
+            raise SpanPanelServerError(f"Server error {e.status_code}: {e}", e.status_code) from e
         else:
             raise SpanPanelAPIError(f"HTTP {e.status_code}: {e}", e.status_code) from e
 
-    def _get_client_for_endpoint(
-        self, requires_auth: bool = True
-    ) -> AuthenticatedClient | Client:
+    def _get_client_for_endpoint(self, requires_auth: bool = True) -> AuthenticatedClient | Client:
         """Get the appropriate client for an endpoint.
 
         Args:
@@ -344,26 +332,16 @@ class SpanPanelClient:
         """
         if requires_auth and not self._access_token:
             # Endpoint requires auth but we don't have a token
-            raise SpanPanelAuthError(
-                "This endpoint requires authentication. Call authenticate() first."
-            )
+            raise SpanPanelAuthError("This endpoint requires authentication. Call authenticate() first.")
 
         # If we're in a context, always use the existing client
         if self._in_context:
             if self._client is None:
-                raise SpanPanelAPIError(
-                    "Client is None while in context - this indicates a lifecycle issue"
-                )
+                raise SpanPanelAPIError("Client is None while in context - this indicates a lifecycle issue")
             # Verify we have the right client type for the request
-            if (
-                requires_auth
-                and self._access_token
-                and not isinstance(self._client, AuthenticatedClient)
-            ):
+            if requires_auth and self._access_token and not isinstance(self._client, AuthenticatedClient):
                 # We need auth but have wrong client type - this shouldn't happen after our fix
-                raise SpanPanelAPIError(
-                    "Client type mismatch: need AuthenticatedClient but have Client"
-                )
+                raise SpanPanelAPIError("Client type mismatch: need AuthenticatedClient but have Client")
             return self._client
 
         # Not in context, create a client if needed
@@ -371,7 +349,7 @@ class SpanPanelClient:
             self._client = self._get_client()
         return self._client
 
-    async def _retry_with_backoff(self, operation, *args, **kwargs):
+    async def _retry_with_backoff(self, operation: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any) -> T:
         """Execute an operation with retry logic and exponential backoff.
 
         Args:
@@ -386,9 +364,7 @@ class SpanPanelClient:
             The final exception if all retries are exhausted
         """
         retry_status_codes = set(RETRIABLE_ERROR_CODES)  # Retriable HTTP status codes
-        max_attempts = (
-            self._retries + 1
-        )  # retries=0 means 1 attempt, retries=1 means 2 attempts, etc.
+        max_attempts = self._retries + 1  # retries=0 means 1 attempt, retries=1 means 2 attempts, etc.
 
         for attempt in range(max_attempts):
             try:
@@ -396,22 +372,15 @@ class SpanPanelClient:
             except UnexpectedStatus as e:
                 # Only retry specific HTTP status codes that are typically transient
                 if e.status_code in retry_status_codes and attempt < max_attempts - 1:
-                    delay = self._retry_timeout * (
-                        self._retry_backoff_multiplier**attempt
-                    )  # Exponential backoff
+                    delay = self._retry_timeout * (self._retry_backoff_multiplier**attempt)  # Exponential backoff
                     await asyncio.sleep(delay)
                     continue
                 # Not retriable or last attempt - re-raise
                 raise
             except httpx.HTTPStatusError as e:
                 # Only retry specific HTTP status codes that are typically transient
-                if (
-                    e.response.status_code in retry_status_codes
-                    and attempt < max_attempts - 1
-                ):
-                    delay = self._retry_timeout * (
-                        self._retry_backoff_multiplier**attempt
-                    )  # Exponential backoff
+                if e.response.status_code in retry_status_codes and attempt < max_attempts - 1:
+                    delay = self._retry_timeout * (self._retry_backoff_multiplier**attempt)  # Exponential backoff
                     await asyncio.sleep(delay)
                     continue
                 # Not retriable or last attempt - re-raise
@@ -419,13 +388,14 @@ class SpanPanelClient:
             except (httpx.ConnectError, httpx.TimeoutException):
                 # Network/timeout errors are always retriable
                 if attempt < max_attempts - 1:
-                    delay = self._retry_timeout * (
-                        self._retry_backoff_multiplier**attempt
-                    )  # Exponential backoff
+                    delay = self._retry_timeout * (self._retry_backoff_multiplier**attempt)  # Exponential backoff
                     await asyncio.sleep(delay)
                     continue
                 # Last attempt - re-raise
                 raise
+
+        # This should never be reached, but added for mypy completeness
+        raise SpanPanelAPIError("Retry operation completed without success or exception")
 
     # Authentication Methods
     async def authenticate(self, name: str, description: str = "") -> AuthOut:
@@ -450,9 +420,7 @@ class SpanPanelClient:
             if response is None:
                 raise SpanPanelAPIError("Authentication failed - no response")
             elif isinstance(response, HTTPValidationError):
-                raise SpanPanelAPIError(
-                    f"Validation error during authentication: {response}"
-                )
+                raise SpanPanelAPIError(f"Validation error during authentication: {response}")
             elif hasattr(response, "access_token"):
                 # Store the token for future requests (works for both AuthOut and mocks)
                 self.set_access_token(response.access_token)
@@ -465,17 +433,11 @@ class SpanPanelClient:
             if e.status_code in AUTH_ERROR_CODES:
                 raise SpanPanelAuthError("Authentication failed") from e
             elif e.status_code in RETRIABLE_ERROR_CODES:
-                raise SpanPanelRetriableError(
-                    f"Retriable server error {e.status_code}: {e}", e.status_code
-                ) from e
+                raise SpanPanelRetriableError(f"Retriable server error {e.status_code}: {e}", e.status_code) from e
             elif e.status_code in SERVER_ERROR_CODES:
-                raise SpanPanelServerError(
-                    f"Server error {e.status_code}: {e}", e.status_code
-                ) from e
+                raise SpanPanelServerError(f"Server error {e.status_code}: {e}", e.status_code) from e
             else:
-                raise SpanPanelAPIError(
-                    f"HTTP {e.status_code}: {e}", e.status_code
-                ) from e
+                raise SpanPanelAPIError(f"HTTP {e.status_code}: {e}", e.status_code) from e
         except httpx.HTTPStatusError as e:
             # Convert HTTPStatusError to UnexpectedStatus and handle appropriately
             # Special case for auth endpoint - 401/403 here means auth failed
@@ -483,24 +445,16 @@ class SpanPanelClient:
                 raise SpanPanelAuthError("Authentication failed") from e
             elif e.response.status_code in RETRIABLE_ERROR_CODES:
                 raise SpanPanelRetriableError(
-                    f"Retriable server error {e.response.status_code}: {e}",
-                    e.response.status_code,
+                    f"Retriable server error {e.response.status_code}: {e}", e.response.status_code
                 ) from e
             elif e.response.status_code in SERVER_ERROR_CODES:
-                raise SpanPanelServerError(
-                    f"Server error {e.response.status_code}: {e}",
-                    e.response.status_code,
-                ) from e
+                raise SpanPanelServerError(f"Server error {e.response.status_code}: {e}", e.response.status_code) from e
             else:
-                raise SpanPanelAPIError(
-                    f"HTTP {e.response.status_code}: {e}", e.response.status_code
-                ) from e
+                raise SpanPanelAPIError(f"HTTP {e.response.status_code}: {e}", e.response.status_code) from e
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
-            raise SpanPanelTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from e
+            raise SpanPanelTimeoutError(f"Request timed out after {self._timeout}s") from e
         except Exception as e:
             raise SpanPanelAPIError(f"API error: {e}") from e
 
@@ -508,28 +462,26 @@ class SpanPanelClient:
     async def get_status(self) -> StatusOut:
         """Get complete panel system status (does not require authentication)."""
 
-        async def _get_status_operation():
+        async def _get_status_operation() -> StatusOut:
             client = self._get_client_for_endpoint(requires_auth=False)
             # Status endpoint works with both authenticated and unauthenticated clients
-            return await system_status_api_v1_status_get.asyncio(
-                client=cast(AuthenticatedClient, client)
-            )
+            result = await system_status_api_v1_status_get.asyncio(client=cast(AuthenticatedClient, client))
+            # Since raise_on_unexpected_status=True, result should never be None
+            if result is None:
+                raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
+            return result
 
         try:
             return await self._retry_with_backoff(_get_status_operation)
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
-            unexpected_status = UnexpectedStatus(
-                e.response.status_code, e.response.content
-            )
+            unexpected_status = UnexpectedStatus(e.response.status_code, e.response.content)
             self._handle_unexpected_status(unexpected_status)
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
-            raise SpanPanelTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from e
+            raise SpanPanelTimeoutError(f"Request timed out after {self._timeout}s") from e
         except ValueError as e:
             # Handle Pydantic validation errors and other ValueError instances
             raise SpanPanelAPIError(f"API error: {e}") from e
@@ -540,12 +492,14 @@ class SpanPanelClient:
     async def get_panel_state(self) -> PanelState:
         """Get panel state information."""
 
-        async def _get_panel_state_operation():
+        async def _get_panel_state_operation() -> PanelState:
             client = self._get_client_for_endpoint(requires_auth=True)
             # Type cast needed because generated API has overly strict type hints
-            return await get_panel_state_api_v1_panel_get.asyncio(
-                client=cast(AuthenticatedClient, client)
-            )
+            result = await get_panel_state_api_v1_panel_get.asyncio(client=cast(AuthenticatedClient, client))
+            # Since raise_on_unexpected_status=True, result should never be None
+            if result is None:
+                raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
+            return result
 
         try:
             return await self._retry_with_backoff(_get_panel_state_operation)
@@ -555,16 +509,12 @@ class SpanPanelClient:
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
-            unexpected_status = UnexpectedStatus(
-                e.response.status_code, e.response.content
-            )
+            unexpected_status = UnexpectedStatus(e.response.status_code, e.response.content)
             self._handle_unexpected_status(unexpected_status)
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
-            raise SpanPanelTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from e
+            raise SpanPanelTimeoutError(f"Request timed out after {self._timeout}s") from e
         except ValueError as e:
             # Handle Pydantic validation errors and other ValueError instances
             raise SpanPanelAPIError(f"API error: {e}") from e
@@ -577,28 +527,26 @@ class SpanPanelClient:
     async def get_circuits(self) -> CircuitsOut:
         """Get all circuits and their current state."""
 
-        async def _get_circuits_operation():
+        async def _get_circuits_operation() -> CircuitsOut:
             client = self._get_client_for_endpoint(requires_auth=True)
             # Type cast needed because generated API has overly strict type hints
-            return await get_circuits_api_v1_circuits_get.asyncio(
-                client=cast(AuthenticatedClient, client)
-            )
+            result = await get_circuits_api_v1_circuits_get.asyncio(client=cast(AuthenticatedClient, client))
+            # Since raise_on_unexpected_status=True, result should never be None
+            if result is None:
+                raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
+            return result
 
         try:
             return await self._retry_with_backoff(_get_circuits_operation)
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
-            unexpected_status = UnexpectedStatus(
-                e.response.status_code, e.response.content
-            )
+            unexpected_status = UnexpectedStatus(e.response.status_code, e.response.content)
             self._handle_unexpected_status(unexpected_status)
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
-            raise SpanPanelTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from e
+            raise SpanPanelTimeoutError(f"Request timed out after {self._timeout}s") from e
         except ValueError as e:
             # Handle Pydantic validation errors and other ValueError instances
             raise SpanPanelAPIError(f"API error: {e}") from e
@@ -609,28 +557,26 @@ class SpanPanelClient:
     async def get_storage_soe(self) -> BatteryStorage:
         """Get storage state of energy (SOE) data."""
 
-        async def _get_storage_soe_operation():
+        async def _get_storage_soe_operation() -> BatteryStorage:
             client = self._get_client_for_endpoint(requires_auth=True)
             # Type cast needed because generated API has overly strict type hints
-            return await get_storage_soe_api_v1_storage_soe_get.asyncio(
-                client=cast(AuthenticatedClient, client)
-            )
+            result = await get_storage_soe_api_v1_storage_soe_get.asyncio(client=cast(AuthenticatedClient, client))
+            # Since raise_on_unexpected_status=True, result should never be None
+            if result is None:
+                raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
+            return result
 
         try:
             return await self._retry_with_backoff(_get_storage_soe_operation)
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
-            unexpected_status = UnexpectedStatus(
-                e.response.status_code, e.response.content
-            )
+            unexpected_status = UnexpectedStatus(e.response.status_code, e.response.content)
             self._handle_unexpected_status(unexpected_status)
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
-            raise SpanPanelTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from e
+            raise SpanPanelTimeoutError(f"Request timed out after {self._timeout}s") from e
         except ValueError as e:
             # Handle Pydantic validation errors and other ValueError instances
             raise SpanPanelAPIError(f"API error: {e}") from e
@@ -657,7 +603,7 @@ class SpanPanelClient:
             SpanPanelRetriableError: For transient server errors
         """
 
-        async def _set_circuit_relay_operation():
+        async def _set_circuit_relay_operation() -> Any:
             client = self._get_client_for_endpoint(requires_auth=True)
 
             # Convert string to enum - explicitly handle invalid values
@@ -665,22 +611,16 @@ class SpanPanelClient:
                 relay_state = RelayState(state.upper())
             except ValueError as e:
                 # Wrap ValueError in a more descriptive error
-                raise SpanPanelAPIError(
-                    f"Invalid relay state '{state}'. Must be one of: OPEN, CLOSED",
-                ) from e
+                raise SpanPanelAPIError(f"Invalid relay state '{state}'. Must be one of: OPEN, CLOSED") from e
 
             relay_in = RelayStateIn(relay_state=relay_state)
 
             # Create the body object with just the relay state
-            body = BodySetCircuitStateApiV1CircuitsCircuitIdPost(
-                relay_state_in=relay_in
-            )
+            body = BodySetCircuitStateApiV1CircuitsCircuitIdPost(relay_state_in=relay_in)
 
             # Type cast needed because generated API has overly strict type hints
             return await set_circuit_state_api_v_1_circuits_circuit_id_post.asyncio(
-                client=cast(AuthenticatedClient, client),
-                circuit_id=circuit_id,
-                body=body,
+                client=cast(AuthenticatedClient, client), circuit_id=circuit_id, body=body
             )
 
         try:
@@ -688,16 +628,12 @@ class SpanPanelClient:
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
-            unexpected_status = UnexpectedStatus(
-                e.response.status_code, e.response.content
-            )
+            unexpected_status = UnexpectedStatus(e.response.status_code, e.response.content)
             self._handle_unexpected_status(unexpected_status)
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
-            raise SpanPanelTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from e
+            raise SpanPanelTimeoutError(f"Request timed out after {self._timeout}s") from e
         except ValueError as e:
             # Specifically handle ValueError from enum conversion
             raise SpanPanelAPIError(f"API error: {e}") from e
@@ -724,7 +660,7 @@ class SpanPanelClient:
             SpanPanelRetriableError: For transient server errors
         """
 
-        async def _set_circuit_priority_operation():
+        async def _set_circuit_priority_operation() -> Any:
             client = self._get_client_for_endpoint(requires_auth=True)
 
             # Convert string to enum - explicitly handle invalid values
@@ -732,22 +668,16 @@ class SpanPanelClient:
                 priority_enum = Priority(priority.upper())
             except ValueError as e:
                 # Wrap ValueError in a more descriptive error matching test expectations
-                raise SpanPanelAPIError(
-                    f"API error: '{priority}' is not a valid Priority"
-                ) from e
+                raise SpanPanelAPIError(f"API error: '{priority}' is not a valid Priority") from e
 
             priority_in = PriorityIn(priority=priority_enum)
 
             # Create the body object with just the priority
-            body = BodySetCircuitStateApiV1CircuitsCircuitIdPost(
-                priority_in=priority_in
-            )
+            body = BodySetCircuitStateApiV1CircuitsCircuitIdPost(priority_in=priority_in)
 
             # Type cast needed because generated API has overly strict type hints
             return await set_circuit_state_api_v_1_circuits_circuit_id_post.asyncio(
-                client=cast(AuthenticatedClient, client),
-                circuit_id=circuit_id,
-                body=body,
+                client=cast(AuthenticatedClient, client), circuit_id=circuit_id, body=body
             )
 
         try:
@@ -755,16 +685,12 @@ class SpanPanelClient:
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
-            unexpected_status = UnexpectedStatus(
-                e.response.status_code, e.response.content
-            )
+            unexpected_status = UnexpectedStatus(e.response.status_code, e.response.content)
             self._handle_unexpected_status(unexpected_status)
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
-            raise SpanPanelTimeoutError(
-                f"Request timed out after {self._timeout}s"
-            ) from e
+            raise SpanPanelTimeoutError(f"Request timed out after {self._timeout}s") from e
         except ValueError as e:
             # Specifically handle ValueError from enum conversion
             raise SpanPanelAPIError(f"API error: {e}") from e

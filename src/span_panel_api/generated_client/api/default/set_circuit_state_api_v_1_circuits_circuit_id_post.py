@@ -5,9 +5,7 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.body_set_circuit_state_api_v1_circuits_circuit_id_post import (
-    BodySetCircuitStateApiV1CircuitsCircuitIdPost,
-)
+from ...models.body_set_circuit_state_api_v1_circuits_circuit_id_post import BodySetCircuitStateApiV1CircuitsCircuitIdPost
 from ...models.circuit import Circuit
 from ...models.http_validation_error import HTTPValidationError
 from ...types import Response
@@ -25,9 +23,8 @@ def _get_kwargs(
         "url": f"/api/v1/circuits/{circuit_id}",
     }
 
-    _body = body.to_dict()
+    _kwargs["json"] = body.to_dict()
 
-    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers

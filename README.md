@@ -61,7 +61,7 @@ async def main():
 asyncio.run(main())
 ```
 
-### Long-Lived Pattern (Services and Integrations)
+### Long-Lived Pattern (Services or Integrations)
 
 **Best for**: Long-running services, persistent connections, integration platforms
 

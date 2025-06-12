@@ -15,16 +15,16 @@ from .exceptions import (
     SpanPanelTimeoutError,
 )
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
+# fmt: off
 __all__ = [
-    # High-level client
-    "SpanPanelClient",
-    # Exceptions
-    "SpanPanelError",
-    "SpanPanelConnectionError",
-    "SpanPanelAuthError",
-    "SpanPanelTimeoutError",
     "SpanPanelAPIError",
-    "SpanPanelServerError",
+    "SpanPanelAuthError",
+    "SpanPanelClient",
+    "SpanPanelConnectionError",
+    "SpanPanelError",
     "SpanPanelRetriableError",
+    "SpanPanelServerError",
+    "SpanPanelTimeoutError",
 ]
+# fmt: on

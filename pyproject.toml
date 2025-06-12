@@ -13,7 +13,7 @@ Homepage = "https://github.com/SpanPanel/span-panel-api"
 Issues = "https://github.com/SpanPanel/span-panel-api/issues"
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.12,<3.14"
 httpx = ">=0.20.0,<0.29.0"
 attrs = ">=22.2.0"
 python-dateutil = "^2.8.0"
@@ -26,11 +26,13 @@ pytest-cov = "^6.0.0"
 bandit = "^1.8.0"
 twine = "^6.0.1"
 pre-commit = "^4.0.0"
+black = "^25.1.0"
 ruff = "^0.11.0"
 mypy = "^1.15.0"
+pymarkdownlnt = "^0.9.30"
 
 [tool.poetry.group.generate.dependencies]
-openapi-python-client = "^0.24.0"
+openapi-python-client = "^0.25.0"
 pyyaml = "^6.0.0"
 
 [build-system]
@@ -38,21 +40,61 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.ruff]
-line-length = 120
+line-length = 125
 exclude = [
     "src/span_panel_api/generated_client/",
+    "generate_client.py",
+    "scripts/coverage.py",
     ".*_cache/",
     "dist/",
     "venv/",
     ".venv/",
 ]
 
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
 [tool.ruff.lint]
-select = ["F", "I", "UP"]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "T20",    # flake8-print
+    "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific rules
+]
+
+ignore = [
+    "E501",   # line too long - following Home Assistant's approach
+    # May conflict with the formatter
+    "W191",
+    "E111",
+    "E114",
+    "E117",
+]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+combine-as-imports = true
+split-on-trailing-comma = false
 
 [tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
 exclude = [
     "src/span_panel_api/generated_client/",
+    "src/span_panel_api/client.py",
+    "generate_client.py",
     "tests/",
     "docs/",
     ".*_cache/",
@@ -60,17 +102,24 @@ exclude = [
     "venv/",
     ".venv/",
 ]
-ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "span_panel_api.generated_client.*"
 follow_imports = "skip"
 ignore_errors = true
 
+[[tool.mypy.overrides]]
+module = [
+    "httpx.*",
+    "attrs.*",
+]
+ignore_missing_imports = true
+
 [tool.coverage.run]
 source = ["src/span_panel_api"]
 omit = [
     "src/span_panel_api/generated_client/*",
+    "generate_client.py",
     "tests/*",
     "*/tests/*",
     "*/.venv/*",
@@ -128,8 +177,33 @@ exclude_lines = [
 ]
 
 [tool.bandit]
-# Security linter configuration
-exclude_dirs = ["tests", "src/span_panel_api/generated_client"]
+exclude_dirs = ["tests", "src/span_panel_api/generated_client", "scripts"]
+skips = ["generate_client.py"]
+
+[tool.black]
+line-length = 125
+# Restrict black to only handling end-of-file newlines and blank lines
+target-version = ["py312"]
+skip-string-normalization = true
+skip-magic-trailing-comma = true
+exclude = '''
+/(
+    \.venv
+    |venv
+    |\.git
+    |\.hg
+    |\.mypy_cache
+    |\.tox
+    |\.nox
+    |_build
+    |buck-out
+    |build
+    |dist
+    |src/span_panel_api/generated_client
+    |generate_client\.py
+    |scripts/coverage\.py
+)/
+'''
 
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"

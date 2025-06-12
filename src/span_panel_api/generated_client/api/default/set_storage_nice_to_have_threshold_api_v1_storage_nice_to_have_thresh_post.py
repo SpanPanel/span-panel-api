@@ -21,9 +21,8 @@ def _get_kwargs(
         "url": "/api/v1/storage/nice-to-have-thresh",
     }
 
-    _body = body.to_dict()
+    _kwargs["json"] = body.to_dict()
 
-    _kwargs["json"] = _body
     headers["Content-Type"] = "application/json"
 
     _kwargs["headers"] = headers

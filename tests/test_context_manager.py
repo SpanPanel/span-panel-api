@@ -18,13 +18,9 @@ class TestContextManagerFix:
         """Test that unauthenticated requests (like get_status) work both inside and outside context managers."""
         client = SpanPanelClient("192.168.1.100", timeout=5.0)
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # Setup mock response for status endpoint
-            mock_status.asyncio = AsyncMock(
-                return_value=MagicMock(system=MagicMock(manufacturer="SPAN"))
-            )
+            mock_status.asyncio = AsyncMock(return_value=MagicMock(system=MagicMock(manufacturer="SPAN")))
 
             # Test unauthenticated call OUTSIDE context manager
             # This should work without any access token set
@@ -62,32 +58,16 @@ class TestContextManagerFix:
 
         # Mock all the API functions
         with (
-            patch(
-                "span_panel_api.client.system_status_api_v1_status_get"
-            ) as mock_status,
-            patch(
-                "span_panel_api.client.get_circuits_api_v1_circuits_get"
-            ) as mock_circuits,
-            patch(
-                "span_panel_api.client.get_panel_state_api_v1_panel_get"
-            ) as mock_panel,
-            patch(
-                "span_panel_api.client.get_storage_soe_api_v1_storage_soe_get"
-            ) as mock_storage,
+            patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status,
+            patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits,
+            patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel,
+            patch("span_panel_api.client.get_storage_soe_api_v1_storage_soe_get") as mock_storage,
         ):
             # Setup mock responses
-            mock_status.asyncio = AsyncMock(
-                return_value=MagicMock(system=MagicMock(manufacturer="SPAN"))
-            )
-            mock_circuits.asyncio = AsyncMock(
-                return_value=MagicMock(circuits=MagicMock(additional_properties={}))
-            )
-            mock_panel.asyncio = AsyncMock(
-                return_value=MagicMock(main_relay_state="CLOSED")
-            )
-            mock_storage.asyncio = AsyncMock(
-                return_value=MagicMock(soe=MagicMock(to_dict=lambda: {"soe": 0.85}))
-            )
+            mock_status.asyncio = AsyncMock(return_value=MagicMock(system=MagicMock(manufacturer="SPAN")))
+            mock_circuits.asyncio = AsyncMock(return_value=MagicMock(circuits=MagicMock(additional_properties={})))
+            mock_panel.asyncio = AsyncMock(return_value=MagicMock(main_relay_state="CLOSED"))
+            mock_storage.asyncio = AsyncMock(return_value=MagicMock(soe=MagicMock(to_dict=lambda: {"soe": 0.85})))
 
             # Test multiple calls within a single context manager
             async with client:
@@ -124,27 +104,15 @@ class TestContextManagerFix:
         client = SpanPanelClient("192.168.1.100", timeout=5.0)
 
         with (
-            patch(
-                "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-            ) as mock_auth,
-            patch(
-                "span_panel_api.client.get_circuits_api_v1_circuits_get"
-            ) as mock_circuits,
-            patch(
-                "span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post"
-            ) as mock_set_circuit,
+            patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth,
+            patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits,
+            patch("span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post") as mock_set_circuit,
         ):
             # Setup mock responses
-            auth_response = MagicMock(
-                access_token="test-token-12345", token_type="Bearer"
-            )
+            auth_response = MagicMock(access_token="test-token-12345", token_type="Bearer")
             mock_auth.asyncio = AsyncMock(return_value=auth_response)
-            mock_circuits.asyncio = AsyncMock(
-                return_value=MagicMock(circuits=MagicMock(additional_properties={}))
-            )
-            mock_set_circuit.asyncio = AsyncMock(
-                return_value=MagicMock(priority="MUST_HAVE")
-            )
+            mock_circuits.asyncio = AsyncMock(return_value=MagicMock(circuits=MagicMock(additional_properties={})))
+            mock_set_circuit.asyncio = AsyncMock(return_value=MagicMock(priority="MUST_HAVE"))
 
             async with client:
                 # Verify initial state
@@ -163,10 +131,7 @@ class TestContextManagerFix:
 
                 assert isinstance(client._client, AuthenticatedClient)
                 # The underlying httpx async client should be preserved to avoid double context issues
-                assert (
-                    getattr(client._client, "_async_client", None)
-                    is initial_async_client
-                )
+                assert getattr(client._client, "_async_client", None) is initial_async_client
 
                 # Post-authentication calls should work
                 circuits = await client.get_circuits()
@@ -183,9 +148,7 @@ class TestContextManagerFix:
         """Test that errors within the context don't break the context manager state."""
         client = SpanPanelClient("192.168.1.100", timeout=5.0)
 
-        with patch(
-            "span_panel_api.client.system_status_api_v1_status_get"
-        ) as mock_status:
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # First call succeeds, next calls fail (with retry attempts)
             # The retry logic will attempt up to RETRY_MAX_ATTEMPTS times for TimeoutException
             side_effects = [
@@ -237,9 +200,7 @@ class TestContextManagerFix:
 
             assert isinstance(client._client, AuthenticatedClient)
             # But the underlying httpx async client should be preserved
-            assert (
-                getattr(client._client, "_async_client", None) is initial_async_client
-            )
+            assert getattr(client._client, "_async_client", None) is initial_async_client
 
         assert client._in_context is False
 
@@ -292,9 +253,7 @@ class TestContextManagerFix:
             client._client = None
 
             # Should raise a clear error
-            with pytest.raises(
-                SpanPanelAPIError, match="Client is None while in context"
-            ):
+            with pytest.raises(SpanPanelAPIError, match="Client is None while in context"):
                 client._get_client_for_endpoint(requires_auth=False)
 
     @pytest.mark.asyncio
@@ -304,9 +263,7 @@ class TestContextManagerFix:
 
         async with client:
             # Trying to enter context again should fail at the httpx level
-            with pytest.raises(
-                RuntimeError, match="Cannot open a client instance more than once"
-            ):
+            with pytest.raises(RuntimeError, match="Cannot open a client instance more than once"):
                 async with client:
                     pass
 
@@ -370,10 +327,7 @@ class TestContextManagerEdgeCases:
 
         # Create a regular Client when we need AuthenticatedClient
         unauthenticated_client = Client(
-            base_url="http://test",
-            timeout=httpx.Timeout(30.0),
-            verify_ssl=False,
-            raise_on_unexpected_status=True,
+            base_url="http://test", timeout=httpx.Timeout(30.0), verify_ssl=False, raise_on_unexpected_status=True
         )
         client._client = unauthenticated_client
 

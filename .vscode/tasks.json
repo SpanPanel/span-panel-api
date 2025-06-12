@@ -1,0 +1,125 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Generate OpenAPI Client",
+            "type": "shell",
+            "command": "poetry",
+            "args": ["run", "python", "generate_client.py"],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": [],
+            "detail": "Generate SPAN Panel OpenAPI client from openapi.json specification",
+            "icon": {
+                "id": "gear",
+                "color": "terminal.ansiBlue"
+            },
+            "runOptions": {
+                "runOn": "default"
+            }
+        },
+        {
+            "label": "Install Dependencies",
+            "type": "shell",
+            "command": "poetry",
+            "args": ["install"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": [],
+            "detail": "Install project dependencies using Poetry"
+        },
+        {
+            "label": "Run Tests",
+            "type": "shell",
+            "command": "poetry",
+            "args": ["run", "pytest"],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": [],
+            "detail": "Run the test suite using pytest"
+        },
+        {
+            "label": "Coverage Report",
+            "type": "shell",
+            "command": "python",
+            "args": ["scripts/coverage.py"],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": [],
+            "detail": "Generate test coverage report",
+            "dependsOn": "Run Tests"
+        },
+        {
+            "label": "Lint Markdown",
+            "type": "shell",
+            "command": "poetry",
+            "args": ["run", "pymarkdown", "scan", "**/*.md"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": [],
+            "detail": "Lint all markdown files using pymarkdown (Python-based markdown linter)"
+        },
+        {
+            "label": "Format Code",
+            "type": "shell",
+            "command": "./scripts/format.sh",
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": [],
+            "detail": "Format code with ruff and black following the project-specific configuration"
+        },
+        {
+            "label": "Run Pre-commit",
+            "type": "shell",
+            "command": "poetry",
+            "args": ["run", "pre-commit", "run", "--all-files"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": [],
+            "detail": "Run all pre-commit hooks on all files"
+        }
+    ]
+}

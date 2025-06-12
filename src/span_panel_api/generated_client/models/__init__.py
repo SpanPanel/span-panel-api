@@ -1,4 +1,4 @@
-""" Contains all the data models used in inputs/outputs """
+"""Contains all the data models used in inputs/outputs"""
 
 from .allowed_endpoint_groups import AllowedEndpointGroups
 from .auth_in import AuthIn

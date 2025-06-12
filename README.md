@@ -1,7 +1,23 @@
 # SPAN Panel OpenAPI Client
 
-A Python client library for accessing the SPAN Panel API.
+[![GitHub Release](https://img.shields.io/github/v/release/SpanPanel/span-panel-api?style=flat-square)](https://github.com/SpanPanel/span-panel-api/releases)
+[![PyPI Version](https://img.shields.io/pypi/v/span-panel-api?style=flat-square)](https://pypi.org/project/span-panel-api/)
+[![Python Versions](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue?style=flat-square)](https://pypi.org/project/span-panel-api/)
+[![License](https://img.shields.io/github/license/SpanPanel/span-panel-api?style=flat-square)](https://github.com/SpanPanel/span-panel-api/blob/main/LICENSE)
 
+[![CI Status](https://img.shields.io/github/actions/workflow/status/SpanPanel/span-panel-api/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/SpanPanel/span-panel-api/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/codecov/c/github/SpanPanel/span-panel-api?style=flat-square)](https://codecov.io/gh/SpanPanel/span-panel-api)
+[![Code Quality](https://img.shields.io/codefactor/grade/github/SpanPanel/span-panel-api?style=flat-square)](https://www.codefactor.io/repository/github/spanpanel/span-panel-api)
+[![Security](https://img.shields.io/snyk/vulnerabilities/github/SpanPanel/span-panel-api?style=flat-square)](https://snyk.io/test/github/SpanPanel/span-panel-api)
+
+[![Pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&style=flat-square)](https://github.com/pre-commit/pre-commit)
+[![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg?style=flat-square)](https://github.com/psf/black)
+[![Linting: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square)](https://github.com/astral-sh/ruff)
+[![Type Checking: MyPy](https://img.shields.io/badge/type%20checking-mypy-blue?style=flat-square)](https://mypy-lang.org/)
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support%20development-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/cayossarian)
+
+A Python client library for accessing the SPAN Panel OpenAPI endpoint.
 
 ## Installation
 
@@ -158,11 +174,11 @@ asyncio.run(manual_example())
 
 ## When to Use Each Pattern
 
-| Pattern | Use Case | Pros | Cons |
-|---------|----------|------|------|
-| **Context Manager** | Scripts, one-off tasks, testing | Automatic cleanup • Exception safe • Simple code | Creates/destroys connection each time • Not efficient for frequent calls |
-| **Long-Lived** | Services, daemons, integration platforms | Efficient connection reuse • Better performance • Authentication persistence | Manual lifecycle management • Must handle cleanup |
-| **Manual** | Custom requirements, debugging | Full control • Custom error handling | Must remember to call close() • More error-prone |
+| Pattern             | Use Case                                 | Pros                                                                         | Cons                                                                     |
+| ------------------- | ---------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| **Context Manager** | Scripts, one-off tasks, testing          | Automatic cleanup • Exception safe • Simple code                             | Creates/destroys connection each time • Not efficient for frequent calls |
+| **Long-Lived**      | Services, daemons, integration platforms | Efficient connection reuse • Better performance • Authentication persistence | Manual lifecycle management • Must handle cleanup                        |
+| **Manual**          | Custom requirements, debugging           | Full control • Custom error handling                                         | Must remember to call close() • More error-prone                         |
 
 ## Error Handling
 
@@ -184,21 +200,21 @@ from span_panel_api.exceptions import (
 
 ### HTTP Error Code Mapping
 
-| Status Code | Exception | Retry? | Description | Action |
-|-------------|-----------|--------|-------------|--------|
-| **Authentication Errors** |
-| 401, 403    | `SpanPanelAuthError` | Once (after re-auth) | Authentication required/failed | Re-authenticate and retry once |
+| Status Code                     | Exception                  | Retry?               | Description                      | Action                         |
+| ------------------------------- | -------------------------- | -------------------- | -------------------------------- | ------------------------------ |
+| **Authentication Errors**       |
+| 401, 403                        | `SpanPanelAuthError`       | Once (after re-auth) | Authentication required/failed   | Re-authenticate and retry once |
 | **Non-Retriable Server Errors** |
-| 500         | `SpanPanelServerError` | **NO** | Internal server error (SPAN bug) | Show error, do not retry |
-| **Retriable Server Errors** |
-| 502         | `SpanPanelRetriableError` | Yes | Bad Gateway (proxy error) | Retry with exponential backoff |
-| 503         | `SpanPanelRetriableError` | Yes | Service Unavailable | Retry with exponential backoff |
-| 504         | `SpanPanelRetriableError` | Yes | Gateway Timeout | Retry with exponential backoff |
-| **Other HTTP Errors** |
-| 404, 400, etc | `SpanPanelAPIError` | Case by case | Client/request errors | Check request parameters |
-| **Network Errors** |
-| Connection failures | `SpanPanelConnectionError` | Yes | Network connectivity issues | Retry with backoff |
-| Timeouts | `SpanPanelTimeoutError` | Yes | Request timed out | Retry with backoff |
+| 500                             | `SpanPanelServerError`     | **NO**               | Internal server error (SPAN bug) | Show error, do not retry       |
+| **Retriable Server Errors**     |
+| 502                             | `SpanPanelRetriableError`  | Yes                  | Bad Gateway (proxy error)        | Retry with exponential backoff |
+| 503                             | `SpanPanelRetriableError`  | Yes                  | Service Unavailable              | Retry with exponential backoff |
+| 504                             | `SpanPanelRetriableError`  | Yes                  | Gateway Timeout                  | Retry with exponential backoff |
+| **Other HTTP Errors**           |
+| 404, 400, etc                   | `SpanPanelAPIError`        | Case by case         | Client/request errors            | Check request parameters       |
+| **Network Errors**              |
+| Connection failures             | `SpanPanelConnectionError` | Yes                  | Network connectivity issues      | Retry with backoff             |
+| Timeouts                        | `SpanPanelTimeoutError`    | Yes                  | Request timed out                | Retry with backoff             |
 
 ### Retry Strategy
 
@@ -228,7 +244,9 @@ async def example_request_with_retry():
 
 ### Exception Handling
 
-The client configures the underlying OpenAPI client with `raise_on_unexpected_status=True`, ensuring that HTTP errors (especially 500 responses) are converted to appropriate exceptions rather than being silently ignored.
+The client configures the underlying OpenAPI client with `raise_on_unexpected_status=True`,
+ensuring that HTTP errors (especially 500 responses) are converted to appropriate exceptions
+rather than being silently ignored.
 
 ## API Reference
 
@@ -298,7 +316,8 @@ await client.set_circuit_priority("circuit-1", "NICE_TO_HAVE")
 The SPAN Panel API client provides timeout and retry configuration:
 
 - `timeout` (float, default: 30.0): The maximum time (in seconds) to wait for a response from the panel for each attempt.
-- `retries` (int, default: 0): The number of times to retry a failed request due to network or retriable server errors. `retries=0` means no retries (1 total attempt), `retries=1` means 1 retry (2 total attempts), etc.
+- `retries` (int, default: 0): The number of times to retry a failed request due to network or retriable server errors.
+`retries=0` means no retries (1 total attempt), `retries=1` means 1 retry (2 total attempts), etc.
 - `retry_timeout` (float, default: 0.5): The base wait time (in seconds) between retries, with exponential backoff.
 - `retry_backoff_multiplier` (float, default: 2.0): The multiplier for exponential backoff between retries.
 
@@ -328,21 +347,22 @@ client.retry_backoff_multiplier = 1.5
 
 ### What does 'retries' mean?
 
-| retries | Total Attempts | Description         |
-|---------|---------------|---------------------|
-| 0       | 1             | No retries (default) |
-| 1       | 2             | 1 retry             |
-| 2       | 3             | 2 retries           |
+| retries | Total Attempts | Description          |
+| ------- | -------------- | -------------------- |
+| 0       | 1              | No retries (default) |
+| 1       | 2              | 1 retry              |
+| 2       | 3              | 2 retries            |
 
 Retry and timeout settings can be queried and changed at runtime.
 
 ## Development Setup
 
 ### Prerequisites
-- Python 3.12+ (SPAN Panel requires Python 3.12+)
+
+- Python 3.12 or 3.13 (SPAN Panel requires Python 3.12+)
 - [Poetry](https://python-poetry.org/) for dependency management
 
-### Installation
+### Development Installation
 
 ```bash
 # Clone and install
@@ -360,7 +380,7 @@ python scripts/coverage.py
 
 ### Project Structure
 
-```
+```bash
 span_openapi/
 ├── src/span_panel_api/        # Main client library
 │   ├── client.py              # SpanPanelClient (high-level wrapper)
@@ -373,14 +393,12 @@ span_openapi/
 └── pyproject.toml            # Poetry configuration
 ```
 
-
-
 ## Advanced Usage
 
 ### SSL Configuration
 
 ```python
-# For panels that support SSL locally
+# For panels that support SSL
 # Note: We do not currently observe panels supporting SSL for local access
 client = SpanPanelClient(
     host="span-panel.local",
@@ -420,11 +438,11 @@ poetry run pytest --cov=span_panel_api tests/
 
 ## Contributing
 
-1. Get `openapi.json`  SPAN Panel API specs
+1. Get `openapi.json` SPAN Panel API specs
 
-    (for example via REST Client extension)
+   (for example via REST Client extension)
 
-    GET <https://span-panel-ip/api/v1/openapi.json>
+   GET <https://span-panel-ip/api/v1/openapi.json>
 
 2. Regenerate client: `poetry run python generate_client.py`
 3. Update wrapper client in `src/span_panel_api/client.py` if needed

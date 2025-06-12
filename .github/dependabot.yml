@@ -15,22 +15,23 @@ updates:
           - "pytest*"
           - "mypy"
           - "ruff"
-          - "black"
+          - "bandit"
           - "pre-commit"
-          - "isort"
           - "twine"
           - "*-cov"
+          - "types-*"
       # Group documentation dependencies
       docs-dependencies:
         patterns:
           - "mkdocs*"
           - "mkdocstrings"
-      # Group core runtime dependencies
+      # Group core runtime dependencies for span-panel-api
       runtime-dependencies:
         patterns:
           - "httpx"
-          - "pydantic"
-          - "typing-extensions"
+          - "attrs"
+          - "python-dateutil"
+          - "click"
     reviewers:
       - "cayossarian"
     assignees:

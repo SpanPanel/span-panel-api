@@ -22,9 +22,7 @@ class TestAuthentication:
         client = SpanPanelClient("192.168.1.100")
 
         # Mock the API function directly
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             # Mock successful auth response
             auth_response = MagicMock()
             auth_response.access_token = "test-token"
@@ -43,23 +41,17 @@ class TestAuthentication:
         client = SpanPanelClient("192.168.1.100")
 
         # Mock the API function to raise an exception
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             # Create a proper mock response with status_code
             mock_response = MagicMock()
             mock_response.status_code = 401
             mock_request = MagicMock()
 
             mock_auth.asyncio = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "401 Unauthorized", request=mock_request, response=mock_response
-                )
+                side_effect=httpx.HTTPStatusError("401 Unauthorized", request=mock_request, response=mock_response)
             )
 
-            with pytest.raises(
-                SpanPanelAuthError
-            ):  # Our wrapper converts 401 errors to SpanPanelAuthError
+            with pytest.raises(SpanPanelAuthError):  # Our wrapper converts 401 errors to SpanPanelAuthError
                 await client.authenticate("test-app", "Test Application")
 
     @pytest.mark.asyncio
@@ -67,14 +59,10 @@ class TestAuthentication:
         """Test authentication with None response."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             mock_auth.asyncio = AsyncMock(return_value=None)
 
-            with pytest.raises(
-                SpanPanelAPIError, match="Authentication failed - no response"
-            ):
+            with pytest.raises(SpanPanelAPIError, match="Authentication failed - no response"):
                 await client.authenticate("test-app", "Test Application")
 
     @pytest.mark.asyncio
@@ -82,19 +70,13 @@ class TestAuthentication:
         """Test authentication with validation error response."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
-            from span_panel_api.generated_client.models.http_validation_error import (
-                HTTPValidationError,
-            )
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
+            from span_panel_api.generated_client.models.http_validation_error import HTTPValidationError
 
             validation_error = HTTPValidationError()
             mock_auth.asyncio = AsyncMock(return_value=validation_error)
 
-            with pytest.raises(
-                SpanPanelAPIError, match="Validation error during authentication"
-            ):
+            with pytest.raises(SpanPanelAPIError, match="Validation error during authentication"):
                 await client.authenticate("test-app", "Test Application")
 
     @pytest.mark.asyncio
@@ -102,9 +84,7 @@ class TestAuthentication:
         """Test authentication with unexpected response type."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             # Return something that's not AuthOut, HTTPValidationError, or None
             mock_auth.asyncio = AsyncMock(return_value="unexpected")
 
@@ -116,9 +96,7 @@ class TestAuthentication:
         """Test ValueError handling in authenticate."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             mock_auth.asyncio.side_effect = ValueError("Validation failed")
 
             with pytest.raises(SpanPanelAPIError, match="API error: Validation failed"):
@@ -129,9 +107,7 @@ class TestAuthentication:
         """Test generic Exception handling in authenticate."""
         client = SpanPanelClient("192.168.1.100")
 
-        with patch(
-            "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-        ) as mock_auth:
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             mock_auth.asyncio.side_effect = RuntimeError("Unexpected error")
 
             with pytest.raises(SpanPanelAPIError, match="API error: Unexpected error"):
@@ -146,45 +122,23 @@ class TestAuthentication:
         test_cases = [
             (401, SpanPanelAuthError, "Authentication failed"),
             (403, SpanPanelAuthError, "Authentication failed"),
-            (
-                500,
-                SpanPanelAPIError,
-                "Server error 500",
-            ),  # Changed from SpanPanelServerError
-            (
-                502,
-                SpanPanelAPIError,
-                "Retriable server error 502",
-            ),  # Changed from SpanPanelRetriableError
-            (
-                503,
-                SpanPanelAPIError,
-                "Retriable server error 503",
-            ),  # Changed from SpanPanelRetriableError
-            (
-                504,
-                SpanPanelAPIError,
-                "Retriable server error 504",
-            ),  # Changed from SpanPanelRetriableError
+            (500, SpanPanelAPIError, "Server error 500"),  # Changed from SpanPanelServerError
+            (502, SpanPanelAPIError, "Retriable server error 502"),  # Changed from SpanPanelRetriableError
+            (503, SpanPanelAPIError, "Retriable server error 503"),  # Changed from SpanPanelRetriableError
+            (504, SpanPanelAPIError, "Retriable server error 504"),  # Changed from SpanPanelRetriableError
             (404, SpanPanelAPIError, "HTTP 404"),
             (400, SpanPanelAPIError, "HTTP 400"),
         ]
 
         for status_code, expected_exception, error_msg_pattern in test_cases:
-            with patch(
-                "span_panel_api.client.generate_jwt_api_v1_auth_register_post"
-            ) as mock_auth:
+            with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
                 # Create a proper mock response
                 mock_response = MagicMock()
                 mock_response.status_code = status_code
                 mock_request = MagicMock()
 
                 mock_auth.asyncio = AsyncMock(
-                    side_effect=httpx.HTTPStatusError(
-                        f"{status_code} Error",
-                        request=mock_request,
-                        response=mock_response,
-                    )
+                    side_effect=httpx.HTTPStatusError(f"{status_code} Error", request=mock_request, response=mock_response)
                 )
 
                 with pytest.raises(expected_exception, match=error_msg_pattern):
@@ -231,10 +185,7 @@ class TestTokenManagement:
 
         # Create a regular Client
         unauthenticated_client = Client(
-            base_url="http://test",
-            timeout=httpx.Timeout(30.0),
-            verify_ssl=False,
-            raise_on_unexpected_status=True,
+            base_url="http://test", timeout=httpx.Timeout(30.0), verify_ssl=False, raise_on_unexpected_status=True
         )
 
         # Mock the async client
@@ -296,8 +247,7 @@ class TestAuthenticationRequirements:
         client = SpanPanelClient("192.168.1.100")
 
         with pytest.raises(
-            SpanPanelAuthError,
-            match="This endpoint requires authentication. Call authenticate\\(\\) first.",
+            SpanPanelAuthError, match="This endpoint requires authentication. Call authenticate\\(\\) first."
         ):
             client._get_client_for_endpoint(requires_auth=True)
 
@@ -318,8 +268,7 @@ class TestAuthenticationRequirements:
         client = SpanPanelClient("192.168.1.100")
 
         with pytest.raises(
-            SpanPanelAuthError,
-            match="This endpoint requires authentication. Call authenticate\\(\\) first.",
+            SpanPanelAuthError, match="This endpoint requires authentication. Call authenticate\\(\\) first."
         ):
             await client.get_panel_state()
 
@@ -329,9 +278,7 @@ class TestAuthenticationRequirements:
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
-        with patch(
-            "span_panel_api.client.get_panel_state_api_v1_panel_get"
-        ) as mock_panel:
+        with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
             mock_panel.asyncio.side_effect = Exception("401 Unauthorized access")
 
             with pytest.raises(SpanPanelAuthError, match="Authentication required"):

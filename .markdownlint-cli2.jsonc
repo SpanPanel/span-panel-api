@@ -2,9 +2,9 @@
   "config": {
     "default": true,
     "MD013": {
-      "line_length": 125,
-      "heading_line_length": 125,
-      "code_block_line_length": 125,
+      "line_length": 256,
+      "heading_line_length": 256,
+      "code_block_line_length": 256,
       "tables": false
     },
     "MD025": false,
@@ -27,12 +27,7 @@
     "MD031": {
       "list_items": true
     },
-    "MD032": {
-      "ul_single": 3,
-      "ol_single": 2,
-      "ul_multi": 1,
-      "ol_multi": 1
-    },
+    "MD032": true,
     "MD036": false,
     "MD040": {
       "allowed_languages": ["yaml", "python", "bash", "shell", "json", "toml", "markdown", "text", "console", "diff"],

@@ -80,8 +80,8 @@
         {
             "label": "Lint Markdown",
             "type": "shell",
-            "command": "poetry",
-            "args": ["run", "pymarkdown", "scan", "**/*.md"],
+            "command": "npx",
+            "args": ["markdownlint-cli2", "--config", ".markdownlint.json", "**/*.md"],
             "group": "build",
             "presentation": {
                 "echo": true,
@@ -90,7 +90,7 @@
                 "panel": "shared"
             },
             "problemMatcher": [],
-            "detail": "Lint all markdown files using pymarkdown (Python-based markdown linter)"
+            "detail": "Lint all markdown files using markdownlint (David Anson)"
         },
         {
             "label": "Format Code",

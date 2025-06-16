@@ -245,19 +245,29 @@ class TestAPIMethodsSuccess:
     @pytest.mark.asyncio
     async def test_get_circuits_success(self):
         """Test successful circuits retrieval."""
-        client = SpanPanelClient("192.168.1.100")
+        client = SpanPanelClient("192.168.1.100", cache_window=0)
         client.set_access_token("test-token")
 
-        with patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits:
+        with (
+            patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits,
+            patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel_state,
+        ):
             # Mock circuits response
             circuits_response = MagicMock()
-            circuits_response.circuits = {"1": MagicMock(name="Main", instant_power_w=1500)}
+            circuits_response.circuits = MagicMock()
+            circuits_response.circuits.additional_properties = {"1": MagicMock(name="Main", instant_power_w=1500)}
             mock_circuits.asyncio = AsyncMock(return_value=circuits_response)
+
+            # Mock panel state response (needed for enhanced circuits)
+            panel_state_response = MagicMock()
+            panel_state_response.branches = []  # No unmapped tabs
+            mock_panel_state.asyncio = AsyncMock(return_value=panel_state_response)
 
             result = await client.get_circuits()
 
             assert result == circuits_response
             mock_circuits.asyncio.assert_called_once()
+            mock_panel_state.asyncio.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_get_storage_soe_success(self):

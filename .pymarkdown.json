@@ -1,7 +1,0 @@
-{
-  "plugins": {
-    "line-length": {
-      "enabled": false
-    }
-  }
-}

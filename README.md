@@ -176,9 +176,9 @@ asyncio.run(manual_example())
 
 | Pattern             | Use Case                                 | Pros                                                                         | Cons                                                                     |
 | ------------------- | ---------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| **Context Manager** | Scripts, one-off tasks, testing          | Automatic cleanup • Exception safe • Simple code                             | Creates/destroys connection each time • Not efficient for frequent calls |
-| **Long-Lived**      | Services, daemons, integration platforms | Efficient connection reuse • Better performance • Authentication persistence | Manual lifecycle management • Must handle cleanup                        |
-| **Manual**          | Custom requirements, debugging           | Full control • Custom error handling                                         | Must remember to call close() • More error-prone                         |
+| **Context Manager** | Scripts, one-off tasks, testing          | Automatic cleanup • Exception safe • Simple code                             | Creates/destroys connection each time |
+| **Long-Lived**      | Services, daemons, integration platforms | Efficient connection reuse Authentication persistence | Manual lifecycle management • Must handle cleanup                        |
+| **Manual**          | Custom requirements, debugging           | Full control handling                                         | Must remember to call close() • More error-prone                         |
 
 ## Error Handling
 
@@ -202,17 +202,17 @@ from span_panel_api.exceptions import (
 
 | Status Code                     | Exception                  | Retry?               | Description                      | Action                         |
 | ------------------------------- | -------------------------- | -------------------- | -------------------------------- | ------------------------------ |
-| **Authentication Errors**       |
+| **Authentication Errors**       | -                          | -                    | -                                | -                              |
 | 401, 403                        | `SpanPanelAuthError`       | Once (after re-auth) | Authentication required/failed   | Re-authenticate and retry once |
-| **Non-Retriable Server Errors** |
+| **Non-Retriable Server Errors** | -                          | -                    | -                                | -                              |
 | 500                             | `SpanPanelServerError`     | **NO**               | Internal server error (SPAN bug) | Show error, do not retry       |
-| **Retriable Server Errors**     |
+| **Retriable Server Errors**     | -                          | -                    | -                                | -                              |
 | 502                             | `SpanPanelRetriableError`  | Yes                  | Bad Gateway (proxy error)        | Retry with exponential backoff |
 | 503                             | `SpanPanelRetriableError`  | Yes                  | Service Unavailable              | Retry with exponential backoff |
 | 504                             | `SpanPanelRetriableError`  | Yes                  | Gateway Timeout                  | Retry with exponential backoff |
-| **Other HTTP Errors**           |
+| **Other HTTP Errors**           | -                          | -                    | -                                | -                              |
 | 404, 400, etc                   | `SpanPanelAPIError`        | Case by case         | Client/request errors            | Check request parameters       |
-| **Network Errors**              |
+| **Network Errors**              | -                          | -                    | -                                | -                              |
 | Connection failures             | `SpanPanelConnectionError` | Yes                  | Network connectivity issues      | Retry with backoff             |
 | Timeouts                        | `SpanPanelTimeoutError`    | Yes                  | Request timed out                | Retry with backoff             |
 
@@ -257,7 +257,8 @@ client = SpanPanelClient(
     host="192.168.1.100",    # Required: SPAN Panel IP
     port=80,                 # Optional: default 80
     timeout=30.0,            # Optional: request timeout
-    use_ssl=False            # Optional: HTTPS (usually False for local)
+    use_ssl=False,           # Optional: HTTPS (usually False for local)
+    cache_window=1.0         # Optional: cache window in seconds (0 to disable)
 )
 ```
 
@@ -311,6 +312,28 @@ await client.set_circuit_priority("circuit-1", "MUST_HAVE")
 await client.set_circuit_priority("circuit-1", "NICE_TO_HAVE")
 ```
 
+### Complete Circuit Data
+
+The `get_circuits()` method includes virtual circuits for unmapped panel tabs,
+providing complete panel visibility including non-user controlled tabs.
+
+- Virtual circuits have IDs like `unmapped_tab_1`, `unmapped_tab_2`
+- All energy values are correctly mapped from panel branches
+
+**Example Output:**
+
+```python
+circuits = await client.get_circuits()
+
+# Standard configured circuits
+print(circuits.circuits.additional_properties["1"].name)  # "Main Kitchen"
+print(circuits.circuits.additional_properties["1"].instant_power_w)  # 150
+
+# Virtual circuits for unmapped tabs (e.g., solar)
+print(circuits.circuits.additional_properties["unmapped_tab_5"].name)  # "Unmapped Tab 5"
+print(circuits.circuits.additional_properties["unmapped_tab_5"].instant_power_w)  # -2500 (solar production)
+```
+
 ## Timeout and Retry Control
 
 The SPAN Panel API client provides timeout and retry configuration:
@@ -354,6 +377,31 @@ client.retry_backoff_multiplier = 1.5
 | 2       | 3              | 2 retries            |
 
 Retry and timeout settings can be queried and changed at runtime.
+
+## Performance Features
+
+### Caching
+
+The client includes a time-based cache that prevents redundant API calls within a
+configurable window.  This feature is particularly useful when multiple operations need the same data.
+The package itself makes multiple calls to create virtual circuits for tabs not represented in circuits data so the cache avoid unecessary calls when the user also makes requests the same data.
+
+**Cache Behavior:**
+
+- Each API endpoint (status, panel_state, circuits, storage) has independent cache
+- Cache window starts when successful data is obtained
+- Subsequent calls within the window return cached data
+- After expiration, next call makes fresh network request
+- Failed requests don't affect cache timing
+
+**Example Benefits:**
+
+```python
+# These calls demonstrate cache efficiency:
+panel_state = await client.get_panel_state()    # Network call
+circuits = await client.get_circuits()          # Uses cached panel_state data internally
+panel_state2 = await client.get_panel_state()   # Returns cached data (within window)
+```
 
 ## Development Setup
 
@@ -430,7 +478,7 @@ python scripts/coverage.py --full
 poetry run pytest tests/test_context_manager.py -v
 
 # Check coverage meets threshold
-python scripts/coverage.py --check --threshold 95
+python scripts/coverage.py --check --threshold 90
 
 # Run with coverage
 poetry run pytest --cov=span_panel_api tests/

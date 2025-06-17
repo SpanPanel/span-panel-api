@@ -27,7 +27,7 @@ pip install span-panel-api
 
 ## Usage Patterns
 
-The client supports two usage patterns depending on your use case:
+The client supports two usage patterns depending on your needs:
 
 ### Context Manager Pattern (Recommended for Scripts)
 

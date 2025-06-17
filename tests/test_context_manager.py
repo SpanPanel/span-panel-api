@@ -16,7 +16,7 @@ class TestContextManagerFix:
     @pytest.mark.asyncio
     async def test_unauthenticated_requests_work_properly(self):
         """Test that unauthenticated requests (like get_status) work both inside and outside context managers."""
-        client = SpanPanelClient("192.168.1.100", timeout=5.0)
+        client = SpanPanelClient("192.168.1.100", timeout=5.0, cache_window=0)  # Disable cache for testing
 
         with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # Setup mock response for status endpoint
@@ -101,17 +101,19 @@ class TestContextManagerFix:
     @pytest.mark.asyncio
     async def test_context_manager_with_authentication_flow(self):
         """Test that authentication within a context manager doesn't break the context."""
-        client = SpanPanelClient("192.168.1.100", timeout=5.0)
+        client = SpanPanelClient("192.168.1.100", timeout=5.0, cache_window=0)
 
         with (
             patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth,
             patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits,
+            patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel_state,
             patch("span_panel_api.client.set_circuit_state_api_v_1_circuits_circuit_id_post") as mock_set_circuit,
         ):
             # Setup mock responses
             auth_response = MagicMock(access_token="test-token-12345", token_type="Bearer")
             mock_auth.asyncio = AsyncMock(return_value=auth_response)
             mock_circuits.asyncio = AsyncMock(return_value=MagicMock(circuits=MagicMock(additional_properties={})))
+            mock_panel_state.asyncio = AsyncMock(return_value=MagicMock(branches=[]))
             mock_set_circuit.asyncio = AsyncMock(return_value=MagicMock(priority="MUST_HAVE"))
 
             async with client:
@@ -146,7 +148,7 @@ class TestContextManagerFix:
     @pytest.mark.asyncio
     async def test_context_manager_error_handling_preserves_state(self):
         """Test that errors within the context don't break the context manager state."""
-        client = SpanPanelClient("192.168.1.100", timeout=5.0)
+        client = SpanPanelClient("192.168.1.100", timeout=5.0, cache_window=0)
 
         with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # First call succeeds, next calls fail (with retry attempts)

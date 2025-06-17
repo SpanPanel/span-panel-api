@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
+import time
 from typing import Any, Callable, NoReturn, TypeVar, cast
 
 import httpx
@@ -40,6 +41,8 @@ try:
         AuthOut,
         BatteryStorage,
         BodySetCircuitStateApiV1CircuitsCircuitIdPost,
+        Branch,
+        Circuit,
         CircuitsOut,
         PanelState,
         Priority,
@@ -57,6 +60,87 @@ except ImportError as e:
 
 
 # Remove the RetryConfig class - using simple parameters instead
+
+
+class TimeWindowCache:
+    """Time-based cache for API data to avoid redundant API calls.
+
+    This cache implements a simple time-window based caching strategy:
+
+    Cache Window Behavior:
+    1. Cache window is created only when successful data is obtained from an API call
+    2. During an active cache window, all requests return cached data (no network calls)
+    3. Cache window expires after the configured duration (default 1 second)
+    4. After expiration, there is a gap with no active cache window
+    5. Next request goes to the network, and if successful, creates a new cache window
+
+    Cache Lifecycle:
+    - Active Window: [successful_response] ----window_duration----> [expires]
+    - Gap Period: [no cache exists - network calls required]
+    - New Window: [successful_response] ----window_duration----> [expires]
+
+    Retry Interaction:
+    - If network calls fail and retry, the cache window may expire during retries
+    - When retry eventually succeeds, it creates a fresh cache window
+    - This is acceptable behavior - slow networks may cause cache expiration
+
+    Thread Safety:
+    - This implementation is not thread-safe
+    - Intended for single-threaded async usage
+    """
+
+    def __init__(self, window_duration: float = 1.0) -> None:
+        """Initialize the cache.
+
+        Args:
+            window_duration: Cache window duration in seconds (default: 1.0)
+                           Set to 0 to disable caching entirely
+        """
+        if window_duration < 0:
+            raise ValueError("Cache window duration must be non-negative")
+
+        self._window_duration = window_duration
+        self._cache_entries: dict[str, tuple[Any, float]] = {}
+
+    def get_cached_data(self, cache_key: str) -> Any | None:
+        """Get cached data if within the cache window, otherwise None.
+
+        Args:
+            cache_key: Unique identifier for the cached data
+
+        Returns:
+            Cached data if valid, None if expired or not found
+        """
+        # If cache window is 0, caching is disabled
+        if self._window_duration == 0:
+            return None
+
+        if cache_key not in self._cache_entries:
+            return None
+
+        cached_data, cache_timestamp = self._cache_entries[cache_key]
+
+        # Check if cache window has expired
+        elapsed = time.time() - cache_timestamp
+        if elapsed > self._window_duration:
+            # Cache expired - remove it and return None
+            del self._cache_entries[cache_key]
+            return None
+
+        return cached_data
+
+    def set_cached_data(self, cache_key: str, data: Any) -> None:
+        """Store successful response data and start a new cache window.
+
+        Args:
+            cache_key: Unique identifier for the cached data
+            data: Data to cache
+        """
+        # If cache window is 0, caching is disabled - don't store anything
+        if self._window_duration == 0:
+            return
+
+        self._cache_entries[cache_key] = (data, time.time())
 
 
 class SpanPanelClient:
@@ -90,6 +174,8 @@ class SpanPanelClient:
         retries: int = 0,  # Default to 0 retries for simplicity
         retry_timeout: float = 0.5,  # How long to wait between retry attempts
         retry_backoff_multiplier: float = 2.0,
+        # Cache configuration
+        cache_window: float = 1.0,  # Panel data cache window in seconds
     ) -> None:
         """Initialize the SPAN Panel client.
 
@@ -101,6 +187,7 @@ class SpanPanelClient:
             retries: Number of retries (0 = no retries, 1 = 1 retry, etc.)
             retry_timeout: Timeout between retry attempts in seconds
             retry_backoff_multiplier: Exponential backoff multiplier
+            cache_window: Panel data cache window duration in seconds (default: 1.0)
         """
         self._host = host
         self._port = port
@@ -118,6 +205,9 @@ class SpanPanelClient:
         self._retries = retries
         self._retry_timeout = retry_timeout
         self._retry_backoff_multiplier = retry_backoff_multiplier
+
+        # Initialize API data cache
+        self._api_cache = TimeWindowCache(cache_window)
 
         # Build base URL
         scheme = "https" if use_ssl else "http"
@@ -471,8 +561,16 @@ class SpanPanelClient:
                 raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
             return result
 
+        # Check cache first
+        cached_status = self._api_cache.get_cached_data("status")
+        if cached_status is not None:
+            return cached_status
+
         try:
-            return await self._retry_with_backoff(_get_status_operation)
+            status = await self._retry_with_backoff(_get_status_operation)
+            # Cache the successful response
+            self._api_cache.set_cached_data("status", status)
+            return status
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
@@ -501,8 +599,16 @@ class SpanPanelClient:
                 raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
             return result
 
+        # Check cache first
+        cached_state = self._api_cache.get_cached_data("panel_state")
+        if cached_state is not None:
+            return cached_state
+
         try:
-            return await self._retry_with_backoff(_get_panel_state_operation)
+            state = await self._retry_with_backoff(_get_panel_state_operation)
+            # Cache the successful response
+            self._api_cache.set_cached_data("panel_state", state)
+            return state
         except SpanPanelAuthError:
             # Pass through auth errors directly
             raise
@@ -525,19 +631,54 @@ class SpanPanelClient:
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
 
     async def get_circuits(self) -> CircuitsOut:
-        """Get all circuits and their current state."""
+        """Get all circuits and their current state, including virtual circuits for unmapped tabs."""
 
         async def _get_circuits_operation() -> CircuitsOut:
+            # Get standard circuits response
             client = self._get_client_for_endpoint(requires_auth=True)
-            # Type cast needed because generated API has overly strict type hints
             result = await get_circuits_api_v1_circuits_get.asyncio(client=cast(AuthenticatedClient, client))
-            # Since raise_on_unexpected_status=True, result should never be None
             if result is None:
                 raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
+
+            # Get panel state for branches data
+            panel_state = await self.get_panel_state()
+
+            # Find tabs already mapped to circuits
+            mapped_tabs: set[int] = set()
+            if hasattr(result, "circuits") and hasattr(result.circuits, "additional_properties"):
+                for circuit in result.circuits.additional_properties.values():
+                    if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
+                        if isinstance(circuit.tabs, (list, tuple)):
+                            mapped_tabs.update(circuit.tabs)
+                        elif isinstance(circuit.tabs, int):
+                            mapped_tabs.add(circuit.tabs)
+
+            # Create virtual circuits for unmapped tabs
+            if hasattr(panel_state, "branches") and panel_state.branches:
+                total_tabs = len(panel_state.branches)
+                all_tabs = set(range(1, total_tabs + 1))
+                unmapped_tabs = all_tabs - mapped_tabs
+
+                for tab_num in unmapped_tabs:
+                    branch_idx = tab_num - 1
+                    if branch_idx < len(panel_state.branches):
+                        branch = panel_state.branches[branch_idx]
+                        virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
+                        circuit_id = f"unmapped_tab_{tab_num}"
+                        result.circuits.additional_properties[circuit_id] = virtual_circuit
+
             return result
 
+        # Check cache first
+        cached_circuits = self._api_cache.get_cached_data("circuits")
+        if cached_circuits is not None:
+            return cached_circuits
+
         try:
-            return await self._retry_with_backoff(_get_circuits_operation)
+            circuits = await self._retry_with_backoff(_get_circuits_operation)
+            # Cache the successful response
+            self._api_cache.set_cached_data("circuits", circuits)
+            return circuits
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
@@ -554,6 +695,52 @@ class SpanPanelClient:
             # Catch and wrap all other exceptions
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
 
+    def _create_unmapped_tab_circuit(self, branch: Branch, tab_number: int) -> Circuit:
+        """Create a virtual circuit for an unmapped tab.
+
+        Args:
+            branch: The Branch object from panel state
+            tab_number: The tab number (1-based)
+
+        Returns:
+            Circuit: A virtual circuit representing the unmapped tab
+        """
+        # Map branch data to circuit data
+        # For solar inverters: imported energy = solar production, exported energy = grid export
+        instant_power_w = getattr(branch, "instant_power_w", 0.0)
+        imported_energy = getattr(branch, "imported_active_energy_wh", 0.0)
+        exported_energy = getattr(branch, "exported_active_energy_wh", 0.0)
+
+        # For solar tabs, imported energy represents production
+        produced_energy_wh = imported_energy
+        consumed_energy_wh = exported_energy
+
+        # Get timestamps (use current time as fallback)
+        import time
+
+        current_time = int(time.time())
+        instant_power_update_time_s = current_time
+        energy_accum_update_time_s = current_time
+
+        # Create the virtual circuit
+        circuit = Circuit(
+            id=f"unmapped_tab_{tab_number}",
+            name=f"Unmapped Tab {tab_number}",
+            relay_state=RelayState.UNKNOWN,
+            instant_power_w=instant_power_w,
+            instant_power_update_time_s=instant_power_update_time_s,
+            produced_energy_wh=produced_energy_wh,
+            consumed_energy_wh=consumed_energy_wh,
+            energy_accum_update_time_s=energy_accum_update_time_s,
+            priority=Priority.UNKNOWN,
+            is_user_controllable=False,
+            is_sheddable=False,
+            is_never_backup=False,
+            tabs=[tab_number],
+        )
+
+        return circuit
+
     async def get_storage_soe(self) -> BatteryStorage:
         """Get storage state of energy (SOE) data."""
 
@@ -566,8 +753,16 @@ class SpanPanelClient:
                 raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
             return result
 
+        # Check cache first
+        cached_storage = self._api_cache.get_cached_data("storage_soe")
+        if cached_storage is not None:
+            return cached_storage
+
         try:
-            return await self._retry_with_backoff(_get_storage_soe_operation)
+            storage = await self._retry_with_backoff(_get_storage_soe_operation)
+            # Cache the successful response
+            self._api_cache.set_cached_data("storage_soe", storage)
+            return storage
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:

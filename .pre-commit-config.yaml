@@ -86,7 +86,8 @@ repos:
     rev: 2.1.3
     hooks:
       - id: poetry-check
-      - id: poetry-lock
+      # poetry-lock hook removed to prevent CI failures due to file modifications
+      # Lock file should be manually updated when dependencies change
 
   # Quick coverage check (total only, no details)
   - repo: local

@@ -7,9 +7,9 @@ It wraps the generated OpenAPI client to provide a more convenient interface.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 import time
-from typing import Any, Callable, NoReturn, TypeVar, cast
+from typing import Any, NoReturn, TypeVar, cast
 
 import httpx
 
@@ -648,7 +648,7 @@ class SpanPanelClient:
             if hasattr(result, "circuits") and hasattr(result.circuits, "additional_properties"):
                 for circuit in result.circuits.additional_properties.values():
                     if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
-                        if isinstance(circuit.tabs, (list, tuple)):
+                        if isinstance(circuit.tabs, list | tuple):
                             mapped_tabs.update(circuit.tabs)
                         elif isinstance(circuit.tabs, int):
                             mapped_tabs.add(circuit.tabs)

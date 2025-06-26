@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, TypeVar, Union
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from attrs import define as _attrs_define, field as _attrs_field
 
@@ -22,8 +22,8 @@ class Client:
     """
 
     allowed_endpoint_groups: "AllowedEndpointGroups"
-    description: Union[Unset, str] = UNSET
-    issued_at: Union[Unset, int] = UNSET
+    description: Unset | str = UNSET
+    issued_at: Unset | int = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

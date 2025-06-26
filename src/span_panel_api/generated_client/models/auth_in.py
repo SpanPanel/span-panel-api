@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Any, TypeVar, Union
+from typing import Any, TypeVar
 
 from attrs import define as _attrs_define, field as _attrs_field
 
@@ -19,9 +19,9 @@ class AuthIn:
     """
 
     name: str
-    description: Union[Unset, str] = UNSET
-    otp: Union[Unset, str] = UNSET
-    dashboard_password: Union[Unset, str] = UNSET
+    description: Unset | str = UNSET
+    otp: Unset | str = UNSET
+    dashboard_password: Unset | str = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

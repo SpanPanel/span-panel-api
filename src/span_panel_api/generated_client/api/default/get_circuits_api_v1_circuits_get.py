@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -18,7 +18,7 @@ def _get_kwargs() -> dict[str, Any]:
     return _kwargs
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[CircuitsOut]:
+def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> CircuitsOut | None:
     if response.status_code == 200:
         response_200 = CircuitsOut.from_dict(response.json())
 
@@ -29,7 +29,7 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[CircuitsOut]:
+def _build_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Response[CircuitsOut]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -64,7 +64,7 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-) -> Optional[CircuitsOut]:
+) -> CircuitsOut | None:
     """Get Circuits
 
     Raises:
@@ -104,7 +104,7 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-) -> Optional[CircuitsOut]:
+) -> CircuitsOut | None:
     """Get Circuits
 
     Raises:

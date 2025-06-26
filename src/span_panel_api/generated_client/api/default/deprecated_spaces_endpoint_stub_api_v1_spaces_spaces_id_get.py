@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -20,9 +20,7 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[Any, HTTPValidationError]]:
+def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Any | HTTPValidationError | None:
     if response.status_code == 200:
         response_200 = response.json()
         return response_200
@@ -37,8 +35,8 @@ def _parse_response(
 
 
 def _build_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[Union[Any, HTTPValidationError]]:
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> Response[Any | HTTPValidationError]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -51,7 +49,7 @@ def sync_detailed(
     spaces_id: str,
     *,
     client: AuthenticatedClient,
-) -> Response[Union[Any, HTTPValidationError]]:
+) -> Response[Any | HTTPValidationError]:
     """Deprecated Spaces Endpoint Stub
 
     Args:
@@ -80,7 +78,7 @@ def sync(
     spaces_id: str,
     *,
     client: AuthenticatedClient,
-) -> Optional[Union[Any, HTTPValidationError]]:
+) -> Any | HTTPValidationError | None:
     """Deprecated Spaces Endpoint Stub
 
     Args:
@@ -104,7 +102,7 @@ async def asyncio_detailed(
     spaces_id: str,
     *,
     client: AuthenticatedClient,
-) -> Response[Union[Any, HTTPValidationError]]:
+) -> Response[Any | HTTPValidationError]:
     """Deprecated Spaces Endpoint Stub
 
     Args:
@@ -131,7 +129,7 @@ async def asyncio(
     spaces_id: str,
     *,
     client: AuthenticatedClient,
-) -> Optional[Union[Any, HTTPValidationError]]:
+) -> Any | HTTPValidationError | None:
     """Deprecated Spaces Endpoint Stub
 
     Args:

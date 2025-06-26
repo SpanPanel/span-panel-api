@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "1.1.0"
+version = "1.1.1"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -30,7 +30,7 @@ pytest-cov = "*"
 bandit = "1.8.5"
 pre-commit = "*"
 black = "*"
-ruff = "0.12.0"
+ruff = "^0.12.0"
 mypy = "*"
 radon = "*"
 twine = "*"

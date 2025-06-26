@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -18,9 +18,7 @@ def _get_kwargs() -> dict[str, Any]:
     return _kwargs
 
 
-def _parse_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[NiceToHaveThreshold]:
+def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> NiceToHaveThreshold | None:
     if response.status_code == 200:
         response_200 = NiceToHaveThreshold.from_dict(response.json())
 
@@ -31,9 +29,7 @@ def _parse_response(
         return None
 
 
-def _build_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[NiceToHaveThreshold]:
+def _build_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Response[NiceToHaveThreshold]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -68,7 +64,7 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-) -> Optional[NiceToHaveThreshold]:
+) -> NiceToHaveThreshold | None:
     """Get Storage Nice To Have Threshold
 
     Raises:
@@ -108,7 +104,7 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-) -> Optional[NiceToHaveThreshold]:
+) -> NiceToHaveThreshold | None:
     """Get Storage Nice To Have Threshold
 
     Raises:

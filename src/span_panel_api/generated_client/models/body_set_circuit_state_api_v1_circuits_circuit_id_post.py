@@ -36,27 +36,27 @@ class BodySetCircuitStateApiV1CircuitsCircuitIdPost:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        relay_state_in: Union[Unset, dict[str, Any]] = UNSET
+        relay_state_in: Unset | dict[str, Any] = UNSET
         if not isinstance(self.relay_state_in, Unset):
             relay_state_in = self.relay_state_in.to_dict()
 
-        priority_in: Union[Unset, dict[str, Any]] = UNSET
+        priority_in: Unset | dict[str, Any] = UNSET
         if not isinstance(self.priority_in, Unset):
             priority_in = self.priority_in.to_dict()
 
-        circuit_name_in: Union[Unset, dict[str, Any]] = UNSET
+        circuit_name_in: Unset | dict[str, Any] = UNSET
         if not isinstance(self.circuit_name_in, Unset):
             circuit_name_in = self.circuit_name_in.to_dict()
 
-        user_controllable_in: Union[Unset, dict[str, Any]] = UNSET
+        user_controllable_in: Unset | dict[str, Any] = UNSET
         if not isinstance(self.user_controllable_in, Unset):
             user_controllable_in = self.user_controllable_in.to_dict()
 
-        sheddable_in: Union[Unset, dict[str, Any]] = UNSET
+        sheddable_in: Unset | dict[str, Any] = UNSET
         if not isinstance(self.sheddable_in, Unset):
             sheddable_in = self.sheddable_in.to_dict()
 
-        never_backup_in: Union[Unset, dict[str, Any]] = UNSET
+        never_backup_in: Unset | dict[str, Any] = UNSET
         if not isinstance(self.never_backup_in, Unset):
             never_backup_in = self.never_backup_in.to_dict()
 
@@ -87,42 +87,42 @@ class BodySetCircuitStateApiV1CircuitsCircuitIdPost:
 
         d = dict(src_dict)
         _relay_state_in = d.pop("relayStateIn", UNSET)
-        relay_state_in: Union[Unset, RelayStateIn]
+        relay_state_in: Unset | RelayStateIn
         if isinstance(_relay_state_in, Unset):
             relay_state_in = UNSET
         else:
             relay_state_in = RelayStateIn.from_dict(_relay_state_in)
 
         _priority_in = d.pop("priorityIn", UNSET)
-        priority_in: Union[Unset, PriorityIn]
+        priority_in: Unset | PriorityIn
         if isinstance(_priority_in, Unset):
             priority_in = UNSET
         else:
             priority_in = PriorityIn.from_dict(_priority_in)
 
         _circuit_name_in = d.pop("circuitNameIn", UNSET)
-        circuit_name_in: Union[Unset, CircuitNameIn]
+        circuit_name_in: Unset | CircuitNameIn
         if isinstance(_circuit_name_in, Unset):
             circuit_name_in = UNSET
         else:
             circuit_name_in = CircuitNameIn.from_dict(_circuit_name_in)
 
         _user_controllable_in = d.pop("userControllableIn", UNSET)
-        user_controllable_in: Union[Unset, BooleanIn]
+        user_controllable_in: Unset | BooleanIn
         if isinstance(_user_controllable_in, Unset):
             user_controllable_in = UNSET
         else:
             user_controllable_in = BooleanIn.from_dict(_user_controllable_in)
 
         _sheddable_in = d.pop("sheddableIn", UNSET)
-        sheddable_in: Union[Unset, BooleanIn]
+        sheddable_in: Unset | BooleanIn
         if isinstance(_sheddable_in, Unset):
             sheddable_in = UNSET
         else:
             sheddable_in = BooleanIn.from_dict(_sheddable_in)
 
         _never_backup_in = d.pop("neverBackupIn", UNSET)
-        never_backup_in: Union[Unset, BooleanIn]
+        never_backup_in: Unset | BooleanIn
         if isinstance(_never_backup_in, Unset):
             never_backup_in = UNSET
         else:

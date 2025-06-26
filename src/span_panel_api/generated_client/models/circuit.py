@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Any, TypeVar, Union, cast
+from typing import Any, TypeVar, cast
 
 from attrs import define as _attrs_define, field as _attrs_field
 
@@ -40,8 +40,8 @@ class Circuit:
     is_user_controllable: bool
     is_sheddable: bool
     is_never_backup: bool
-    name: Union[Unset, str] = UNSET
-    tabs: Union[Unset, list[int]] = UNSET
+    name: Unset | str = UNSET
+    tabs: Unset | list[int] = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -69,7 +69,7 @@ class Circuit:
 
         name = self.name
 
-        tabs: Union[Unset, list[int]] = UNSET
+        tabs: Unset | list[int] = UNSET
         if not isinstance(self.tabs, Unset):
             tabs = self.tabs
 

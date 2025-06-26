@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -22,8 +22,8 @@ def _get_kwargs(
 
 
 def _parse_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[Client, HTTPValidationError]]:
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> Client | HTTPValidationError | None:
     if response.status_code == 200:
         response_200 = Client.from_dict(response.json())
 
@@ -39,8 +39,8 @@ def _parse_response(
 
 
 def _build_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[Union[Client, HTTPValidationError]]:
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> Response[Client | HTTPValidationError]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -53,7 +53,7 @@ def sync_detailed(
     name: str,
     *,
     client: AuthenticatedClient,
-) -> Response[Union[Client, HTTPValidationError]]:
+) -> Response[Client | HTTPValidationError]:
     """Get Client
 
     Args:
@@ -82,7 +82,7 @@ def sync(
     name: str,
     *,
     client: AuthenticatedClient,
-) -> Optional[Union[Client, HTTPValidationError]]:
+) -> Client | HTTPValidationError | None:
     """Get Client
 
     Args:
@@ -106,7 +106,7 @@ async def asyncio_detailed(
     name: str,
     *,
     client: AuthenticatedClient,
-) -> Response[Union[Client, HTTPValidationError]]:
+) -> Response[Client | HTTPValidationError]:
     """Get Client
 
     Args:
@@ -133,7 +133,7 @@ async def asyncio(
     name: str,
     *,
     client: AuthenticatedClient,
-) -> Optional[Union[Client, HTTPValidationError]]:
+) -> Client | HTTPValidationError | None:
     """Get Client
 
     Args:

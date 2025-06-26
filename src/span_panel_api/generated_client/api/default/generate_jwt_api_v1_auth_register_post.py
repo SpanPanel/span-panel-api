@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, Optional, Union
+from typing import Any
 
 import httpx
 
@@ -31,8 +31,8 @@ def _get_kwargs(
 
 
 def _parse_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[AuthOut, HTTPValidationError]]:
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> AuthOut | HTTPValidationError | None:
     if response.status_code == 200:
         response_200 = AuthOut.from_dict(response.json())
 
@@ -48,8 +48,8 @@ def _parse_response(
 
 
 def _build_response(
-    *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[Union[AuthOut, HTTPValidationError]]:
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> Response[AuthOut | HTTPValidationError]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -62,7 +62,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient,
     body: AuthIn,
-) -> Response[Union[AuthOut, HTTPValidationError]]:
+) -> Response[AuthOut | HTTPValidationError]:
     """Generate Jwt
 
     Args:
@@ -91,7 +91,7 @@ def sync(
     *,
     client: AuthenticatedClient,
     body: AuthIn,
-) -> Optional[Union[AuthOut, HTTPValidationError]]:
+) -> AuthOut | HTTPValidationError | None:
     """Generate Jwt
 
     Args:
@@ -115,7 +115,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
     body: AuthIn,
-) -> Response[Union[AuthOut, HTTPValidationError]]:
+) -> Response[AuthOut | HTTPValidationError]:
     """Generate Jwt
 
     Args:
@@ -142,7 +142,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient,
     body: AuthIn,
-) -> Optional[Union[AuthOut, HTTPValidationError]]:
+) -> AuthOut | HTTPValidationError | None:
     """Generate Jwt
 
     Args:

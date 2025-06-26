@@ -25,11 +25,11 @@ class NiceToHaveThreshold:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        nice_to_have_threshold_low_soe: Union[Unset, dict[str, Any]] = UNSET
+        nice_to_have_threshold_low_soe: Unset | dict[str, Any] = UNSET
         if not isinstance(self.nice_to_have_threshold_low_soe, Unset):
             nice_to_have_threshold_low_soe = self.nice_to_have_threshold_low_soe.to_dict()
 
-        nice_to_have_threshold_high_soe: Union[Unset, dict[str, Any]] = UNSET
+        nice_to_have_threshold_high_soe: Unset | dict[str, Any] = UNSET
         if not isinstance(self.nice_to_have_threshold_high_soe, Unset):
             nice_to_have_threshold_high_soe = self.nice_to_have_threshold_high_soe.to_dict()
 
@@ -49,14 +49,14 @@ class NiceToHaveThreshold:
 
         d = dict(src_dict)
         _nice_to_have_threshold_low_soe = d.pop("nice_to_have_threshold_low_soe", UNSET)
-        nice_to_have_threshold_low_soe: Union[Unset, StateOfEnergy]
+        nice_to_have_threshold_low_soe: Unset | StateOfEnergy
         if isinstance(_nice_to_have_threshold_low_soe, Unset):
             nice_to_have_threshold_low_soe = UNSET
         else:
             nice_to_have_threshold_low_soe = StateOfEnergy.from_dict(_nice_to_have_threshold_low_soe)
 
         _nice_to_have_threshold_high_soe = d.pop("nice_to_have_threshold_high_soe", UNSET)
-        nice_to_have_threshold_high_soe: Union[Unset, StateOfEnergy]
+        nice_to_have_threshold_high_soe: Unset | StateOfEnergy
         if isinstance(_nice_to_have_threshold_high_soe, Unset):
             nice_to_have_threshold_high_soe = UNSET
         else:

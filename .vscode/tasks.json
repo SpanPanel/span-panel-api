@@ -2,10 +2,32 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "Setup Git Hooks",
+            "type": "shell",
+            "command": "${workspaceFolder}/setup-hooks.sh",
+            "runOptions": {
+                "runOn": "folderOpen"
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "dedicated",
+                "showReuseMessage": false,
+                "clear": false,
+                "close": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "Generate OpenAPI Client",
             "type": "shell",
             "command": "poetry",
-            "args": ["run", "python", "generate_client.py"],
+            "args": [
+                "run",
+                "python",
+                "generate_client.py"
+            ],
             "group": {
                 "kind": "build",
                 "isDefault": false
@@ -32,7 +54,9 @@
             "label": "Install Dependencies",
             "type": "shell",
             "command": "poetry",
-            "args": ["install"],
+            "args": [
+                "install"
+            ],
             "group": "build",
             "presentation": {
                 "echo": true,
@@ -47,7 +71,10 @@
             "label": "Run Tests",
             "type": "shell",
             "command": "poetry",
-            "args": ["run", "pytest"],
+            "args": [
+                "run",
+                "pytest"
+            ],
             "group": {
                 "kind": "test",
                 "isDefault": true
@@ -65,7 +92,9 @@
             "label": "Coverage Report",
             "type": "shell",
             "command": "python",
-            "args": ["scripts/coverage.py"],
+            "args": [
+                "scripts/coverage.py"
+            ],
             "group": "test",
             "presentation": {
                 "echo": true,
@@ -81,7 +110,12 @@
             "label": "Lint Markdown",
             "type": "shell",
             "command": "npx",
-            "args": ["markdownlint-cli2", "--config", ".markdownlint.json", "**/*.md"],
+            "args": [
+                "markdownlint-cli2",
+                "--config",
+                ".markdownlint.json",
+                "**/*.md"
+            ],
             "group": "build",
             "presentation": {
                 "echo": true,
@@ -110,7 +144,12 @@
             "label": "Run Pre-commit",
             "type": "shell",
             "command": "poetry",
-            "args": ["run", "pre-commit", "run", "--all-files"],
+            "args": [
+                "run",
+                "pre-commit",
+                "run",
+                "--all-files"
+            ],
             "group": "build",
             "presentation": {
                 "echo": true,

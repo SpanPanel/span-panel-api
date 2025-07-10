@@ -416,8 +416,8 @@ panel_state2 = await client.get_panel_state()   # Returns cached data (within wi
 # Clone and install
 git clone <repository code URL>
 cd span-panel-api
+eval "$(poetry env activate)"
 poetry install
-poetry env activate
 
 # Run tests
 poetry run pytest

@@ -36,7 +36,7 @@ radon = "*"
 twine = "*"
 
 [tool.poetry.group.generate.dependencies]
-openapi-python-client = "^0.25.0"
+openapi-python-client = "^0.25.2"
 pyyaml = "^6.0.0"
 
 [build-system]

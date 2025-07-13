@@ -22,6 +22,7 @@ from .exceptions import (
     SpanPanelServerError,
     SpanPanelTimeoutError,
 )
+from .simulation import BranchVariation, CircuitVariation, DynamicSimulationEngine, PanelVariation, StatusVariation
 
 T = TypeVar("T")
 
@@ -176,6 +177,8 @@ class SpanPanelClient:
         retry_backoff_multiplier: float = 2.0,
         # Cache configuration
         cache_window: float = 1.0,  # Panel data cache window in seconds
+        # Simulation configuration
+        simulation_mode: bool = False,  # Enable simulation mode
     ) -> None:
         """Initialize the SPAN Panel client.
 
@@ -188,11 +191,13 @@ class SpanPanelClient:
             retry_timeout: Timeout between retry attempts in seconds
             retry_backoff_multiplier: Exponential backoff multiplier
             cache_window: Panel data cache window duration in seconds (default: 1.0)
+            simulation_mode: Enable simulation mode for testing (default: False)
         """
         self._host = host
         self._port = port
         self._timeout = timeout
         self._use_ssl = use_ssl
+        self._simulation_mode = simulation_mode
 
         # Simple retry configuration - validate and store
         if retries < 0:
@@ -209,6 +214,11 @@ class SpanPanelClient:
         # Initialize API data cache
         self._api_cache = TimeWindowCache(cache_window)
 
+        # Initialize simulation engine if in simulation mode
+        self._simulation_engine: DynamicSimulationEngine | None = None
+        if simulation_mode:
+            self._simulation_engine = DynamicSimulationEngine()
+
         # Build base URL
         scheme = "https" if use_ssl else "http"
         self._base_url = f"{scheme}://{host}:{port}"
@@ -220,6 +230,32 @@ class SpanPanelClient:
         # Context tracking - critical for preventing "Cannot open a client instance more than once"
         self._in_context: bool = False
         self._httpx_client_owned: bool = False
+
+    def _convert_raw_to_circuits_out(self, raw_data: dict[str, Any]) -> CircuitsOut:
+        """Convert raw simulation data to CircuitsOut model."""
+        # This is a simplified conversion - in reality, you'd need to properly
+        # construct the CircuitsOut object from the raw data
+        from .generated_client.models import CircuitsOut
+
+        return CircuitsOut.from_dict(raw_data)
+
+    def _convert_raw_to_panel_state(self, raw_data: dict[str, Any]) -> PanelState:
+        """Convert raw simulation data to PanelState model."""
+        from .generated_client.models import PanelState
+
+        return PanelState.from_dict(raw_data)
+
+    def _convert_raw_to_status_out(self, raw_data: dict[str, Any]) -> StatusOut:
+        """Convert raw simulation data to StatusOut model."""
+        from .generated_client.models import StatusOut
+
+        return StatusOut.from_dict(raw_data)
+
+    def _convert_raw_to_battery_storage(self, raw_data: dict[str, Any]) -> BatteryStorage:
+        """Convert raw simulation data to BatteryStorage model."""
+        from .generated_client.models import BatteryStorage
+
+        return BatteryStorage.from_dict(raw_data)
 
     # Properties for querying and setting retry configuration
     @property
@@ -319,7 +355,7 @@ class SpanPanelClient:
 
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
         """Async context manager exit."""
         try:
             await self.close()
@@ -484,7 +520,7 @@ class SpanPanelClient:
                 # Last attempt - re-raise
                 raise
 
-        # This should never be reached, but added for mypy completeness
+        # This should never be reached, but required for mypy type checking
         raise SpanPanelAPIError("Retry operation completed without success or exception")
 
     # Authentication Methods
@@ -549,8 +585,43 @@ class SpanPanelClient:
             raise SpanPanelAPIError(f"API error: {e}") from e
 
     # Panel Status and Info
-    async def get_status(self) -> StatusOut:
-        """Get complete panel system status (does not require authentication)."""
+    async def get_status(self, variations: StatusVariation | None = None) -> StatusOut:
+        """Get complete panel system status (does not require authentication).
+
+        Args:
+            variations: Status field variations (simulation mode only)
+        """
+        # In simulation mode, use simulation engine
+        if self._simulation_mode:
+            return await self._get_status_simulation(variations=variations)
+
+        # In live mode, ignore variation parameters
+        return await self._get_status_live()
+
+    async def _get_status_simulation(self, variations: StatusVariation | None = None) -> StatusOut:
+        """Get status data in simulation mode."""
+        if self._simulation_engine is None:
+            raise SpanPanelAPIError("Simulation engine not initialized")
+
+        # Check cache first
+        cache_key = f"status_sim_{hash(str(variations))}"
+        cached_status = self._api_cache.get_cached_data(cache_key)
+        if cached_status is not None:
+            return cached_status
+
+        # Get simulation data
+        status_data = self._simulation_engine.get_status_data(variations=variations)
+
+        # Convert to model object
+        status_out = self._convert_raw_to_status_out(status_data)
+
+        # Cache the result
+        self._api_cache.set_cached_data(cache_key, status_out)
+
+        return status_out
+
+    async def _get_status_live(self) -> StatusOut:
+        """Get status data from live panel."""
 
         async def _get_status_operation() -> StatusOut:
             client = self._get_client_for_endpoint(requires_auth=False)
@@ -587,8 +658,59 @@ class SpanPanelClient:
             # Catch and wrap all other exceptions
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
 
-    async def get_panel_state(self) -> PanelState:
-        """Get panel state information."""
+    async def get_panel_state(
+        self,
+        variations: dict[int, BranchVariation] | None = None,
+        panel_variations: PanelVariation | None = None,
+        global_power_variation: float | None = None,
+    ) -> PanelState:
+        """Get panel state information.
+
+        Args:
+            variations: Dict mapping branch_id to specific variations (simulation mode only)
+            panel_variations: Panel-level variations (simulation mode only)
+            global_power_variation: Apply to all branches (simulation mode only)
+        """
+        # In simulation mode, use simulation engine
+        if self._simulation_mode:
+            return await self._get_panel_state_simulation(
+                variations=variations, panel_variations=panel_variations, global_power_variation=global_power_variation
+            )
+
+        # In live mode, ignore variation parameters
+        return await self._get_panel_state_live()
+
+    async def _get_panel_state_simulation(
+        self,
+        variations: dict[int, BranchVariation] | None = None,
+        panel_variations: PanelVariation | None = None,
+        global_power_variation: float | None = None,
+    ) -> PanelState:
+        """Get panel state data in simulation mode."""
+        if self._simulation_engine is None:
+            raise SpanPanelAPIError("Simulation engine not initialized")
+
+        # Check cache first
+        cache_key = f"panel_sim_{hash(str(variations))}_{hash(str(panel_variations))}_{global_power_variation}"
+        cached_panel = self._api_cache.get_cached_data(cache_key)
+        if cached_panel is not None:
+            return cached_panel
+
+        # Get simulation data
+        panel_data = self._simulation_engine.get_panel_state_data(
+            variations=variations, panel_variations=panel_variations, global_power_variation=global_power_variation
+        )
+
+        # Convert to model object
+        panel_state = self._convert_raw_to_panel_state(panel_data)
+
+        # Cache the result
+        self._api_cache.set_cached_data(cache_key, panel_state)
+
+        return panel_state
+
+    async def _get_panel_state_live(self) -> PanelState:
+        """Get panel state data from live panel."""
 
         async def _get_panel_state_operation() -> PanelState:
             client = self._get_client_for_endpoint(requires_auth=True)
@@ -630,8 +752,74 @@ class SpanPanelClient:
             # Catch and wrap all other exceptions
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
 
-    async def get_circuits(self) -> CircuitsOut:
-        """Get all circuits and their current state, including virtual circuits for unmapped tabs."""
+    async def get_circuits(
+        self,
+        variations: dict[str, CircuitVariation] | None = None,
+        global_power_variation: float | None = None,
+        global_energy_variation: float | None = None,
+        # Legacy support
+        power_variation: float | None = None,
+        energy_variation: float | None = None,
+    ) -> CircuitsOut:
+        """Get all circuits and their current state, including virtual circuits for unmapped tabs.
+
+        Args:
+            variations: Dict mapping circuit_id to specific variations (simulation mode only)
+            global_power_variation: Apply to all circuits (simulation mode only)
+            global_energy_variation: Apply to all circuits (simulation mode only)
+            power_variation: Legacy parameter, use global_power_variation instead
+            energy_variation: Legacy parameter, use global_energy_variation instead
+        """
+        # Handle legacy parameters
+        if power_variation is not None and global_power_variation is None:
+            global_power_variation = power_variation
+        if energy_variation is not None and global_energy_variation is None:
+            global_energy_variation = energy_variation
+
+        # In simulation mode, use simulation engine
+        if self._simulation_mode:
+            return await self._get_circuits_simulation(
+                variations=variations,
+                global_power_variation=global_power_variation,
+                global_energy_variation=global_energy_variation,
+            )
+
+        # In live mode, ignore all variation parameters and use live implementation
+        return await self._get_circuits_live()
+
+    async def _get_circuits_simulation(
+        self,
+        variations: dict[str, CircuitVariation] | None = None,
+        global_power_variation: float | None = None,
+        global_energy_variation: float | None = None,
+    ) -> CircuitsOut:
+        """Get circuits data in simulation mode."""
+        if self._simulation_engine is None:
+            raise SpanPanelAPIError("Simulation engine not initialized")
+
+        # Check cache first
+        cache_key = f"circuits_sim_{hash(str(variations))}_{global_power_variation}_{global_energy_variation}"
+        cached_circuits = self._api_cache.get_cached_data(cache_key)
+        if cached_circuits is not None:
+            return cached_circuits
+
+        # Get simulation data
+        circuits_data = self._simulation_engine.get_circuits_data(
+            variations=variations,
+            global_power_variation=global_power_variation,
+            global_energy_variation=global_energy_variation,
+        )
+
+        # Convert to model object
+        circuits_out = self._convert_raw_to_circuits_out(circuits_data)
+
+        # Cache the result
+        self._api_cache.set_cached_data(cache_key, circuits_out)
+
+        return circuits_out
+
+    async def _get_circuits_live(self) -> CircuitsOut:
+        """Get circuits data from live panel."""
 
         async def _get_circuits_operation() -> CircuitsOut:
             # Get standard circuits response
@@ -741,8 +929,43 @@ class SpanPanelClient:
 
         return circuit
 
-    async def get_storage_soe(self) -> BatteryStorage:
-        """Get storage state of energy (SOE) data."""
+    async def get_storage_soe(self, soe_variation: float | None = None) -> BatteryStorage:
+        """Get storage state of energy (SOE) data.
+
+        Args:
+            soe_variation: Battery percentage variation (simulation mode only)
+        """
+        # In simulation mode, use simulation engine
+        if self._simulation_mode:
+            return await self._get_storage_soe_simulation(soe_variation=soe_variation)
+
+        # In live mode, ignore variation parameters
+        return await self._get_storage_soe_live()
+
+    async def _get_storage_soe_simulation(self, soe_variation: float | None = None) -> BatteryStorage:
+        """Get storage SOE data in simulation mode."""
+        if self._simulation_engine is None:
+            raise SpanPanelAPIError("Simulation engine not initialized")
+
+        # Check cache first
+        cache_key = f"storage_soe_sim_{soe_variation}"
+        cached_storage = self._api_cache.get_cached_data(cache_key)
+        if cached_storage is not None:
+            return cached_storage
+
+        # Get simulation data
+        storage_data = self._simulation_engine.get_storage_soe_data(soe_variation=soe_variation)
+
+        # Convert to model object
+        battery_storage = self._convert_raw_to_battery_storage(storage_data)
+
+        # Cache the result
+        self._api_cache.set_cached_data(cache_key, battery_storage)
+
+        return battery_storage
+
+    async def _get_storage_soe_live(self) -> BatteryStorage:
+        """Get storage SOE data from live panel."""
 
         async def _get_storage_soe_operation() -> BatteryStorage:
             client = self._get_client_for_endpoint(requires_auth=True)

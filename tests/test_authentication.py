@@ -283,3 +283,23 @@ class TestAuthenticationRequirements:
 
             with pytest.raises(SpanPanelAuthError, match="Authentication required"):
                 await client.get_panel_state()
+
+    @pytest.mark.asyncio
+    async def test_authentication_error_paths(self):
+        """Test authentication error handling paths (lines 559-566)."""
+        from span_panel_api.exceptions import SpanPanelAPIError
+        from tests.test_factories import create_live_client
+
+        client = create_live_client(cache_window=0)
+
+        # Test ValueError in authentication
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
+            mock_auth.asyncio = AsyncMock(side_effect=ValueError("Invalid input"))
+            with pytest.raises(SpanPanelAPIError, match="API error: Invalid input"):
+                await client.authenticate("test", "description")
+
+        # Test generic exception in authentication
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
+            mock_auth.asyncio = AsyncMock(side_effect=RuntimeError("Unexpected error"))
+            with pytest.raises(SpanPanelAPIError, match="API error: Unexpected error"):
+                await client.authenticate("test", "description")

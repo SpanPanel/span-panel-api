@@ -8,6 +8,7 @@ import pytest
 from span_panel_api import SpanPanelClient
 from span_panel_api.const import RETRY_MAX_ATTEMPTS
 from span_panel_api.exceptions import SpanPanelAPIError, SpanPanelTimeoutError
+from tests.test_factories import create_sim_client
 
 
 class TestContextManagerFix:
@@ -16,87 +17,67 @@ class TestContextManagerFix:
     @pytest.mark.asyncio
     async def test_unauthenticated_requests_work_properly(self):
         """Test that unauthenticated requests (like get_status) work both inside and outside context managers."""
-        client = SpanPanelClient("192.168.1.100", timeout=5.0, cache_window=0)  # Disable cache for testing
+        client = create_sim_client(cache_window=0)  # Use simulation mode for testing
 
-        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
-            # Setup mock response for status endpoint
-            mock_status.asyncio = AsyncMock(return_value=MagicMock(system=MagicMock(manufacturer="SPAN")))
+        # Test unauthenticated call OUTSIDE context manager
+        # This should work without any access token set
+        assert client._access_token is None
+        status_outside_context = await client.get_status()
+        assert status_outside_context is not None
+        assert status_outside_context.system.manufacturer == "Span"
 
-            # Test unauthenticated call OUTSIDE context manager
-            # This should work without any access token set
-            assert client._access_token is None
-            status_outside_context = await client.get_status()
-            assert status_outside_context is not None
-            assert status_outside_context.system.manufacturer == "SPAN"
+        # Test unauthenticated call INSIDE context manager WITHOUT setting token
+        async with client:
+            assert client._in_context is True
+            assert client._access_token is None  # Still no token set
 
-            # Test unauthenticated call INSIDE context manager WITHOUT setting token
-            async with client:
-                assert client._in_context is True
-                assert client._access_token is None  # Still no token set
+            status_inside_context = await client.get_status()
+            assert status_inside_context is not None
+            assert status_inside_context.system.manufacturer == "Span"
 
-                status_inside_context = await client.get_status()
-                assert status_inside_context is not None
-                assert status_inside_context.system.manufacturer == "SPAN"
+        # Test unauthenticated call INSIDE context manager WITH token set
+        # (status endpoint should still work even if token is set since it doesn't require auth)
+        async with client:
+            client.set_access_token("test-token")
+            assert client._access_token == "test-token"
 
-            # Test unauthenticated call INSIDE context manager WITH token set
-            # (status endpoint should still work even if token is set since it doesn't require auth)
-            async with client:
-                client.set_access_token("test-token")
-                assert client._access_token == "test-token"
-
-                status_with_token = await client.get_status()
-                assert status_with_token is not None
-                assert status_with_token.system.manufacturer == "SPAN"
-
-            # Verify calls were made to the unauthenticated endpoint
-            assert mock_status.asyncio.call_count == 3
+            status_with_token = await client.get_status()
+            assert status_with_token is not None
+            assert status_with_token.system.manufacturer == "Span"
 
     @pytest.mark.asyncio
     async def test_context_manager_multiple_api_calls(self):
         """Test that multiple API calls work within a single context manager without double context errors."""
-        client = SpanPanelClient("192.168.1.100", timeout=5.0)
+        client = create_sim_client()
 
-        # Mock all the API functions
-        with (
-            patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status,
-            patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits,
-            patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel,
-            patch("span_panel_api.client.get_storage_soe_api_v1_storage_soe_get") as mock_storage,
-        ):
-            # Setup mock responses
-            mock_status.asyncio = AsyncMock(return_value=MagicMock(system=MagicMock(manufacturer="SPAN")))
-            mock_circuits.asyncio = AsyncMock(return_value=MagicMock(circuits=MagicMock(additional_properties={})))
-            mock_panel.asyncio = AsyncMock(return_value=MagicMock(main_relay_state="CLOSED"))
-            mock_storage.asyncio = AsyncMock(return_value=MagicMock(soe=MagicMock(to_dict=lambda: {"soe": 0.85})))
+        # Test multiple calls within a single context manager
+        async with client:
+            # Verify we're in context
+            assert client._in_context is True
+            assert client._client is not None
 
-            # Test multiple calls within a single context manager
-            async with client:
-                # Verify we're in context
-                assert client._in_context is True
-                assert client._client is not None
+            # Multiple calls should not cause "Cannot open a client instance more than once"
+            # These calls are unauthenticated (status endpoint doesn't require auth)
+            status1 = await client.get_status()
+            assert status1 is not None
 
-                # Multiple calls should not cause "Cannot open a client instance more than once"
-                # These calls are unauthenticated (status endpoint doesn't require auth)
-                status1 = await client.get_status()
-                assert status1 is not None
+            status2 = await client.get_status()
+            assert status2 is not None
 
-                status2 = await client.get_status()
-                assert status2 is not None
+            # Set access token for authenticated calls (not needed in simulation but tests the flow)
+            client.set_access_token("test-token")
 
-                # Set access token for authenticated calls
-                client.set_access_token("test-token")
+            circuits = await client.get_circuits()
+            assert circuits is not None
 
-                circuits = await client.get_circuits()
-                assert circuits is not None
+            panel = await client.get_panel_state()
+            assert panel is not None
 
-                panel = await client.get_panel_state()
-                assert panel is not None
+            storage = await client.get_storage_soe()
+            assert storage is not None
 
-                storage = await client.get_storage_soe()
-                assert storage is not None
-
-            # Verify we exited context properly
-            assert client._in_context is False
+        # Verify we exited context properly
+        assert client._in_context is False
 
     @pytest.mark.asyncio
     async def test_context_manager_with_authentication_flow(self):

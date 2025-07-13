@@ -19,6 +19,13 @@
 
 A Python client library for accessing the SPAN Panel OpenAPI endpoint.
 
+## Simulation Mode
+
+The SPAN Panel API client includes a simulation mode for development and testing without requiring a physical SPAN panel. When enabled, the client uses pre-recorded fixture data and applies dynamic variations provided by the API to simulate various load variations.
+Simulation mode supports time-based energy accumulation, power fluctuation patterns for different appliance types, and per-circuit or per-branch variation controls.
+
+For detailed information and usage examples, see [tests/docs/simulation.md](tests/docs/simulation.md).
+
 ## Installation
 
 ```bash
@@ -430,15 +437,26 @@ python scripts/coverage.py
 
 ```bash
 span_openapi/
-├── src/span_panel_api/        # Main client library
-│   ├── client.py              # SpanPanelClient (high-level wrapper)
-│   ├── exceptions.py          # Exception hierarchy
-│   ├── const.py               # HTTP status constants
-│   └── generated_client/      # Auto-generated OpenAPI client
-├── tests/                     # test suite
-├── scripts/coverage.py        # Coverage checking utility
-├── openapi.json              # SPAN Panel OpenAPI specification
-└── pyproject.toml            # Poetry configuration
+├── src/span_panel_api/           # Main client library
+│   ├── client.py                 # SpanPanelClient (high-level wrapper)
+│   ├── simulation.py             # Simulation engine for dynamic test mode
+│   ├── exceptions.py             # Exception hierarchy
+│   ├── const.py                  # HTTP status constants
+│   └── generated_client/         # Auto-generated OpenAPI client
+├── tests/                        # Test suite
+│   ├── test_core_client.py       # Core client and API error path tests
+│   ├── test_context_manager.py   # Context manager tests
+│   ├── test_cache_functionality.py # Cache and retry tests
+│   ├── test_enhanced_circuits.py # Enhanced/virtual circuits tests
+│   ├── test_simulation_mode.py   # Simulation mode tests
+│   ├── test_factories.py         # Shared test fixtures and factories
+│   ├── conftest.py               # Pytest shared fixtures
+│   └── simulation_fixtures/      # Simulation fixture data (response .txt files)
+├── scripts/coverage.py           # Coverage checking utility
+├── openapi.json                  # SPAN Panel OpenAPI specification
+├── pyproject.toml                # Poetry configuration
+└── README.md                     # Project documentation
+
 ```
 
 ## Advanced Usage

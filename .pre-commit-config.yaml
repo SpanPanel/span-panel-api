@@ -82,6 +82,17 @@ repos:
         additional_dependencies: ['bandit[toml]']
         exclude: '^tests/.*|^scripts/.*|^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
+  # Vulture for dead code detection
+  - repo: local
+    hooks:
+      - id: vulture
+        name: vulture
+        entry: bash -c 'poetry run vulture src/span_panel_api/ --min-confidence 80'
+        language: system
+        types: [python]
+        pass_filenames: false
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
+
   # Poetry check for pyproject.toml validation
   - repo: https://github.com/python-poetry/poetry
     rev: 2.1.3

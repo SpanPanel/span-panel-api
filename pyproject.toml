@@ -35,6 +35,7 @@ ruff = "^0.12.2"
 mypy = "*"
 radon = "*"
 twine = "*"
+vulture = "^2.14"
 
 [tool.poetry.group.generate.dependencies]
 openapi-python-client = "^0.25.2"

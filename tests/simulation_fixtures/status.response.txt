@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Server: nginx
+Date: Sun, 13 Jul 2025 18:25:18 GMT
+Content-Type: application/json
+Content-Length: 286
+Connection: close
+
+{"software":{"firmwareVersion":"spanos2/r202518/04","updateStatus":"idle","env":"prod"},"system":{"manufacturer":"Span","serial":"sim-serial-123","model":"00200","doorState":"CLOSED","proximityProven":false,"uptime":1666224},"network":{"eth0Link":true,"wlanLink":true,"wwanLink":false}}

@@ -1,7 +1,7 @@
 repos:
   # Pre-commit hooks for basic checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: v5.0.0
     hooks:
       - id: trailing-whitespace
         exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
@@ -28,11 +28,11 @@ repos:
     hooks:
       # Run formatter first
       - id: ruff-format
-        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/coverage\.py|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/coverage\.py|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
       # Then linter
       - id: ruff-check
         args: ['--fix']
-        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/coverage\.py|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/coverage\.py|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
   # Black limited to handling end-of-file newlines and blank lines
   - repo: https://github.com/psf/black
@@ -63,6 +63,7 @@ repos:
     hooks:
       - id: mypy
         additional_dependencies:
+          - numpy
           - httpx
           - attrs
           - python-dateutil
@@ -79,7 +80,7 @@ repos:
       - id: bandit
         args: ['-c', 'pyproject.toml']
         additional_dependencies: ['bandit[toml]']
-        exclude: '^tests/.*|^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*'
+        exclude: '^tests/.*|^scripts/.*|^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
   # Poetry check for pyproject.toml validation
   - repo: https://github.com/python-poetry/poetry

@@ -19,6 +19,13 @@
 
 A Python client library for accessing the SPAN Panel OpenAPI endpoint.
 
+## Simulation Mode
+
+The SPAN Panel API client includes a simulation mode for development and testing without requiring a physical SPAN panel. When enabled, the client uses pre-recorded fixture data and applies dynamic variations provided by the API to simulate various load variations.
+Simulation mode supports time-based energy accumulation, power fluctuation patterns for different appliance types, and per-circuit or per-branch variation controls.
+
+For detailed information and usage examples, see [tests/docs/simulation.md](tests/docs/simulation.md).
+
 ## Installation
 
 ```bash

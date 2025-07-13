@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "1.1.1"
+version = "1.1.2"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -12,6 +12,7 @@ dependencies = [
     "attrs>=22.2.0",
     "python-dateutil>=2.8.0",
     "click>=8.0.0",
+    "numpy>=1.21.0",
 ]
 
 [project.urls]
@@ -53,6 +54,7 @@ exclude = [
     "dist/",
     "venv/",
     ".venv/",
+    "examples/",
 ]
 
 [tool.ruff.format]
@@ -181,7 +183,7 @@ exclude_lines = [
 ]
 
 [tool.bandit]
-exclude_dirs = ["tests", "src/span_panel_api/generated_client", "scripts"]
+exclude_dirs = ["tests", "src/span_panel_api/generated_client", "scripts", "examples"]
 skips = ["generate_client.py"]
 
 [tool.black]

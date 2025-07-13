@@ -305,11 +305,26 @@ class TestSimulationErrorHandling:
         client._simulation_mode = True
         client._simulation_engine = None
 
-        # Should raise an error
+        # Test all simulation methods raise the same error
         with pytest.raises(SpanPanelAPIError):
             import asyncio
 
             asyncio.run(client.get_circuits())
+
+        with pytest.raises(SpanPanelAPIError):
+            import asyncio
+
+            asyncio.run(client.get_status())
+
+        with pytest.raises(SpanPanelAPIError):
+            import asyncio
+
+            asyncio.run(client.get_panel_state())
+
+        with pytest.raises(SpanPanelAPIError):
+            import asyncio
+
+            asyncio.run(client.get_storage_soe())
 
     def test_missing_fixture_data(self) -> None:
         """Test behavior when fixture data is missing."""

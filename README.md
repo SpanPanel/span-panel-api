@@ -437,15 +437,26 @@ python scripts/coverage.py
 
 ```bash
 span_openapi/
-├── src/span_panel_api/        # Main client library
-│   ├── client.py              # SpanPanelClient (high-level wrapper)
-│   ├── exceptions.py          # Exception hierarchy
-│   ├── const.py               # HTTP status constants
-│   └── generated_client/      # Auto-generated OpenAPI client
-├── tests/                     # test suite
-├── scripts/coverage.py        # Coverage checking utility
-├── openapi.json              # SPAN Panel OpenAPI specification
-└── pyproject.toml            # Poetry configuration
+├── src/span_panel_api/           # Main client library
+│   ├── client.py                 # SpanPanelClient (high-level wrapper)
+│   ├── simulation.py             # Simulation engine for dynamic test mode
+│   ├── exceptions.py             # Exception hierarchy
+│   ├── const.py                  # HTTP status constants
+│   └── generated_client/         # Auto-generated OpenAPI client
+├── tests/                        # Test suite
+│   ├── test_core_client.py       # Core client and API error path tests
+│   ├── test_context_manager.py   # Context manager tests
+│   ├── test_cache_functionality.py # Cache and retry tests
+│   ├── test_enhanced_circuits.py # Enhanced/virtual circuits tests
+│   ├── test_simulation_mode.py   # Simulation mode tests
+│   ├── test_factories.py         # Shared test fixtures and factories
+│   ├── conftest.py               # Pytest shared fixtures
+│   └── simulation_fixtures/      # Simulation fixture data (response .txt files)
+├── scripts/coverage.py           # Coverage checking utility
+├── openapi.json                  # SPAN Panel OpenAPI specification
+├── pyproject.toml                # Poetry configuration
+└── README.md                     # Project documentation
+
 ```
 
 ## Advanced Usage

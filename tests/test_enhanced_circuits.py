@@ -281,3 +281,28 @@ class TestEnhancedCircuits:
         assert circuit.produced_energy_wh == 0.0
         assert circuit.consumed_energy_wh == 0.0
         assert circuit.tabs == [15]
+
+    @pytest.mark.asyncio
+    async def test_create_unmapped_tab_circuit_coverage(self):
+        """Test the _create_unmapped_tab_circuit method coverage (from missing coverage)."""
+        from unittest.mock import MagicMock
+
+        from tests.test_factories import create_live_client
+
+        client = create_live_client(cache_window=0)
+        client.set_access_token("test-token")
+
+        # Create a mock branch for testing
+        mock_branch = MagicMock()
+        mock_branch.id = 1
+        mock_branch.relay_state = "CLOSED"
+
+        # Test the _create_unmapped_tab_circuit method
+        circuit = client._create_unmapped_tab_circuit(mock_branch, 2)
+
+        assert circuit.id == "unmapped_tab_2"
+        assert circuit.name == "Unmapped Tab 2"
+        assert circuit.tabs == [2]
+        assert circuit.relay_state.value == "UNKNOWN"  # Default value for unmapped circuits
+        assert circuit.priority.value == "UNKNOWN"
+        assert circuit.is_user_controllable is False

@@ -378,6 +378,65 @@ async def test_cache_disabled_with_simulation(sim_client_no_cache: SpanPanelClie
     assert call_count == 2  # Should increment since cache is disabled
 
 
+@pytest.mark.asyncio
+async def test_cache_hit_coverage():
+    """Test cache hit paths to ensure they're covered (lines 721, 829, 976)."""
+    from tests.test_factories import create_live_client
+
+    client = create_live_client(cache_window=1.0)  # Enable caching
+    client.set_access_token("test-token")
+
+    # Test panel state cache hit (line 721)
+    with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
+        mock_response = MagicMock()
+        mock_panel.asyncio = AsyncMock(return_value=mock_response)
+
+        # First call - should hit API and cache result
+        result1 = await client.get_panel_state()
+        assert mock_panel.asyncio.call_count == 1
+
+        # Second call - should hit cache (line 721)
+        result2 = await client.get_panel_state()
+        assert mock_panel.asyncio.call_count == 1  # No additional call
+        assert result1 == result2
+
+    # Test circuits cache hit (line 829)
+    with (
+        patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits,
+        patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel_for_circuits,
+    ):
+        mock_circuits_response = MagicMock()
+        mock_circuits_response.circuits = MagicMock()
+        mock_circuits_response.circuits.additional_properties = {}
+        mock_circuits.asyncio = AsyncMock(return_value=mock_circuits_response)
+
+        mock_panel_response = MagicMock()
+        mock_panel_response.branches = []
+        mock_panel_for_circuits.asyncio = AsyncMock(return_value=mock_panel_response)
+
+        # First call - should hit API and cache result
+        result1 = await client.get_circuits()
+        circuits_call_count = mock_circuits.asyncio.call_count
+
+        # Second call - should hit cache (line 829)
+        result2 = await client.get_circuits()
+        assert mock_circuits.asyncio.call_count == circuits_call_count  # No additional call
+
+    # Test storage SOE cache hit (line 976)
+    with patch("span_panel_api.client.get_storage_soe_api_v1_storage_soe_get") as mock_storage:
+        mock_storage_response = MagicMock()
+        mock_storage.asyncio = AsyncMock(return_value=mock_storage_response)
+
+        # First call - should hit API and cache result
+        result1 = await client.get_storage_soe()
+        assert mock_storage.asyncio.call_count == 1
+
+        # Second call - should hit cache (line 976)
+        result2 = await client.get_storage_soe()
+        assert mock_storage.asyncio.call_count == 1  # No additional call
+        assert result1 == result2
+
+
 if __name__ == "__main__":
     test_cache_basic_functionality()
     test_cache_expiration()

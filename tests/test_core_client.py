@@ -206,90 +206,64 @@ class TestClientInternals:
 
 
 class TestAPIMethodsSuccess:
-    """Test successful API method calls."""
+    """Test successful API method calls using simulation mode."""
 
     @pytest.mark.asyncio
-    async def test_get_status_success(self):
-        """Test successful status retrieval."""
-        client = SpanPanelClient("192.168.1.100")
+    async def test_get_status_success(self, sim_client: SpanPanelClient):
+        """Test successful status retrieval using simulation mode."""
+        result = await sim_client.get_status()
 
-        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
-            # Mock status response
-            status_response = MagicMock()
-            status_response.system = MagicMock(manufacturer="SPAN")
-            mock_status.asyncio = AsyncMock(return_value=status_response)
-
-            result = await client.get_status()
-
-            assert result == status_response
-            mock_status.asyncio.assert_called_once()
+        # Verify we get a proper status response with expected fields
+        assert result is not None
+        assert hasattr(result, "system")
+        assert hasattr(result, "network")
+        assert hasattr(result.system, "door_state")
 
     @pytest.mark.asyncio
-    async def test_get_panel_state_success(self):
-        """Test successful panel state retrieval."""
-        client = SpanPanelClient("192.168.1.100")
-        client.set_access_token("test-token")
+    async def test_get_panel_state_success(self, sim_client: SpanPanelClient):
+        """Test successful panel state retrieval using simulation mode."""
+        result = await sim_client.get_panel_state()
 
-        with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
-            # Mock panel state response
-            panel_response = MagicMock()
-            panel_response.main_relay_state = "CLOSED"
-            panel_response.instant_grid_power_w = 5000
-            mock_panel.asyncio = AsyncMock(return_value=panel_response)
-
-            result = await client.get_panel_state()
-
-            assert result == panel_response
-            mock_panel.asyncio.assert_called_once()
+        # Verify we get a proper panel state response with expected fields
+        assert result is not None
+        assert hasattr(result, "branches")
+        assert hasattr(result, "main_relay_state")
+        assert hasattr(result, "instant_grid_power_w")
 
     @pytest.mark.asyncio
-    async def test_get_circuits_success(self):
-        """Test successful circuits retrieval."""
-        client = SpanPanelClient("192.168.1.100", cache_window=0)
-        client.set_access_token("test-token")
+    async def test_get_circuits_success(self, sim_client: SpanPanelClient):
+        """Test successful circuits retrieval using simulation mode."""
+        result = await sim_client.get_circuits()
 
-        with (
-            patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits,
-            patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel_state,
-        ):
-            # Mock circuits response
-            circuits_response = MagicMock()
-            circuits_response.circuits = MagicMock()
-            circuits_response.circuits.additional_properties = {"1": MagicMock(name="Main", instant_power_w=1500)}
-            mock_circuits.asyncio = AsyncMock(return_value=circuits_response)
+        # Verify we get a proper circuits response with expected fields
+        assert result is not None
+        assert hasattr(result, "circuits")
 
-            # Mock panel state response (needed for enhanced circuits)
-            panel_state_response = MagicMock()
-            panel_state_response.branches = []  # No unmapped tabs
-            mock_panel_state.asyncio = AsyncMock(return_value=panel_state_response)
+        # Circuits are stored in additional_properties
+        circuits = result.circuits.additional_properties
+        assert len(circuits) > 0
 
-            result = await client.get_circuits()
-
-            assert result == circuits_response
-            mock_circuits.asyncio.assert_called_once()
-            mock_panel_state.asyncio.assert_called_once()
+        # Check first circuit has expected attributes
+        first_circuit = next(iter(circuits.values()))
+        assert hasattr(first_circuit, "id")
+        assert hasattr(first_circuit, "name")
+        assert hasattr(first_circuit, "instant_power_w")
 
     @pytest.mark.asyncio
-    async def test_get_storage_soe_success(self):
-        """Test successful storage SOE retrieval."""
-        client = SpanPanelClient("192.168.1.100")
-        client.set_access_token("test-token")
+    async def test_get_storage_soe_success(self, sim_client: SpanPanelClient):
+        """Test successful storage SOE retrieval using simulation mode."""
+        result = await sim_client.get_storage_soe()
 
-        with patch("span_panel_api.client.get_storage_soe_api_v1_storage_soe_get") as mock_storage:
-            # Mock storage SOE response
-            storage_response = MagicMock()
-            storage_response.soe = 0.85
-            storage_response.max_energy_kwh = 13.5
-            mock_storage.asyncio = AsyncMock(return_value=storage_response)
-
-            result = await client.get_storage_soe()
-
-            assert result == storage_response
-            mock_storage.asyncio.assert_called_once()
+        # Verify we get a proper storage response with expected fields
+        assert result is not None
+        assert hasattr(result, "soe")
+        assert hasattr(result.soe, "percentage")
+        assert isinstance(result.soe.percentage, (int | float))
+        assert 0 <= result.soe.percentage <= 100
 
     @pytest.mark.asyncio
     async def test_set_circuit_relay_success(self):
-        """Test successful circuit relay setting."""
+        """Test successful circuit relay setting (live mode only - no simulation support)."""
         client = SpanPanelClient("192.168.1.100")
         client.set_access_token("test-token")
 
@@ -306,7 +280,7 @@ class TestAPIMethodsSuccess:
 
     @pytest.mark.asyncio
     async def test_set_circuit_priority_success(self):
-        """Test successful circuit priority setting."""
+        """Test successful circuit priority setting (live mode only - no simulation support)."""
         client = SpanPanelClient("192.168.1.100")
         client.set_access_token("test-token")
 

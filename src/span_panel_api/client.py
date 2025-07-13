@@ -520,7 +520,7 @@ class SpanPanelClient:
                 # Last attempt - re-raise
                 raise
 
-        # This should never be reached, but added for mypy completeness
+        # This should never be reached, but required for mypy type checking
         raise SpanPanelAPIError("Retry operation completed without success or exception")
 
     # Authentication Methods

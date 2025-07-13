@@ -314,8 +314,106 @@ class TestSimulationErrorHandling:
     def test_missing_fixture_data(self) -> None:
         """Test behavior when fixture data is missing."""
         # This would test what happens if fixture files don't exist
-        # Implementation depends on how we handle missing fixtures
+        # For now, this is a placeholder as the fixture loading is in __init__
         pass
+
+    def test_missing_fixture_data_errors(self) -> None:
+        """Test ValueError when specific fixture data is missing."""
+        from span_panel_api.simulation import DynamicSimulationEngine
+
+        # Create engine and manually remove fixture data to test error paths
+        engine = DynamicSimulationEngine()
+
+        # Test circuits fixture missing
+        original_circuits = engine._base_data.get("circuits")
+        if "circuits" in engine._base_data:
+            del engine._base_data["circuits"]
+
+        with pytest.raises(ValueError, match="Circuits fixture data not available"):
+            engine.get_circuits_data()
+
+        # Restore circuits data
+        if original_circuits:
+            engine._base_data["circuits"] = original_circuits
+
+        # Test panel fixture missing
+        original_panel = engine._base_data.get("panel")
+        if "panel" in engine._base_data:
+            del engine._base_data["panel"]
+
+        with pytest.raises(ValueError, match="Panel fixture data not available"):
+            engine.get_panel_state_data()
+
+        # Restore panel data
+        if original_panel:
+            engine._base_data["panel"] = original_panel
+
+        # Test status fixture missing
+        original_status = engine._base_data.get("status")
+        if "status" in engine._base_data:
+            del engine._base_data["status"]
+
+        with pytest.raises(ValueError, match="Status fixture data not available"):
+            engine.get_status_data()
+
+        # Restore status data
+        if original_status:
+            engine._base_data["status"] = original_status
+
+        # Test SOE fixture missing
+        original_soe = engine._base_data.get("soe")
+        if "soe" in engine._base_data:
+            del engine._base_data["soe"]
+
+        with pytest.raises(ValueError, match="Storage SOE fixture data not available"):
+            engine.get_storage_soe_data()
+
+        # Restore SOE data
+        if original_soe:
+            engine._base_data["soe"] = original_soe
+
+    def test_panel_variations_coverage(self) -> None:
+        """Test panel variations that are missing coverage."""
+        from span_panel_api.simulation import DynamicSimulationEngine, PanelVariation
+
+        engine = DynamicSimulationEngine()
+
+        # Test dsm_state variation
+        panel_variations = PanelVariation(dsm_state="DSM_OFF_GRID")
+        result = engine.get_panel_state_data(panel_variations=panel_variations)
+        assert result["dsmState"] == "DSM_OFF_GRID"
+
+        # Test instant_grid_power_variation
+        panel_variations = PanelVariation(instant_grid_power_variation=0.1)
+        result = engine.get_panel_state_data(panel_variations=panel_variations)
+        # Should have modified the instantGridPowerW value
+        assert "instantGridPowerW" in result
+
+    def test_status_variations_coverage(self) -> None:
+        """Test status variations that are missing coverage."""
+        from span_panel_api.simulation import DynamicSimulationEngine, StatusVariation
+
+        engine = DynamicSimulationEngine()
+
+        # Test main_relay_state variation by adding mainRelayState to fixture
+        # First add mainRelayState to the fixture data
+        if "status" in engine._base_data and "system" in engine._base_data["status"]:
+            engine._base_data["status"]["system"]["mainRelayState"] = "CLOSED"
+
+        status_variations = StatusVariation(main_relay_state="OPEN")
+        result = engine.get_status_data(variations=status_variations)
+        # Now the line should be executed
+        assert result["system"]["mainRelayState"] == "OPEN"
+
+        # Test wlan_link variation
+        status_variations = StatusVariation(wlan_link=False)
+        result = engine.get_status_data(variations=status_variations)
+        assert result["network"]["wlanLink"] is False
+
+        # Test wwwan_link variation
+        status_variations = StatusVariation(wwwan_link=True)
+        result = engine.get_status_data(variations=status_variations)
+        assert result["network"]["wwanLink"] is True
 
 
 class TestSimulationCaching:

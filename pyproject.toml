@@ -189,10 +189,10 @@ skips = ["generate_client.py"]
 
 [tool.black]
 line-length = 125
-# Restrict black to only handling end-of-file newlines and blank lines
 target-version = ["py312"]
 skip-string-normalization = true
-skip-magic-trailing-comma = true
+# Allow magic trailing comma for better line length handling
+skip-magic-trailing-comma = false
 exclude = '''
 /(
     \.venv

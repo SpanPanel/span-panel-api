@@ -1,7 +1,7 @@
-# ruff: noqa
 import asyncio
+from collections.abc import Generator
+
 import pytest
-from typing import Generator
 
 # Register pytest-asyncio plugin and provide legacy event_loop fixture
 pytest_plugins = ["pytest_asyncio"]

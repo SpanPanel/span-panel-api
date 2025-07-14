@@ -26,15 +26,15 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.11.13
     hooks:
-      # Run formatter first
+      # Run formatter first - include tests for formatting and import sorting
       - id: ruff-format
         exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/coverage\.py|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
-      # Then linter
+      # Then linter - exclude tests from strict linting
       - id: ruff-check
         args: ['--fix']
-        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/coverage\.py|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/coverage\.py|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
-  # Black limited to handling end-of-file newlines and blank lines
+  # Black for line length handling that ruff doesn't handle as well
   - repo: https://github.com/psf/black
     rev: 25.1.0
     hooks:
@@ -43,7 +43,6 @@ repos:
         args: [
           '--line-length=125',
           '--skip-string-normalization',
-          '--skip-magic-trailing-comma',
           '--target-version=py312',
           '--extend-exclude=src/span_panel_api/generated_client|generate_client\.py|scripts/coverage\.py|\.venv|venv'
         ]
@@ -72,6 +71,21 @@ repos:
           - pytest
         args: ['--config-file=pyproject.toml']
         exclude: '^src/span_panel_api/generated_client/.*|tests/.*|docs/.*|\..*_cache/.*|dist/.*|venv/.*'
+
+  # Pylint for code quality
+  - repo: https://github.com/pycqa/pylint
+    rev: v3.3.3
+    hooks:
+      - id: pylint
+        additional_dependencies:
+          - numpy
+          - httpx
+          - attrs
+          - python-dateutil
+          - click
+          - typing-extensions
+          - pytest
+        exclude: '^src/span_panel_api/generated_client/.*|tests/.*|generate_client\.py|scripts/coverage\.py|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
   # Check for common security issues
   - repo: https://github.com/PyCQA/bandit

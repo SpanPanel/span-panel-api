@@ -4,25 +4,17 @@
 class SpanPanelError(Exception):
     """Base exception for all SPAN Panel API errors."""
 
-    pass
-
 
 class SpanPanelConnectionError(SpanPanelError):
     """Raised when connection to SPAN Panel fails."""
-
-    pass
 
 
 class SpanPanelAuthError(SpanPanelError):
     """Raised when authentication with SPAN Panel fails."""
 
-    pass
-
 
 class SpanPanelTimeoutError(SpanPanelError):
     """Raised when a request to SPAN Panel times out."""
-
-    pass
 
 
 class SpanPanelAPIError(SpanPanelError):
@@ -36,10 +28,6 @@ class SpanPanelAPIError(SpanPanelError):
 class SpanPanelServerError(SpanPanelAPIError):
     """Raised when SPAN Panel returns a 5xx server error (non-retriable)."""
 
-    pass
-
 
 class SpanPanelRetriableError(SpanPanelAPIError):
     """Raised when SPAN Panel returns a retriable server error (502, 503, 504)."""
-
-    pass

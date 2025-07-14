@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 import time
 from typing import Any, NoReturn, TypeVar, cast
 
@@ -235,26 +236,18 @@ class SpanPanelClient:
         """Convert raw simulation data to CircuitsOut model."""
         # This is a simplified conversion - in reality, you'd need to properly
         # construct the CircuitsOut object from the raw data
-        from .generated_client.models import CircuitsOut
-
         return CircuitsOut.from_dict(raw_data)
 
     def _convert_raw_to_panel_state(self, raw_data: dict[str, Any]) -> PanelState:
         """Convert raw simulation data to PanelState model."""
-        from .generated_client.models import PanelState
-
         return PanelState.from_dict(raw_data)
 
     def _convert_raw_to_status_out(self, raw_data: dict[str, Any]) -> StatusOut:
         """Convert raw simulation data to StatusOut model."""
-        from .generated_client.models import StatusOut
-
         return StatusOut.from_dict(raw_data)
 
     def _convert_raw_to_battery_storage(self, raw_data: dict[str, Any]) -> BatteryStorage:
         """Convert raw simulation data to BatteryStorage model."""
-        from .generated_client.models import BatteryStorage
-
         return BatteryStorage.from_dict(raw_data)
 
     # Properties for querying and setting retry configuration
@@ -311,9 +304,8 @@ class SpanPanelClient:
                 # This prevents us from managing a client that's already managed by a context
                 self._httpx_client_owned = not self._in_context
             return self._client
-        else:
-            # No token, use unauthenticated client
-            return self._get_unauthenticated_client()
+        # No token, use unauthenticated client
+        return self._get_unauthenticated_client()
 
     def _get_unauthenticated_client(self) -> Client:
         """Get an unauthenticated client for operations that don't require auth."""
@@ -367,8 +359,6 @@ class SpanPanelClient:
         """Close the client and cleanup resources."""
         if self._client:
             # The generated client has async context manager support
-            from contextlib import suppress
-
             with suppress(Exception):
                 await self._client.__aexit__(None, None, None)
             self._client = None
@@ -401,7 +391,12 @@ class SpanPanelClient:
             # Inside context: need to carefully upgrade client while preserving httpx instance
             if not isinstance(self._client, AuthenticatedClient):
                 # Need to upgrade from Client to AuthenticatedClient
-                old_async_client = getattr(self._client, "_async_client", None)
+                # Store reference to existing async client before creating new authenticated client
+                old_async_client = None
+                with suppress(Exception):
+                    # Client may not have been initialized yet
+                    old_async_client = self._client.get_async_httpx_client()
+
                 self._client = AuthenticatedClient(
                     base_url=self._base_url,
                     token=token,
@@ -411,7 +406,7 @@ class SpanPanelClient:
                 )
                 # Preserve the existing httpx async client to avoid double context issues
                 if old_async_client is not None:
-                    self._client._async_client = old_async_client
+                    self._client.set_async_httpx_client(old_async_client)
                     # Update the Authorization header on the existing httpx client
                     header_value = f"{self._client.prefix} {self._client.token}"
                     old_async_client.headers[self._client.auth_header_name] = header_value
@@ -420,10 +415,12 @@ class SpanPanelClient:
                 self._client.token = token
                 # Update the Authorization header on existing httpx clients
                 header_value = f"{self._client.prefix} {self._client.token}"
-                if self._client._async_client is not None:
-                    self._client._async_client.headers[self._client.auth_header_name] = header_value
-                if self._client._client is not None:
-                    self._client._client.headers[self._client.auth_header_name] = header_value
+                with suppress(Exception):
+                    async_client = self._client.get_async_httpx_client()
+                    async_client.headers[self._client.auth_header_name] = header_value
+                with suppress(Exception):
+                    sync_client = self._client.get_httpx_client()
+                    sync_client.headers[self._client.auth_header_name] = header_value
 
     def _handle_unexpected_status(self, e: UnexpectedStatus) -> NoReturn:
         """Convert UnexpectedStatus to appropriate SpanPanel exception.
@@ -439,12 +436,11 @@ class SpanPanelClient:
         """
         if e.status_code in AUTH_ERROR_CODES:
             raise SpanPanelAuthError("Authentication required") from e
-        elif e.status_code in RETRIABLE_ERROR_CODES:
+        if e.status_code in RETRIABLE_ERROR_CODES:
             raise SpanPanelRetriableError(f"Retriable server error {e.status_code}: {e}", e.status_code) from e
-        elif e.status_code in SERVER_ERROR_CODES:
+        if e.status_code in SERVER_ERROR_CODES:
             raise SpanPanelServerError(f"Server error {e.status_code}: {e}", e.status_code) from e
-        else:
-            raise SpanPanelAPIError(f"HTTP {e.status_code}: {e}", e.status_code) from e
+        raise SpanPanelAPIError(f"HTTP {e.status_code}: {e}", e.status_code) from e
 
     def _get_client_for_endpoint(self, requires_auth: bool = True) -> AuthenticatedClient | Client:
         """Get the appropriate client for an endpoint.
@@ -545,38 +541,35 @@ class SpanPanelClient:
             # Handle response - could be AuthOut, HTTPValidationError, or None
             if response is None:
                 raise SpanPanelAPIError("Authentication failed - no response")
-            elif isinstance(response, HTTPValidationError):
+            if isinstance(response, HTTPValidationError):
                 raise SpanPanelAPIError(f"Validation error during authentication: {response}")
-            elif hasattr(response, "access_token"):
+            if hasattr(response, "access_token"):
                 # Store the token for future requests (works for both AuthOut and mocks)
                 self.set_access_token(response.access_token)
                 return response
-            else:
-                raise SpanPanelAPIError(f"Unexpected response type: {type(response)}")
+            raise SpanPanelAPIError(f"Unexpected response type: {type(response)}")
         except UnexpectedStatus as e:
             # Convert UnexpectedStatus to appropriate SpanPanel exception
             # Special case for auth endpoint - 401/403 here means auth failed
             if e.status_code in AUTH_ERROR_CODES:
                 raise SpanPanelAuthError("Authentication failed") from e
-            elif e.status_code in RETRIABLE_ERROR_CODES:
+            if e.status_code in RETRIABLE_ERROR_CODES:
                 raise SpanPanelRetriableError(f"Retriable server error {e.status_code}: {e}", e.status_code) from e
-            elif e.status_code in SERVER_ERROR_CODES:
+            if e.status_code in SERVER_ERROR_CODES:
                 raise SpanPanelServerError(f"Server error {e.status_code}: {e}", e.status_code) from e
-            else:
-                raise SpanPanelAPIError(f"HTTP {e.status_code}: {e}", e.status_code) from e
+            raise SpanPanelAPIError(f"HTTP {e.status_code}: {e}", e.status_code) from e
         except httpx.HTTPStatusError as e:
             # Convert HTTPStatusError to UnexpectedStatus and handle appropriately
             # Special case for auth endpoint - 401/403 here means auth failed
             if e.response.status_code in AUTH_ERROR_CODES:
                 raise SpanPanelAuthError("Authentication failed") from e
-            elif e.response.status_code in RETRIABLE_ERROR_CODES:
+            if e.response.status_code in RETRIABLE_ERROR_CODES:
                 raise SpanPanelRetriableError(
                     f"Retriable server error {e.response.status_code}: {e}", e.response.status_code
                 ) from e
-            elif e.response.status_code in SERVER_ERROR_CODES:
+            if e.response.status_code in SERVER_ERROR_CODES:
                 raise SpanPanelServerError(f"Server error {e.response.status_code}: {e}", e.response.status_code) from e
-            else:
-                raise SpanPanelAPIError(f"HTTP {e.response.status_code}: {e}", e.response.status_code) from e
+            raise SpanPanelAPIError(f"HTTP {e.response.status_code}: {e}", e.response.status_code) from e
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
@@ -904,8 +897,6 @@ class SpanPanelClient:
         consumed_energy_wh = exported_energy
 
         # Get timestamps (use current time as fallback)
-        import time
-
         current_time = int(time.time())
         instant_power_update_time_s = current_time
         energy_accum_update_time_s = current_time

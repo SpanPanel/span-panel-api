@@ -457,3 +457,58 @@ class TestSimulationCaching:
 
             # Should be different objects
             assert circuits1 is not circuits2
+
+    async def test_simulation_creates_unmapped_tab_virtual_circuits(self, sim_client: SpanPanelClient) -> None:
+        """Test that simulation mode creates virtual circuits for unmapped tabs like live mode."""
+        async with sim_client:
+            circuits = await sim_client.get_circuits()
+
+            # Get all circuit IDs
+            circuit_dict = circuits.circuits.additional_properties
+            all_circuit_ids = set(circuit_dict.keys())
+
+            # Find unmapped tab virtual circuits
+            unmapped_circuit_ids = {cid for cid in all_circuit_ids if cid.startswith("unmapped_tab_")}
+
+            # Based on simulation fixture analysis:
+            # - Total tabs: 32 (branches 1-32)
+            # - Mapped tabs: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,29,31]
+            # - Expected unmapped tabs: [27,28,30,32]
+            expected_unmapped_ids = {"unmapped_tab_27", "unmapped_tab_28", "unmapped_tab_30", "unmapped_tab_32"}
+
+            # Verify virtual circuits were created for unmapped tabs
+            assert (
+                unmapped_circuit_ids == expected_unmapped_ids
+            ), f"Expected {expected_unmapped_ids}, got {unmapped_circuit_ids}"
+
+            # Verify each virtual circuit has correct properties
+            for circuit_id in expected_unmapped_ids:
+                circuit = circuit_dict[circuit_id]
+                tab_num = int(circuit_id.split("_")[-1])
+
+                assert circuit.id == circuit_id
+                assert circuit.name == f"Unmapped Tab {tab_num}"
+                assert circuit.tabs == [tab_num]
+                assert hasattr(circuit, "instant_power_w")
+                assert hasattr(circuit, "relay_state")
+
+    async def test_simulation_uses_host_as_serial_number(self) -> None:
+        """Test that simulation mode uses the host parameter as the serial number."""
+        custom_serial = "SPAN-TEST-ABC123"
+
+        # Create client with custom serial as host
+        client = SpanPanelClient(host=custom_serial, simulation_mode=True)
+
+        async with client:
+            status = await client.get_status()
+
+            # Verify the serial number matches the host parameter
+            assert status.system.serial == custom_serial
+
+        # Test with another serial number
+        another_serial = "SPAN-DEV-XYZ789"
+        client2 = SpanPanelClient(host=another_serial, simulation_mode=True)
+
+        async with client2:
+            status2 = await client2.get_status()
+            assert status2.system.serial == another_serial

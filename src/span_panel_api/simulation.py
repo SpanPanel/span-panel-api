@@ -54,12 +54,18 @@ class StatusVariation(TypedDict, total=False):
 class DynamicSimulationEngine:
     """Dynamic simulation engine for SPAN Panel API responses."""
 
-    def __init__(self) -> None:
-        """Initialize the simulation engine."""
+    def __init__(self, serial_number: str | None = None) -> None:
+        """Initialize the simulation engine.
+
+        Args:
+            serial_number: Custom serial number for the simulated panel.
+                          If None, uses default "sim-serial-123".
+        """
         self._base_data = self._load_fixtures()
         self._simulation_start_time = time.time()
         self._last_update_times: dict[str, float] = {}
         self._circuit_states: dict[str, dict[str, Any]] = {}
+        self._serial_number = serial_number or "sim-serial-123"
 
     def _load_fixtures(self) -> dict[str, dict[str, Any]]:
         """Load fixture data from response files."""
@@ -200,6 +206,10 @@ class DynamicSimulationEngine:
             raise ValueError("Status fixture data not available")
 
         status_data = deepcopy(self._base_data["status"])
+
+        # Override serial number with configured value
+        if "system" in status_data:
+            status_data["system"]["serial"] = self._serial_number
 
         if variations:
             # Apply system variations

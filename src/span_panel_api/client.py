@@ -218,7 +218,8 @@ class SpanPanelClient:
         # Initialize simulation engine if in simulation mode
         self._simulation_engine: DynamicSimulationEngine | None = None
         if simulation_mode:
-            self._simulation_engine = DynamicSimulationEngine()
+            # In simulation mode, use the host as the serial number for device identification
+            self._simulation_engine = DynamicSimulationEngine(serial_number=host)
 
         # Build base URL
         scheme = "https" if use_ssl else "http"
@@ -805,6 +806,33 @@ class SpanPanelClient:
 
         # Convert to model object
         circuits_out = self._convert_raw_to_circuits_out(circuits_data)
+
+        # Apply unmapped tab logic (same as live mode)
+        panel_state = await self.get_panel_state()
+
+        # Find tabs already mapped to circuits
+        mapped_tabs: set[int] = set()
+        if hasattr(circuits_out, "circuits") and hasattr(circuits_out.circuits, "additional_properties"):
+            for circuit in circuits_out.circuits.additional_properties.values():
+                if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
+                    if isinstance(circuit.tabs, list | tuple):
+                        mapped_tabs.update(circuit.tabs)
+                    elif isinstance(circuit.tabs, int):
+                        mapped_tabs.add(circuit.tabs)
+
+        # Create virtual circuits for unmapped tabs
+        if hasattr(panel_state, "branches") and panel_state.branches:
+            total_tabs = len(panel_state.branches)
+            all_tabs = set(range(1, total_tabs + 1))
+            unmapped_tabs = all_tabs - mapped_tabs
+
+            for tab_num in unmapped_tabs:
+                branch_idx = tab_num - 1
+                if branch_idx < len(panel_state.branches):
+                    branch = panel_state.branches[branch_idx]
+                    virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
+                    circuit_id = f"unmapped_tab_{tab_num}"
+                    circuits_out.circuits.additional_properties[circuit_id] = virtual_circuit
 
         # Cache the result
         self._api_cache.set_cached_data(cache_key, circuits_out)

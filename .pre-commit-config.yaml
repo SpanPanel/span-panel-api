@@ -26,15 +26,15 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.11.13
     hooks:
-      # Run formatter first - include tests for formatting and import sorting
+      # Run formatter first - exclude tests to avoid conflicts with black
       - id: ruff-format
-        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/coverage\.py|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/coverage\.py|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
       # Then linter - exclude tests from strict linting
       - id: ruff-check
         args: ['--fix']
         exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/coverage\.py|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
-  # Black for line length handling that ruff doesn't handle as well
+  # Black for line length handling and test file formatting
   - repo: https://github.com/psf/black
     rev: 25.1.0
     hooks:

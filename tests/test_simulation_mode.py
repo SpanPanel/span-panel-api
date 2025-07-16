@@ -339,6 +339,9 @@ class TestSimulationErrorHandling:
         # Create engine and manually remove fixture data to test error paths
         engine = DynamicSimulationEngine()
 
+        # Trigger fixture loading by calling _ensure_fixtures_loaded
+        engine._ensure_fixtures_loaded()
+
         # Test circuits fixture missing
         original_circuits = engine._base_data.get("circuits")
         if "circuits" in engine._base_data:
@@ -409,6 +412,9 @@ class TestSimulationErrorHandling:
         from span_panel_api.simulation import DynamicSimulationEngine, StatusVariation
 
         engine = DynamicSimulationEngine()
+
+        # Trigger fixture loading by calling _ensure_fixtures_loaded
+        engine._ensure_fixtures_loaded()
 
         # Test main_relay_state variation by adding mainRelayState to fixture
         # First add mainRelayState to the fixture data
@@ -512,3 +518,49 @@ class TestSimulationCaching:
         async with client2:
             status2 = await client2.get_status()
             assert status2.system.serial == another_serial
+
+    async def test_simulation_async_initialization_race_condition(self) -> None:
+        """Test that concurrent initialization calls handle race conditions properly."""
+        from span_panel_api.simulation import DynamicSimulationEngine
+        import asyncio
+
+        # Create engine but don't initialize it
+        engine = DynamicSimulationEngine("TEST-SERIAL")
+
+        # Create multiple concurrent initialization tasks
+        async def init_and_check():
+            await engine.initialize_async()
+            # Verify fixtures are loaded
+            assert engine._base_data is not None
+            return "initialized"
+
+        # Run multiple initializations concurrently to test race condition handling
+        tasks = [init_and_check() for _ in range(3)]
+        results = await asyncio.gather(*tasks)
+
+        # All should succeed
+        assert all(result == "initialized" for result in results)
+
+        # Verify engine is properly initialized
+        assert engine._base_data is not None
+        assert "circuits" in engine._base_data
+
+    async def test_simulation_double_check_in_lock(self) -> None:
+        """Test the double-check pattern inside the async lock."""
+        from span_panel_api.simulation import DynamicSimulationEngine
+        import asyncio
+
+        engine = DynamicSimulationEngine("TEST-SERIAL")
+
+        # Manually set the base data to simulate first initialization completing
+        engine._base_data = {"test": "data"}
+
+        # Now call initialize_async - it should return early from the double-check
+        await engine.initialize_async()
+
+        # Verify it didn't overwrite our test data
+        assert engine._base_data == {"test": "data"}
+
+        # Test calling initialize again after it's already loaded
+        await engine.initialize_async()
+        assert engine._base_data == {"test": "data"}

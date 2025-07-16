@@ -6,9 +6,11 @@ allowing realistic testing without requiring physical hardware.
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 import json
 from pathlib import Path
+import threading
 import time
 from typing import Any, TypedDict
 
@@ -61,14 +63,16 @@ class DynamicSimulationEngine:
             serial_number: Custom serial number for the simulated panel.
                           If None, uses default "sim-serial-123".
         """
-        self._base_data = self._load_fixtures()
+        self._base_data: dict[str, dict[str, Any]] | None = None
+        self._fixture_loading_lock: asyncio.Lock | None = None
+        self._lock_init_lock = threading.Lock()  # Thread-safe lock initialization
         self._simulation_start_time = time.time()
         self._last_update_times: dict[str, float] = {}
         self._circuit_states: dict[str, dict[str, Any]] = {}
         self._serial_number = serial_number or "sim-serial-123"
 
-    def _load_fixtures(self) -> dict[str, dict[str, Any]]:
-        """Load fixture data from response files."""
+    def _load_fixtures_sync(self) -> dict[str, dict[str, Any]]:
+        """Load fixture data from response files synchronously (for backwards compatibility)."""
         fixtures_dir = Path(__file__).parent.parent.parent / "tests" / "simulation_fixtures"
 
         fixtures = {}
@@ -108,6 +112,35 @@ class DynamicSimulationEngine:
 
         return fixtures
 
+    async def initialize_async(self) -> None:
+        """Initialize the simulation engine asynchronously.
+
+        This method should be called after creating the engine to load
+        fixture data without blocking the event loop.
+        """
+        if self._base_data is not None:
+            return
+
+        # Thread-safe lazy initialization of the async lock
+        if self._fixture_loading_lock is None:
+            with self._lock_init_lock:
+                if self._fixture_loading_lock is None:
+                    self._fixture_loading_lock = asyncio.Lock()
+
+        async with self._fixture_loading_lock:
+            # Double-check after acquiring lock
+            if self._base_data is not None:
+                return
+
+            # Load fixtures in a thread to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            self._base_data = await loop.run_in_executor(None, self._load_fixtures_sync)
+
+    def _ensure_fixtures_loaded(self) -> None:
+        """Ensure fixture data is loaded (sync fallback)."""
+        if self._base_data is None:
+            self._base_data = self._load_fixtures_sync()
+
     def get_circuits_data(
         self,
         variations: dict[str, CircuitVariation] | None = None,
@@ -115,7 +148,8 @@ class DynamicSimulationEngine:
         global_energy_variation: float | None = None,
     ) -> dict[str, Any]:
         """Get circuits data with dynamic variations."""
-        if "circuits" not in self._base_data:
+        self._ensure_fixtures_loaded()
+        if self._base_data is None or "circuits" not in self._base_data:
             raise ValueError("Circuits fixture data not available")
 
         current_time = time.time()
@@ -158,7 +192,8 @@ class DynamicSimulationEngine:
         global_power_variation: float | None = None,
     ) -> dict[str, Any]:
         """Get panel state data with dynamic variations."""
-        if "panel" not in self._base_data:
+        self._ensure_fixtures_loaded()
+        if self._base_data is None or "panel" not in self._base_data:
             raise ValueError("Panel fixture data not available")
 
         panel_data = deepcopy(self._base_data["panel"])
@@ -202,7 +237,8 @@ class DynamicSimulationEngine:
 
     def get_status_data(self, variations: StatusVariation | None = None) -> dict[str, Any]:
         """Get status data with field variations."""
-        if "status" not in self._base_data:
+        self._ensure_fixtures_loaded()
+        if self._base_data is None or "status" not in self._base_data:
             raise ValueError("Status fixture data not available")
 
         status_data = deepcopy(self._base_data["status"])
@@ -237,7 +273,8 @@ class DynamicSimulationEngine:
 
     def get_storage_soe_data(self, soe_variation: float | None = None) -> dict[str, Any]:
         """Get storage state of energy data with variation."""
-        if "soe" not in self._base_data:
+        self._ensure_fixtures_loaded()
+        if self._base_data is None or "soe" not in self._base_data:
             raise ValueError("Storage SOE fixture data not available")
 
         soe_data = deepcopy(self._base_data["soe"])

@@ -217,6 +217,7 @@ class SpanPanelClient:
 
         # Initialize simulation engine if in simulation mode
         self._simulation_engine: DynamicSimulationEngine | None = None
+        self._simulation_initialized = False
         if simulation_mode:
             # In simulation mode, use the host as the serial number for device identification
             self._simulation_engine = DynamicSimulationEngine(serial_number=host)
@@ -232,6 +233,15 @@ class SpanPanelClient:
         # Context tracking - critical for preventing "Cannot open a client instance more than once"
         self._in_context: bool = False
         self._httpx_client_owned: bool = False
+
+    async def _ensure_simulation_initialized(self) -> None:
+        """Ensure simulation engine is properly initialized asynchronously."""
+        if not self._simulation_mode or self._simulation_initialized:
+            return
+
+        if self._simulation_engine is not None:
+            await self._simulation_engine.initialize_async()
+            self._simulation_initialized = True
 
     def _convert_raw_to_circuits_out(self, raw_data: dict[str, Any]) -> CircuitsOut:
         """Convert raw simulation data to CircuitsOut model."""
@@ -597,6 +607,9 @@ class SpanPanelClient:
         if self._simulation_engine is None:
             raise SpanPanelAPIError("Simulation engine not initialized")
 
+        # Ensure simulation is properly initialized asynchronously
+        await self._ensure_simulation_initialized()
+
         # Check cache first
         cache_key = f"status_sim_{hash(str(variations))}"
         cached_status = self._api_cache.get_cached_data(cache_key)
@@ -683,6 +696,9 @@ class SpanPanelClient:
         """Get panel state data in simulation mode."""
         if self._simulation_engine is None:
             raise SpanPanelAPIError("Simulation engine not initialized")
+
+        # Ensure simulation is properly initialized asynchronously
+        await self._ensure_simulation_initialized()
 
         # Check cache first
         cache_key = f"panel_sim_{hash(str(variations))}_{hash(str(panel_variations))}_{global_power_variation}"
@@ -790,6 +806,9 @@ class SpanPanelClient:
         """Get circuits data in simulation mode."""
         if self._simulation_engine is None:
             raise SpanPanelAPIError("Simulation engine not initialized")
+
+        # Ensure simulation is properly initialized asynchronously
+        await self._ensure_simulation_initialized()
 
         # Check cache first
         cache_key = f"circuits_sim_{hash(str(variations))}_{global_power_variation}_{global_energy_variation}"
@@ -965,6 +984,9 @@ class SpanPanelClient:
         """Get storage SOE data in simulation mode."""
         if self._simulation_engine is None:
             raise SpanPanelAPIError("Simulation engine not initialized")
+
+        # Ensure simulation is properly initialized asynchronously
+        await self._ensure_simulation_initialized()
 
         # Check cache first
         cache_key = f"storage_soe_sim_{soe_variation}"

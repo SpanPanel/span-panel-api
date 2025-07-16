@@ -27,6 +27,9 @@ from .simulation import BranchVariation, CircuitVariation, DynamicSimulationEngi
 
 T = TypeVar("T")
 
+# Constants
+BEARER_TOKEN_TYPE = "Bearer"  # OAuth2 Bearer token type specification  # nosec B105
+
 try:
     from .generated_client import AuthenticatedClient, Client
     from .generated_client.api.default import (
@@ -541,6 +544,15 @@ class SpanPanelClient:
         Returns:
             AuthOut containing access token
         """
+        # In simulation mode, return a mock authentication response
+        if self._simulation_mode:
+            # Create a mock authentication response
+            mock_token = f"sim-token-{name}-{int(time.time())}"
+            current_time_ms = int(time.time() * 1000)
+            auth_out = AuthOut(access_token=mock_token, token_type=BEARER_TOKEN_TYPE, iat_ms=current_time_ms)
+            self.set_access_token(mock_token)
+            return auth_out
+
         # Use unauthenticated client for registration
         client = self._get_unauthenticated_client()
         auth_in = AuthIn(name=name, description=description)

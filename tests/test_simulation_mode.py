@@ -564,3 +564,46 @@ class TestSimulationCaching:
         # Test calling initialize again after it's already loaded
         await engine.initialize_async()
         assert engine._base_data == {"test": "data"}
+
+
+class TestSimulationAuthentication:
+    """Test authentication in simulation mode."""
+
+    async def test_simulation_authentication_bypasses_network(self):
+        """Test that authentication in simulation mode doesn't make network calls."""
+        client = SpanPanelClient("nonexistent-host", simulation_mode=True)
+
+        # This should work even with a nonexistent host because it bypasses network
+        auth_result = await client.authenticate("test-app", "Test Application")
+
+        # Verify the authentication response
+        assert auth_result.access_token.startswith("sim-token-test-app-")
+        assert auth_result.token_type == "Bearer"
+        assert isinstance(auth_result.iat_ms, int)
+        assert auth_result.iat_ms > 0
+
+        # Verify client has the token set
+        assert client._access_token == auth_result.access_token
+
+        # Verify we can make authenticated calls after simulation auth
+        status = await client.get_status()
+        assert status.system.manufacturer == "Span"
+
+    async def test_simulation_authentication_unique_tokens(self):
+        """Test that different clients get unique authentication tokens."""
+        client1 = SpanPanelClient("host1", simulation_mode=True)
+        client2 = SpanPanelClient("host2", simulation_mode=True)
+
+        auth1 = await client1.authenticate("app1", "Application 1")
+        auth2 = await client2.authenticate("app2", "Application 2")
+
+        # Tokens should be different
+        assert auth1.access_token != auth2.access_token
+        assert auth1.access_token.startswith("sim-token-app1-")
+        assert auth2.access_token.startswith("sim-token-app2-")
+
+        # Both should have the same token type and valid timestamps
+        assert auth1.token_type == "Bearer"
+        assert auth2.token_type == "Bearer"
+        assert isinstance(auth1.iat_ms, int)
+        assert isinstance(auth2.iat_ms, int)

@@ -23,9 +23,61 @@ from .exceptions import (
     SpanPanelServerError,
     SpanPanelTimeoutError,
 )
-from .simulation import BranchVariation, CircuitVariation, DynamicSimulationEngine, PanelVariation, StatusVariation
+from .simulation import DynamicSimulationEngine
 
 T = TypeVar("T")
+
+
+# Default async delay implementation
+async def _default_async_delay(delay_seconds: float) -> None:
+    """Default async delay implementation using asyncio.sleep."""
+    await asyncio.sleep(delay_seconds)
+
+
+class _DelayFunctionRegistry:
+    """Registry for managing the async delay function."""
+
+    def __init__(self) -> None:
+        self._delay_func: Callable[[float], Awaitable[None]] = _default_async_delay
+
+    def set_delay_func(self, delay_func: Callable[[float], Awaitable[None]] | None) -> None:
+        """Set the delay function."""
+        self._delay_func = delay_func if delay_func is not None else _default_async_delay
+
+    async def call_delay(self, delay_seconds: float) -> None:
+        """Call the current delay function."""
+        await self._delay_func(delay_seconds)
+
+
+# Module-level registry instance
+_delay_registry = _DelayFunctionRegistry()
+
+
+def set_async_delay_func(delay_func: Callable[[float], Awaitable[None]] | None) -> None:
+    """Set a custom async delay function for HA compatibility.
+
+    This allows HA integrations to provide their own delay implementation
+    that works with HA's time simulation and event loop management.
+
+    Args:
+        delay_func: Custom delay function that takes delay_seconds as float,
+                   or None to use the default asyncio.sleep implementation.
+
+    Example for HA integrations:
+        ```python
+        import span_panel_api.client as span_client
+
+        async def ha_compatible_delay(delay_seconds: float) -> None:
+            # Use HA's event loop utilities
+            await hass.helpers.event.async_call_later(delay_seconds, lambda: None)
+            # Or just yield: await asyncio.sleep(0)
+
+        # Set the custom delay function
+        span_client.set_async_delay_func(ha_compatible_delay)
+        ```
+    """
+    _delay_registry.set_delay_func(delay_func)
+
 
 # Constants
 BEARER_TOKEN_TYPE = "Bearer"  # OAuth2 Bearer token type specification  # nosec B105
@@ -147,6 +199,10 @@ class TimeWindowCache:
 
         self._cache_entries[cache_key] = (data, time.time())
 
+    def clear(self) -> None:
+        """Clear all cached data."""
+        self._cache_entries.clear()
+
 
 class SpanPanelClient:
     """Modern async client for SPAN Panel REST API.
@@ -183,6 +239,7 @@ class SpanPanelClient:
         cache_window: float = 1.0,  # Panel data cache window in seconds
         # Simulation configuration
         simulation_mode: bool = False,  # Enable simulation mode
+        simulation_config_path: str | None = None,  # Path to YAML simulation config
     ) -> None:
         """Initialize the SPAN Panel client.
 
@@ -196,6 +253,7 @@ class SpanPanelClient:
             retry_backoff_multiplier: Exponential backoff multiplier
             cache_window: Panel data cache window duration in seconds (default: 1.0)
             simulation_mode: Enable simulation mode for testing (default: False)
+            simulation_config_path: Path to YAML simulation configuration file
         """
         self._host = host
         self._port = port
@@ -223,7 +281,7 @@ class SpanPanelClient:
         self._simulation_initialized = False
         if simulation_mode:
             # In simulation mode, use the host as the serial number for device identification
-            self._simulation_engine = DynamicSimulationEngine(serial_number=host)
+            self._simulation_engine = DynamicSimulationEngine(serial_number=host, config_path=simulation_config_path)
 
         # Build base URL
         scheme = "https" if use_ssl else "http"
@@ -509,7 +567,7 @@ class SpanPanelClient:
                 # Only retry specific HTTP status codes that are typically transient
                 if e.status_code in retry_status_codes and attempt < max_attempts - 1:
                     delay = self._retry_timeout * (self._retry_backoff_multiplier**attempt)  # Exponential backoff
-                    await asyncio.sleep(delay)
+                    await _delay_registry.call_delay(delay)
                     continue
                 # Not retriable or last attempt - re-raise
                 raise
@@ -517,7 +575,7 @@ class SpanPanelClient:
                 # Only retry specific HTTP status codes that are typically transient
                 if e.response.status_code in retry_status_codes and attempt < max_attempts - 1:
                     delay = self._retry_timeout * (self._retry_backoff_multiplier**attempt)  # Exponential backoff
-                    await asyncio.sleep(delay)
+                    await _delay_registry.call_delay(delay)
                     continue
                 # Not retriable or last attempt - re-raise
                 raise
@@ -525,7 +583,7 @@ class SpanPanelClient:
                 # Network/timeout errors are always retriable
                 if attempt < max_attempts - 1:
                     delay = self._retry_timeout * (self._retry_backoff_multiplier**attempt)  # Exponential backoff
-                    await asyncio.sleep(delay)
+                    await _delay_registry.call_delay(delay)
                     continue
                 # Last attempt - re-raise
                 raise
@@ -601,20 +659,16 @@ class SpanPanelClient:
             raise SpanPanelAPIError(f"API error: {e}") from e
 
     # Panel Status and Info
-    async def get_status(self, variations: StatusVariation | None = None) -> StatusOut:
-        """Get complete panel system status (does not require authentication).
-
-        Args:
-            variations: Status field variations (simulation mode only)
-        """
+    async def get_status(self) -> StatusOut:
+        """Get complete panel system status (does not require authentication)."""
         # In simulation mode, use simulation engine
         if self._simulation_mode:
-            return await self._get_status_simulation(variations=variations)
+            return await self._get_status_simulation()
 
-        # In live mode, ignore variation parameters
+        # In live mode, use standard endpoint
         return await self._get_status_live()
 
-    async def _get_status_simulation(self, variations: StatusVariation | None = None) -> StatusOut:
+    async def _get_status_simulation(self) -> StatusOut:
         """Get status data in simulation mode."""
         if self._simulation_engine is None:
             raise SpanPanelAPIError("Simulation engine not initialized")
@@ -623,13 +677,13 @@ class SpanPanelClient:
         await self._ensure_simulation_initialized()
 
         # Check cache first
-        cache_key = f"status_sim_{hash(str(variations))}"
+        cache_key = "status_sim"
         cached_status = self._api_cache.get_cached_data(cache_key)
         if cached_status is not None:
             return cached_status
 
         # Get simulation data
-        status_data = self._simulation_engine.get_status_data(variations=variations)
+        status_data = await self._simulation_engine.get_status()
 
         # Convert to model object
         status_out = self._convert_raw_to_status_out(status_data)
@@ -677,34 +731,20 @@ class SpanPanelClient:
             # Catch and wrap all other exceptions
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
 
-    async def get_panel_state(
-        self,
-        variations: dict[int, BranchVariation] | None = None,
-        panel_variations: PanelVariation | None = None,
-        global_power_variation: float | None = None,
-    ) -> PanelState:
+    async def get_panel_state(self) -> PanelState:
         """Get panel state information.
 
-        Args:
-            variations: Dict mapping branch_id to specific variations (simulation mode only)
-            panel_variations: Panel-level variations (simulation mode only)
-            global_power_variation: Apply to all branches (simulation mode only)
+        In simulation mode, panel behavior is defined by the YAML configuration file.
+        Use set_panel_overrides() for temporary variations outside normal ranges.
         """
         # In simulation mode, use simulation engine
         if self._simulation_mode:
-            return await self._get_panel_state_simulation(
-                variations=variations, panel_variations=panel_variations, global_power_variation=global_power_variation
-            )
+            return await self._get_panel_state_simulation()
 
-        # In live mode, ignore variation parameters
+        # In live mode, use live implementation
         return await self._get_panel_state_live()
 
-    async def _get_panel_state_simulation(
-        self,
-        variations: dict[int, BranchVariation] | None = None,
-        panel_variations: PanelVariation | None = None,
-        global_power_variation: float | None = None,
-    ) -> PanelState:
+    async def _get_panel_state_simulation(self) -> PanelState:
         """Get panel state data in simulation mode."""
         if self._simulation_engine is None:
             raise SpanPanelAPIError("Simulation engine not initialized")
@@ -713,23 +753,64 @@ class SpanPanelClient:
         await self._ensure_simulation_initialized()
 
         # Check cache first
-        cache_key = f"panel_sim_{hash(str(variations))}_{hash(str(panel_variations))}_{global_power_variation}"
-        cached_panel = self._api_cache.get_cached_data(cache_key)
-        if cached_panel is not None:
-            return cached_panel
-
-        # Get simulation data
-        panel_data = self._simulation_engine.get_panel_state_data(
-            variations=variations, panel_variations=panel_variations, global_power_variation=global_power_variation
-        )
+        cache_key = "full_sim_data"
+        cached_full_data = self._api_cache.get_cached_data(cache_key)
+        if cached_full_data is not None:
+            panel_data = cached_full_data.get("panel", {})
+        else:
+            # Get simulation data
+            full_data = await self._simulation_engine.get_panel_data()
+            panel_data = full_data.get("panel", {})
+            # Cache the full dataset for consistency
+            self._api_cache.set_cached_data(cache_key, full_data)
 
         # Convert to model object
         panel_state = self._convert_raw_to_panel_state(panel_data)
 
-        # Cache the result
-        self._api_cache.set_cached_data(cache_key, panel_state)
+        # Adjust panel power to include unmapped tab power for consistency with circuit totals
+        # This ensures panel.instant_grid_power_w matches the sum of all circuit.instant_power_w
+        await self._adjust_panel_power_for_virtual_circuits(panel_state)
 
         return panel_state
+
+    async def _adjust_panel_power_for_virtual_circuits(self, panel_state: PanelState) -> None:
+        """Adjust panel power to include unmapped tab power for consistency with circuit totals."""
+        if not hasattr(panel_state, "branches") or not panel_state.branches:
+            return  # pragma: no cover
+
+        # Get the current circuits to find mapped tabs
+        cache_key = "full_sim_data"
+        cached_full_data = self._api_cache.get_cached_data(cache_key)  # pragma: no cover
+        if cached_full_data is None:
+            return  # pragma: no cover
+
+        circuits_data = cached_full_data.get("circuits", {})
+        circuits_out = self._convert_raw_to_circuits_out(circuits_data)
+
+        # Find tabs already mapped to circuits
+        mapped_tabs: set[int] = set()
+        if hasattr(circuits_out, "circuits") and hasattr(circuits_out.circuits, "additional_properties"):
+            for circuit in circuits_out.circuits.additional_properties.values():
+                if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
+                    if isinstance(circuit.tabs, list | tuple):
+                        mapped_tabs.update(circuit.tabs)
+                    elif isinstance(circuit.tabs, int):
+                        mapped_tabs.add(circuit.tabs)
+
+        # Calculate unmapped tab power from branches
+        unmapped_tab_power = 0.0
+        total_tabs = len(panel_state.branches)
+        all_tabs = set(range(1, total_tabs + 1))
+        unmapped_tabs = all_tabs - mapped_tabs
+
+        for tab_num in unmapped_tabs:
+            branch_idx = tab_num - 1
+            if branch_idx < len(panel_state.branches):
+                branch = panel_state.branches[branch_idx]
+                unmapped_tab_power += branch.instant_power_w
+
+        # Add unmapped tab power to panel grid power
+        panel_state.instant_grid_power_w += unmapped_tab_power
 
     async def _get_panel_state_live(self) -> PanelState:
         """Get panel state data from live panel."""
@@ -774,47 +855,20 @@ class SpanPanelClient:
             # Catch and wrap all other exceptions
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
 
-    async def get_circuits(
-        self,
-        variations: dict[str, CircuitVariation] | None = None,
-        global_power_variation: float | None = None,
-        global_energy_variation: float | None = None,
-        # Legacy support
-        power_variation: float | None = None,
-        energy_variation: float | None = None,
-    ) -> CircuitsOut:
+    async def get_circuits(self) -> CircuitsOut:
         """Get all circuits and their current state, including virtual circuits for unmapped tabs.
 
-        Args:
-            variations: Dict mapping circuit_id to specific variations (simulation mode only)
-            global_power_variation: Apply to all circuits (simulation mode only)
-            global_energy_variation: Apply to all circuits (simulation mode only)
-            power_variation: Legacy parameter, use global_power_variation instead
-            energy_variation: Legacy parameter, use global_energy_variation instead
+        In simulation mode, circuit behavior is defined by the YAML configuration file.
+        Use set_circuit_overrides() for temporary variations outside normal ranges.
         """
-        # Handle legacy parameters
-        if power_variation is not None and global_power_variation is None:
-            global_power_variation = power_variation
-        if energy_variation is not None and global_energy_variation is None:
-            global_energy_variation = energy_variation
-
         # In simulation mode, use simulation engine
         if self._simulation_mode:
-            return await self._get_circuits_simulation(
-                variations=variations,
-                global_power_variation=global_power_variation,
-                global_energy_variation=global_energy_variation,
-            )
+            return await self._get_circuits_simulation()
 
-        # In live mode, ignore all variation parameters and use live implementation
+        # In live mode, use live implementation
         return await self._get_circuits_live()
 
-    async def _get_circuits_simulation(
-        self,
-        variations: dict[str, CircuitVariation] | None = None,
-        global_power_variation: float | None = None,
-        global_energy_variation: float | None = None,
-    ) -> CircuitsOut:
+    async def _get_circuits_simulation(self) -> CircuitsOut:
         """Get circuits data in simulation mode."""
         if self._simulation_engine is None:
             raise SpanPanelAPIError("Simulation engine not initialized")
@@ -822,18 +876,17 @@ class SpanPanelClient:
         # Ensure simulation is properly initialized asynchronously
         await self._ensure_simulation_initialized()
 
-        # Check cache first
-        cache_key = f"circuits_sim_{hash(str(variations))}_{global_power_variation}_{global_energy_variation}"
-        cached_circuits = self._api_cache.get_cached_data(cache_key)
-        if cached_circuits is not None:
-            return cached_circuits
-
-        # Get simulation data
-        circuits_data = self._simulation_engine.get_circuits_data(
-            variations=variations,
-            global_power_variation=global_power_variation,
-            global_energy_variation=global_energy_variation,
-        )
+        # Check cache first - use same cache key as panel to ensure data consistency
+        cache_key = "full_sim_data"
+        cached_full_data = self._api_cache.get_cached_data(cache_key)
+        if cached_full_data is not None:
+            circuits_data = cached_full_data.get("circuits", {})
+        else:
+            # Get simulation data
+            full_data = await self._simulation_engine.get_panel_data()
+            circuits_data = full_data.get("circuits", {})
+            # Cache the full dataset for consistency
+            self._api_cache.set_cached_data(cache_key, full_data)
 
         # Convert to model object
         circuits_out = self._convert_raw_to_circuits_out(circuits_data)
@@ -864,9 +917,6 @@ class SpanPanelClient:
                     virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
                     circuit_id = f"unmapped_tab_{tab_num}"
                     circuits_out.circuits.additional_properties[circuit_id] = virtual_circuit
-
-        # Cache the result
-        self._api_cache.set_cached_data(cache_key, circuits_out)
 
         return circuits_out
 
@@ -979,20 +1029,19 @@ class SpanPanelClient:
 
         return circuit
 
-    async def get_storage_soe(self, soe_variation: float | None = None) -> BatteryStorage:
+    async def get_storage_soe(self) -> BatteryStorage:
         """Get storage state of energy (SOE) data.
 
-        Args:
-            soe_variation: Battery percentage variation (simulation mode only)
+        In simulation mode, storage behavior is defined by the YAML configuration file.
         """
         # In simulation mode, use simulation engine
         if self._simulation_mode:
-            return await self._get_storage_soe_simulation(soe_variation=soe_variation)
+            return await self._get_storage_soe_simulation()
 
         # In live mode, ignore variation parameters
         return await self._get_storage_soe_live()
 
-    async def _get_storage_soe_simulation(self, soe_variation: float | None = None) -> BatteryStorage:
+    async def _get_storage_soe_simulation(self) -> BatteryStorage:
         """Get storage SOE data in simulation mode."""
         if self._simulation_engine is None:
             raise SpanPanelAPIError("Simulation engine not initialized")
@@ -1001,13 +1050,13 @@ class SpanPanelClient:
         await self._ensure_simulation_initialized()
 
         # Check cache first
-        cache_key = f"storage_soe_sim_{soe_variation}"
+        cache_key = "storage_soe_sim"
         cached_storage = self._api_cache.get_cached_data(cache_key)
         if cached_storage is not None:
             return cached_storage
 
         # Get simulation data
-        storage_data = self._simulation_engine.get_storage_soe_data(soe_variation=soe_variation)
+        storage_data = await self._simulation_engine.get_soe()
 
         # Convert to model object
         battery_storage = self._convert_raw_to_battery_storage(storage_data)
@@ -1073,6 +1122,24 @@ class SpanPanelClient:
             SpanPanelServerError: For 5xx server errors
             SpanPanelRetriableError: For transient server errors
         """
+        # In simulation mode, apply relay state as a dynamic override
+        if self._simulation_mode:
+            if self._simulation_engine is None:
+                raise SpanPanelAPIError("Simulation engine not initialized")
+
+            await self._ensure_simulation_initialized()
+
+            # Validate state
+            if state.upper() not in ["OPEN", "CLOSED"]:
+                raise SpanPanelAPIError(f"Invalid relay state '{state}'. Must be one of: OPEN, CLOSED")
+
+            # Apply the relay state override to the simulation engine
+            if self._simulation_engine is not None:
+                circuit_overrides = {circuit_id: {"relay_state": state.upper()}}
+                self._simulation_engine.set_dynamic_overrides(circuit_overrides=circuit_overrides)
+
+            # Return a mock success response
+            return {"status": "success", "circuit_id": circuit_id, "relay_state": state.upper()}
 
         async def _set_circuit_relay_operation() -> Any:
             client = self._get_client_for_endpoint(requires_auth=True)
@@ -1168,3 +1235,70 @@ class SpanPanelClient:
         except Exception as e:
             # Catch and wrap all other exceptions
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
+
+    async def set_circuit_overrides(
+        self, circuit_overrides: dict[str, dict[str, Any]] | None = None, global_overrides: dict[str, Any] | None = None
+    ) -> None:
+        """Set temporary circuit overrides in simulation mode.
+
+        This allows temporary variations outside the normal ranges defined in the YAML configuration.
+        Only works in simulation mode.
+
+        Args:
+            circuit_overrides: Dict mapping circuit_id to override parameters:
+                - power_override: Set specific power value (Watts)
+                - relay_state: Force relay state ("OPEN" or "CLOSED")
+                - priority: Override priority ("MUST_HAVE" or "NON_ESSENTIAL")
+                - power_multiplier: Multiply normal power by this factor
+            global_overrides: Apply to all circuits:
+                - power_multiplier: Global power multiplier
+                - noise_factor: Override noise factor
+                - time_acceleration: Override time acceleration
+
+        Example:
+            # Force specific circuit to high power
+            await client.set_circuit_overrides({
+                "circuit_001": {
+                    "power_override": 2000.0,
+                    "relay_state": "CLOSED"
+                }
+            })
+
+            # Apply global 2x power multiplier
+            await client.set_circuit_overrides(
+                global_overrides={"power_multiplier": 2.0}
+            )
+        """
+        if not self._simulation_mode:
+            raise SpanPanelAPIError("Circuit overrides only available in simulation mode")
+
+        if self._simulation_engine is None:
+            raise SpanPanelAPIError("Simulation engine not initialized")
+
+        await self._ensure_simulation_initialized()
+
+        # Apply overrides to simulation engine
+        self._simulation_engine.set_dynamic_overrides(circuit_overrides=circuit_overrides, global_overrides=global_overrides)
+
+        # Clear caches since behavior has changed
+        self._api_cache.clear()
+
+    async def clear_circuit_overrides(self) -> None:
+        """Clear all temporary circuit overrides in simulation mode.
+
+        Returns circuit behavior to the YAML configuration defaults.
+        Only works in simulation mode.
+        """
+        if not self._simulation_mode:
+            raise SpanPanelAPIError("Circuit overrides only available in simulation mode")
+
+        if self._simulation_engine is None:
+            raise SpanPanelAPIError("Simulation engine not initialized")
+
+        await self._ensure_simulation_initialized()
+
+        # Clear overrides from simulation engine
+        self._simulation_engine.clear_dynamic_overrides()
+
+        # Clear caches since behavior has changed
+        self._api_cache.clear()

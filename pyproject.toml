@@ -13,6 +13,7 @@ dependencies = [
     "python-dateutil>=2.8.0",
     "click>=8.0.0",
     "numpy>=1.21.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.urls]
@@ -37,6 +38,7 @@ pylint = "*"
 radon = "*"
 twine = "*"
 vulture = "^2.14"
+types-pyyaml = "^6.0.12.20250516"
 
 [tool.poetry.group.generate.dependencies]
 openapi-python-client = "^0.25.2"
@@ -105,10 +107,10 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 exclude = [
     "src/span_panel_api/generated_client/",
-    "src/span_panel_api/client.py",
     "generate_client.py",
     "tests/",
     "docs/",
+    "examples/",
     ".*_cache/",
     "dist/",
     "venv/",

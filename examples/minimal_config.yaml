@@ -1,0 +1,30 @@
+# Minimal configuration for basic simulation testing
+# Single circuit to test core functionality
+
+panel_config:
+  serial_number: "SPAN-MIN-001"
+  total_tabs: 2
+  main_size: 50
+
+circuit_templates:
+  basic_load:
+    power_range: [0.0, 100.0]
+    energy_behavior: "consume_only"
+    typical_power: 50.0
+    power_variation: 0.1
+    relay_behavior: "controllable"
+    priority: "MUST_HAVE"
+
+circuits:
+  - id: "test_circuit"
+    name: "Test Circuit"
+    template: "basic_load"
+    tabs: [1]
+
+unmapped_tabs: [2]
+
+simulation_params:
+  update_interval: 5
+  time_acceleration: 1.0
+  noise_factor: 0.01
+  enable_realistic_behaviors: false

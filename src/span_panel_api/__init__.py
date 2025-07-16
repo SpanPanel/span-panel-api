@@ -4,7 +4,7 @@ A modern, type-safe Python client library for the SPAN Panel REST API.
 """
 
 # Import our high-level client and exceptions
-from .client import SpanPanelClient
+from .client import SpanPanelClient, set_async_delay_func
 from .exceptions import (
     SpanPanelAPIError,
     SpanPanelAuthError,
@@ -26,5 +26,6 @@ __all__ = [
     "SpanPanelRetriableError",
     "SpanPanelServerError",
     "SpanPanelTimeoutError",
+    "set_async_delay_func",
 ]
 # fmt: on

@@ -72,6 +72,8 @@ asyncio.run(main())
 
 **Best for**: Long-running services, persistent connections, integration platforms
 
+> **Note for Home Assistant integrations**: See [Home Assistant Integration](#home-assistant-integration) section for HA-specific compatibility configuration.
+
 ```python
 import asyncio
 from span_panel_api import SpanPanelClient
@@ -460,6 +462,42 @@ span_openapi/
 ```
 
 ## Advanced Usage
+
+### Home Assistant Integration
+
+For Home Assistant integrations, the client provides a compatibility layer to handle asyncio timing issues that can occur in HA's event loop:
+
+```python
+from span_panel_api import SpanPanelClient, set_async_delay_func
+import asyncio
+
+# In your Home Assistant integration setup:
+async def ha_compatible_delay(seconds: float) -> None:
+    """Custom delay function that works well with HA's event loop."""
+    # Use HA's async utilities or implement HA-specific delay logic
+    await asyncio.sleep(seconds)
+
+# Configure the client to use HA-compatible delay
+set_async_delay_func(ha_compatible_delay)
+
+# Now create and use clients normally
+async with SpanPanelClient("192.168.1.100") as client:
+    # Client will use your custom delay function for retry logic
+    await client.authenticate("your_token")
+    panel_state = await client.get_panel_state()
+
+# To reset to default behavior (uses asyncio.sleep):
+set_async_delay_func(None)
+```
+
+**Why This Matters:**
+
+- Home Assistant's event loop can be sensitive to blocking operations
+- The default `asyncio.sleep()` used in retry logic may not play well with HA
+- Custom delay functions allow HA integrations to use HA's preferred async patterns
+- This prevents integration timeouts and improves responsiveness
+
+**Note:** This only affects the retry delay behavior. Normal API operations remain unchanged.
 
 ### SSL Configuration
 

@@ -91,15 +91,15 @@ async def test_cache_prevents_redundant_calls():
     client = create_sim_client(cache_window=1.0)
 
     # Track simulation engine calls to verify caching behavior
-    original_get_status_data = client._simulation_engine.get_status_data
+    original_get_status = client._simulation_engine.get_status
     call_count = 0
 
-    def track_status_data(*args, **kwargs):
+    async def track_status_data(*args, **kwargs):
         nonlocal call_count
         call_count += 1
-        return original_get_status_data(*args, **kwargs)
+        return await original_get_status(*args, **kwargs)
 
-    client._simulation_engine.get_status_data = track_status_data
+    client._simulation_engine.get_status = track_status_data
 
     # First call should hit the simulation engine
     result1 = await client.get_status()
@@ -115,33 +115,28 @@ async def test_cache_prevents_redundant_calls():
 async def test_cache_hit_paths(sim_client: SpanPanelClient):
     """Test cache hit paths for all API methods using simulation mode."""
     # Track simulation engine calls to verify caching behavior
-    original_get_circuits_data = sim_client._simulation_engine.get_circuits_data
-    original_get_panel_state_data = sim_client._simulation_engine.get_panel_state_data
-    original_get_status_data = sim_client._simulation_engine.get_status_data
-    original_get_storage_soe_data = sim_client._simulation_engine.get_storage_soe_data
+    original_get_panel_data = sim_client._simulation_engine.get_panel_data
+    original_get_status = sim_client._simulation_engine.get_status
+    original_get_soe = sim_client._simulation_engine.get_soe
 
     call_counts = {"circuits": 0, "panel_state": 0, "status": 0, "storage_soe": 0}
 
-    def track_circuits_data(*args, **kwargs):
+    async def track_panel_data(*args, **kwargs):
         call_counts["circuits"] += 1
-        return original_get_circuits_data(*args, **kwargs)
-
-    def track_panel_state_data(*args, **kwargs):
         call_counts["panel_state"] += 1
-        return original_get_panel_state_data(*args, **kwargs)
+        return await original_get_panel_data(*args, **kwargs)
 
-    def track_status_data(*args, **kwargs):
+    async def track_status_data(*args, **kwargs):
         call_counts["status"] += 1
-        return original_get_status_data(*args, **kwargs)
+        return await original_get_status(*args, **kwargs)
 
-    def track_storage_soe_data(*args, **kwargs):
+    async def track_soe_data(*args, **kwargs):
         call_counts["storage_soe"] += 1
-        return original_get_storage_soe_data(*args, **kwargs)
+        return await original_get_soe(*args, **kwargs)
 
-    sim_client._simulation_engine.get_circuits_data = track_circuits_data
-    sim_client._simulation_engine.get_panel_state_data = track_panel_state_data
-    sim_client._simulation_engine.get_status_data = track_status_data
-    sim_client._simulation_engine.get_storage_soe_data = track_storage_soe_data
+    sim_client._simulation_engine.get_panel_data = track_panel_data
+    sim_client._simulation_engine.get_status = track_status_data
+    sim_client._simulation_engine.get_soe = track_soe_data
 
     # Test status cache hit
     await sim_client.get_status()
@@ -158,11 +153,12 @@ async def test_cache_hit_paths(sim_client: SpanPanelClient):
     assert call_counts["panel_state"] == 1  # No additional call
 
     # Test circuits cache hit
+    # Note: get_circuits() now uses shared caching with panel state for better consistency
     await sim_client.get_circuits()
-    assert call_counts["circuits"] == 1
+    assert call_counts["circuits"] == 1  # Called once, shared cache ensures consistency
 
     await sim_client.get_circuits()  # Should hit cache
-    assert call_counts["circuits"] == 1  # No additional call
+    assert call_counts["circuits"] == 1  # No additional calls
 
     # Test storage SOE cache hit
     await sim_client.get_storage_soe()
@@ -187,15 +183,15 @@ async def test_cache_disabled_behavior():
     client = create_sim_client(cache_window=0)
 
     # Track simulation engine calls to verify no caching
-    original_get_status_data = client._simulation_engine.get_status_data
+    original_get_status = client._simulation_engine.get_status
     call_count = 0
 
-    def track_status_data(*args, **kwargs):
+    async def track_status_data(*args, **kwargs):
         nonlocal call_count
         call_count += 1
-        return original_get_status_data(*args, **kwargs)
+        return await original_get_status(*args, **kwargs)
 
-    client._simulation_engine.get_status_data = track_status_data
+    client._simulation_engine.get_status = track_status_data
 
     # Each call should hit the simulation engine (no caching)
     await client.get_status()
@@ -360,15 +356,15 @@ async def test_api_result_none_error():
 async def test_cache_disabled_with_simulation(sim_client_no_cache: SpanPanelClient):
     """Test that cache_window=0 disables caching in simulation mode."""
     # Track simulation engine calls to verify no caching
-    original_get_status_data = sim_client_no_cache._simulation_engine.get_status_data
+    original_get_status = sim_client_no_cache._simulation_engine.get_status
     call_count = 0
 
-    def track_status_data(*args, **kwargs):
+    async def track_status_data(*args, **kwargs):
         nonlocal call_count
         call_count += 1
-        return original_get_status_data(*args, **kwargs)
+        return await original_get_status(*args, **kwargs)
 
-    sim_client_no_cache._simulation_engine.get_status_data = track_status_data
+    sim_client_no_cache._simulation_engine.get_status = track_status_data
 
     # Each call should hit the simulation engine (no caching)
     await sim_client_no_cache.get_status()

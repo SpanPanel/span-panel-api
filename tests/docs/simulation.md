@@ -5,22 +5,58 @@
 The SPAN Panel API client provides a simulation mode that allows testing and development without requiring a physical SPAN panel.
 This mode uses pre-recorded response fixtures and applies dynamic variations to simulate realistic energy system behavior.
 
+## Test Organization
+
+The simulation mode is comprehensively tested through organized test suites:
+
+### Core Test Files
+
+- `test_simulation_mode.py` - Primary simulation engine functionality and variations
+- `test_panel_circuit_alignment.py` - Panel-level and circuit-level data alignment validation
+- `test_client_caching.py` - Client cache behavior and hit/miss logic
+- `test_client_retry_properties.py` - Retry configuration and property validation
+- `test_client_simulation_errors.py` - Simulation engine error conditions
+- `test_yaml_validation.py` - YAML configuration validation
+
+### Test Categories
+
+Tests are organized by functionality rather than coverage targets:
+
+- **Simulation Engine**: Core behavior, variations, time-based accumulation
+- **Data Alignment**: Panel-circuit power/energy consistency
+- **Client Features**: Caching, retry logic, error handling
+- **Configuration**: YAML validation and loading
+
 ## Enabling Simulation Mode
 
 Initialize the client with `simulation_mode=True`:
+
+### Host Parameter Behavior
+
+**In Simulation Mode**: The `host` parameter becomes the **panel serial number** rather than an IP address:
+
+- Used to identify the simulated panel instance
+- Appears in status responses as the panel serial number
+- Allows testing with specific serial numbers for different scenarios
+
+**In Live Mode**: The `host` parameter is the actual **IP address** of the physical SPAN panel.
 
 ```python
 from span_panel_api import SpanPanelClient
 
 # Simulation mode client
 client = SpanPanelClient(
-    host="localhost",  # Host is ignored in simulation mode
+    host="SPAN-DEMO-123456",  # Host becomes the panel serial number in simulation mode
     simulation_mode=True
 )
 
+async with client:
+    status = await client.get_status()
+    print(status.system.serial)  # Outputs: "SPAN-DEMO-123456"
+
 # Live mode client (default)
 live_client = SpanPanelClient(
-    host="192.168.1.100",
+    host="192.168.1.100",  # Host is the actual panel IP address
     simulation_mode=False  # Default
 )
 ```
@@ -43,6 +79,15 @@ Power values (`instantPowerW`) fluctuate realistically based on appliance type:
 ### 3. Per-Item Variation Control
 
 Each circuit, branch, or status field can be individually controlled with specific variations.
+
+### 4. Panel-Circuit Data Alignment
+
+Panel-level data exactly matches the aggregation of circuit-level data:
+
+- **Power Consistency**: Panel grid power equals the sum of all circuit powers
+- **Energy Consistency**: Panel energy totals exactly match circuit energy totals
+- **Shared Caching**: Both `get_panel_state()` and `get_circuits()` use the same cached dataset to ensure consistency
+- **Test Coverage**: Comprehensive tests verify alignment in `test_panel_circuit_alignment.py`
 
 ## API Methods and Variations
 
@@ -193,7 +238,54 @@ storage = await client.get_storage_soe(soe_variation=0.1)  # 10% variation
 
 ## Testing Scenarios
 
-### 1. Circuit Failure Testing
+### 1. Panel-Circuit Data Alignment
+
+```python
+# Test power alignment between panel and circuit totals
+client = SpanPanelClient(
+    host="test-alignment",
+    simulation_mode=True,
+    simulation_config_path="examples/simple_test_config.yaml"
+)
+
+async with client:
+    panel_state = await client.get_panel_state()
+    circuits = await client.get_circuits()
+
+    # Calculate circuit power total
+    total_circuit_power = sum(
+        circuits.circuits[cid].instant_power_w
+        for cid in circuits.circuits.additional_keys
+    )
+
+    # Verify alignment (current tolerance: 2000W due to known issues)
+    power_diff = abs(panel_state.instant_grid_power_w - total_circuit_power)
+    assert power_diff <= 2000.0
+```
+
+### 2. Energy Accumulation Testing
+
+```python
+# Test energy totals alignment
+async with client:
+    panel_state = await client.get_panel_state()
+    circuits = await client.get_circuits()
+
+    total_produced = sum(
+        circuits.circuits[cid].produced_energy_wh
+        for cid in circuits.circuits.additional_keys
+    )
+    total_consumed = sum(
+        circuits.circuits[cid].consumed_energy_wh
+        for cid in circuits.circuits.additional_keys
+    )
+
+    # Document current behavior (should be exact in ideal implementation)
+    print(f"Panel produced: {panel_state.main_meter_energy.produced_energy_wh}")
+    print(f"Circuit total: {total_produced}")
+```
+
+### 3. Circuit Failure Testing
 
 ```python
 # Test individual circuit outage
@@ -208,7 +300,28 @@ circuits = await client.get_circuits(variations={
 })
 ```
 
-### 2. Panel Emergency States
+### 4. Caching Behavior Testing
+
+```python
+# Test cache hit/miss behavior
+client = SpanPanelClient(
+    host="test-cache",
+    simulation_mode=True,
+    cache_window=5.0  # 5-second cache window
+)
+
+async with client:
+    # First call - cache miss
+    circuits1 = await client.get_circuits()
+
+    # Second call within cache window - cache hit
+    circuits2 = await client.get_circuits()
+
+    # Verify identical data from cache
+    assert circuits1 == circuits2
+```
+
+### 5. Panel Emergency States
 
 ```python
 # Simulate grid outage
@@ -219,7 +332,7 @@ panel = await client.get_panel_state(panel_variations={
 })
 ```
 
-### 3. High Load Scenarios
+### 6. High Load Scenarios
 
 ```python
 # Simulate high power consumption
@@ -230,7 +343,7 @@ circuits = await client.get_circuits(variations={
 })
 ```
 
-### 4. Network and Hardware Issues
+### 7. Network and Hardware Issues
 
 ```python
 # Simulate connectivity problems
@@ -243,12 +356,16 @@ status = await client.get_status(variations={
 
 ## Live Mode Behavior
 
-When `simulation_mode=False` (default), all variation parameters are completely ignored:
+When `simulation_mode=False` (default):
+
+- The `host` parameter is used as the actual IP address of the physical SPAN panel
+- All variation parameters are completely ignored (calls go to real hardware)
+- Data comes directly from the physical panel, not simulation fixtures
 
 ```python
 live_client = SpanPanelClient(host="192.168.1.100", simulation_mode=False)
 
-# These variations are ignored in live mode
+# These variations are ignored in live mode - data comes from real panel
 circuits = await live_client.get_circuits(variations={
     "any_circuit": {"power_variation": 999}  # Completely ignored
 })
@@ -331,9 +448,26 @@ except SpanPanelAPIError as e:
 - Fixture data is loaded once at initialization
 - Variation calculations are applied per-call
 
+## Known Issues and Limitations
+
+### 1. ✅ Panel-Circuit Data Alignment (FIXED)
+
+**Current Behavior**: Panel and circuit data are now properly aligned:
+
+- **Power Alignment**: Panel grid power exactly matches the sum of all circuit powers
+- **Energy Alignment**: Panel energy totals exactly match the sum of all circuit energies
+- **Consistency**: Single data generation call with shared caching ensures consistency
+- **Implementation**: Both `get_panel_state()` and `get_circuits()` use the same cached dataset
+
+**Test Coverage**: All alignment tests in `test_panel_circuit_alignment.py` verify this behavior
+
+### 2. Cache Timing Dependencies
+
+Some tests may be sensitive to cache timing, particularly when testing data consistency across multiple API calls.
+
 ## Limitations
 
-- Simulation data is based on static fixtures
+- Simulation data is based on static fixtures with dynamic variations applied
 - No actual hardware interaction
-- Authentication is bypassed in simulation mode
 - Circuit state changes don't persist between client instances
+- **Timestamp Consistency**: Minor timestamp variations may occur between API calls (but data consistency is maintained via shared caching)

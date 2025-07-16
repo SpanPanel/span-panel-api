@@ -69,8 +69,9 @@ repos:
           - click
           - typing-extensions
           - pytest
+          - types-PyYAML
         args: ['--config-file=pyproject.toml']
-        exclude: '^src/span_panel_api/generated_client/.*|tests/.*|docs/.*|\..*_cache/.*|dist/.*|venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|tests/.*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # Pylint for code quality
   - repo: https://github.com/pycqa/pylint
@@ -85,6 +86,7 @@ repos:
           - click
           - typing-extensions
           - pytest
+          - pyyaml
         exclude: '^src/span_panel_api/generated_client/.*|tests/.*|generate_client\.py|scripts/coverage\.py|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
   # Check for common security issues

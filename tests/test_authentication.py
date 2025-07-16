@@ -303,3 +303,51 @@ class TestAuthenticationRequirements:
             mock_auth.asyncio = AsyncMock(side_effect=RuntimeError("Unexpected error"))
             with pytest.raises(SpanPanelAPIError, match="API error: Unexpected error"):
                 await client.authenticate("test", "description")
+
+
+class TestSimulationAuthentication:
+    """Test authentication in simulation mode."""
+
+    @pytest.mark.asyncio
+    async def test_simulation_mode_authentication(self):
+        """Test that simulation mode returns mock authentication responses."""
+        client = SpanPanelClient(
+            host="test-sim-auth", simulation_mode=True, simulation_config_path="examples/simple_test_config.yaml"
+        )
+
+        async with client:
+            # Authenticate in simulation mode
+            auth_result = await client.authenticate("test-service", "Test Service Description")
+
+            # Should return a mock authentication response
+            assert auth_result.access_token.startswith("sim-token-test-service-")
+            assert auth_result.token_type == "Bearer"
+            assert auth_result.iat_ms > 0
+
+            # Token should be set on the client
+            assert client._access_token == auth_result.access_token
+
+    @pytest.mark.asyncio
+    async def test_simulation_mode_authentication_token_format(self):
+        """Test that simulation authentication generates properly formatted tokens."""
+        client = SpanPanelClient(
+            host="test-sim-token", simulation_mode=True, simulation_config_path="examples/simple_test_config.yaml"
+        )
+
+        async with client:
+            # Test with different name
+            auth_result = await client.authenticate("my-integration", "My Integration Service")
+
+            # Token should include the name
+            assert "my-integration" in auth_result.access_token
+            assert auth_result.access_token.startswith("sim-token-my-integration-")
+
+            # Should have timestamp component
+            token_parts = auth_result.access_token.split("-")
+            assert len(token_parts) >= 4  # sim, token, name, timestamp
+
+            # iat_ms should be recent (within last minute)
+            import time
+
+            current_time_ms = int(time.time() * 1000)
+            assert abs(auth_result.iat_ms - current_time_ms) < 60000  # Within 1 minute

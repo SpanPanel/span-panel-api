@@ -21,7 +21,7 @@ from span_panel_api import SpanPanelClient
 from span_panel_api.exceptions import SpanPanelAuthError, SpanPanelConnectionError, SpanPanelTimeoutError
 
 
-async def test_bearer_auth(panel_ip: str, jwt_token: str) -> None:
+async def test_bearer_auth(panel_ip: str, jwt_token: str) -> None:  # pragma: no cover
     """Test Bearer token authentication with a real panel."""
     print(f"🔍 Testing Bearer token authentication with panel: {panel_ip}")
     print(f"🎫 Token: {jwt_token[:20]}..." if len(jwt_token) > 20 else f"🎫 Token: {jwt_token}")

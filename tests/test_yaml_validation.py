@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import yaml
 
-from src.span_panel_api.simulation import DynamicSimulationEngine
+from span_panel_api.simulation import DynamicSimulationEngine
 
 
 class TestYAMLValidation:

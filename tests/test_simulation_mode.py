@@ -189,7 +189,9 @@ class TestYAMLConfigurationMode:
         # Test with no config should raise error
         engine = DynamicSimulationEngine("edge-test")
 
-        with pytest.raises(ValueError, match="YAML configuration with circuits is required"):
+        with pytest.raises(
+            ValueError, match="Simulation mode requires either config_data or a valid config_path with YAML configuration"
+        ):
             await engine.initialize_async()
 
         # Test with valid YAML config should work
@@ -404,7 +406,9 @@ class TestSimulationErrorHandling:
         engine = DynamicSimulationEngine()
 
         # Should raise error when trying to initialize without config
-        with pytest.raises(ValueError, match="YAML configuration with circuits is required"):
+        with pytest.raises(
+            ValueError, match="Simulation mode requires either config_data or a valid config_path with YAML configuration"
+        ):
             await engine.initialize_async()
 
     async def test_simulation_engine_methods(self) -> None:

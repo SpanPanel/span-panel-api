@@ -507,6 +507,10 @@ class SpanPanelClient:
             SpanPanelAPIError: For all other HTTP errors
         """
         if e.status_code in AUTH_ERROR_CODES:
+            # If we have a token but got 401/403, authentication failed
+            # If we don't have a token, authentication is required
+            if self._access_token:
+                raise SpanPanelAuthError(f"Authentication failed: Status {e.status_code}") from e
             raise SpanPanelAuthError("Authentication required") from e
         if e.status_code in RETRIABLE_ERROR_CODES:
             raise SpanPanelRetriableError(f"Retriable server error {e.status_code}: {e}", e.status_code) from e
@@ -592,12 +596,16 @@ class SpanPanelClient:
         raise SpanPanelAPIError("Retry operation completed without success or exception")
 
     # Authentication Methods
-    async def authenticate(self, name: str, description: str = "") -> AuthOut:
+    async def authenticate(
+        self, name: str, description: str = "", otp: str | None = None, dashboard_password: str | None = None
+    ) -> AuthOut:
         """Register and authenticate a new API client.
 
         Args:
             name: Client name
             description: Optional client description
+            otp: Optional One-Time Password for enhanced security
+            dashboard_password: Optional dashboard password for authentication
 
         Returns:
             AuthOut containing access token
@@ -613,7 +621,14 @@ class SpanPanelClient:
 
         # Use unauthenticated client for registration
         client = self._get_unauthenticated_client()
+
+        # Create auth input with all provided parameters
         auth_in = AuthIn(name=name, description=description)
+        if otp is not None:
+            auth_in.otp = otp
+        if dashboard_password is not None:
+            auth_in.dashboard_password = dashboard_password
+
         try:
             # Type cast needed because generated API has overly strict type hints
             response = await generate_jwt_api_v1_auth_register_post.asyncio(
@@ -621,42 +636,60 @@ class SpanPanelClient:
             )
             # Handle response - could be AuthOut, HTTPValidationError, or None
             if response is None:
-                raise SpanPanelAPIError("Authentication failed - no response")
+                raise SpanPanelAPIError("Authentication failed - no response from server")
             if isinstance(response, HTTPValidationError):
-                raise SpanPanelAPIError(f"Validation error during authentication: {response}")
+                error_details = getattr(response, "detail", "Unknown validation error")
+                raise SpanPanelAPIError(f"Validation error during authentication: {error_details}")
             if hasattr(response, "access_token"):
                 # Store the token for future requests (works for both AuthOut and mocks)
                 self.set_access_token(response.access_token)
                 return response
-            raise SpanPanelAPIError(f"Unexpected response type: {type(response)}")
+            raise SpanPanelAPIError(f"Unexpected response type: {type(response)}, response: {response}")
         except UnexpectedStatus as e:
             # Convert UnexpectedStatus to appropriate SpanPanel exception
             # Special case for auth endpoint - 401/403 here means auth failed
+            error_text = f"Status {e.status_code}"
+
             if e.status_code in AUTH_ERROR_CODES:
-                raise SpanPanelAuthError("Authentication failed") from e
+                raise SpanPanelAuthError(f"Authentication failed: {error_text}") from e
             if e.status_code in RETRIABLE_ERROR_CODES:
-                raise SpanPanelRetriableError(f"Retriable server error {e.status_code}: {e}", e.status_code) from e
+                raise SpanPanelRetriableError(f"Retriable server error {e.status_code}: {error_text}", e.status_code) from e
             if e.status_code in SERVER_ERROR_CODES:
-                raise SpanPanelServerError(f"Server error {e.status_code}: {e}", e.status_code) from e
-            raise SpanPanelAPIError(f"HTTP {e.status_code}: {e}", e.status_code) from e
+                raise SpanPanelServerError(f"Server error {e.status_code}: {error_text}", e.status_code) from e
+            raise SpanPanelAPIError(f"HTTP {e.status_code}: {error_text}", e.status_code) from e
         except httpx.HTTPStatusError as e:
             # Convert HTTPStatusError to UnexpectedStatus and handle appropriately
             # Special case for auth endpoint - 401/403 here means auth failed
+            error_text = e.response.text if hasattr(e.response, "text") else str(e)
+
             if e.response.status_code in AUTH_ERROR_CODES:
-                raise SpanPanelAuthError("Authentication failed") from e
+                raise SpanPanelAuthError(f"Authentication failed: {error_text}") from e
             if e.response.status_code in RETRIABLE_ERROR_CODES:
                 raise SpanPanelRetriableError(
-                    f"Retriable server error {e.response.status_code}: {e}", e.response.status_code
+                    f"Retriable server error {e.response.status_code}: {error_text}", e.response.status_code
                 ) from e
             if e.response.status_code in SERVER_ERROR_CODES:
-                raise SpanPanelServerError(f"Server error {e.response.status_code}: {e}", e.response.status_code) from e
-            raise SpanPanelAPIError(f"HTTP {e.response.status_code}: {e}", e.response.status_code) from e
+                raise SpanPanelServerError(
+                    f"Server error {e.response.status_code}: {error_text}", e.response.status_code
+                ) from e
+            raise SpanPanelAPIError(f"HTTP {e.response.status_code}: {error_text}", e.response.status_code) from e
         except httpx.ConnectError as e:
             raise SpanPanelConnectionError(f"Failed to connect to {self._host}") from e
         except httpx.TimeoutException as e:
             raise SpanPanelTimeoutError(f"Request timed out after {self._timeout}s") from e
+        except ValueError as e:
+            # Handle specific dictionary parsing errors from malformed server responses
+            if "dictionary update sequence element" in str(e) and "length" in str(e) and "required" in str(e):
+                raise SpanPanelAPIError(
+                    f"Server returned malformed authentication response. "
+                    f"This may indicate a panel firmware issue or network problem. "
+                    f"Original error: {e}"
+                ) from e
+            # Handle other ValueError instances (like Pydantic validation errors)
+            raise SpanPanelAPIError(f"Invalid data during authentication: {e}") from e
         except Exception as e:
-            raise SpanPanelAPIError(f"API error: {e}") from e
+            # Catch any other unexpected errors
+            raise SpanPanelAPIError(f"Unexpected error during authentication: {e}") from e
 
     # Panel Status and Info
     async def get_status(self) -> StatusOut:
@@ -850,9 +883,14 @@ class SpanPanelClient:
             # Handle Pydantic validation errors and other ValueError instances
             raise SpanPanelAPIError(f"API error: {e}") from e
         except Exception as e:
-            if "401 Unauthorized" in str(e):
+            # Only convert to auth error if it's specifically an HTTP 401 error, not just any error mentioning "401"
+            if isinstance(e, (httpx.HTTPStatusError | UnexpectedStatus | RuntimeError)) and "401" in str(e):
+                # If we have a token but got 401, authentication failed
+                # If we don't have a token, authentication is required
+                if self._access_token:
+                    raise SpanPanelAuthError("Authentication failed") from e
                 raise SpanPanelAuthError("Authentication required") from e
-            # Catch and wrap all other exceptions
+            # All other exceptions are internal errors, not auth problems
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
 
     async def get_circuits(self) -> CircuitsOut:

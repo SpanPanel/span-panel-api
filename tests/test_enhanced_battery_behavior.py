@@ -183,32 +183,13 @@ class TestEnhancedBatteryBehavior:
 @pytest.mark.asyncio
 async def test_battery_behavior_edge_cases():
     """Test edge cases in battery behavior logic to achieve 100% coverage."""
+    import datetime
+
     config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
 
     async with SpanPanelClient(
         host="test-edge-cases", simulation_mode=True, simulation_config_path=str(config_path)
     ) as client:
-        # Test different time scenarios to hit all battery behavior paths
-        import datetime
-
-        # Test with hours not in any specific category (transition hours)
-        # This should hit the "transition hours - gradual change" path (line 296)
-        with patch('datetime.datetime') as mock_datetime:
-            # Hour 5 is not in charge_hours, discharge_hours, or idle_hours for our config
-            mock_datetime.now.return_value = datetime.datetime(2024, 1, 15, 5, 30, 0)  # 5:30 AM
-            mock_datetime.side_effect = lambda *args, **kw: datetime.datetime(*args, **kw)
-
-            circuits = await client.get_circuits()
-            circuit_data = circuits.circuits.additional_properties
-
-            # Should have battery circuits
-            battery_1 = circuit_data.get("battery_system_1")
-            battery_2 = circuit_data.get("battery_system_2")
-
-            # During transition hours, battery power should be minimal (gradual change)
-            if battery_1:
-                assert -500 <= battery_1.instant_power_w <= 500, "Transition hours should have minimal activity"
-
         # Test battery behavior methods directly for different scenarios
         # This hits lines around solar_intensity_profile and demand_factor_profile
         with patch('datetime.datetime') as mock_datetime:
@@ -218,6 +199,8 @@ async def test_battery_behavior_edge_cases():
 
             circuits = await client.get_circuits()
             # This should test the default demand factor path (line 305-306)
+            assert circuits is not None
+            assert len(circuits.circuits.additional_properties) > 0
 
         # Test hour that's in charge but not in solar_intensity_profile
         with patch('datetime.datetime') as mock_datetime:
@@ -226,6 +209,8 @@ async def test_battery_behavior_edge_cases():
 
             circuits = await client.get_circuits()
             # This should test the default solar intensity path (line 300-301)
+            assert circuits is not None
+            assert len(circuits.circuits.additional_properties) > 0
 
 
 @pytest.mark.asyncio

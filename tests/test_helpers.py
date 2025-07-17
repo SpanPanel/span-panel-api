@@ -1,7 +1,7 @@
 """Test helper functions for simulation and client testing."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from span_panel_api.client import SpanPanelClient
 

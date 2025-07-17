@@ -94,18 +94,6 @@ circuit_templates:
       responds_to_grid: true
       max_power_reduction: 0.6  # Can reduce to 40% during grid stress
 
-  # Solar inverter with realistic daily production
-  solar_inverter:
-    power_range: [-8000.0, 0.0]  # Negative = production
-    energy_behavior: "produce_only"
-    typical_power: -5000.0  # 5kW system
-    power_variation: 0.4  # Weather dependent
-    relay_behavior: "non_controllable"
-    priority: "MUST_HAVE"
-    time_of_day_profile:
-      enabled: true
-      peak_hours: [10, 11, 12, 13, 14, 15]  # Solar peak production
-
   # Pool equipment
   pool_equipment:
     power_range: [0.0, 1200.0]
@@ -179,7 +167,7 @@ circuits:
   - id: "kitchen_outlets"
     name: "Kitchen Outlets"
     template: "kitchen_outlets"
-    tabs: [9, 10]  # 240V circuit using two tabs
+    tabs: [9, 10]  # 120V circuit using two tabs
 
   - id: "office_outlets"
     name: "Office Outlets"
@@ -259,22 +247,11 @@ circuits:
     template: "heat_pump"
     tabs: [24, 26]  # 240V system
 
-  # EV charging and solar (tabs 27-30)
+  # EV charging (tabs 27-29)
   - id: "ev_charger_garage"
     name: "Garage EV Charger"
     template: "ev_charger"
     tabs: [27, 29]  # 240V Level 2 charger
-
-  - id: "solar_inverter_main"
-    name: "Solar Inverter"
-    template: "solar_inverter"
-    tabs: [28]  # Single phase solar inverter (tab 30 left unmapped)
-
-  # Pool equipment (tab 31 only, tab 32 left unmapped)
-  - id: "pool_pump"
-    name: "Pool Pump & Filter"
-    template: "pool_equipment"
-    tabs: [31]
 
 # Configuration for unmapped tabs with specific behaviors
 # Tabs 30 and 32: Solar production tabs for integration testing

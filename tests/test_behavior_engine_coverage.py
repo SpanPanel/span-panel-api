@@ -173,23 +173,6 @@ class TestBehaviorEngineEdgeCases:
         assert power1 >= 0
         assert power2 >= 0
 
-    def test_default_config_coverage(self):
-        """Test default configuration generation."""
-        from span_panel_api.simulation import DynamicSimulationEngine
-
-        engine = DynamicSimulationEngine("TEST-DEFAULT")
-        default_config = engine._get_default_config()
-
-        # Should have required sections
-        assert "panel_config" in default_config
-        assert "circuit_templates" in default_config
-        assert "circuits" in default_config
-
-        # Should have circuit templates even if circuits list is empty
-        assert len(default_config["circuit_templates"]) > 0
-        assert "lighting" in default_config["circuit_templates"]
-        assert "solar" in default_config["circuit_templates"]
-
     def test_relay_state_open_coverage(self):
         """Test that OPEN relay state returns 0.0 power - covers line 170."""
         config_path = Path(__file__).parent.parent / "examples" / "behavior_test_config.yaml"

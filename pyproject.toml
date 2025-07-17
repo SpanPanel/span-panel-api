@@ -39,6 +39,7 @@ radon = "*"
 twine = "*"
 vulture = "^2.14"
 types-pyyaml = "^6.0.12.20250516"
+coverage = "^7.9.2"
 
 [tool.poetry.group.generate.dependencies]
 openapi-python-client = "^0.25.2"
@@ -53,7 +54,7 @@ line-length = 125
 exclude = [
     "src/span_panel_api/generated_client/",
     "generate_client.py",
-    "scripts/coverage.py",
+    "scripts/",
     ".*_cache/",
     "dist/",
     "venv/",
@@ -108,6 +109,7 @@ disallow_untyped_defs = true
 exclude = [
     "src/span_panel_api/generated_client/",
     "generate_client.py",
+    "scripts/",
     "tests/",
     "docs/",
     "examples/",
@@ -230,7 +232,7 @@ ignore-paths = [
     "^src/span_panel_api/generated_client/.*",
     "^tests/.*",
     "^generate_client\\.py$",
-    "^scripts/coverage\\.py$",
+    "^scripts/.*",
     "^examples/.*",
 ]
 

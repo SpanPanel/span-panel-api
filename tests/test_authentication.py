@@ -99,7 +99,19 @@ class TestAuthentication:
         with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             mock_auth.asyncio.side_effect = ValueError("Validation failed")
 
-            with pytest.raises(SpanPanelAPIError, match="API error: Validation failed"):
+            with pytest.raises(SpanPanelAPIError, match="Invalid data during authentication: Validation failed"):
+                await client.authenticate("test", "Test Client")
+
+    @pytest.mark.asyncio
+    async def test_authenticate_malformed_response_error(self):
+        """Test malformed server response handling in authenticate."""
+        client = SpanPanelClient("192.168.1.100")
+
+        with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
+            # Simulate the exact error from malformed JSON response
+            mock_auth.asyncio.side_effect = ValueError("dictionary update sequence element #0 has length 1; 2 is required")
+
+            with pytest.raises(SpanPanelAPIError, match="Server returned malformed authentication response"):
                 await client.authenticate("test", "Test Client")
 
     @pytest.mark.asyncio
@@ -110,7 +122,7 @@ class TestAuthentication:
         with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             mock_auth.asyncio.side_effect = RuntimeError("Unexpected error")
 
-            with pytest.raises(SpanPanelAPIError, match="API error: Unexpected error"):
+            with pytest.raises(SpanPanelAPIError, match="Unexpected error during authentication: Unexpected error"):
                 await client.authenticate("test", "Test Client")
 
     @pytest.mark.asyncio
@@ -273,15 +285,37 @@ class TestAuthenticationRequirements:
             await client.get_panel_state()
 
     @pytest.mark.asyncio
-    async def test_get_panel_state_401_exception_string(self):
-        """Test exception with '401 Unauthorized' in string."""
+    async def test_get_panel_state_internal_401_exception_string(self):
+        """Test that internal exceptions mentioning '401' are NOT converted to auth errors."""
         client = SpanPanelClient("192.168.1.100")
         client._access_token = "test-token"
 
         with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
+            # Generic exception that mentions 401 - this is an internal error, not an auth problem
             mock_panel.asyncio.side_effect = Exception("401 Unauthorized access")
 
-            with pytest.raises(SpanPanelAuthError, match="Authentication required"):
+            # Should be SpanPanelAPIError (internal error), not SpanPanelAuthError
+            with pytest.raises(SpanPanelAPIError, match="Unexpected error"):
+                await client.get_panel_state()
+
+    @pytest.mark.asyncio
+    async def test_get_panel_state_real_http_401_error(self):
+        """Test that real HTTP 401 errors are still converted to auth errors."""
+        client = SpanPanelClient("192.168.1.100")
+        client._access_token = "test-token"
+
+        # Create a mock HTTP 401 error
+        mock_request = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        http_error = httpx.HTTPStatusError("401 Unauthorized", request=mock_request, response=mock_response)
+
+        with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
+            mock_panel.asyncio.side_effect = http_error
+
+            # Real HTTP 401 errors should still become SpanPanelAuthError
+            with pytest.raises(SpanPanelAuthError, match="Authentication failed"):
                 await client.get_panel_state()
 
     @pytest.mark.asyncio
@@ -295,13 +329,13 @@ class TestAuthenticationRequirements:
         # Test ValueError in authentication
         with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             mock_auth.asyncio = AsyncMock(side_effect=ValueError("Invalid input"))
-            with pytest.raises(SpanPanelAPIError, match="API error: Invalid input"):
+            with pytest.raises(SpanPanelAPIError, match="Invalid data during authentication: Invalid input"):
                 await client.authenticate("test", "description")
 
         # Test generic exception in authentication
         with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:
             mock_auth.asyncio = AsyncMock(side_effect=RuntimeError("Unexpected error"))
-            with pytest.raises(SpanPanelAPIError, match="API error: Unexpected error"):
+            with pytest.raises(SpanPanelAPIError, match="Unexpected error during authentication: Unexpected error"):
                 await client.authenticate("test", "description")
 
 

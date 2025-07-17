@@ -327,7 +327,7 @@ class DynamicSimulationEngine:
 
         Args:
             serial_number: Custom serial number for the simulated panel.
-                          If None, uses value from config or "sim-serial-123".
+                          If None, uses value from config.
             config_path: Path to YAML configuration file.
             config_data: Direct configuration data (overrides config_path).
         """
@@ -381,8 +381,10 @@ class DynamicSimulationEngine:
             loop = asyncio.get_event_loop()  # pragma: no cover
             self._config = await loop.run_in_executor(None, self._load_yaml_config, self._config_path)  # pragma: no cover
         else:  # pragma: no cover
-            # Use default configuration
-            self._config = self._get_default_config()  # pragma: no cover
+            # No config provided - simulation cannot start
+            raise ValueError(
+                "Simulation mode requires either config_data or a valid config_path with YAML configuration"
+            )  # pragma: no cover
 
         # Override serial number if provided
         if self._serial_number_override and self._config:
@@ -461,60 +463,6 @@ class DynamicSimulationEngine:
             template_name = circuit["template"]
             if template_name not in circuit_templates:
                 raise ValueError(f"Circuit {i} references unknown template '{template_name}'")
-
-    def _get_default_config(self) -> SimulationConfig:
-        """Get default configuration for backwards compatibility."""
-        return {
-            "panel_config": {
-                "serial_number": self._serial_number_override or "sim-serial-123",
-                "total_tabs": 32,
-                "main_size": 200,
-            },
-            "circuit_templates": {
-                "lighting": {
-                    "power_range": [5.0, 50.0],
-                    "energy_behavior": "consume_only",
-                    "typical_power": 25.0,
-                    "power_variation": 0.1,
-                    "relay_behavior": "controllable",
-                    "priority": "MUST_HAVE",
-                },
-                "outlets": {
-                    "power_range": [0.0, 1500.0],
-                    "energy_behavior": "mixed",
-                    "typical_power": 150.0,
-                    "power_variation": 0.3,
-                    "relay_behavior": "controllable",
-                    "priority": "MUST_HAVE",
-                },
-                "hvac": {
-                    "power_range": [0.0, 3000.0],
-                    "energy_behavior": "consume_only",
-                    "typical_power": 1200.0,
-                    "power_variation": 0.2,
-                    "relay_behavior": "controllable",
-                    "priority": "NON_ESSENTIAL",
-                    "cycling_pattern": {"on_duration": 900, "off_duration": 1800},
-                },
-                "solar": {
-                    "power_range": [-8000.0, 0.0],
-                    "energy_behavior": "produce_only",
-                    "typical_power": -4000.0,
-                    "power_variation": 0.4,
-                    "relay_behavior": "non_controllable",
-                    "priority": "MUST_HAVE",
-                    "time_of_day_profile": {"enabled": True, "peak_hours": [10, 11, 12, 13, 14, 15, 16]},
-                },
-            },
-            "circuits": [],  # Will be populated from fixtures if empty
-            "unmapped_tabs": [27, 28, 30, 32],
-            "simulation_params": {
-                "update_interval": 5,
-                "time_acceleration": 1.0,
-                "noise_factor": 0.02,
-                "enable_realistic_behaviors": True,
-            },
-        }
 
     async def _generate_base_data_from_config(self) -> dict[str, dict[str, Any]]:
         """Generate base simulation data from YAML configuration."""
@@ -689,7 +637,10 @@ class DynamicSimulationEngine:
         """Get the simulated panel serial number."""
         if self._config:
             return self._config["panel_config"]["serial_number"]
-        return self._serial_number_override or "sim-serial-123"
+        if self._serial_number_override:
+            return self._serial_number_override
+
+        raise ValueError("No configuration loaded - serial number not available")  # pragma: no cover
 
     async def get_panel_data(self) -> dict[str, dict[str, Any]]:
         """Get panel and circuit data."""

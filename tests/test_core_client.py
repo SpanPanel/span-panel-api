@@ -422,7 +422,7 @@ class TestAPIMethodsErrorPaths:
                 await client.get_panel_state()
         with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
             mock_panel.asyncio = AsyncMock(side_effect=RuntimeError("401 Unauthorized access"))
-            with pytest.raises(SpanPanelAuthError, match="Authentication required"):
+            with pytest.raises(SpanPanelAuthError, match="Authentication failed"):
                 await client.get_panel_state()
         with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
             mock_panel.asyncio = AsyncMock(side_effect=RuntimeError("Some other error"))

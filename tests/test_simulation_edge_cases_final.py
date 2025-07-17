@@ -1,6 +1,7 @@
 """Test final simulation edge cases to achieve 100% coverage."""
 
 import pytest
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 from span_panel_api.simulation import DynamicSimulationEngine
 
@@ -35,26 +36,26 @@ class TestSimulationFinalEdgeCases:
             await engine._load_config_async()
 
     @pytest.mark.asyncio
-    async def test_no_config_path_and_no_config_data_fallback(self):
-        """Test fallback to default config when no path or data provided (line 324)."""
+    async def test_no_config_path_and_no_config_data_error(self):
+        """Test that missing config raises error when no path or data provided."""
         engine = DynamicSimulationEngine()
 
         # Ensure no config path or data
         engine._config_path = None
         engine._config_data = None
 
-        # This should hit the default config path on line 324
-        await engine._load_config_async()
-
-        assert engine._config is not None
-        assert "panel_config" in engine._config
+        # This should raise an error
+        with pytest.raises(ValueError, match="Simulation mode requires either config_data or a valid config_path"):
+            await engine._load_config_async()
 
     @pytest.mark.asyncio
     async def test_global_override_power_multiplier_application(self):
         """Test global power multiplier override application (line 657)."""
-        engine = DynamicSimulationEngine()
+        # Create engine with actual config
+        config_path = Path(__file__).parent.parent / "examples" / "behavior_test_config.yaml"
+        engine = DynamicSimulationEngine(config_path=config_path)
 
-        # Load default config
+        # Load the config
         await engine._load_config_async()
 
         # Set up a global power multiplier override
@@ -72,9 +73,11 @@ class TestSimulationFinalEdgeCases:
     @pytest.mark.asyncio
     async def test_global_override_with_circuit_override_combination(self):
         """Test combination of circuit and global overrides to ensure line 657 is hit."""
-        engine = DynamicSimulationEngine()
+        # Create engine with actual config
+        config_path = Path(__file__).parent.parent / "examples" / "behavior_test_config.yaml"
+        engine = DynamicSimulationEngine(config_path=config_path)
 
-        # Load default config
+        # Load the config
         await engine._load_config_async()
 
         # Set up both circuit and global overrides
@@ -89,3 +92,15 @@ class TestSimulationFinalEdgeCases:
 
         # Power should be set to override (150.0) - global multiplier doesn't apply to power_override
         assert circuit_info["instantPowerW"] == 150.0  # power_override takes precedence
+
+
+# Standalone function to cover the serial_number error path
+
+
+def test_serial_number_no_config_or_override():
+    """Test that accessing serial_number with no config or override raises ValueError."""
+    from span_panel_api.simulation import DynamicSimulationEngine
+
+    engine = DynamicSimulationEngine()
+    with pytest.raises(ValueError, match="No configuration loaded - serial number not available"):
+        _ = engine.serial_number

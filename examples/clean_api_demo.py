@@ -12,10 +12,9 @@ Run with: poetry run python examples/clean_api_demo.py
 """
 
 import asyncio
-import json
 from pathlib import Path
 
-from src.span_panel_api.client import SpanPanelClient
+from span_panel_api.client import SpanPanelClient
 
 
 async def demo_clean_api():
@@ -38,15 +37,16 @@ async def demo_clean_api():
         circuits = await client.get_circuits()
         panel = await client.get_panel_state()
         storage = await client.get_storage_soe()
+        status = await client.get_status()
 
-        print(f"✅ Connected to simulated panel: {panel.serial_number}")
+        print(f"✅ Connected to simulated panel: {status.system.serial}")
         print(f"📊 Found {len(circuits.circuits.additional_properties)} circuits")
         print(f"⚡ Grid power: {panel.instant_grid_power_w:.1f}W")
-        print(f"🔋 Battery SOE: {storage.state_of_energy:.1%}")
+        print(f"🔋 Battery SOE: {storage.soe.percentage:.0f}%")
 
         # Show some interesting circuits
         print("\n🔌 Sample circuit data:")
-        for circuit_id, circuit in list(circuits.circuits.additional_properties.items())[:5]:
+        for _circuit_id, circuit in list(circuits.circuits.additional_properties.items())[:5]:
             print(f"  • {circuit.name}: {circuit.instant_power_w:.1f}W ({circuit.relay_state})")
 
     # Example 2: Dynamic overrides for testing scenarios
@@ -61,7 +61,10 @@ async def demo_clean_api():
         circuits_before = await client.get_circuits()
         ev_before = circuits_before.circuits.additional_properties.get("ev_charger_garage")
 
-        print(f"🚗 EV Charger before override: {ev_before.instant_power_w:.1f}W")
+        if ev_before:
+            print(f"🚗 EV Charger before override: {ev_before.instant_power_w:.1f}W")
+        else:
+            print("🚗 EV Charger circuit not found, using default values")
 
         # Apply dynamic override to simulate high-power charging
         await client.set_circuit_overrides(
@@ -72,7 +75,10 @@ async def demo_clean_api():
         circuits_after = await client.get_circuits()
         ev_after = circuits_after.circuits.additional_properties.get("ev_charger_garage")
 
-        print(f"🚗 EV Charger after override: {ev_after.instant_power_w:.1f}W")
+        if ev_after:
+            print(f"🚗 EV Charger after override: {ev_after.instant_power_w:.1f}W")
+        else:
+            print("🚗 EV Charger circuit not found after override")
         print("✅ Dynamic override applied successfully!")
 
         # Clear overrides to return to YAML-defined behavior
@@ -81,7 +87,10 @@ async def demo_clean_api():
         circuits_restored = await client.get_circuits()
         ev_restored = circuits_restored.circuits.additional_properties.get("ev_charger_garage")
 
-        print(f"🚗 EV Charger after clearing: {ev_restored.instant_power_w:.1f}W")
+        if ev_restored:
+            print(f"🚗 EV Charger after clearing: {ev_restored.instant_power_w:.1f}W")
+        else:
+            print("🚗 EV Charger circuit not found after clearing")
         print("✅ Overrides cleared - back to YAML configuration")
 
     # Example 3: Global overrides for stress testing
@@ -113,9 +122,9 @@ async def demo_clean_api():
     print("\n🏘️  Example 4: Different house configurations")
     print("-" * 40)
 
-    # Small house simulation (would use different YAML)
+    # Small house simulation (using same config for demo purposes)
     async with SpanPanelClient(
-        host="small-house", simulation_mode=True  # Uses default config if no path provided
+        host="small-house", simulation_mode=True, simulation_config_path=str(config_path)
     ) as small_client:
 
         small_circuits = await small_client.get_circuits()
@@ -127,9 +136,9 @@ async def demo_clean_api():
     ) as large_client:
 
         large_circuits = await large_client.get_circuits()
-        large_panel = await large_client.get_panel_state()
+        large_status = await large_client.get_status()
         print(f"🏰 Large house: {len(large_circuits.circuits.additional_properties)} circuits")
-        print(f"   Serial: {large_panel.serial_number}")
+        print(f"   Serial: {large_status.system.serial}")
 
     print("\n✨ Demo completed! Key benefits of the new system:")
     print("  • Clean API - no variation parameters on core methods")
@@ -169,12 +178,12 @@ async def demo_yaml_features():
                 print(f"  • {description}")
                 print(f"    {circuit.name}: {circuit.instant_power_w:.1f}W ({circuit.priority})")
 
-        print(f"\n📈 Realistic Behaviors Active:")
-        print(f"  • Time-based variations (lighting, solar)")
-        print(f"  • Equipment cycling (HVAC, appliances)")
-        print(f"  • Smart load response (EV charger)")
-        print(f"  • Seasonal efficiency changes")
-        print(f"  • Random noise (±2%) for realism")
+        print("\n📈 Realistic Behaviors Active:")
+        print("  • Time-based variations (lighting, solar)")
+        print("  • Equipment cycling (HVAC, appliances)")
+        print("  • Smart load response (EV charger)")
+        print("  • Seasonal efficiency changes")
+        print("  • Random noise (±2%) for realism")
 
 
 if __name__ == "__main__":

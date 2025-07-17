@@ -796,3 +796,223 @@ class TestUnmappedTabEdgeCases:
                             circuit.instant_power_w >= 0
                         ), f"Unmapped tab {tab_num} should consume power (positive): {circuit.instant_power_w}W"
                     assert circuit.name is not None
+
+
+class TestUnmappedTabEnergyAccumulation:
+    """Test energy accumulation for unmapped tabs 30 and 32 in 32-circuit panel."""
+
+    async def test_energy_accumulation_unmapped_tabs_30_32(self) -> None:
+        """Test that energy accumulates properly for solar production tabs 30 and 32."""
+        import asyncio
+        from pathlib import Path
+
+        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_32_circuit.yaml"
+
+        async with SpanPanelClient(
+            host="energy-accumulation-test", simulation_mode=True, simulation_config_path=str(config_path)
+        ) as client:
+
+            print("\n=== Energy Accumulation Test for Unmapped Tabs 30 & 32 ===")
+
+            # Get initial state
+            circuits_initial = await client.get_circuits()
+            circuit_data_initial = circuits_initial.circuits.additional_properties
+
+            # Verify tabs 30 and 32 exist and are configured for solar production
+            assert "unmapped_tab_30" in circuit_data_initial, "Tab 30 should be unmapped"
+            assert "unmapped_tab_32" in circuit_data_initial, "Tab 32 should be unmapped"
+
+            tab30_initial = circuit_data_initial["unmapped_tab_30"]
+            tab32_initial = circuit_data_initial["unmapped_tab_32"]
+
+            print(
+                f"Initial Tab 30: {tab30_initial.instant_power_w:.1f}W, "
+                f"Produced: {tab30_initial.produced_energy_wh:.2f}Wh, "
+                f"Consumed: {tab30_initial.consumed_energy_wh:.2f}Wh"
+            )
+            print(
+                f"Initial Tab 32: {tab32_initial.instant_power_w:.1f}W, "
+                f"Produced: {tab32_initial.produced_energy_wh:.2f}Wh, "
+                f"Consumed: {tab32_initial.consumed_energy_wh:.2f}Wh"
+            )
+
+            # Wait for energy accumulation (2 seconds should be enough for some accumulation)
+            print("\n--- Waiting 2 seconds for energy accumulation ---")
+            await asyncio.sleep(2)
+
+            # Get updated state
+            circuits_updated = await client.get_circuits()
+            circuit_data_updated = circuits_updated.circuits.additional_properties
+
+            tab30_updated = circuit_data_updated["unmapped_tab_30"]
+            tab32_updated = circuit_data_updated["unmapped_tab_32"]
+
+            print(
+                f"Updated Tab 30: {tab30_updated.instant_power_w:.1f}W, "
+                f"Produced: {tab30_updated.produced_energy_wh:.2f}Wh, "
+                f"Consumed: {tab30_updated.consumed_energy_wh:.2f}Wh"
+            )
+            print(
+                f"Updated Tab 32: {tab32_updated.instant_power_w:.1f}W, "
+                f"Produced: {tab32_updated.produced_energy_wh:.2f}Wh, "
+                f"Consumed: {tab32_updated.consumed_energy_wh:.2f}Wh"
+            )
+
+            # Calculate energy changes
+            tab30_produced_change = tab30_updated.produced_energy_wh - tab30_initial.produced_energy_wh
+            tab30_consumed_change = tab30_updated.consumed_energy_wh - tab30_initial.consumed_energy_wh
+            tab32_produced_change = tab32_updated.produced_energy_wh - tab32_initial.produced_energy_wh
+            tab32_consumed_change = tab32_updated.consumed_energy_wh - tab32_initial.consumed_energy_wh
+
+            print(f"\nEnergy Changes:")
+            print(f"Tab 30 - Produced: +{tab30_produced_change:.3f}Wh, Consumed: +{tab30_consumed_change:.3f}Wh")
+            print(f"Tab 32 - Produced: +{tab32_produced_change:.3f}Wh, Consumed: +{tab32_consumed_change:.3f}Wh")
+
+            # Test assertions for solar production tabs
+            # These tabs should accumulate produced energy when generating power (negative power)
+            if tab30_updated.instant_power_w < 0:  # If producing power
+                assert (
+                    tab30_produced_change >= 0
+                ), f"Tab 30 should accumulate produced energy when generating power, got {tab30_produced_change:.3f}Wh"
+                assert (
+                    tab30_consumed_change == 0
+                ), f"Tab 30 should not accumulate consumed energy when producing, got {tab30_consumed_change:.3f}Wh"
+            else:  # If not producing (nighttime)
+                # During non-production periods, no energy should accumulate
+                print("Tab 30 not producing (likely nighttime) - no energy accumulation expected")
+
+            if tab32_updated.instant_power_w < 0:  # If producing power
+                assert (
+                    tab32_produced_change >= 0
+                ), f"Tab 32 should accumulate produced energy when generating power, got {tab32_produced_change:.3f}Wh"
+                assert (
+                    tab32_consumed_change == 0
+                ), f"Tab 32 should not accumulate consumed energy when producing, got {tab32_consumed_change:.3f}Wh"
+            else:  # If not producing (nighttime)
+                # During non-production periods, no energy should accumulate
+                print("Tab 32 not producing (likely nighttime) - no energy accumulation expected")
+
+            # Energy values should never be negative
+            assert (
+                tab30_updated.produced_energy_wh >= 0
+            ), f"Tab 30 produced energy should never be negative: {tab30_updated.produced_energy_wh}"
+            assert (
+                tab30_updated.consumed_energy_wh >= 0
+            ), f"Tab 30 consumed energy should never be negative: {tab30_updated.consumed_energy_wh}"
+            assert (
+                tab32_updated.produced_energy_wh >= 0
+            ), f"Tab 32 produced energy should never be negative: {tab32_updated.produced_energy_wh}"
+            assert (
+                tab32_updated.consumed_energy_wh >= 0
+            ), f"Tab 32 consumed energy should never be negative: {tab32_updated.consumed_energy_wh}"
+
+            # Energy should be monotonically increasing (never decrease)
+            assert (
+                tab30_updated.produced_energy_wh >= tab30_initial.produced_energy_wh
+            ), "Tab 30 produced energy should only increase"
+            assert (
+                tab30_updated.consumed_energy_wh >= tab30_initial.consumed_energy_wh
+            ), "Tab 30 consumed energy should only increase"
+            assert (
+                tab32_updated.produced_energy_wh >= tab32_initial.produced_energy_wh
+            ), "Tab 32 produced energy should only increase"
+            assert (
+                tab32_updated.consumed_energy_wh >= tab32_initial.consumed_energy_wh
+            ), "Tab 32 consumed energy should only increase"
+
+            print("\n✅ Energy accumulation test passed for unmapped tabs 30 & 32!")
+
+    async def test_energy_accumulation_over_longer_period(self) -> None:
+        """Test energy accumulation over a longer period to verify proper time-based calculation."""
+        import asyncio
+        from pathlib import Path
+
+        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_32_circuit.yaml"
+
+        async with SpanPanelClient(
+            host="longer-energy-test", simulation_mode=True, simulation_config_path=str(config_path)
+        ) as client:
+
+            print("\n=== Longer Period Energy Accumulation Test ===")
+
+            # Record energy over multiple measurements
+            measurements = []
+            measurement_count = 5
+            wait_time = 1.0  # 1 second between measurements
+
+            for i in range(measurement_count):
+                circuits = await client.get_circuits()
+                circuit_data = circuits.circuits.additional_properties
+
+                tab30 = circuit_data["unmapped_tab_30"]
+                tab32 = circuit_data["unmapped_tab_32"]
+
+                measurements.append(
+                    {
+                        'time': i * wait_time,
+                        'tab30_power': tab30.instant_power_w,
+                        'tab30_produced': tab30.produced_energy_wh,
+                        'tab30_consumed': tab30.consumed_energy_wh,
+                        'tab32_power': tab32.instant_power_w,
+                        'tab32_produced': tab32.produced_energy_wh,
+                        'tab32_consumed': tab32.consumed_energy_wh,
+                    }
+                )
+
+                print(
+                    f"Measurement {i+1}: Tab30({tab30.instant_power_w:.1f}W, {tab30.produced_energy_wh:.3f}Wh), "
+                    f"Tab32({tab32.instant_power_w:.1f}W, {tab32.produced_energy_wh:.3f}Wh)"
+                )
+
+                if i < measurement_count - 1:  # Don't wait after last measurement
+                    await asyncio.sleep(wait_time)
+
+            # Analyze energy accumulation patterns
+            print(f"\n=== Energy Accumulation Analysis ===")
+
+            # Check that energy values are monotonically increasing
+            for i in range(1, len(measurements)):
+                current = measurements[i]
+                previous = measurements[i - 1]
+
+                # Energy should never decrease
+                assert (
+                    current['tab30_produced'] >= previous['tab30_produced']
+                ), f"Tab 30 produced energy decreased from {previous['tab30_produced']:.3f} to {current['tab30_produced']:.3f}"
+                assert (
+                    current['tab30_consumed'] >= previous['tab30_consumed']
+                ), f"Tab 30 consumed energy decreased from {previous['tab30_consumed']:.3f} to {current['tab30_consumed']:.3f}"
+                assert (
+                    current['tab32_produced'] >= previous['tab32_produced']
+                ), f"Tab 32 produced energy decreased from {previous['tab32_produced']:.3f} to {current['tab32_produced']:.3f}"
+                assert (
+                    current['tab32_consumed'] >= previous['tab32_consumed']
+                ), f"Tab 32 consumed energy decreased from {previous['tab32_consumed']:.3f} to {current['tab32_consumed']:.3f}"
+
+            # Calculate total energy change
+            first = measurements[0]
+            last = measurements[-1]
+            total_time_hours = (len(measurements) - 1) * wait_time / 3600  # Convert to hours
+
+            tab30_total_produced = last['tab30_produced'] - first['tab30_produced']
+            tab32_total_produced = last['tab32_produced'] - first['tab32_produced']
+
+            print(f"Total time period: {total_time_hours:.6f} hours")
+            print(f"Tab 30 total produced energy: {tab30_total_produced:.6f}Wh")
+            print(f"Tab 32 total produced energy: {tab32_total_produced:.6f}Wh")
+
+            # If panels were producing during test, energy accumulation should be reasonable
+            # Energy (Wh) = Power (W) × Time (h), so for 1500W over ~4 seconds = ~1.67Wh
+            if any(m['tab30_power'] < 0 for m in measurements):
+                expected_range = abs(last['tab30_power']) * total_time_hours
+                assert (
+                    tab30_total_produced <= expected_range * 1.5
+                ), f"Tab 30 energy accumulation seems too high: {tab30_total_produced:.6f}Wh for {expected_range:.6f}Wh expected"
+
+            if any(m['tab32_power'] < 0 for m in measurements):
+                expected_range = abs(last['tab32_power']) * total_time_hours
+                assert (
+                    tab32_total_produced <= expected_range * 1.5
+                ), f"Tab 32 energy accumulation seems too high: {tab32_total_produced:.6f}Wh for {expected_range:.6f}Wh expected"
+
+            print("✅ Longer period energy accumulation test passed!")

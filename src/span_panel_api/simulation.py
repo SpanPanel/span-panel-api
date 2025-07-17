@@ -344,6 +344,9 @@ class DynamicSimulationEngine:
         self._behavior_engine: RealisticBehaviorEngine | None = None
         self._dynamic_overrides: dict[str, Any] = {}
         self._global_overrides: dict[str, Any] = {}
+        # Energy accumulation tracking
+        self._circuit_energy_states: dict[str, dict[str, float]] = {}
+        self._last_energy_update_time = time.time()
 
     async def initialize_async(self) -> None:
         """Initialize the simulation engine asynchronously."""
@@ -493,6 +496,8 @@ class DynamicSimulationEngine:
         total_produced_energy = 0.0
         total_consumed_energy = 0.0
 
+        current_time = time.time()
+
         for circuit_def in self._config["circuits"]:
             template_name = circuit_def["template"]
             template = self._config["circuit_templates"][template_name]
@@ -503,22 +508,23 @@ class DynamicSimulationEngine:
                 final_template.update(circuit_def["overrides"])  # type: ignore[typeddict-item]
 
             # Generate realistic power using behavior engine
-            behavior_engine = RealisticBehaviorEngine(time.time(), self._config)
-            instant_power = behavior_engine.get_circuit_power(circuit_def["id"], final_template, time.time())
+            behavior_engine = RealisticBehaviorEngine(current_time, self._config)
+            instant_power = behavior_engine.get_circuit_power(circuit_def["id"], final_template, current_time)
 
-            # Generate energy values based on power
-            produced_energy = random.uniform(500, 2000) if instant_power < 0 else 0.0  # nosec B311
-            consumed_energy = random.uniform(10000, 100000) if instant_power > 0 else 0.0  # nosec B311
+            # Calculate accumulated energy based on power and time elapsed
+            produced_energy, consumed_energy = self._calculate_accumulated_energy(
+                circuit_def["id"], instant_power, current_time
+            )
 
             circuit_data = {
                 "id": circuit_def["id"],
                 "name": circuit_def["name"],
                 "relayState": "CLOSED",
                 "instantPowerW": instant_power,
-                "instantPowerUpdateTimeS": int(time.time()),
+                "instantPowerUpdateTimeS": int(current_time),
                 "producedEnergyWh": produced_energy,
                 "consumedEnergyWh": consumed_energy,
-                "energyAccumUpdateTimeS": int(time.time()),
+                "energyAccumUpdateTimeS": int(current_time),
                 "tabs": circuit_def["tabs"],
                 "priority": final_template["priority"],
                 "isUserControllable": final_template["relay_behavior"] == "controllable",
@@ -609,15 +615,36 @@ class DynamicSimulationEngine:
                 else:
                     # Default unmapped tab baseline consumption (10-200W)
                     baseline_power = random.uniform(10.0, 200.0)  # nosec B311
+
+                # Calculate accumulated energy for unmapped tabs
+                current_time = time.time()
+                circuit_id = f"unmapped_tab_{tab_num}"
+                produced_energy, consumed_energy = self._calculate_accumulated_energy(
+                    circuit_id, baseline_power, current_time
+                )
+
+                # For unmapped tabs:
+                # - Solar production (negative power) -> imported energy represents production
+                # - Consumption (positive power) -> exported energy represents consumption
+                if baseline_power < 0:
+                    # Solar production
+                    imported_energy = produced_energy
+                    exported_energy = consumed_energy
+                else:
+                    # Consumption
+                    imported_energy = consumed_energy
+                    exported_energy = produced_energy
             else:
                 baseline_power = 0.0  # Mapped tabs get power from circuit definitions
+                imported_energy = 0.0
+                exported_energy = 0.0
 
             branch = {
                 "id": f"branch_{tab_num}",
                 "relayState": "CLOSED",
                 "instantPowerW": baseline_power,
-                "importedActiveEnergyWh": random.uniform(100, 1000),  # nosec B311
-                "exportedActiveEnergyWh": 0.0,
+                "importedActiveEnergyWh": imported_energy,
+                "exportedActiveEnergyWh": exported_energy,
                 "measureStartTsMs": current_time_ms,
                 "measureDurationMs": 5000,  # 5 second measurement window
                 "isMeasureValid": True,
@@ -796,3 +823,39 @@ class DynamicSimulationEngine:
         # Apply global overrides
         if "power_multiplier" in self._global_overrides:
             circuit_info["instantPowerW"] *= self._global_overrides["power_multiplier"]  # pragma: no cover
+
+    def _calculate_accumulated_energy(
+        self, circuit_id: str, instant_power: float, current_time: float
+    ) -> tuple[float, float]:
+        """Calculate accumulated energy for a circuit based on power and time elapsed.
+
+        Args:
+            circuit_id: Circuit identifier
+            instant_power: Current power in watts (negative for production)
+            current_time: Current timestamp
+
+        Returns:
+            Tuple of (produced_energy_wh, consumed_energy_wh)
+        """
+        # Initialize energy state if not exists
+        if circuit_id not in self._circuit_energy_states:
+            self._circuit_energy_states[circuit_id] = {"produced_wh": 0.0, "consumed_wh": 0.0, "last_update": current_time}
+
+        energy_state = self._circuit_energy_states[circuit_id]
+        last_update = energy_state["last_update"]
+        time_elapsed_hours = (current_time - last_update) / 3600.0  # Convert seconds to hours
+
+        # Calculate energy increment based on current power
+        if instant_power > 0:
+            # Positive power = consumption
+            energy_increment = instant_power * time_elapsed_hours
+            energy_state["consumed_wh"] += energy_increment
+        elif instant_power < 0:
+            # Negative power = production
+            energy_increment = abs(instant_power) * time_elapsed_hours
+            energy_state["produced_wh"] += energy_increment
+
+        # Update last update time
+        energy_state["last_update"] = current_time
+
+        return energy_state["produced_wh"], energy_state["consumed_wh"]

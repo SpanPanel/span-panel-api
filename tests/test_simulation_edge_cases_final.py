@@ -45,7 +45,7 @@ class TestSimulationFinalEdgeCases:
         engine._config_data = None
 
         # This should raise an error
-        with pytest.raises(ValueError, match="Simulation mode requires either config_data or a valid config_path"):
+        with pytest.raises(ValueError, match="YAML configuration is required"):
             await engine._load_config_async()
 
     @pytest.mark.asyncio

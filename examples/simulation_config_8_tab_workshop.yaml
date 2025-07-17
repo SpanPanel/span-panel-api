@@ -10,10 +10,11 @@ circuit_templates:
   # Workshop-specific templates with realistic power ranges
 
   workshop_lighting:
-    power_range: [20.0, 80.0]
-    energy_behavior: "consume_only"
-    typical_power: 45.0
-    power_variation: 0.2
+    energy_profile:
+      mode: "consumer"
+      power_range: [20.0, 80.0]
+      typical_power: 45.0
+      power_variation: 0.2
     relay_behavior: "controllable"
     priority: "MUST_HAVE"
     time_of_day_profile:
@@ -23,10 +24,11 @@ circuit_templates:
       off_peak_multiplier: 0.1
 
   heavy_machinery:
-    power_range: [0.0, 3500.0]
-    energy_behavior: "consume_only"
-    typical_power: 2200.0
-    power_variation: 0.4
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 3500.0]
+      typical_power: 2200.0
+      power_variation: 0.4
     relay_behavior: "controllable"
     priority: "NON_ESSENTIAL"
     cycling_pattern:
@@ -36,10 +38,11 @@ circuit_templates:
       duty_cycle: 0.6
 
   power_tools:
-    power_range: [0.0, 1800.0]
-    energy_behavior: "consume_only"
-    typical_power: 400.0
-    power_variation: 0.6
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 1800.0]
+      typical_power: 400.0
+      power_variation: 0.6
     relay_behavior: "controllable"
     priority: "NON_ESSENTIAL"
     cycling_pattern:
@@ -49,10 +52,11 @@ circuit_templates:
       duty_cycle: 0.25
 
   hvac_workshop:
-    power_range: [0.0, 2400.0]
-    energy_behavior: "consume_only"
-    typical_power: 1500.0
-    power_variation: 0.3
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 2400.0]
+      typical_power: 1500.0
+      power_variation: 0.3
     relay_behavior: "controllable"
     priority: "NICE_TO_HAVE"
     time_of_day_profile:

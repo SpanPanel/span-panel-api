@@ -121,14 +121,12 @@ class TestPanelCircuitAlignment:
             print(f"Panel consumed: {panel_consumed}Wh, Circuit total: {total_consumed_energy}Wh")
 
             # Energy should now align exactly
-            assert panel_produced == total_produced_energy, (
-                f"Panel produced energy ({panel_produced}Wh) should exactly match "
-                f"circuit total ({total_produced_energy}Wh)"
-            )
-            assert panel_consumed == total_consumed_energy, (
-                f"Panel consumed energy ({panel_consumed}Wh) should exactly match "
-                f"circuit total ({total_consumed_energy}Wh)"
-            )
+            assert (
+                panel_produced == total_produced_energy
+            ), f"Panel produced energy ({panel_produced}Wh) should exactly match circuit total ({total_produced_energy}Wh)"
+            assert (
+                panel_consumed == total_consumed_energy
+            ), f"Panel consumed energy ({panel_consumed}Wh) should exactly match circuit total ({total_consumed_energy}Wh)"
 
     async def test_panel_circuit_consistency_across_calls(self):
         """Test that panel and circuit data remain consistent across multiple calls."""
@@ -158,14 +156,14 @@ class TestPanelCircuitAlignment:
 
                 # Verify power alignment (with current larger variation due to separate data generation)
                 power_difference = abs(panel_state.instant_grid_power_w - total_circuit_power)
-                assert power_difference <= 2000.0, f"Call {i+1}: Power misalignment too large ({power_difference}W)"
+                assert power_difference <= 2000.0, f"Call {i + 1}: Power misalignment too large ({power_difference}W)"
 
                 # Document that energy alignment is currently not exact due to separate data generation
                 # For now, just verify data is reasonable
-                assert panel_state.main_meter_energy.produced_energy_wh >= 0, f"Call {i+1}: Invalid produced energy"
-                assert panel_state.main_meter_energy.consumed_energy_wh >= 0, f"Call {i+1}: Invalid consumed energy"
-                assert total_produced_energy >= 0, f"Call {i+1}: Invalid circuit produced energy"
-                assert total_consumed_energy >= 0, f"Call {i+1}: Invalid circuit consumed energy"
+                assert panel_state.main_meter_energy.produced_energy_wh >= 0, f"Call {i + 1}: Invalid produced energy"
+                assert panel_state.main_meter_energy.consumed_energy_wh >= 0, f"Call {i + 1}: Invalid consumed energy"
+                assert total_produced_energy >= 0, f"Call {i + 1}: Invalid circuit produced energy"
+                assert total_consumed_energy >= 0, f"Call {i + 1}: Invalid circuit consumed energy"
 
     async def test_panel_circuit_alignment_with_mixed_behaviors(self):
         """Test alignment with mixed circuit behaviors (producing and consuming)."""
@@ -215,7 +213,7 @@ class TestPanelCircuitAlignment:
             circuits = await client.get_circuits()
 
             # Verify basic data integrity
-            assert hasattr(panel_state, 'dsm_state'), "Panel should have dsm_state"
+            assert hasattr(panel_state, "dsm_state"), "Panel should have dsm_state"
             assert len(circuits.circuits.additional_keys) > 0, "Should have circuits configured"
 
             # Verify timestamp consistency (should be close)

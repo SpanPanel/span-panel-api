@@ -1,27 +1,42 @@
 #!/usr/bin/env python3
-"""Live Bearer Token Authentication Test Script.
+"""
+Manual test script for Bearer token authentication with real panels.
 
-This script tests Bearer token authentication with a real SPAN panel to verify:
-- Bearer token formatting is correct
-- Valid tokens authenticate successfully
-- Invalid tokens are properly rejected
-- Client connects to real panel (not simulation)
+This script is designed to be run manually with real panel credentials,
+not as part of the automated test suite.
 
 Usage:
-    poetry run python scripts/test_live_auth.py <panel_ip> <jwt_token>
-
-Example:
-    poetry run python scripts/test_live_auth.py 192.168.1.100 eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+    python scripts/test_live_auth.py --panel-ip <IP> --jwt-token <TOKEN>
 """
 
+import argparse
 import asyncio
 import sys
+from typing import Optional
 
-from span_panel_api import SpanPanelClient
-from span_panel_api.exceptions import SpanPanelAuthError, SpanPanelConnectionError, SpanPanelTimeoutError
+# Import after sys path modification if needed
+try:
+    from span_panel_api import SpanPanelClient
+    from span_panel_api.exceptions import (
+        SpanPanelAuthError,
+        SpanPanelConnectionError,
+        SpanPanelTimeoutError,
+    )
+except ImportError:
+    # Development imports
+    sys.path.insert(0, "src")
+    from span_panel_api import SpanPanelClient
+    from span_panel_api.exceptions import (
+        SpanPanelAuthError,
+        SpanPanelConnectionError,
+        SpanPanelTimeoutError,
+    )
+
+# This prevents pytest from trying to collect this as a test
+pytest_plugins = []
 
 
-async def test_bearer_auth(panel_ip: str, jwt_token: str) -> None:  # pragma: no cover
+async def bearer_auth_validation(panel_ip: str, jwt_token: str) -> None:  # pragma: no cover
     """Test Bearer token authentication with a real panel."""
     print(f"🔍 Testing Bearer token authentication with panel: {panel_ip}")
     print(f"🎫 Token: {jwt_token[:20]}..." if len(jwt_token) > 20 else f"🎫 Token: {jwt_token}")
@@ -281,7 +296,7 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        asyncio.run(test_bearer_auth(panel_ip, jwt_token))
+        asyncio.run(bearer_auth_validation(panel_ip, jwt_token))
     except KeyboardInterrupt:
         print("\n⏹️  Test interrupted by user")
     except Exception as e:

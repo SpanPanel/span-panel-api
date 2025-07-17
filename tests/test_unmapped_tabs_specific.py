@@ -46,7 +46,7 @@ class TestUnmappedTabSpecificCoverage:
                             assert (
                                 circuit.instant_power_w >= 0
                             ), f"Unmapped tab {tab_num} should consume power: {circuit.instant_power_w}W"
-                        assert hasattr(circuit, 'relay_state')
+                        assert hasattr(circuit, "relay_state")
 
     @pytest.mark.asyncio
     async def test_unmapped_tab_edge_case_boundary(self):

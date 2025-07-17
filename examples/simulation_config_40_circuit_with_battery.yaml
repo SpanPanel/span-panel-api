@@ -9,26 +9,29 @@ panel_config:
 circuit_templates:
   # Standard templates
   lighting:
-    power_range: [5.0, 50.0]
-    energy_behavior: "consume_only"
-    typical_power: 25.0
-    power_variation: 0.15
+    energy_profile:
+      mode: "consumer"
+      power_range: [5.0, 50.0]
+      typical_power: 25.0
+      power_variation: 0.15
     relay_behavior: "controllable"
     priority: "MUST_HAVE"
 
   outlets:
-    power_range: [0.0, 1800.0]
-    energy_behavior: "mixed"
-    typical_power: 150.0
-    power_variation: 0.4
+    energy_profile:
+      mode: "bidirectional"
+      power_range: [0.0, 1800.0]
+      typical_power: 150.0
+      power_variation: 0.4
     relay_behavior: "controllable"
     priority: "MUST_HAVE"
 
   hvac:
-    power_range: [0.0, 3000.0]
-    energy_behavior: "consume_only"
-    typical_power: 1500.0
-    power_variation: 0.2
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 3000.0]
+      typical_power: 1500.0
+      power_variation: 0.2
     relay_behavior: "controllable"
     priority: "MUST_HAVE"
     cycling_pattern:
@@ -36,18 +39,20 @@ circuit_templates:
       off_duration: 1800  # 30 minutes
 
   solar:
-    power_range: [-8000.0, 0.0]
-    energy_behavior: "produce_only"
-    typical_power: -4000.0
-    power_variation: 0.4
+    energy_profile:
+      mode: "producer"
+      power_range: [-8000.0, 0.0]
+      typical_power: -4000.0
+      power_variation: 0.4
     relay_behavior: "non_controllable"
     priority: "MUST_HAVE"
 
   battery:
-    power_range: [-5000.0, 5000.0]  # Can charge or discharge
-    energy_behavior: "mixed"
-    typical_power: 0.0  # Neutral when idle
-    power_variation: 0.1
+    energy_profile:
+      mode: "bidirectional"
+      power_range: [-5000.0, 5000.0]  # Can charge or discharge
+      typical_power: 0.0  # Neutral when idle
+      power_variation: 0.1
     relay_behavior: "non_controllable"
     priority: "MUST_HAVE"
     battery_behavior:
@@ -241,8 +246,68 @@ circuits:
   # Tabs 38-40 are intentionally left unmapped to test unmapped tab creation
   # This will trigger the code in lines 866-876 of client.py
 
+# Circuit synchronizations for 240V battery systems and solar arrays
+tab_synchronizations:
+  - tabs: [33, 35]  # Battery System 1 - 240V split phase
+    behavior: "240v_split_phase"
+    power_split: "equal"
+    energy_sync: true
+    template: "battery_sync"
+
+  - tabs: [34, 36]  # Battery System 2 - 240V split phase
+    behavior: "240v_split_phase"
+    power_split: "equal"
+    energy_sync: true
+    template: "battery_sync"
+
+  - tabs: [29, 31]  # Solar Inverter 1 - 240V split phase
+    behavior: "240v_split_phase"
+    power_split: "equal"
+    energy_sync: true
+    template: "solar_sync"
+
+  - tabs: [30, 32]  # Solar Inverter 2 - 240V split phase
+    behavior: "240v_split_phase"
+    power_split: "equal"
+    energy_sync: true
+    template: "solar_sync"
+
 # Explicitly list unmapped tabs for testing purposes
-unmapped_tabs: []  # Empty - unmapped tabs will be auto-detected
+unmapped_tabs: [38, 39, 40]  # These tabs will have auto-generated behavior
+
+# Unmapped tab templates for tabs that should have behavior but remain unmapped
+unmapped_tab_templates:
+  "38":
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 1000.0]
+      typical_power: 200.0
+      power_variation: 0.3
+    relay_behavior: "non_controllable"
+    priority: "NON_ESSENTIAL"
+
+  "39":
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 800.0]
+      typical_power: 150.0
+      power_variation: 0.2
+    relay_behavior: "non_controllable"
+    priority: "NON_ESSENTIAL"
+
+  "40":
+    energy_profile:
+      mode: "producer"
+      power_range: [-1500.0, 0.0]
+      typical_power: -500.0
+      power_variation: 0.4
+    relay_behavior: "non_controllable"
+    priority: "MUST_HAVE"
+    time_of_day_profile:
+      enabled: true
+      peak_hours: [11, 12, 13, 14, 15]
+      peak_multiplier: 1.0
+      off_peak_multiplier: 0.0
 
 simulation_params:
   enable_realistic_behaviors: true

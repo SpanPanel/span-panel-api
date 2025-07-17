@@ -2,16 +2,17 @@
 # Demonstrates cycling, time-of-day, and smart behaviors
 
 panel_config:
-  serial_number: "SPAN-BEHAVIOR-001"
+  serial_number: "span-behavior-001"
   total_tabs: 12
   main_size: 200
 
 circuit_templates:
   cycling_hvac:
-    power_range: [0.0, 3500.0]
-    energy_behavior: "consume_only"
-    typical_power: 2800.0
-    power_variation: 0.1
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 3500.0]
+      typical_power: 2800.0
+      power_variation: 0.1
     relay_behavior: "controllable"
     priority: "NON_ESSENTIAL"
     cycling_pattern:
@@ -19,10 +20,11 @@ circuit_templates:
       off_duration: 1800  # 30 minutes off
 
   time_of_day_lighting:
-    power_range: [0.0, 100.0]
-    energy_behavior: "consume_only"
-    typical_power: 40.0
-    power_variation: 0.2
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 100.0]
+      typical_power: 40.0
+      power_variation: 0.2
     relay_behavior: "controllable"
     priority: "MUST_HAVE"
     time_of_day_profile:
@@ -30,53 +32,69 @@ circuit_templates:
       peak_hours: [18, 19, 20, 21, 22]
 
   smart_ev_charger:
-    power_range: [0.0, 7200.0]
-    energy_behavior: "consume_only"
-    typical_power: 6000.0
-    power_variation: 0.05
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 7200.0]
+      typical_power: 6000.0
+      power_variation: 0.05
     relay_behavior: "controllable"
     priority: "NON_ESSENTIAL"
     smart_behavior:
       max_power_reduction: 0.6  # Can reduce to 40% during grid stress
 
   variable_solar:
-    power_range: [-8000.0, 0.0]
-    energy_behavior: "produce_only"
-    typical_power: -4000.0
-    power_variation: 0.3
+    energy_profile:
+      mode: "producer"
+      power_range: [-8000.0, 0.0]
+      typical_power: -4000.0
+      power_variation: 0.3
     relay_behavior: "non_controllable"
     priority: "MUST_HAVE"
     time_of_day_profile:
       enabled: true
       peak_hours: [10, 11, 12, 13, 14]  # Solar peak production
 
+  lighting:
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 150.0]
+      typical_power: 75.0
+      power_variation: 0.15
+    relay_behavior: "controllable"
+    priority: "MUST_HAVE"
+
 circuits:
   - id: "main_hvac_cycling"
     name: "Main HVAC with Cycling"
     template: "cycling_hvac"
-    tabs: [1, 2]
+    tabs: [1, 3]  # L1 + L2 = Valid 240V
 
   - id: "outdoor_lights_tod"
     name: "Outdoor Lights (Time of Day)"
     template: "time_of_day_lighting"
-    tabs: [3, 4]
+    tabs: [2, 4]  # L1 + L2 = Valid 240V
 
   - id: "ev_charger_smart"
     name: "EV Charger (Smart)"
     template: "smart_ev_charger"
-    tabs: [5, 6]
+    tabs: [5, 7]  # L1 + L2 = Valid 240V
 
   - id: "solar_array_variable"
     name: "Solar Array (Variable)"
     template: "variable_solar"
-    tabs: [7, 8]
+    tabs: [6, 8]  # L1 + L2 = Valid 240V
 
   - id: "backup_hvac_cycling"
     name: "Backup HVAC with Cycling"
     template: "cycling_hvac"
-    tabs: [9, 10]
+    tabs: [9, 11]  # L1 + L2 = Valid 240V
 
-unmapped_tabs: [11, 12]
+  - id: "living_room_lights"
+    name: "Living Room Lights"
+    template: "lighting"
+    tabs: [10]  # 120V circuit
+
+unmapped_tabs: [12]
 
 simulation_params:
   update_interval: 3

@@ -39,7 +39,7 @@ radon = "*"
 twine = "*"
 vulture = "^2.14"
 types-pyyaml = "^6.0.12.20250516"
-coverage = "^7.9.2"
+coverage = "*"
 
 [tool.poetry.group.generate.dependencies]
 openapi-python-client = "^0.25.2"
@@ -131,7 +131,9 @@ module = [
 ]
 ignore_missing_imports = true
 
+
 [tool.coverage.run]
+data_file = ".local_coverage_data"
 source = ["src/span_panel_api"]
 omit = [
     "src/span_panel_api/generated_client/*",

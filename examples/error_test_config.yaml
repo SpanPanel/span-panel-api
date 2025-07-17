@@ -1,0 +1,31 @@
+# Error Test Configuration
+# Used for testing error conditions and edge cases
+
+panel_config:
+  serial_number: "ERROR-TEST-001"
+  total_tabs: 4
+  main_size: 100
+
+circuit_templates:
+  minimal_consumer:
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 50.0]
+      typical_power: 25.0
+      power_variation: 0.1
+    relay_behavior: "controllable"
+    priority: "NON_ESSENTIAL"
+
+circuits:
+  - id: "error_test_circuit"
+    name: "Error Test Circuit"
+    template: "minimal_consumer"
+    tabs: [1]
+
+unmapped_tabs: [2, 3, 4]
+
+simulation_params:
+  update_interval: 1
+  time_acceleration: 1.0
+  noise_factor: 0.05
+  enable_realistic_behaviors: false

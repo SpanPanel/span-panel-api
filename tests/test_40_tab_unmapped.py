@@ -42,8 +42,9 @@ class Test40TabUnmappedCoverage:
 
                 # These assertions test the virtual circuit creation in lines 866-876
                 assert circuit.name is not None, f"Unmapped tab {tab_num} should have a name"
-                assert circuit.instant_power_w >= 0, f"Unmapped tab {tab_num} should have non-negative power"
-                assert hasattr(circuit, 'relay_state'), f"Unmapped tab {tab_num} should have relay_state"
+                # Power can be positive (consumer) or negative (producer)
+                assert isinstance(circuit.instant_power_w, (int, float)), f"Unmapped tab {tab_num} should have numeric power"
+                assert hasattr(circuit, "relay_state"), f"Unmapped tab {tab_num} should have relay_state"
                 assert circuit.relay_state in [
                     "OPEN",
                     "CLOSED",

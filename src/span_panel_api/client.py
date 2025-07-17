@@ -240,6 +240,7 @@ class SpanPanelClient:
         # Simulation configuration
         simulation_mode: bool = False,  # Enable simulation mode
         simulation_config_path: str | None = None,  # Path to YAML simulation config
+        simulation_start_time: str | None = None,  # Override simulation start time (ISO format)
     ) -> None:
         """Initialize the SPAN Panel client.
 
@@ -254,6 +255,7 @@ class SpanPanelClient:
             cache_window: Panel data cache window duration in seconds (default: 1.0)
             simulation_mode: Enable simulation mode for testing (default: False)
             simulation_config_path: Path to YAML simulation configuration file
+            simulation_start_time: Override simulation start time (ISO format, e.g., "2024-06-15T12:00:00")
         """
         self._host = host
         self._port = port
@@ -279,6 +281,7 @@ class SpanPanelClient:
         # Initialize simulation engine if in simulation mode
         self._simulation_engine: DynamicSimulationEngine | None = None
         self._simulation_initialized = False
+        self._simulation_start_time_override = simulation_start_time
         if simulation_mode:
             # In simulation mode, use the host as the serial number for device identification
             self._simulation_engine = DynamicSimulationEngine(serial_number=host, config_path=simulation_config_path)
@@ -302,6 +305,11 @@ class SpanPanelClient:
 
         if self._simulation_engine is not None:
             await self._simulation_engine.initialize_async()
+
+            # Override simulation start time if provided
+            if self._simulation_start_time_override:
+                self._simulation_engine.override_simulation_start_time(self._simulation_start_time_override)
+
             self._simulation_initialized = True
 
     def _convert_raw_to_circuits_out(self, raw_data: dict[str, Any]) -> CircuitsOut:
@@ -513,10 +521,10 @@ class SpanPanelClient:
                 raise SpanPanelAuthError(f"Authentication failed: Status {e.status_code}") from e
             raise SpanPanelAuthError("Authentication required") from e
         if e.status_code in RETRIABLE_ERROR_CODES:
-            raise SpanPanelRetriableError(f"Retriable server error {e.status_code}: {e}", e.status_code) from e
+            raise SpanPanelRetriableError(f"Retriable server error {e.status_code}: {e}") from e
         if e.status_code in SERVER_ERROR_CODES:
-            raise SpanPanelServerError(f"Server error {e.status_code}: {e}", e.status_code) from e
-        raise SpanPanelAPIError(f"HTTP {e.status_code}: {e}", e.status_code) from e
+            raise SpanPanelServerError(f"Server error {e.status_code}: {e}") from e
+        raise SpanPanelAPIError(f"HTTP {e.status_code}: {e}") from e
 
     def _get_client_for_endpoint(self, requires_auth: bool = True) -> AuthenticatedClient | Client:
         """Get the appropriate client for an endpoint.
@@ -809,13 +817,13 @@ class SpanPanelClient:
     async def _adjust_panel_power_for_virtual_circuits(self, panel_state: PanelState) -> None:
         """Adjust panel power to include unmapped tab power for consistency with circuit totals."""
         if not hasattr(panel_state, "branches") or not panel_state.branches:
-            return  # pragma: no cover
+            return
 
         # Get the current circuits to find mapped tabs
         cache_key = "full_sim_data"
-        cached_full_data = self._api_cache.get_cached_data(cache_key)  # pragma: no cover
+        cached_full_data = self._api_cache.get_cached_data(cache_key)
         if cached_full_data is None:
-            return  # pragma: no cover
+            return
 
         circuits_data = cached_full_data.get("circuits", {})
         circuits_out = self._convert_raw_to_circuits_out(circuits_data)

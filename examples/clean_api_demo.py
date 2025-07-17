@@ -140,7 +140,7 @@ async def demo_clean_api():
         print(f"🏰 Large house: {len(large_circuits.circuits.additional_properties)} circuits")
         print(f"   Serial: {large_status.system.serial}")
 
-    print("\n✨ Demo completed! Key benefits of the new system:")
+    print("\n✨ Demo:")
     print("  • Clean API - no variation parameters on core methods")
     print("  • YAML configuration defines realistic behaviors")
     print("  • Dynamic overrides for temporary test scenarios")

@@ -63,8 +63,8 @@ async def mock_time_progression(start_time: Optional[datetime] = None, time_step
         nonlocal current_time
         current_time += timedelta(seconds=seconds)
 
-    with patch('time.time', side_effect=mock_time), patch('datetime.datetime.now', side_effect=mock_datetime_now):
-        yield {'advance': advance_time, 'current_time': lambda: current_time}
+    with patch("time.time", side_effect=mock_time), patch("datetime.datetime.now", side_effect=mock_datetime_now):
+        yield {"advance": advance_time, "current_time": lambda: current_time}
 
 
 async def wait_for_condition(

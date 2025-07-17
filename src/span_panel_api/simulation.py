@@ -18,42 +18,7 @@ from typing import Any, NotRequired, TypedDict
 
 import yaml
 
-
-# Legacy variation types for backwards compatibility
-class CircuitVariation(TypedDict, total=False):
-    """Variation parameters for individual circuits."""
-
-    power_variation: float
-    energy_variation: float
-    relay_state: str
-    priority: str
-
-
-class BranchVariation(TypedDict, total=False):
-    """Variation parameters for panel branches."""
-
-    power_variation: float
-    relay_state: str
-
-
-class PanelVariation(TypedDict, total=False):
-    """Variation parameters for panel-level data."""
-
-    main_relay_state: str
-    dsm_grid_state: str
-    dsm_state: str
-    instant_grid_power_variation: float
-
-
-class StatusVariation(TypedDict, total=False):
-    """Variation parameters for status data."""
-
-    door_state: str
-    main_relay_state: str
-    proximity_proven: bool
-    eth0_link: bool
-    wlan_link: bool
-    wwwan_link: bool
+from span_panel_api.exceptions import SimulationConfigurationError
 
 
 # New YAML configuration types
@@ -86,13 +51,25 @@ class SmartBehavior(TypedDict, total=False):
     max_power_reduction: float  # 0.0 to 1.0
 
 
+class EnergyProfile(TypedDict):
+    """Energy profile defining production/consumption behavior."""
+
+    mode: str  # "consumer", "producer", "bidirectional"
+    power_range: list[float]  # [min, max] in Watts (negative for production)
+    typical_power: float  # Watts (negative for production)
+    power_variation: float  # 0.0 to 1.0 (percentage)
+
+
+class EnergyProfileExtended(EnergyProfile, total=False):
+    """Extended energy profile with optional features."""
+
+    efficiency: float  # Energy conversion efficiency (0.0 to 1.0)
+
+
 class CircuitTemplate(TypedDict):
     """Circuit template configuration."""
 
-    power_range: list[float]  # [min, max] in Watts
-    energy_behavior: str  # "consume_only", "produce_only", "mixed"
-    typical_power: float  # Watts
-    power_variation: float  # 0.0 to 1.0 (percentage)
+    energy_profile: EnergyProfileExtended
     relay_behavior: str  # "controllable", "non_controllable"
     priority: str  # "MUST_HAVE", "NON_ESSENTIAL"
 
@@ -120,6 +97,16 @@ class CircuitDefinitionExtended(CircuitDefinition, total=False):
     overrides: dict[str, Any]
 
 
+class TabSynchronization(TypedDict):
+    """Tab synchronization configuration."""
+
+    tabs: list[int]
+    behavior: str  # e.g., "240v_split_phase", "generator_paralleled"
+    power_split: str  # "equal", "primary_secondary", "custom_ratio"
+    energy_sync: bool
+    template: str  # Template name to apply to synchronized group
+
+
 class SimulationParams(TypedDict, total=False):
     """Global simulation parameters."""
 
@@ -127,6 +114,8 @@ class SimulationParams(TypedDict, total=False):
     time_acceleration: float  # Multiplier for time progression
     noise_factor: float  # Random noise percentage
     enable_realistic_behaviors: bool
+    simulation_start_time: str  # ISO format datetime string (e.g., "2024-06-15T12:00:00")
+    use_simulation_time: bool  # Whether to use simulation time vs system time
 
 
 class SimulationConfig(TypedDict):
@@ -138,6 +127,7 @@ class SimulationConfig(TypedDict):
     unmapped_tabs: list[int]
     simulation_params: SimulationParams
     unmapped_tab_templates: NotRequired[dict[str, CircuitTemplateExtended]]
+    tab_synchronizations: NotRequired[list[TabSynchronization]]
 
 
 class RealisticBehaviorEngine:
@@ -171,7 +161,8 @@ class RealisticBehaviorEngine:
         if relay_state == "OPEN":
             return 0.0
 
-        base_power = template["typical_power"]
+        energy_profile = template["energy_profile"]
+        base_power = energy_profile["typical_power"]
 
         # Apply time-of-day modulation
         if template.get("time_of_day_profile", {}).get("enabled", False):
@@ -191,7 +182,7 @@ class RealisticBehaviorEngine:
             base_power = self._apply_smart_behavior(base_power, template, current_time)
 
         # Add random variation
-        variation = template.get("power_variation", 0.1)
+        variation = energy_profile.get("power_variation", 0.1)
         noise_factor = self._config["simulation_params"].get("noise_factor", 0.02)
         total_variation = variation + noise_factor
 
@@ -199,7 +190,7 @@ class RealisticBehaviorEngine:
         final_power = base_power * power_multiplier
 
         # Clamp to template range
-        min_power, max_power = template["power_range"]
+        min_power, max_power = energy_profile["power_range"]
         final_power = max(min_power, min(max_power, final_power))
 
         return final_power
@@ -208,12 +199,13 @@ class RealisticBehaviorEngine:
         self, base_power: float, template: CircuitTemplateExtended, current_time: float
     ) -> float:
         """Apply time-of-day power modulation."""
-        current_hour = int((current_time % 86400) / 3600)  # Hour of day (0-23)
+        # Use local time for hour calculation instead of UTC-based modulo
+        current_hour = datetime.fromtimestamp(current_time).hour
 
         profile = template.get("time_of_day_profile", {})
         peak_hours = profile.get("peak_hours", [])
 
-        if template.get("energy_behavior") == "produce_only":
+        if template["energy_profile"]["mode"] == "producer":
             # Solar production pattern
             if 6 <= current_hour <= 18:
                 # Daylight hours - use sine curve
@@ -273,45 +265,55 @@ class RealisticBehaviorEngine:
 
         battery_config_raw = template.get("battery_behavior", {})
         if not isinstance(battery_config_raw, dict):
-            return base_power  # pragma: no cover
+            return base_power
         battery_config: dict[str, Any] = battery_config_raw
+
+        # Check if battery behavior is enabled
+        if not battery_config.get("enabled", True):
+            return base_power
 
         charge_hours: list[int] = battery_config.get("charge_hours", [])
         discharge_hours: list[int] = battery_config.get("discharge_hours", [])
         idle_hours: list[int] = battery_config.get("idle_hours", [])
 
-        max_charge_power: float = battery_config.get("max_charge_power", -3000.0)
-        max_discharge_power: float = battery_config.get("max_discharge_power", 2500.0)
-
         if current_hour in charge_hours:
-            # Solar hours - battery charges (negative power)
-            solar_intensity = self._get_solar_intensity_from_config(current_hour, battery_config)  # pragma: no cover
-            charge_power = max_charge_power * solar_intensity  # pragma: no cover
-            return charge_power  # pragma: no cover
+            return self._get_charge_power(battery_config, current_hour)
 
         if current_hour in discharge_hours:
-            # Peak demand hours - battery discharges (positive power)
-            demand_factor = self._get_demand_factor_from_config(current_hour, battery_config)  # pragma: no cover
-            discharge_power = max_discharge_power * demand_factor  # pragma: no cover
-            return discharge_power  # pragma: no cover
+            return self._get_discharge_power(battery_config, current_hour)
 
         if current_hour in idle_hours:
-            # Low activity hours - minimal power flow
-            idle_range: list[float] = battery_config.get("idle_power_range", [-100.0, 100.0])
-            return random.uniform(idle_range[0], idle_range[1])  # nosec B311
+            return self._get_idle_power(battery_config)
 
-        # Transition hours - gradual change  # pragma: no cover
-        return base_power * 0.1  # pragma: no cover
+        # Transition hours - gradual change
+        return base_power * 0.1
+
+    def _get_charge_power(self, battery_config: dict[str, Any], current_hour: int) -> float:
+        """Get charging power for the current hour."""
+        max_charge_power: float = battery_config.get("max_charge_power", -3000.0)
+        solar_intensity = self._get_solar_intensity_from_config(current_hour, battery_config)
+        return max_charge_power * solar_intensity
+
+    def _get_discharge_power(self, battery_config: dict[str, Any], current_hour: int) -> float:
+        """Get discharging power for the current hour."""
+        max_discharge_power: float = battery_config.get("max_discharge_power", 2500.0)
+        demand_factor = self._get_demand_factor_from_config(current_hour, battery_config)
+        return max_discharge_power * demand_factor
+
+    def _get_idle_power(self, battery_config: dict[str, Any]) -> float:
+        """Get idle power (minimal power flow during low activity hours)."""
+        idle_range: list[float] = battery_config.get("idle_power_range", [-100.0, 100.0])
+        return random.uniform(idle_range[0], idle_range[1])  # nosec B311
 
     def _get_solar_intensity_from_config(self, hour: int, battery_config: dict[str, Any]) -> float:
         """Get solar intensity from YAML configuration."""
-        solar_profile: dict[int, float] = battery_config.get("solar_intensity_profile", {})  # pragma: no cover
-        return solar_profile.get(hour, 0.1)  # Default to minimal intensity  # pragma: no cover
+        solar_profile: dict[int, float] = battery_config.get("solar_intensity_profile", {})
+        return solar_profile.get(hour, 0.1)  # Default to minimal intensity
 
     def _get_demand_factor_from_config(self, hour: int, battery_config: dict[str, Any]) -> float:
         """Get demand factor from YAML configuration."""
-        demand_profile: dict[int, float] = battery_config.get("demand_factor_profile", {})  # pragma: no cover
-        return demand_profile.get(hour, 0.3)  # Default to low demand  # pragma: no cover
+        demand_profile: dict[int, float] = battery_config.get("demand_factor_profile", {})
+        return demand_profile.get(hour, 0.3)  # Default to low demand
 
 
 class DynamicSimulationEngine:
@@ -339,6 +341,9 @@ class DynamicSimulationEngine:
         self._fixture_loading_lock: asyncio.Lock | None = None
         self._lock_init_lock = threading.Lock()
         self._simulation_start_time = time.time()
+        self._simulation_time_offset = 0.0  # Offset between real time and simulation time
+        self._use_simulation_time = False
+        self._simulation_start_time_override: str | None = None
         self._last_update_times: dict[str, float] = {}
         self._circuit_states: dict[str, dict[str, Any]] = {}
         self._behavior_engine: RealisticBehaviorEngine | None = None
@@ -347,6 +352,9 @@ class DynamicSimulationEngine:
         # Energy accumulation tracking
         self._circuit_energy_states: dict[str, dict[str, float]] = {}
         self._last_energy_update_time = time.time()
+        # Tab synchronization tracking
+        self._tab_sync_groups: dict[int, str] = {}  # tab_number -> sync_group_id
+        self._sync_group_power: dict[str, float] = {}  # sync_group_id -> total_power
 
     async def initialize_async(self) -> None:
         """Initialize the simulation engine asynchronously."""
@@ -361,17 +369,25 @@ class DynamicSimulationEngine:
 
         async with self._fixture_loading_lock:
             # Double-check after acquiring lock
-            if self._base_data is not None:  # pragma: no cover
-                return  # pragma: no cover
+            if self._base_data is not None:
+                return
 
             # Load configuration
             await self._load_config_async()
 
             # Generate data from YAML config (required)
-            if not self._config:  # pragma: no cover
-                raise ValueError("YAML configuration is required")  # pragma: no cover
+            if not self._config:
+                raise ValueError("YAML configuration is required")
 
+            self._initialize_tab_synchronizations()
             self._base_data = await self._generate_base_data_from_config()
+            self._initialize_simulation_time()
+
+            # Apply simulation start time override if set before initialization
+            if self._simulation_start_time_override:
+                self.override_simulation_start_time(self._simulation_start_time_override)
+                self._simulation_start_time_override = None
+
             self._behavior_engine = RealisticBehaviorEngine(self._simulation_start_time, self._config)
 
     async def _load_config_async(self) -> None:
@@ -379,19 +395,99 @@ class DynamicSimulationEngine:
         if self._config_data:
             # Validate provided config data
             self._validate_yaml_config(self._config_data)
-            self._config = self._config_data  # pragma: no cover
-        elif self._config_path and self._config_path.exists():  # pragma: no cover
-            loop = asyncio.get_event_loop()  # pragma: no cover
-            self._config = await loop.run_in_executor(None, self._load_yaml_config, self._config_path)  # pragma: no cover
-        else:  # pragma: no cover
+            self._config = self._config_data
+        elif self._config_path and self._config_path.exists():
+            loop = asyncio.get_event_loop()
+            self._config = await loop.run_in_executor(None, self._load_yaml_config, self._config_path)
+        else:
             # No config provided - simulation cannot start
-            raise ValueError(
-                "Simulation mode requires either config_data or a valid config_path with YAML configuration"
-            )  # pragma: no cover
+            raise ValueError("YAML configuration is required")
 
         # Override serial number if provided
         if self._serial_number_override and self._config:
             self._config["panel_config"]["serial_number"] = self._serial_number_override
+
+    def _initialize_simulation_time(self) -> None:
+        """Initialize simulation time based on configuration."""
+        if not self._config:
+            raise SimulationConfigurationError("Simulation configuration is required for simulation time initialization.")
+
+        sim_params = self._config.get("simulation_params", {})
+        self._use_simulation_time = sim_params.get("use_simulation_time", False)
+
+        if self._use_simulation_time:
+            # Parse simulation start time if provided
+            start_time_str = sim_params.get("simulation_start_time")
+            if start_time_str:
+                try:
+                    # Parse ISO format datetime as local time (no timezone conversion)
+                    if start_time_str.endswith("Z"):
+                        # Remove Z suffix and treat as local time
+                        start_time_str = start_time_str[:-1]
+                    sim_start_dt = datetime.fromisoformat(start_time_str)
+                    sim_start_timestamp = sim_start_dt.timestamp()
+
+                    # Calculate offset from real time to simulation time
+                    real_start_time = self._simulation_start_time
+                    self._simulation_time_offset = sim_start_timestamp - real_start_time
+                except (ValueError, TypeError) as exc:
+                    raise SimulationConfigurationError(f"Invalid simulation_start_time: {start_time_str}") from exc
+
+    def get_current_simulation_time(self) -> float:
+        """Get current time for simulation (either real time or simulation time)."""
+        current_real_time = time.time()
+
+        if self._use_simulation_time:
+            # Apply time acceleration if configured
+            sim_params = self._config.get("simulation_params", {}) if self._config else {}
+            time_acceleration = sim_params.get("time_acceleration", 1.0)
+
+            # Calculate elapsed time since simulation start
+            elapsed_real_time = current_real_time - self._simulation_start_time
+            elapsed_sim_time = elapsed_real_time * time_acceleration
+
+            # Return simulation time with offset
+            return self._simulation_start_time + self._simulation_time_offset + elapsed_sim_time
+
+        return current_real_time
+
+    def override_simulation_start_time(self, start_time_str: str) -> None:
+        """Override the simulation start time after initialization.
+
+        Args:
+            start_time_str: ISO format datetime string (e.g., "2024-06-15T12:00:00")
+        """
+        if not self._config:
+            # If no config is loaded, just store the override for later use
+            # This allows the method to be called before initialization
+            self._simulation_start_time_override = start_time_str
+            return
+
+        # Enable simulation time and set the override
+        self._use_simulation_time = True
+
+        # Update the config to reflect the override
+        if "simulation_params" not in self._config:
+            self._config["simulation_params"] = {}
+
+        self._config["simulation_params"]["use_simulation_time"] = True
+        self._config["simulation_params"]["simulation_start_time"] = start_time_str
+
+        try:
+            # Parse ISO format datetime as local time (no timezone conversion)
+            if start_time_str.endswith("Z"):
+                # Remove Z suffix and treat as local time
+                start_time_str = start_time_str[:-1]
+            sim_start_dt = datetime.fromisoformat(start_time_str)
+            sim_start_timestamp = sim_start_dt.timestamp()
+
+            # Calculate offset from real time to simulation time
+            real_start_time = self._simulation_start_time
+            self._simulation_time_offset = sim_start_timestamp - real_start_time
+        except (ValueError, TypeError):
+            # Handle invalid datetime format gracefully - fall back to real time
+            self._use_simulation_time = False
+            return
 
     def _load_yaml_config(self, config_path: Path) -> SimulationConfig:
         """Load YAML configuration file synchronously."""
@@ -442,10 +538,7 @@ class DynamicSimulationEngine:
             raise ValueError(f"Circuit template '{template_name}' must be a dictionary")
 
         required_template_fields = [
-            "power_range",
-            "energy_behavior",
-            "typical_power",
-            "power_variation",
+            "energy_profile",
             "relay_behavior",
             "priority",
         ]
@@ -482,14 +575,14 @@ class DynamicSimulationEngine:
     async def _generate_base_data_from_config(self) -> dict[str, dict[str, Any]]:
         """Generate base simulation data from YAML configuration."""
         if not self._config or not self._config["circuits"]:
-            raise ValueError("YAML configuration with circuits is required")
+            raise SimulationConfigurationError("YAML configuration with circuits is required for data generation")
 
         return await self._generate_from_config()
 
     async def _generate_from_config(self) -> dict[str, dict[str, Any]]:
         """Generate simulation data from configuration."""
         if not self._config:
-            raise ValueError("Configuration not loaded")
+            raise SimulationConfigurationError("Configuration not loaded for data generation")
 
         circuits_data = {}
         total_power = 0.0
@@ -509,12 +602,41 @@ class DynamicSimulationEngine:
 
             # Generate realistic power using behavior engine
             behavior_engine = RealisticBehaviorEngine(current_time, self._config)
-            instant_power = behavior_engine.get_circuit_power(circuit_def["id"], final_template, current_time)
+            base_power = behavior_engine.get_circuit_power(circuit_def["id"], final_template, current_time)
+
+            # Check if this circuit uses synchronized tabs
+            circuit_tabs = circuit_def["tabs"]
+            sync_config = None
+            for tab_num in circuit_tabs:
+                tab_sync = self._get_tab_sync_config(tab_num)
+                if tab_sync:
+                    sync_config = tab_sync
+                    break
+
+            # Apply synchronization if needed
+            if sync_config and len(circuit_tabs) > 1:
+                # For multi-tab circuits, use the total power (don't split)
+                instant_power = base_power
+                # Store total power for synchronization with unmapped tabs in same group
+                for tab_num in circuit_tabs:
+                    if tab_num in self._tab_sync_groups:
+                        sync_group_id = self._tab_sync_groups[tab_num]
+                        self._sync_group_power[sync_group_id] = base_power
+            else:
+                instant_power = base_power
 
             # Calculate accumulated energy based on power and time elapsed
-            produced_energy, consumed_energy = self._calculate_accumulated_energy(
-                circuit_def["id"], instant_power, current_time
-            )
+            # For synchronized circuits, use shared energy calculation
+            if sync_config and sync_config.get("energy_sync", False):
+                # Use the first tab for energy synchronization reference
+                first_tab = circuit_tabs[0]
+                produced_energy, consumed_energy = self._synchronize_energy_for_tab(
+                    first_tab, circuit_def["id"], instant_power, current_time
+                )
+            else:
+                produced_energy, consumed_energy = self._calculate_accumulated_energy(
+                    circuit_def["id"], instant_power, current_time
+                )
 
             circuit_data = {
                 "id": circuit_def["id"],
@@ -557,7 +679,7 @@ class DynamicSimulationEngine:
     ) -> dict[str, Any]:
         """Generate panel data aggregated from circuit data."""
         if not self._config:
-            raise ValueError("Configuration not loaded")
+            raise SimulationConfigurationError("Configuration not loaded")
 
         # Panel grid power should exactly match the total of all circuit power
         # Negative values indicate production (solar), positive indicates consumption
@@ -600,7 +722,8 @@ class DynamicSimulationEngine:
 
         for tab_num in range(1, total_tabs + 1):
             # Create a branch for each tab with all required fields
-            current_time_ms = int(time.time() * 1000)
+            current_sim_time = self.get_current_simulation_time()
+            current_time_ms = int(current_sim_time * 1000)
 
             # Handle unmapped tabs
             if tab_num not in mapped_tabs:
@@ -608,20 +731,38 @@ class DynamicSimulationEngine:
                 unmapped_tab_config = self._config.get("unmapped_tab_templates", {}).get(str(tab_num))
                 if unmapped_tab_config:
                     # Apply behavior engine to unmapped tab with its template
-                    behavior_engine = RealisticBehaviorEngine(time.time(), self._config)
-                    baseline_power = behavior_engine.get_circuit_power(
-                        f"unmapped_tab_{tab_num}", unmapped_tab_config, time.time()
+                    behavior_engine = RealisticBehaviorEngine(self._simulation_start_time, self._config)
+                    current_sim_time = self.get_current_simulation_time()
+                    base_power = behavior_engine.get_circuit_power(
+                        f"unmapped_tab_{tab_num}", unmapped_tab_config, current_sim_time
                     )
+
+                    # Apply tab synchronization if configured
+                    sync_config = self._get_tab_sync_config(tab_num)
+                    if sync_config:
+                        baseline_power = self._get_synchronized_power(tab_num, base_power, sync_config)
+                    else:
+                        baseline_power = base_power
                 else:
                     # Default unmapped tab baseline consumption (10-200W)
                     baseline_power = random.uniform(10.0, 200.0)  # nosec B311
 
-                # Calculate accumulated energy for unmapped tabs
-                current_time = time.time()
+                # Calculate accumulated energy for unmapped tabs with synchronization support
+                current_time = self.get_current_simulation_time()
                 circuit_id = f"unmapped_tab_{tab_num}"
-                produced_energy, consumed_energy = self._calculate_accumulated_energy(
-                    circuit_id, baseline_power, current_time
-                )
+
+                # Check if this tab has synchronization configuration
+                sync_config = self._get_tab_sync_config(tab_num)
+                if sync_config and sync_config.get("energy_sync", False):
+                    # Use synchronized energy calculation
+                    produced_energy, consumed_energy = self._synchronize_energy_for_tab(
+                        tab_num, circuit_id, baseline_power, current_time
+                    )
+                else:
+                    # Use regular energy calculation
+                    produced_energy, consumed_energy = self._calculate_accumulated_energy(
+                        circuit_id, baseline_power, current_time
+                    )
 
                 # For unmapped tabs:
                 # - Solar production (negative power) -> imported energy represents production
@@ -655,8 +796,8 @@ class DynamicSimulationEngine:
 
     def _generate_status_data(self) -> dict[str, Any]:
         """Generate status data from configuration."""
-        if not self._config:  # pragma: no cover
-            return {}  # pragma: no cover
+        if not self._config:
+            return {}
 
         return {
             "software": {"firmwareVersion": "sim/v1.0.0", "updateStatus": "idle", "env": "simulation"},
@@ -679,7 +820,7 @@ class DynamicSimulationEngine:
         if self._serial_number_override:
             return self._serial_number_override
 
-        raise ValueError("No configuration loaded - serial number not available")  # pragma: no cover
+        raise ValueError("No configuration loaded - serial number not available")
 
     async def get_panel_data(self) -> dict[str, dict[str, Any]]:
         """Get panel and circuit data."""
@@ -707,17 +848,15 @@ class DynamicSimulationEngine:
             for circuit_def in self._config["circuits"]:
                 template_name = circuit_def.get("template", "")
                 if template_name == "battery":
-                    template_raw: CircuitTemplateExtended | dict[Any, Any] = self._config["circuit_templates"].get(
-                        template_name, {}
-                    )
+                    template_raw: Any = self._config["circuit_templates"].get(template_name, {})
                     if not isinstance(template_raw, dict):
                         continue
-                    template_dict: dict[str, Any] = template_raw  # type: ignore
+                    template_dict: dict[str, Any] = template_raw
                     if template_dict.get("battery_behavior", {}).get("enabled", False):
                         # Calculate what the battery power would be at this time
                         behavior_engine = RealisticBehaviorEngine(current_time, self._config)
                         # Convert dict to CircuitTemplateExtended for type compatibility
-                        template_extended: CircuitTemplateExtended = template_dict  # type: ignore
+                        template_extended: CircuitTemplateExtended = template_dict  # type: ignore[assignment]
                         battery_power = behavior_engine.get_circuit_power(circuit_def["id"], template_extended, current_time)
                         total_battery_power += battery_power
                         battery_count += 1
@@ -733,10 +872,10 @@ class DynamicSimulationEngine:
 
         if avg_battery_power < -1000:  # Significant charging
             # Battery is charging - higher SOE
-            return min(95.0, base_soe + 10.0)  # pragma: no cover
+            return min(95.0, base_soe + 10.0)
         if avg_battery_power > 1000:  # Significant discharging
             # Battery is discharging - lower SOE
-            return max(15.0, base_soe - 15.0)  # pragma: no cover
+            return max(15.0, base_soe - 15.0)
         # Minimal activity - normal SOE
         return base_soe
 
@@ -818,11 +957,11 @@ class DynamicSimulationEngine:
                     circuit_info["instantPowerW"] = 0.0
 
             if "priority" in overrides:
-                circuit_info["priority"] = overrides["priority"]  # pragma: no cover
+                circuit_info["priority"] = overrides["priority"]
 
         # Apply global overrides
         if "power_multiplier" in self._global_overrides:
-            circuit_info["instantPowerW"] *= self._global_overrides["power_multiplier"]  # pragma: no cover
+            circuit_info["instantPowerW"] *= self._global_overrides["power_multiplier"]
 
     def _calculate_accumulated_energy(
         self, circuit_id: str, instant_power: float, current_time: float
@@ -859,3 +998,86 @@ class DynamicSimulationEngine:
         energy_state["last_update"] = current_time
 
         return energy_state["produced_wh"], energy_state["consumed_wh"]
+
+    def _initialize_tab_synchronizations(self) -> None:
+        """Initialize tab synchronization groups from configuration."""
+        if not self._config:
+            return
+
+        tab_syncs = self._config.get("tab_synchronizations", [])
+
+        for sync_config in tab_syncs:
+            sync_group_id = f"sync_{sync_config['behavior']}_{hash(tuple(sync_config['tabs']))}"
+
+            for tab_num in sync_config["tabs"]:
+                self._tab_sync_groups[tab_num] = sync_group_id
+
+        # Initialize power tracking for sync groups
+        for sync_group_id in set(self._tab_sync_groups.values()):
+            self._sync_group_power[sync_group_id] = 0.0
+
+    def _get_synchronized_power(self, tab_num: int, base_power: float, sync_config: TabSynchronization) -> float:
+        """Get synchronized power for a tab based on sync configuration."""
+        sync_group_id = self._tab_sync_groups.get(tab_num)
+        if not sync_group_id:
+            return base_power
+
+        # Store the total power for this sync group
+        self._sync_group_power[sync_group_id] = base_power
+
+        # Split power based on configuration
+        if sync_config["power_split"] == "equal":
+            num_tabs = len(sync_config["tabs"])
+            return base_power / num_tabs
+        if sync_config["power_split"] == "primary_secondary":
+            # First tab gets full power, others get 0 (for data representation)
+            if tab_num == sync_config["tabs"][0]:
+                return base_power
+
+            return 0.0
+
+        return base_power
+
+    def _get_tab_sync_config(self, tab_num: int) -> TabSynchronization | None:
+        """Get synchronization configuration for a specific tab."""
+        if not self._config:
+            raise SimulationConfigurationError("Simulation configuration is required for tab synchronization.")
+
+        tab_syncs = self._config.get("tab_synchronizations", [])
+
+        for sync_config in tab_syncs:
+            if tab_num in sync_config["tabs"]:
+                return sync_config
+
+        return None
+
+    def _synchronize_energy_for_tab(
+        self,
+        tab_num: int,
+        circuit_id: str,
+        instant_power: float,
+        current_time: float,
+    ) -> tuple[float, float]:
+        """Calculate synchronized energy for tabs in the same sync group."""
+        try:
+            sync_config = self._get_tab_sync_config(tab_num)
+        except SimulationConfigurationError:
+            # Fallback to regular energy calculation if no sync config
+            return self._calculate_accumulated_energy(circuit_id, instant_power, current_time)
+
+        if not sync_config or not sync_config.get("energy_sync", False):
+            # Fallback to regular energy calculation if sync not enabled
+            return self._calculate_accumulated_energy(circuit_id, instant_power, current_time)
+
+        # Use a shared energy state for all tabs in the sync group
+        sync_group_id = self._tab_sync_groups.get(tab_num)
+        if not sync_group_id:
+            # Fallback to regular energy calculation if no sync group
+            return self._calculate_accumulated_energy(circuit_id, instant_power, current_time)
+
+        shared_circuit_id = f"sync_group_{sync_group_id}"
+
+        # Calculate energy using the total power for the sync group
+        total_power = self._sync_group_power.get(sync_group_id, instant_power * len(sync_config["tabs"]))
+
+        return self._calculate_accumulated_energy(shared_circuit_id, total_power, current_time)

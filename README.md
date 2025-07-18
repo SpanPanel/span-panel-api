@@ -72,6 +72,8 @@ asyncio.run(main())
 
 **Best for**: Long-running services, persistent connections, integration platforms
 
+> **Note for Home Assistant integrations**: See [Home Assistant Integration](#home-assistant-integration) section for HA-specific compatibility configuration.
+
 ```python
 import asyncio
 from span_panel_api import SpanPanelClient
@@ -193,35 +195,45 @@ The client provides error categorization for different retry strategies:
 
 ### Exception Types
 
+All exceptions inherit from `SpanPanelError`.
+
+- `SpanPanelAuthError`: Raised for authentication failures (invalid token, login required, etc.)
+- `SpanPanelConnectionError`: Raised for network errors, server errors, or API errors
+- `SpanPanelTimeoutError`: Raised when a request times out
+- `SpanPanelValidationError`: Raised for data validation errors (invalid input, schema mismatch)
+- `SpanPanelAPIError`: General API error (fallback for unexpected API issues)
+- `SpanPanelRetriableError`: Raised for retriable server errors (502, 503, 504)
+- `SpanPanelServerError`: Raised for non-retriable server errors (500)
+- `SimulationConfigurationError`: Raised for invalid or missing simulation configuration (simulation mode only)
+
 ```python
-from span_panel_api.exceptions import (
-    SpanPanelError,           # Base exception
-    SpanPanelAPIError,        # General API errors
-    SpanPanelAuthError,       # 401/403 - need re-authentication
-    SpanPanelConnectionError, # Network connectivity issues
-    SpanPanelTimeoutError,    # Request timeouts
-    SpanPanelRetriableError,  # 502/503/504 - temporary issues, SHOULD retry
-    SpanPanelServerError,     # 500 - application bugs, DO NOT retry
+from span_panel_api import (
+    SpanPanelError,              # Base exception
+    SpanPanelAuthError,
+    SpanPanelConnectionError,
+    SpanPanelTimeoutError,
+    SpanPanelValidationError,
+    SpanPanelAPIError,
+    SpanPanelRetriableError,
+    SpanPanelServerError,
+    SimulationConfigurationError,
 )
 ```
 
 ### HTTP Error Code Mapping
 
-| Status Code                     | Exception                  | Retry?               | Description                      | Action                         |
-| ------------------------------- | -------------------------- | -------------------- | -------------------------------- | ------------------------------ |
-| **Authentication Errors**       | -                          | -                    | -                                | -                              |
-| 401, 403                        | `SpanPanelAuthError`       | Once (after re-auth) | Authentication required/failed   | Re-authenticate and retry once |
-| **Non-Retriable Server Errors** | -                          | -                    | -                                | -                              |
-| 500                             | `SpanPanelServerError`     | **NO**               | Internal server error (SPAN bug) | Show error, do not retry       |
-| **Retriable Server Errors**     | -                          | -                    | -                                | -                              |
-| 502                             | `SpanPanelRetriableError`  | Yes                  | Bad Gateway (proxy error)        | Retry with exponential backoff |
-| 503                             | `SpanPanelRetriableError`  | Yes                  | Service Unavailable              | Retry with exponential backoff |
-| 504                             | `SpanPanelRetriableError`  | Yes                  | Gateway Timeout                  | Retry with exponential backoff |
-| **Other HTTP Errors**           | -                          | -                    | -                                | -                              |
-| 404, 400, etc                   | `SpanPanelAPIError`        | Case by case         | Client/request errors            | Check request parameters       |
-| **Network Errors**              | -                          | -                    | -                                | -                              |
-| Connection failures             | `SpanPanelConnectionError` | Yes                  | Network connectivity issues      | Retry with backoff             |
-| Timeouts                        | `SpanPanelTimeoutError`    | Yes                  | Request timed out                | Retry with backoff             |
+| Status Code                     | Exception                        | Retry?               | Description                      | Action                         |
+| ------------------------------- | -------------------------------- | -------------------- | -------------------------------- | ------------------------------ |
+| **Authentication Errors**       | -                                | -                    | -                                | -                              |
+| 401, 403                        | `SpanPanelAuthError`             | Once (after re-auth) | Authentication required/failed   | Re-authenticate and retry once |
+| **Server/Network Errors**       | -                                | -                    | -                                | -                              |
+| 500                             | `SpanPanelServerError`           | No                   | Server error (non-retriable)     | Check server, report issue     |
+| 502, 503, 504                   | `SpanPanelRetriableError`        | Yes                  | Retriable server/network errors  | Retry with exponential backoff |
+| **Other HTTP Errors**           | -                                | -                    | -                                | -                              |
+| 404, 400, etc                   | `SpanPanelAPIError`              | Case by case         | Client/request errors            | Check request parameters       |
+| **Timeouts**                    | `SpanPanelTimeoutError`          | Yes                  | Request timed out                | Retry with backoff             |
+| **Validation Errors**           | `SpanPanelValidationError`       | No                   | Data validation failed           | Fix input data                 |
+| **Simulation Config Errors**    | `SimulationConfigurationError`   | No                   | Invalid/missing simulation config| Fix simulation config          |
 
 ### Retry Strategy
 
@@ -235,17 +247,24 @@ async def example_request_with_retry():
         await client.authenticate("my-app", "My Application")
         return await client.get_circuits()
     except SpanPanelRetriableError as e:
-        # Temporary server issues - should retry with backoff
-        # 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout
-        logger.warning(f"Retriable error {e.status_code}, will retry: {e}")
+        # Temporary server or network issues - should retry with backoff
+        logger.warning(f"Retriable error, will retry: {e}")
         raise  # Let retry logic handle the retry
-    except SpanPanelServerError as e:
-        # Application bugs on SPAN side - DO NOT retry
-        # 500 Internal Server Error (SPAN Panel bug, not your fault!)
-        logger.error(f"Server error {e.status_code}, not retrying: {e}")
-        raise  # Show notification but don't waste resources retrying
-    except (SpanPanelConnectionError, SpanPanelTimeoutError):
-        # Network issues - should retry
+    except SpanPanelTimeoutError as e:
+        # Network timeout - should retry
+        logger.warning(f"Timeout, will retry: {e}")
+        raise
+    except SpanPanelValidationError as e:
+        # Data validation error - fix input
+        logger.error(f"Validation error: {e}")
+        raise
+    except SimulationConfigurationError as e:
+        # Simulation config error - fix config
+        logger.error(f"Simulation config error: {e}")
+        raise
+    except SpanPanelAPIError as e:
+        # Other API errors
+        logger.error(f"API error: {e}")
         raise
 ```
 
@@ -391,7 +410,7 @@ Retry and timeout settings can be queried and changed at runtime.
 
 The client includes a time-based cache that prevents redundant API calls within a
 configurable window.  This feature is particularly useful when multiple operations need the same data.
-The package itself makes multiple calls to create virtual circuits for tabs not represented in circuits data so the cache avoid unecessary calls when the user also makes requests the same data.
+The package itself makes multiple calls to create virtual circuits for tabs not represented in circuits data so the cache avoids unecessary calls when the user also makes requests the same data.
 
 **Cache Behavior:**
 
@@ -460,6 +479,42 @@ span_openapi/
 ```
 
 ## Advanced Usage
+
+### Home Assistant Integration
+
+For Home Assistant integrations, the client provides a compatibility layer to handle asyncio timing issues that can occur in HA's event loop:
+
+```python
+from span_panel_api import SpanPanelClient, set_async_delay_func
+import asyncio
+
+# In your Home Assistant integration setup:
+async def ha_compatible_delay(seconds: float) -> None:
+    """Custom delay function that works well with HA's event loop."""
+    # Use HA's async utilities or implement HA-specific delay logic
+    await asyncio.sleep(seconds)
+
+# Configure the client to use HA-compatible delay
+set_async_delay_func(ha_compatible_delay)
+
+# Now create and use clients normally
+async with SpanPanelClient("192.168.1.100") as client:
+    # Client will use your custom delay function for retry logic
+    await client.authenticate("your_token")
+    panel_state = await client.get_panel_state()
+
+# To reset to default behavior (uses asyncio.sleep):
+set_async_delay_func(None)
+```
+
+**Why This Matters:**
+
+- Home Assistant's event loop can be sensitive to blocking operations
+- The default `asyncio.sleep()` used in retry logic may not play well with HA
+- Custom delay functions allow HA integrations to use HA's preferred async patterns
+- This prevents integration timeouts and improves responsiveness
+
+**Note:** This only affects the retry delay behavior. Normal API operations remain unchanged.
 
 ### SSL Configuration
 

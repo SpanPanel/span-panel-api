@@ -1,0 +1,48 @@
+# Simple test configuration without tab synchronization
+panel_config:
+  serial_number: "SPAN-TEST-001"
+  total_tabs: 32
+  main_size: 200
+
+circuit_templates:
+  basic_consumer:
+    energy_profile:
+      mode: "consumer"
+      power_range: [0.0, 1000.0]
+      typical_power: 100.0
+      power_variation: 0.1
+    relay_behavior: "controllable"
+    priority: "MUST_HAVE"
+
+  basic_producer:
+    energy_profile:
+      mode: "producer"
+      power_range: [-2000.0, 0.0]
+      typical_power: -500.0
+      power_variation: 0.2
+    relay_behavior: "non_controllable"
+    priority: "MUST_HAVE"
+
+circuits:
+  - id: "test_circuit_1"
+    name: "Test Circuit 1"
+    template: "basic_consumer"
+    tabs: [1]
+
+  - id: "test_circuit_2"
+    name: "Test Circuit 2"
+    template: "basic_consumer"
+    tabs: [2]
+
+  - id: "test_solar"
+    name: "Test Solar"
+    template: "basic_producer"
+    tabs: [3]
+
+unmapped_tabs: [4, 5, 6]
+
+simulation_params:
+  update_interval: 5
+  time_acceleration: 1.0
+  noise_factor: 0.02
+  enable_realistic_behaviors: true

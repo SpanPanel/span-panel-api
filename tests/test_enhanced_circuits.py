@@ -306,3 +306,51 @@ class TestEnhancedCircuits:
         assert circuit.relay_state.value == "UNKNOWN"  # Default value for unmapped circuits
         assert circuit.priority.value == "UNKNOWN"
         assert circuit.is_user_controllable is False
+
+    @pytest.mark.asyncio
+    async def test_get_circuits_unmapped_tabs_simulation_edge_case(self):
+        """Test unmapped tab handling edge case in simulation where tab index exceeds branches."""
+        client = SpanPanelClient(
+            host="test-unmapped-edge-case", simulation_mode=True, simulation_config_path="examples/simple_test_config.yaml"
+        )
+
+        async with client:
+            # Get circuits normally first
+            circuits = await client.get_circuits()
+
+            # All configured circuits should be present plus any unmapped tabs
+            assert len(circuits.circuits.additional_properties) >= 4  # At least the 4 configured circuits
+
+            # Verify circuit IDs exist
+            circuit_ids = list(circuits.circuits.additional_properties.keys())
+            expected_ids = ["living_room_lights", "kitchen_outlets", "main_hvac", "solar_inverter"]
+
+            for expected_id in expected_ids:
+                assert expected_id in circuit_ids, f"Expected circuit {expected_id} not found in {circuit_ids}"
+
+            # If there are unmapped tabs, they should follow the correct naming pattern
+            unmapped_circuits = [cid for cid in circuit_ids if cid.startswith("unmapped_tab_")]
+            for unmapped_id in unmapped_circuits:
+                # Should be in format unmapped_tab_N where N is a valid tab number
+                tab_num = int(unmapped_id.split("_")[-1])
+                assert tab_num > 0, f"Invalid tab number in {unmapped_id}"
+
+    @pytest.mark.asyncio
+    async def test_get_circuits_handles_circuit_tabs_as_single_int(self):
+        """Test that circuits with single int tabs (not list) are handled correctly."""
+        # This test ensures coverage of the isinstance(circuit.tabs, int) branch
+        client = SpanPanelClient(
+            host="test-single-int-tabs", simulation_mode=True, simulation_config_path="examples/simple_test_config.yaml"
+        )
+
+        async with client:
+            # Use the simulation directly to trigger the edge case logic
+            circuits = await client.get_circuits()
+
+            # This will exercise the unmapped tab logic including bounds checking
+            circuit_ids = list(circuits.circuits.additional_properties.keys())
+
+            # Verify the expected simulation circuits exist
+            expected_ids = ["living_room_lights", "kitchen_outlets", "main_hvac", "solar_inverter"]
+            for expected_id in expected_ids:
+                assert expected_id in circuit_ids

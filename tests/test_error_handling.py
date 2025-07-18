@@ -41,7 +41,7 @@ class TestHTTPStatusErrorHandling:
                 side_effect=httpx.HTTPStatusError("401 Unauthorized", request=mock_request, response=mock_response)
             )
 
-            with pytest.raises(SpanPanelAuthError, match="Authentication required"):
+            with pytest.raises(SpanPanelAuthError, match="Authentication failed"):
                 await client.get_panel_state()
 
     @pytest.mark.asyncio
@@ -61,7 +61,7 @@ class TestHTTPStatusErrorHandling:
                 side_effect=httpx.HTTPStatusError("403 Forbidden", request=mock_request, response=mock_response)
             )
 
-            with pytest.raises(SpanPanelAuthError, match="Authentication required"):
+            with pytest.raises(SpanPanelAuthError, match="Authentication failed"):
                 await client.get_panel_state()
 
     @pytest.mark.asyncio

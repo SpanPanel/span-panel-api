@@ -1,0 +1,29 @@
+# Minimal configuration for basic testing
+panel_config:
+  serial_number: "SPAN-MIN-001"
+  total_tabs: 4
+  main_size: 100
+
+circuit_templates:
+  basic_load:
+    energy_profile:
+      mode: "consumer"
+      power_range: [10.0, 100.0]
+      typical_power: 50.0
+      power_variation: 0.1
+    relay_behavior: "controllable"
+    priority: "MUST_HAVE"
+
+circuits:
+  - id: "test_circuit"
+    name: "Test Circuit"
+    template: "basic_load"
+    tabs: [1, 3]  # 240V circuit (L1 + L2)
+
+unmapped_tabs: [2, 4]
+
+simulation_params:
+  update_interval: 5
+  time_acceleration: 1.0
+  noise_factor: 0.05
+  enable_realistic_behaviors: false

@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "1.1.4"
+version = "1.1.5"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -13,6 +13,7 @@ dependencies = [
     "python-dateutil>=2.8.0",
     "click>=8.0.0",
     "numpy>=1.21.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.urls]
@@ -37,6 +38,8 @@ pylint = "*"
 radon = "*"
 twine = "*"
 vulture = "^2.14"
+types-pyyaml = "^6.0.12.20250516"
+coverage = "*"
 
 [tool.poetry.group.generate.dependencies]
 openapi-python-client = "^0.25.2"
@@ -51,7 +54,7 @@ line-length = 125
 exclude = [
     "src/span_panel_api/generated_client/",
     "generate_client.py",
-    "scripts/coverage.py",
+    "scripts/",
     ".*_cache/",
     "dist/",
     "venv/",
@@ -105,10 +108,11 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 exclude = [
     "src/span_panel_api/generated_client/",
-    "src/span_panel_api/client.py",
     "generate_client.py",
+    "scripts/",
     "tests/",
     "docs/",
+    "examples/",
     ".*_cache/",
     "dist/",
     "venv/",
@@ -127,7 +131,9 @@ module = [
 ]
 ignore_missing_imports = true
 
+
 [tool.coverage.run]
+data_file = ".local_coverage_data"
 source = ["src/span_panel_api"]
 omit = [
     "src/span_panel_api/generated_client/*",
@@ -139,6 +145,7 @@ omit = [
 ]
 
 [tool.coverage.report]
+fail_under = 95.0
 # Exclude defensive/error handling code from coverage that's not core functionality:
 # - Import error handling (hard to test, defensive)
 # - Generic exception wrappers (defensive code)
@@ -228,7 +235,7 @@ ignore-paths = [
     "^src/span_panel_api/generated_client/.*",
     "^tests/.*",
     "^generate_client\\.py$",
-    "^scripts/coverage\\.py$",
+    "^scripts/.*",
     "^examples/.*",
 ]
 

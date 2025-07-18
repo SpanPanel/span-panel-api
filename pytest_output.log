@@ -1,0 +1,11 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.2, pytest-8.4.1, pluggy-1.6.0
+rootdir: /Users/bflood/projects/HA/span-panel-api
+configfile: pytest.ini
+plugins: anyio-4.9.0, cov-6.2.1, asyncio-1.0.0
+asyncio: mode=Mode.AUTO, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 6 items
+
+tests/test_simulation_edge_cases_final.py ......                         [100%]
+
+============================== 6 passed in 0.05s ===============================

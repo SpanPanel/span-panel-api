@@ -124,6 +124,6 @@ repos:
         name: coverage summary
         entry: bash
         language: system
-        args: ['-c', 'output=$(poetry run pytest tests/ --cov=src/span_panel_api --cov-config=pyproject.toml -q 2>&1); if echo "$output" | grep -q "FAILED"; then echo "$output"; exit 1; else echo "$output"; fi']
+        args: ['-c', 'output=$(poetry run pytest tests/ --cov=src/span_panel_api --cov-config=pyproject.toml --cov-fail-under=95 -q 2>&1); if echo "$output" | grep -q "FAILED"; then echo "$output"; exit 1; else echo "$output"; fi']
         pass_filenames: false
         verbose: true

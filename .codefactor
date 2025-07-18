@@ -1,0 +1,29 @@
+{
+  "version": "1.0.0",
+  "exclude": [
+    "scripts/**/*",
+    "examples/**/*",
+    "tests/**/*",
+    "src/span_panel_api/generated_client/**/*",
+    "generate_client.py",
+    "*.pyc",
+    "__pycache__/**/*",
+    ".venv/**/*",
+    "venv/**/*",
+    "dist/**/*",
+    "build/**/*",
+    ".git/**/*",
+    ".mypy_cache/**/*",
+    ".pytest_cache/**/*",
+    ".ruff_cache/**/*"
+  ],
+  "rules": {
+    "ComplexMethod": {
+      "enabled": true,
+      "exclude": [
+        "scripts/**/*",
+        "examples/**/*"
+      ]
+    }
+  }
+}

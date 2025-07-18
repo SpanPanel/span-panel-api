@@ -145,6 +145,7 @@ omit = [
 ]
 
 [tool.coverage.report]
+fail_under = 95.0
 # Exclude defensive/error handling code from coverage that's not core functionality:
 # - Import error handling (hard to test, defensive)
 # - Generic exception wrappers (defensive code)

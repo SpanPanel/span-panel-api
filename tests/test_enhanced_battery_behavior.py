@@ -132,9 +132,9 @@ class TestEnhancedBatteryBehavior:
 
             elif current_hour in idle_hours:
                 # During idle hours, expect minimal activity
-                # Allow for higher power due to 240V split-phase battery systems
+                # Allow for higher power due to 240V split-phase battery systems (2 systems × 5000W each)
                 assert (
-                    -5000 <= total_battery_power <= 5000
+                    -10000 <= total_battery_power <= 10000
                 ), f"Battery power should be reasonable during idle hours: {total_battery_power}W"
 
             # SOE should always be reasonable

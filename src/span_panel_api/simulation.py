@@ -18,6 +18,7 @@ from typing import Any, NotRequired, TypedDict
 
 import yaml
 
+from span_panel_api.const import DSM_GRID_UP, DSM_ON_GRID, MAIN_RELAY_CLOSED, PANEL_ON_GRID
 from span_panel_api.exceptions import SimulationConfigurationError
 
 
@@ -689,9 +690,9 @@ class DynamicSimulationEngine:
             "instantGridPowerW": grid_power,
             "instantPanelStateOfEnergyPercent": random.uniform(0.6, 0.9),  # nosec B311
             "serialNumber": self._config["panel_config"]["serial_number"],
-            "mainRelayState": "CLOSED",
-            "dsmGridState": "LIVE",
-            "dsmState": "ON_GRID",
+            "mainRelayState": MAIN_RELAY_CLOSED,
+            "dsmGridState": DSM_GRID_UP,
+            "dsmState": DSM_ON_GRID,
             "mainMeterEnergy": {
                 "producedEnergyWh": total_produced_energy,
                 "consumedEnergyWh": total_consumed_energy,
@@ -703,7 +704,7 @@ class DynamicSimulationEngine:
             },
             "gridSampleStartMs": int(time.time() * 1000),
             "gridSampleEndMs": int(time.time() * 1000),
-            "currentRunConfig": 1,
+            "currentRunConfig": PANEL_ON_GRID,
             "branches": self._generate_branches(),
         }
 

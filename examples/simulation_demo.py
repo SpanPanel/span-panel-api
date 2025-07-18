@@ -9,6 +9,7 @@ It shows how to use various simulation features for testing and development.
 import asyncio
 
 from span_panel_api import SpanPanelClient
+from span_panel_api.const import DSM_GRID_DOWN, DSM_OFF_GRID
 from span_panel_api.simulation import BranchVariation, CircuitVariation, PanelVariation, StatusVariation
 
 
@@ -108,7 +109,7 @@ async def demo_panel_variations() -> None:
             (
                 "Grid Outage",
                 None,
-                PanelVariation(main_relay_state="OPEN", dsm_grid_state="DSM_GRID_DOWN", dsm_state="DSM_OFF_GRID"),
+                PanelVariation(main_relay_state="OPEN", dsm_grid_state=DSM_GRID_DOWN, dsm_state=DSM_OFF_GRID),
             ),
             ("Branch Failure", {1: BranchVariation(relay_state="OPEN")}, None),
         ]

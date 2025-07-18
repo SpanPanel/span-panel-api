@@ -1,106 +1,233 @@
-"""Test final simulation edge cases to achieve 100% coverage."""
+"""Tests for simulation edge cases and missing coverage lines."""
 
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-from span_panel_api.simulation import DynamicSimulationEngine
+from unittest.mock import Mock, patch
+from span_panel_api import SpanPanelClient
+from span_panel_api.simulation import SimulationConfigurationError
+import time
 
 
-class TestSimulationFinalEdgeCases:
-    """Test final edge cases to reach 100% coverage."""
-
-    @pytest.mark.asyncio
-    async def test_double_checked_locking_pattern(self):
-        """Test the double-checked locking pattern in initialize_async (line 307)."""
-        engine = DynamicSimulationEngine()
-
-        # Set base_data to test the early return path (line 307)
-        engine._base_data = {"already": "set"}
-
-        # Call initialize_async which should return early due to _base_data being set
-        await engine.initialize_async()
-
-        # Should still have the original data
-        assert engine._base_data == {"already": "set"}
+class TestSimulationMissingCoverage:
+    """Test cases to cover missing lines in simulation.py."""
 
     @pytest.mark.asyncio
-    async def test_config_validation_with_invalid_config_data(self):
-        """Test YAML config validation with invalid config structure (line 314)."""
-        engine = DynamicSimulationEngine()
+    async def test_battery_behavior_disabled(self):
+        """Test battery behavior when disabled in config (line 269)."""
+        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
 
-        # Set up invalid config data that will trigger validation
-        engine._config_data = {"invalid": "structure", "missing": "required_fields"}
+        async with SpanPanelClient(
+            host="battery-disabled-test", simulation_mode=True, simulation_config_path=str(config_path)
+        ) as client:
+            # Get the simulation engine and ensure it's initialized
+            engine = client._simulation_engine
+            assert engine is not None
+            await engine.initialize_async()
 
-        # This should hit the validation error path on line 314
-        with pytest.raises(ValueError):
-            await engine._load_config_async()
+            # Modify battery template to disable battery behavior
+            battery_template = engine._config["circuit_templates"]["battery"]
+            battery_template["battery_behavior"]["enabled"] = False
+
+            # Test that battery behavior returns base power when disabled
+            behavior_engine = engine._behavior_engine
+            template = engine._config["circuit_templates"]["battery"]
+
+            # This should hit line 269 (battery behavior disabled check)
+            power = behavior_engine._apply_battery_behavior(1000.0, template, time.time())
+            assert power == 1000.0  # Should return base power unchanged
 
     @pytest.mark.asyncio
-    async def test_no_config_path_and_no_config_data_error(self):
-        """Test that missing config raises error when no path or data provided."""
+    async def test_battery_behavior_not_dict(self):
+        """Test battery behavior when config is not a dict (line 274)."""
+        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
+
+        async with SpanPanelClient(
+            host="battery-not-dict-test", simulation_mode=True, simulation_config_path=str(config_path)
+        ) as client:
+            # Get the simulation engine and ensure it's initialized
+            engine = client._simulation_engine
+            assert engine is not None
+            await engine.initialize_async()
+
+            # Modify battery template to have non-dict battery_behavior
+            battery_template = engine._config["circuit_templates"]["battery"]
+            battery_template["battery_behavior"] = "not_a_dict"
+
+            # Test that battery behavior returns base power when config is not dict
+            behavior_engine = engine._behavior_engine
+
+            # This should hit line 274 (battery config not dict check)
+            power = behavior_engine._apply_battery_behavior(1000.0, battery_template, time.time())
+            assert power == 1000.0  # Should return base power unchanged
+
+    @pytest.mark.asyncio
+    async def test_simulation_time_invalid_format(self):
+        """Test simulation time initialization with invalid datetime format (lines 427, 434-435)."""
+        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
+
+        async with SpanPanelClient(
+            host="invalid-time-test", simulation_mode=True, simulation_config_path=str(config_path)
+        ) as client:
+            # Get the simulation engine
+            engine = client._simulation_engine
+            assert engine is not None
+
+            # Test override_simulation_start_time with invalid format
+            # This should hit lines 434-435 (invalid datetime fallback)
+            engine.override_simulation_start_time("invalid-datetime-format")
+
+            # Should fall back to real time (use_simulation_time = False)
+            assert not engine._use_simulation_time
+
+    @pytest.mark.asyncio
+    async def test_template_reference_validation(self):
+        """Test circuit template reference validation (line 472)."""
+        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
+
+        async with SpanPanelClient(
+            host="template-validation-test", simulation_mode=True, simulation_config_path=str(config_path)
+        ) as client:
+            # Get the simulation engine and ensure it's initialized
+            engine = client._simulation_engine
+            assert engine is not None
+            await engine.initialize_async()
+
+            # Test validation with unknown template reference
+            invalid_circuit = {"id": "test_circuit", "name": "Test Circuit", "template": "nonexistent_template", "tabs": [1]}
+
+            # This should hit line 472 (template reference validation)
+            with pytest.raises(ValueError, match="references unknown template"):
+                engine._validate_single_circuit(0, invalid_circuit, engine._config["circuit_templates"])
+
+    @pytest.mark.asyncio
+    async def test_primary_secondary_power_split(self):
+        """Test primary/secondary power split logic (lines 1033-1040)."""
+        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
+
+        async with SpanPanelClient(
+            host="power-split-test", simulation_mode=True, simulation_config_path=str(config_path)
+        ) as client:
+            # Get the simulation engine and ensure it's initialized
+            engine = client._simulation_engine
+            assert engine is not None
+            await engine.initialize_async()
+
+            # Create a sync config with primary_secondary split
+            sync_config = {
+                "tabs": [33, 35],
+                "behavior": "240v_split_phase",
+                "power_split": "primary_secondary",
+                "energy_sync": True,
+                "template": "battery_sync",
+            }
+
+            # Test primary tab gets full power
+            primary_power = engine._get_synchronized_power(33, 1000.0, sync_config)
+            assert primary_power == 1000.0
+
+            # Test secondary tab gets 0 power
+            secondary_power = engine._get_synchronized_power(35, 1000.0, sync_config)
+            assert secondary_power == 0.0
+
+    @pytest.mark.asyncio
+    async def test_tab_sync_config_not_found(self):
+        """Test tab sync config not found scenario (line 1006)."""
+        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
+
+        async with SpanPanelClient(
+            host="sync-config-test", simulation_mode=True, simulation_config_path=str(config_path)
+        ) as client:
+            # Get the simulation engine and ensure it's initialized
+            engine = client._simulation_engine
+            assert engine is not None
+            await engine.initialize_async()
+
+            # Test with a tab that has no sync config
+            # This should hit line 1006 (tab sync config not found)
+            sync_config = engine._get_tab_sync_config(999)  # Non-existent tab
+            assert sync_config is None
+
+    @pytest.mark.asyncio
+    async def test_energy_sync_fallback(self):
+        """Test energy sync fallback when sync config fails (line 1077)."""
+        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
+
+        async with SpanPanelClient(
+            host="energy-sync-test", simulation_mode=True, simulation_config_path=str(config_path)
+        ) as client:
+            # Get the simulation engine
+            engine = client._simulation_engine
+            assert engine is not None
+
+            # Test energy synchronization with a tab that has no sync group
+            # This should hit line 1077 (energy sync fallback)
+            produced, consumed = engine._synchronize_energy_for_tab(999, "test_circuit", 100.0, time.time())
+            assert isinstance(produced, float)
+            assert isinstance(consumed, float)
+
+    @pytest.mark.asyncio
+    async def test_no_config_provided_error(self):
+        """Test error when no config is provided (line 381)."""
+        # Test initialization without config
+        from span_panel_api.simulation import DynamicSimulationEngine
+
         engine = DynamicSimulationEngine()
 
-        # Ensure no config path or data
-        engine._config_path = None
-        engine._config_data = None
-
-        # This should raise an error
+        # This should hit line 381 (no config provided error)
         with pytest.raises(ValueError, match="YAML configuration is required"):
-            await engine._load_config_async()
+            await engine.initialize_async()
 
     @pytest.mark.asyncio
-    async def test_global_override_power_multiplier_application(self):
-        """Test global power multiplier override application (line 657)."""
-        # Create engine with actual config
-        config_path = Path(__file__).parent.parent / "examples" / "behavior_test_config.yaml"
-        engine = DynamicSimulationEngine(config_path=config_path)
+    async def test_simulation_time_init_error(self):
+        """Test simulation time initialization error (lines 389-390)."""
+        from span_panel_api.simulation import DynamicSimulationEngine
 
-        # Load the config
-        await engine._load_config_async()
+        # Create engine with invalid config that will cause simulation time init error
+        invalid_config = {
+            "panel_config": {"serial_number": "test", "total_tabs": 40, "main_size": 200},
+            "circuit_templates": {
+                "test": {
+                    "energy_profile": {
+                        "mode": "consumer",
+                        "power_range": [0, 100],
+                        "typical_power": 50,
+                        "power_variation": 0.1,
+                    },
+                    "relay_behavior": "controllable",
+                    "priority": "MUST_HAVE",
+                }
+            },
+            "circuits": [{"id": "test", "name": "Test", "template": "test", "tabs": [1]}],
+            "unmapped_tabs": [],
+            "simulation_params": {},
+        }
 
-        # Set up a global power multiplier override
-        engine._global_overrides = {"power_multiplier": 2.0}
+        engine = DynamicSimulationEngine(config_data=invalid_config)
 
-        # Create a mock circuit info
-        circuit_info = {"instantPowerW": 100.0, "relayState": "CLOSED", "priority": "MUST_HAVE"}
-
-        # Apply dynamic overrides - this should hit line 657
-        engine._apply_dynamic_overrides("test_circuit", circuit_info)
-
-        # Power should be multiplied by the global multiplier
-        assert circuit_info["instantPowerW"] == 200.0  # 100.0 * 2.0
+        # This should hit lines 389-390 (simulation time init error)
+        with pytest.raises(SimulationConfigurationError, match="Simulation configuration is required"):
+            engine._initialize_simulation_time()
 
     @pytest.mark.asyncio
-    async def test_global_override_with_circuit_override_combination(self):
-        """Test combination of circuit and global overrides to ensure line 657 is hit."""
-        # Create engine with actual config
-        config_path = Path(__file__).parent.parent / "examples" / "behavior_test_config.yaml"
-        engine = DynamicSimulationEngine(config_path=config_path)
+    async def test_soe_calculation_edge_cases(self):
+        """Test SOE calculation edge cases (lines 876, 881)."""
+        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
 
-        # Load the config
-        await engine._load_config_async()
+        async with SpanPanelClient(
+            host="soe-edge-test", simulation_mode=True, simulation_config_path=str(config_path)
+        ) as client:
+            # Get the simulation engine
+            engine = client._simulation_engine
+            assert engine is not None
 
-        # Set up both circuit and global overrides
-        engine._circuit_overrides = {"test_circuit": {"power_override": 150.0}}
-        engine._global_overrides = {"power_multiplier": 1.5}
+            # Test SOE calculation with no battery circuits
+            # This should hit line 876 (no battery circuits)
+            with patch.object(engine, '_config') as mock_config:
+                mock_config.get.return_value = []  # No battery circuits
+                soe = engine._calculate_dynamic_soe()
+                assert 15.0 <= soe <= 95.0
 
-        # Create a mock circuit info
-        circuit_info = {"instantPowerW": 100.0, "relayState": "CLOSED", "priority": "MUST_HAVE"}
-
-        # Apply dynamic overrides - this should hit both circuit and global override paths
-        engine._apply_dynamic_overrides("test_circuit", circuit_info)
-
-        # Power should be set to override (150.0) - global multiplier doesn't apply to power_override
-        assert circuit_info["instantPowerW"] == 150.0  # power_override takes precedence
-
-
-# Standalone function to cover the serial_number error path
-
-
-def test_serial_number_no_config_or_override():
-    """Test that accessing serial_number with no config or override raises ValueError."""
-    from span_panel_api.simulation import DynamicSimulationEngine
-
-    engine = DynamicSimulationEngine()
-    with pytest.raises(ValueError, match="No configuration loaded - serial number not available"):
-        _ = engine.serial_number
+            # Test SOE calculation with battery circuits
+            # This should hit line 881 (with battery circuits)
+            soe = engine._calculate_dynamic_soe()
+            assert 15.0 <= soe <= 95.0

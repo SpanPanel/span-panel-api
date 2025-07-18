@@ -410,7 +410,7 @@ Retry and timeout settings can be queried and changed at runtime.
 
 The client includes a time-based cache that prevents redundant API calls within a
 configurable window.  This feature is particularly useful when multiple operations need the same data.
-The package itself makes multiple calls to create virtual circuits for tabs not represented in circuits data so the cache avoid unecessary calls when the user also makes requests the same data.
+The package itself makes multiple calls to create virtual circuits for tabs not represented in circuits data so the cache avoids unecessary calls when the user also makes requests the same data.
 
 **Cache Behavior:**
 

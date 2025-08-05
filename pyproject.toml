@@ -42,7 +42,7 @@ types-pyyaml = "^6.0.12.20250516"
 coverage = "*"
 
 [tool.poetry.group.generate.dependencies]
-openapi-python-client = "^0.25.2"
+openapi-python-client = "^0.25.3"
 pyyaml = "^6.0.0"
 
 [build-system]

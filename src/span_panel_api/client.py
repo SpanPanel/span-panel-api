@@ -938,46 +938,14 @@ class SpanPanelClient:
             # Cache the full dataset for consistency
             self._api_cache.set_cached_data(cache_key, full_data)
 
-        # Convert to model object
+        # Convert to model object and apply unmapped tab logic (same as live mode)
         circuits_out = self._convert_raw_to_circuits_out(circuits_data)
-
-        # Apply unmapped tab logic (same as live mode)
         panel_state = await self.get_panel_state()
 
-        # Find tabs already mapped to circuits
-        mapped_tabs: set[int] = set()
-        if hasattr(circuits_out, "circuits") and hasattr(circuits_out.circuits, "additional_properties"):
-            for circuit in circuits_out.circuits.additional_properties.values():
-                if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
-                    if isinstance(circuit.tabs, list | tuple):
-                        mapped_tabs.update(circuit.tabs)
-                    elif isinstance(circuit.tabs, int):
-                        mapped_tabs.add(circuit.tabs)
-
-        # Create virtual circuits for unmapped tabs
         if hasattr(panel_state, "branches") and panel_state.branches:
-            total_tabs = len(panel_state.branches)
-            all_tabs = set(range(1, total_tabs + 1))
-            unmapped_tabs = all_tabs - mapped_tabs
-
-            _LOGGER.debug(
-                "Creating unmapped circuits. Total tabs: %s, Mapped tabs: %s, Unmapped tabs: %s",
-                total_tabs,
-                mapped_tabs,
-                unmapped_tabs,
-            )
-
-            for tab_num in unmapped_tabs:
-                branch_idx = tab_num - 1
-                if branch_idx < len(panel_state.branches):
-                    branch = panel_state.branches[branch_idx]
-                    virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
-                    circuit_id = f"unmapped_tab_{tab_num}"
-                    circuits_out.circuits.additional_properties[circuit_id] = virtual_circuit
-                    _LOGGER.debug("Created unmapped circuit: %s", circuit_id)
-
-            if not hasattr(panel_state, "branches") or not panel_state.branches:
-                _LOGGER.debug("No branches in panel state (simulation), skipping unmapped circuit creation")
+            self._add_unmapped_virtuals(circuits_out, panel_state.branches)
+        else:
+            _LOGGER.debug("No branches in panel state (simulation), skipping unmapped circuit creation")
 
         return circuits_out
 
@@ -994,43 +962,14 @@ class SpanPanelClient:
             # Get panel state for branches data
             panel_state = await self.get_panel_state()
             _LOGGER.debug(
-                "Panel state branches: %s", len(panel_state.branches) if hasattr(panel_state, "branches") else "No branches"
+                "Panel state branches: %s",
+                len(panel_state.branches) if hasattr(panel_state, "branches") else "No branches",
             )
-
-            # Find tabs already mapped to circuits
-            mapped_tabs: set[int] = set()
-            if hasattr(result, "circuits") and hasattr(result.circuits, "additional_properties"):
-                for circuit in result.circuits.additional_properties.values():
-                    if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
-                        if isinstance(circuit.tabs, list | tuple):
-                            mapped_tabs.update(circuit.tabs)
-                        elif isinstance(circuit.tabs, int):
-                            mapped_tabs.add(circuit.tabs)
-                _LOGGER.debug("Mapped tabs found: %s", mapped_tabs)
 
             # Create virtual circuits for unmapped tabs
             if hasattr(panel_state, "branches") and panel_state.branches:
-                total_tabs = len(panel_state.branches)
-                all_tabs = set(range(1, total_tabs + 1))
-                unmapped_tabs = all_tabs - mapped_tabs
-
-                _LOGGER.debug(
-                    "Creating unmapped circuits (live mode). Total tabs: %s, Mapped tabs: %s, Unmapped tabs: %s",
-                    total_tabs,
-                    mapped_tabs,
-                    unmapped_tabs,
-                )
-
-                for tab_num in unmapped_tabs:
-                    branch_idx = tab_num - 1
-                    if branch_idx < len(panel_state.branches):
-                        branch = panel_state.branches[branch_idx]
-                        virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
-                        circuit_id = f"unmapped_tab_{tab_num}"
-                        result.circuits.additional_properties[circuit_id] = virtual_circuit
-                        _LOGGER.debug("Created unmapped circuit (live mode): %s", circuit_id)
-
-            if not hasattr(panel_state, "branches") or not panel_state.branches:
+                self._add_unmapped_virtuals(result, panel_state.branches)
+            else:
                 _LOGGER.debug("No branches in panel state (live mode), skipping unmapped circuit creation")
 
             return result
@@ -1108,6 +1047,53 @@ class SpanPanelClient:
         except (AttributeError, IndexError, KeyError, TypeError):  # Defensive: never fail on cache post-processing
             # Log at debug level but don't fail - this is defensive code
             _LOGGER.debug("Error ensuring unmapped circuits in cache, continuing with cached data")
+
+    def _get_mapped_tabs_from_circuits(self, circuits: CircuitsOut) -> set[int]:
+        """Collect tab numbers that are already mapped to circuits.
+
+        Args:
+            circuits: CircuitsOut container to inspect
+
+        Returns:
+            Set of mapped tab numbers
+        """
+        mapped_tabs: set[int] = set()
+        if hasattr(circuits, "circuits") and hasattr(circuits.circuits, "additional_properties"):
+            for circuit in circuits.circuits.additional_properties.values():
+                if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
+                    if isinstance(circuit.tabs, list | tuple):
+                        mapped_tabs.update(circuit.tabs)
+                    elif isinstance(circuit.tabs, int):
+                        mapped_tabs.add(circuit.tabs)
+        return mapped_tabs
+
+    def _add_unmapped_virtuals(self, circuits: CircuitsOut, branches: list[Branch]) -> None:
+        """Add virtual circuits for any tabs not present in the mapped set.
+
+        Args:
+            circuits: CircuitsOut to mutate with virtual entries
+            branches: Panel branches used to synthesize metrics
+        """
+        mapped_tabs = self._get_mapped_tabs_from_circuits(circuits)
+        total_tabs = len(branches)
+        all_tabs = set(range(1, total_tabs + 1))
+        unmapped_tabs = all_tabs - mapped_tabs
+
+        _LOGGER.debug(
+            "Creating unmapped circuits. Total tabs: %s, Mapped tabs: %s, Unmapped tabs: %s",
+            total_tabs,
+            mapped_tabs,
+            unmapped_tabs,
+        )
+
+        for tab_num in unmapped_tabs:
+            branch_idx = tab_num - 1
+            if branch_idx < len(branches):
+                branch = branches[branch_idx]
+                virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
+                circuit_id = f"unmapped_tab_{tab_num}"
+                circuits.circuits.additional_properties[circuit_id] = virtual_circuit
+                _LOGGER.debug("Created unmapped circuit: %s", circuit_id)
 
     def _create_unmapped_tab_circuit(self, branch: Branch, tab_number: int) -> Circuit:
         """Create a virtual circuit for an unmapped tab.

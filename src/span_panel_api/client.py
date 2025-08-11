@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+import logging
 import time
 from typing import Any, NoReturn, TypeVar, cast
 
@@ -26,6 +27,9 @@ from .exceptions import (
 from .simulation import DynamicSimulationEngine
 
 T = TypeVar("T")
+
+# Logger for this module
+_LOGGER = logging.getLogger(__name__)
 
 
 # Default async delay implementation
@@ -934,35 +938,14 @@ class SpanPanelClient:
             # Cache the full dataset for consistency
             self._api_cache.set_cached_data(cache_key, full_data)
 
-        # Convert to model object
+        # Convert to model object and apply unmapped tab logic (same as live mode)
         circuits_out = self._convert_raw_to_circuits_out(circuits_data)
-
-        # Apply unmapped tab logic (same as live mode)
         panel_state = await self.get_panel_state()
 
-        # Find tabs already mapped to circuits
-        mapped_tabs: set[int] = set()
-        if hasattr(circuits_out, "circuits") and hasattr(circuits_out.circuits, "additional_properties"):
-            for circuit in circuits_out.circuits.additional_properties.values():
-                if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
-                    if isinstance(circuit.tabs, list | tuple):
-                        mapped_tabs.update(circuit.tabs)
-                    elif isinstance(circuit.tabs, int):
-                        mapped_tabs.add(circuit.tabs)
-
-        # Create virtual circuits for unmapped tabs
         if hasattr(panel_state, "branches") and panel_state.branches:
-            total_tabs = len(panel_state.branches)
-            all_tabs = set(range(1, total_tabs + 1))
-            unmapped_tabs = all_tabs - mapped_tabs
-
-            for tab_num in unmapped_tabs:
-                branch_idx = tab_num - 1
-                if branch_idx < len(panel_state.branches):
-                    branch = panel_state.branches[branch_idx]
-                    virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
-                    circuit_id = f"unmapped_tab_{tab_num}"
-                    circuits_out.circuits.additional_properties[circuit_id] = virtual_circuit
+            self._add_unmapped_virtuals(circuits_out, panel_state.branches)
+        else:
+            _LOGGER.debug("No branches in panel state (simulation), skipping unmapped circuit creation")
 
         return circuits_out
 
@@ -978,42 +961,36 @@ class SpanPanelClient:
 
             # Get panel state for branches data
             panel_state = await self.get_panel_state()
-
-            # Find tabs already mapped to circuits
-            mapped_tabs: set[int] = set()
-            if hasattr(result, "circuits") and hasattr(result.circuits, "additional_properties"):
-                for circuit in result.circuits.additional_properties.values():
-                    if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
-                        if isinstance(circuit.tabs, list | tuple):
-                            mapped_tabs.update(circuit.tabs)
-                        elif isinstance(circuit.tabs, int):
-                            mapped_tabs.add(circuit.tabs)
+            _LOGGER.debug(
+                "Panel state branches: %s",
+                len(panel_state.branches) if hasattr(panel_state, "branches") else "No branches",
+            )
 
             # Create virtual circuits for unmapped tabs
             if hasattr(panel_state, "branches") and panel_state.branches:
-                total_tabs = len(panel_state.branches)
-                all_tabs = set(range(1, total_tabs + 1))
-                unmapped_tabs = all_tabs - mapped_tabs
-
-                for tab_num in unmapped_tabs:
-                    branch_idx = tab_num - 1
-                    if branch_idx < len(panel_state.branches):
-                        branch = panel_state.branches[branch_idx]
-                        virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
-                        circuit_id = f"unmapped_tab_{tab_num}"
-                        result.circuits.additional_properties[circuit_id] = virtual_circuit
+                self._add_unmapped_virtuals(result, panel_state.branches)
+            else:
+                _LOGGER.debug("No branches in panel state (live mode), skipping unmapped circuit creation")
 
             return result
 
         # Check cache first
         cached_circuits = self._api_cache.get_cached_data("circuits")
         if cached_circuits is not None:
+            # Deterministically ensure unmapped circuits using cached panel state if available
+            self._ensure_unmapped_circuits_in_cache(cached_circuits)
             return cached_circuits
 
         try:
             circuits = await self._retry_with_backoff(_get_circuits_operation)
             # Cache the successful response
             self._api_cache.set_cached_data("circuits", circuits)
+
+            # Debug logging to see what's being cached
+            circuit_keys = list(circuits.circuits.additional_properties.keys())
+            cached_unmapped = [cid for cid in circuit_keys if cid.startswith("unmapped_tab_")]
+            _LOGGER.debug("Caching circuits. Total: %s, Unmapped: %s", len(circuit_keys), cached_unmapped)
+
             return circuits
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
@@ -1030,6 +1007,93 @@ class SpanPanelClient:
         except Exception as e:
             # Catch and wrap all other exceptions
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
+
+    def _ensure_unmapped_circuits_in_cache(self, cached_circuits: CircuitsOut) -> None:
+        """Ensure unmapped circuits are present in cached circuits data.
+
+        This is a defensive method that never raises exceptions to avoid breaking cache functionality.
+
+        Args:
+            cached_circuits: The cached circuits data to potentially augment
+        """
+        try:
+            cached_state = self._api_cache.get_cached_data("panel_state")
+            if cached_state is None or not hasattr(cached_state, "branches") or not cached_state.branches:
+                return
+
+            # Find mapped tabs from cached circuits
+            mapped_tabs: set[int] = set()
+            if not (hasattr(cached_circuits, "circuits") and hasattr(cached_circuits.circuits, "additional_properties")):
+                return
+
+            for circuit in cached_circuits.circuits.additional_properties.values():
+                if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
+                    if isinstance(circuit.tabs, list | tuple):
+                        mapped_tabs.update(circuit.tabs)
+                    elif isinstance(circuit.tabs, int):
+                        mapped_tabs.add(circuit.tabs)
+
+            total_tabs = len(cached_state.branches)
+            all_tabs = set(range(1, total_tabs + 1))
+            unmapped_tabs = all_tabs - mapped_tabs
+
+            for tab_num in unmapped_tabs:
+                branch_idx = tab_num - 1
+                if branch_idx < len(cached_state.branches):
+                    branch = cached_state.branches[branch_idx]
+                    virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
+                    circuit_id = f"unmapped_tab_{tab_num}"
+                    cached_circuits.circuits.additional_properties[circuit_id] = virtual_circuit
+        except (AttributeError, IndexError, KeyError, TypeError):  # Defensive: never fail on cache post-processing
+            # Log at debug level but don't fail - this is defensive code
+            _LOGGER.debug("Error ensuring unmapped circuits in cache, continuing with cached data")
+
+    def _get_mapped_tabs_from_circuits(self, circuits: CircuitsOut) -> set[int]:
+        """Collect tab numbers that are already mapped to circuits.
+
+        Args:
+            circuits: CircuitsOut container to inspect
+
+        Returns:
+            Set of mapped tab numbers
+        """
+        mapped_tabs: set[int] = set()
+        if hasattr(circuits, "circuits") and hasattr(circuits.circuits, "additional_properties"):
+            for circuit in circuits.circuits.additional_properties.values():
+                if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
+                    if isinstance(circuit.tabs, list | tuple):
+                        mapped_tabs.update(circuit.tabs)
+                    elif isinstance(circuit.tabs, int):
+                        mapped_tabs.add(circuit.tabs)
+        return mapped_tabs
+
+    def _add_unmapped_virtuals(self, circuits: CircuitsOut, branches: list[Branch]) -> None:
+        """Add virtual circuits for any tabs not present in the mapped set.
+
+        Args:
+            circuits: CircuitsOut to mutate with virtual entries
+            branches: Panel branches used to synthesize metrics
+        """
+        mapped_tabs = self._get_mapped_tabs_from_circuits(circuits)
+        total_tabs = len(branches)
+        all_tabs = set(range(1, total_tabs + 1))
+        unmapped_tabs = all_tabs - mapped_tabs
+
+        _LOGGER.debug(
+            "Creating unmapped circuits. Total tabs: %s, Mapped tabs: %s, Unmapped tabs: %s",
+            total_tabs,
+            mapped_tabs,
+            unmapped_tabs,
+        )
+
+        for tab_num in unmapped_tabs:
+            branch_idx = tab_num - 1
+            if branch_idx < len(branches):
+                branch = branches[branch_idx]
+                virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
+                circuit_id = f"unmapped_tab_{tab_num}"
+                circuits.circuits.additional_properties[circuit_id] = virtual_circuit
+                _LOGGER.debug("Created unmapped circuit: %s", circuit_id)
 
     def _create_unmapped_tab_circuit(self, branch: Branch, tab_number: int) -> Circuit:
         """Create a virtual circuit for an unmapped tab.
@@ -1168,24 +1232,33 @@ class SpanPanelClient:
             SpanPanelServerError: For 5xx server errors
             SpanPanelRetriableError: For transient server errors
         """
-        # In simulation mode, apply relay state as a dynamic override
+        # In simulation mode, use simulation engine
         if self._simulation_mode:
-            if self._simulation_engine is None:
-                raise SpanPanelAPIError("Simulation engine not initialized")
+            return await self._set_circuit_relay_simulation(circuit_id, state)
 
-            await self._ensure_simulation_initialized()
+        # In live mode, use live implementation
+        return await self._set_circuit_relay_live(circuit_id, state)
 
-            # Validate state
-            if state.upper() not in ["OPEN", "CLOSED"]:
-                raise SpanPanelAPIError(f"Invalid relay state '{state}'. Must be one of: OPEN, CLOSED")
+    async def _set_circuit_relay_simulation(self, circuit_id: str, state: str) -> Any:
+        """Set circuit relay state in simulation mode."""
+        if self._simulation_engine is None:
+            raise SpanPanelAPIError("Simulation engine not initialized")
 
-            # Apply the relay state override to the simulation engine
-            if self._simulation_engine is not None:
-                circuit_overrides = {circuit_id: {"relay_state": state.upper()}}
-                self._simulation_engine.set_dynamic_overrides(circuit_overrides=circuit_overrides)
+        await self._ensure_simulation_initialized()
 
-            # Return a mock success response
-            return {"status": "success", "circuit_id": circuit_id, "relay_state": state.upper()}
+        # Validate state
+        if state.upper() not in ["OPEN", "CLOSED"]:
+            raise SpanPanelAPIError(f"Invalid relay state '{state}'. Must be one of: OPEN, CLOSED")
+
+        # Apply the relay state override to the simulation engine
+        circuit_overrides = {circuit_id: {"relay_state": state.upper()}}
+        self._simulation_engine.set_dynamic_overrides(circuit_overrides=circuit_overrides)
+
+        # Return a mock success response
+        return {"status": "success", "circuit_id": circuit_id, "relay_state": state.upper()}
+
+    async def _set_circuit_relay_live(self, circuit_id: str, state: str) -> Any:
+        """Set circuit relay state in live mode."""
 
         async def _set_circuit_relay_operation() -> Any:
             client = self._get_client_for_endpoint(requires_auth=True)
@@ -1243,6 +1316,33 @@ class SpanPanelClient:
             SpanPanelServerError: For 5xx server errors
             SpanPanelRetriableError: For transient server errors
         """
+        # In simulation mode, use simulation engine
+        if self._simulation_mode:
+            return await self._set_circuit_priority_simulation(circuit_id, priority)
+
+        # In live mode, use live implementation
+        return await self._set_circuit_priority_live(circuit_id, priority)
+
+    async def _set_circuit_priority_simulation(self, circuit_id: str, priority: str) -> Any:
+        """Set circuit priority in simulation mode."""
+        if self._simulation_engine is None:
+            raise SpanPanelAPIError("Simulation engine not initialized")
+
+        await self._ensure_simulation_initialized()
+
+        # Validate priority
+        if priority.upper() not in ["MUST_HAVE", "NICE_TO_HAVE"]:
+            raise SpanPanelAPIError(f"Invalid priority '{priority}'. Must be one of: MUST_HAVE, NICE_TO_HAVE")
+
+        # Apply the priority override to the simulation engine
+        circuit_overrides = {circuit_id: {"priority": priority.upper()}}
+        self._simulation_engine.set_dynamic_overrides(circuit_overrides=circuit_overrides)
+
+        # Return a mock success response
+        return {"status": "success", "circuit_id": circuit_id, "priority": priority.upper()}
+
+    async def _set_circuit_priority_live(self, circuit_id: str, priority: str) -> Any:
+        """Set circuit priority in live mode."""
 
         async def _set_circuit_priority_operation() -> Any:
             client = self._get_client_for_endpoint(requires_auth=True)

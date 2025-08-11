@@ -222,7 +222,7 @@ class TestSimulationMissingCoverage:
 
             # Test SOE calculation with no battery circuits
             # This should hit line 876 (no battery circuits)
-            with patch.object(engine, '_config') as mock_config:
+            with patch.object(engine, "_config") as mock_config:
                 mock_config.get.return_value = []  # No battery circuits
                 soe = engine._calculate_dynamic_soe()
                 assert 15.0 <= soe <= 95.0

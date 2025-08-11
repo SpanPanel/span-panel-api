@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Script to format markdown files using markdownlint-cli2."""
+"""Script to format markdown files using Prettier."""
 
 import subprocess
 import sys
@@ -7,11 +7,11 @@ from pathlib import Path
 
 
 def main() -> None:
-    """Run markdownlint-cli2 with auto-fix on markdown files."""
+    """Run Prettier with auto-fix on markdown files."""
     try:
-        # Run markdownlint-cli2 with fix enabled
+        # Run Prettier with fix enabled on markdown files
         result = subprocess.run(
-            ["npx", "markdownlint-cli2", "--config", ".markdownlint-cli2.jsonc", "--fix", "**/*.md"],
+            ["npx", "prettier", "--write", "--config", ".prettierrc.json", "**/*.md"],
             capture_output=True,
             text=True,
             cwd=Path(__file__).parent.parent,
@@ -19,13 +19,16 @@ def main() -> None:
 
         if result.returncode == 0:
             print("✅ Markdown formatting complete!")
+            if result.stdout:
+                print("Formatted files:")
+                print(result.stdout)
         else:
             print("❌ Markdown formatting failed:")
             print(result.stderr)
             sys.exit(1)
 
     except FileNotFoundError:
-        print("❌ markdownlint-cli2 not found. Please install it with: npm install -g markdownlint-cli2")
+        print("❌ Prettier not found. Please install it with: npm install -g prettier")
         sys.exit(1)
     except Exception as e:
         print(f"❌ Error running markdown formatter: {e}")

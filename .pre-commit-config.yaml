@@ -48,12 +48,21 @@ repos:
         ]
         exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
-  # Markdownlint for markdown files
+  # Prettier for markdown formatting
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.1.0
+    hooks:
+      - id: prettier
+        types: [markdown]
+        args: ['--config', '.prettierrc.json']
+        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|node_modules/.*|htmlcov/.*'
+
+  # Markdownlint for markdown files (after Prettier formatting)
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: v0.15.0
     hooks:
       - id: markdownlint-cli2
-        args: ['--config', '.markdownlint-cli2.jsonc', '--fix']
+        args: ['--config', '.markdownlint-cli2.jsonc']
         exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|node_modules/.*|htmlcov/.*'
 
   # MyPy for type checking

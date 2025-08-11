@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+import logging
 import time
 from typing import Any, NoReturn, TypeVar, cast
 
@@ -26,6 +27,9 @@ from .exceptions import (
 from .simulation import DynamicSimulationEngine
 
 T = TypeVar("T")
+
+# Logger for this module
+_LOGGER = logging.getLogger(__name__)
 
 
 # Default async delay implementation
@@ -956,6 +960,13 @@ class SpanPanelClient:
             all_tabs = set(range(1, total_tabs + 1))
             unmapped_tabs = all_tabs - mapped_tabs
 
+            _LOGGER.debug(
+                "Creating unmapped circuits. Total tabs: %s, Mapped tabs: %s, Unmapped tabs: %s",
+                total_tabs,
+                mapped_tabs,
+                unmapped_tabs,
+            )
+
             for tab_num in unmapped_tabs:
                 branch_idx = tab_num - 1
                 if branch_idx < len(panel_state.branches):
@@ -963,6 +974,10 @@ class SpanPanelClient:
                     virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
                     circuit_id = f"unmapped_tab_{tab_num}"
                     circuits_out.circuits.additional_properties[circuit_id] = virtual_circuit
+                    _LOGGER.debug("Created unmapped circuit: %s", circuit_id)
+
+            if not hasattr(panel_state, "branches") or not panel_state.branches:
+                _LOGGER.debug("No branches in panel state (simulation), skipping unmapped circuit creation")
 
         return circuits_out
 
@@ -978,6 +993,9 @@ class SpanPanelClient:
 
             # Get panel state for branches data
             panel_state = await self.get_panel_state()
+            _LOGGER.debug(
+                "Panel state branches: %s", len(panel_state.branches) if hasattr(panel_state, "branches") else "No branches"
+            )
 
             # Find tabs already mapped to circuits
             mapped_tabs: set[int] = set()
@@ -988,12 +1006,20 @@ class SpanPanelClient:
                             mapped_tabs.update(circuit.tabs)
                         elif isinstance(circuit.tabs, int):
                             mapped_tabs.add(circuit.tabs)
+                _LOGGER.debug("Mapped tabs found: %s", mapped_tabs)
 
             # Create virtual circuits for unmapped tabs
             if hasattr(panel_state, "branches") and panel_state.branches:
                 total_tabs = len(panel_state.branches)
                 all_tabs = set(range(1, total_tabs + 1))
                 unmapped_tabs = all_tabs - mapped_tabs
+
+                _LOGGER.debug(
+                    "Creating unmapped circuits (live mode). Total tabs: %s, Mapped tabs: %s, Unmapped tabs: %s",
+                    total_tabs,
+                    mapped_tabs,
+                    unmapped_tabs,
+                )
 
                 for tab_num in unmapped_tabs:
                     branch_idx = tab_num - 1
@@ -1002,18 +1028,40 @@ class SpanPanelClient:
                         virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
                         circuit_id = f"unmapped_tab_{tab_num}"
                         result.circuits.additional_properties[circuit_id] = virtual_circuit
+                        _LOGGER.debug("Created unmapped circuit (live mode): %s", circuit_id)
+
+            if not hasattr(panel_state, "branches") or not panel_state.branches:
+                _LOGGER.debug("No branches in panel state (live mode), skipping unmapped circuit creation")
 
             return result
 
         # Check cache first
         cached_circuits = self._api_cache.get_cached_data("circuits")
         if cached_circuits is not None:
-            return cached_circuits
+            # Debug logging to see what's in the cache
+            cached_circuit_keys = list(cached_circuits.circuits.additional_properties.keys())
+            cached_unmapped = [cid for cid in cached_circuit_keys if cid.startswith("unmapped_tab_")]
+            _LOGGER.debug("Returning cached circuits. Total: %s, Unmapped: %s", len(cached_circuit_keys), cached_unmapped)
+
+            # If cached data doesn't contain unmapped circuits, clear the cache to force fresh data
+            # This ensures unmapped circuits are created in the next fetch
+            if not cached_unmapped:
+                _LOGGER.debug("Cache doesn't contain unmapped circuits, clearing cache to force fresh data")
+                self._api_cache.clear()
+                # Don't return cached data, continue to fetch fresh data
+            else:
+                return cached_circuits
 
         try:
             circuits = await self._retry_with_backoff(_get_circuits_operation)
             # Cache the successful response
             self._api_cache.set_cached_data("circuits", circuits)
+
+            # Debug logging to see what's being cached
+            circuit_keys = list(circuits.circuits.additional_properties.keys())
+            cached_unmapped = [cid for cid in circuit_keys if cid.startswith("unmapped_tab_")]
+            _LOGGER.debug("Caching circuits. Total: %s, Unmapped: %s", len(circuit_keys), cached_unmapped)
+
             return circuits
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
@@ -1168,24 +1216,33 @@ class SpanPanelClient:
             SpanPanelServerError: For 5xx server errors
             SpanPanelRetriableError: For transient server errors
         """
-        # In simulation mode, apply relay state as a dynamic override
+        # In simulation mode, use simulation engine
         if self._simulation_mode:
-            if self._simulation_engine is None:
-                raise SpanPanelAPIError("Simulation engine not initialized")
+            return await self._set_circuit_relay_simulation(circuit_id, state)
 
-            await self._ensure_simulation_initialized()
+        # In live mode, use live implementation
+        return await self._set_circuit_relay_live(circuit_id, state)
 
-            # Validate state
-            if state.upper() not in ["OPEN", "CLOSED"]:
-                raise SpanPanelAPIError(f"Invalid relay state '{state}'. Must be one of: OPEN, CLOSED")
+    async def _set_circuit_relay_simulation(self, circuit_id: str, state: str) -> Any:
+        """Set circuit relay state in simulation mode."""
+        if self._simulation_engine is None:
+            raise SpanPanelAPIError("Simulation engine not initialized")
 
-            # Apply the relay state override to the simulation engine
-            if self._simulation_engine is not None:
-                circuit_overrides = {circuit_id: {"relay_state": state.upper()}}
-                self._simulation_engine.set_dynamic_overrides(circuit_overrides=circuit_overrides)
+        await self._ensure_simulation_initialized()
 
-            # Return a mock success response
-            return {"status": "success", "circuit_id": circuit_id, "relay_state": state.upper()}
+        # Validate state
+        if state.upper() not in ["OPEN", "CLOSED"]:
+            raise SpanPanelAPIError(f"Invalid relay state '{state}'. Must be one of: OPEN, CLOSED")
+
+        # Apply the relay state override to the simulation engine
+        circuit_overrides = {circuit_id: {"relay_state": state.upper()}}
+        self._simulation_engine.set_dynamic_overrides(circuit_overrides=circuit_overrides)
+
+        # Return a mock success response
+        return {"status": "success", "circuit_id": circuit_id, "relay_state": state.upper()}
+
+    async def _set_circuit_relay_live(self, circuit_id: str, state: str) -> Any:
+        """Set circuit relay state in live mode."""
 
         async def _set_circuit_relay_operation() -> Any:
             client = self._get_client_for_endpoint(requires_auth=True)
@@ -1243,6 +1300,33 @@ class SpanPanelClient:
             SpanPanelServerError: For 5xx server errors
             SpanPanelRetriableError: For transient server errors
         """
+        # In simulation mode, use simulation engine
+        if self._simulation_mode:
+            return await self._set_circuit_priority_simulation(circuit_id, priority)
+
+        # In live mode, use live implementation
+        return await self._set_circuit_priority_live(circuit_id, priority)
+
+    async def _set_circuit_priority_simulation(self, circuit_id: str, priority: str) -> Any:
+        """Set circuit priority in simulation mode."""
+        if self._simulation_engine is None:
+            raise SpanPanelAPIError("Simulation engine not initialized")
+
+        await self._ensure_simulation_initialized()
+
+        # Validate priority
+        if priority.upper() not in ["MUST_HAVE", "NICE_TO_HAVE"]:
+            raise SpanPanelAPIError(f"Invalid priority '{priority}'. Must be one of: MUST_HAVE, NICE_TO_HAVE")
+
+        # Apply the priority override to the simulation engine
+        circuit_overrides = {circuit_id: {"priority": priority.upper()}}
+        self._simulation_engine.set_dynamic_overrides(circuit_overrides=circuit_overrides)
+
+        # Return a mock success response
+        return {"status": "success", "circuit_id": circuit_id, "priority": priority.upper()}
+
+    async def _set_circuit_priority_live(self, circuit_id: str, priority: str) -> Any:
+        """Set circuit priority in live mode."""
 
         async def _set_circuit_priority_operation() -> Any:
             client = self._get_client_for_endpoint(requires_auth=True)

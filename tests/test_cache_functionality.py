@@ -403,11 +403,15 @@ async def test_cache_hit_coverage():
     ):
         mock_circuits_response = MagicMock()
         mock_circuits_response.circuits = MagicMock()
-        mock_circuits_response.circuits.additional_properties = {}
+        # Add some unmapped circuits to prevent cache clearing
+        mock_circuits_response.circuits.additional_properties = {
+            "unmapped_tab_1": MagicMock(),
+            "unmapped_tab_2": MagicMock(),
+        }
         mock_circuits.asyncio = AsyncMock(return_value=mock_circuits_response)
 
         mock_panel_response = MagicMock()
-        mock_panel_response.branches = []
+        mock_panel_response.branches = [MagicMock(), MagicMock()]  # Add branches to match unmapped circuits
         mock_panel_for_circuits.asyncio = AsyncMock(return_value=mock_panel_response)
 
         # First call - should hit API and cache result

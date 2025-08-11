@@ -1038,19 +1038,9 @@ class SpanPanelClient:
         # Check cache first
         cached_circuits = self._api_cache.get_cached_data("circuits")
         if cached_circuits is not None:
-            # Debug logging to see what's in the cache
-            cached_circuit_keys = list(cached_circuits.circuits.additional_properties.keys())
-            cached_unmapped = [cid for cid in cached_circuit_keys if cid.startswith("unmapped_tab_")]
-            _LOGGER.debug("Returning cached circuits. Total: %s, Unmapped: %s", len(cached_circuit_keys), cached_unmapped)
-
-            # If cached data doesn't contain unmapped circuits, clear the cache to force fresh data
-            # This ensures unmapped circuits are created in the next fetch
-            if not cached_unmapped:
-                _LOGGER.debug("Cache doesn't contain unmapped circuits, clearing cache to force fresh data")
-                self._api_cache.clear()
-                # Don't return cached data, continue to fetch fresh data
-            else:
-                return cached_circuits
+            # Deterministically ensure unmapped circuits using cached panel state if available
+            self._ensure_unmapped_circuits_in_cache(cached_circuits)
+            return cached_circuits
 
         try:
             circuits = await self._retry_with_backoff(_get_circuits_operation)
@@ -1078,6 +1068,46 @@ class SpanPanelClient:
         except Exception as e:
             # Catch and wrap all other exceptions
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
+
+    def _ensure_unmapped_circuits_in_cache(self, cached_circuits: CircuitsOut) -> None:
+        """Ensure unmapped circuits are present in cached circuits data.
+
+        This is a defensive method that never raises exceptions to avoid breaking cache functionality.
+
+        Args:
+            cached_circuits: The cached circuits data to potentially augment
+        """
+        try:
+            cached_state = self._api_cache.get_cached_data("panel_state")
+            if cached_state is None or not hasattr(cached_state, "branches") or not cached_state.branches:
+                return
+
+            # Find mapped tabs from cached circuits
+            mapped_tabs: set[int] = set()
+            if not (hasattr(cached_circuits, "circuits") and hasattr(cached_circuits.circuits, "additional_properties")):
+                return
+
+            for circuit in cached_circuits.circuits.additional_properties.values():
+                if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
+                    if isinstance(circuit.tabs, list | tuple):
+                        mapped_tabs.update(circuit.tabs)
+                    elif isinstance(circuit.tabs, int):
+                        mapped_tabs.add(circuit.tabs)
+
+            total_tabs = len(cached_state.branches)
+            all_tabs = set(range(1, total_tabs + 1))
+            unmapped_tabs = all_tabs - mapped_tabs
+
+            for tab_num in unmapped_tabs:
+                branch_idx = tab_num - 1
+                if branch_idx < len(cached_state.branches):
+                    branch = cached_state.branches[branch_idx]
+                    virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
+                    circuit_id = f"unmapped_tab_{tab_num}"
+                    cached_circuits.circuits.additional_properties[circuit_id] = virtual_circuit
+        except (AttributeError, IndexError, KeyError, TypeError):  # Defensive: never fail on cache post-processing
+            # Log at debug level but don't fail - this is defensive code
+            _LOGGER.debug("Error ensuring unmapped circuits in cache, continuing with cached data")
 
     def _create_unmapped_tab_circuit(self, branch: Branch, tab_number: int) -> Circuit:
         """Create a virtual circuit for an unmapped tab.

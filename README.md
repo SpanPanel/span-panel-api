@@ -21,8 +21,8 @@ A Python client library for accessing the SPAN Panel OpenAPI endpoint.
 
 ## Simulation Mode
 
-The SPAN Panel API client includes a simulation mode for development and testing without requiring a physical SPAN panel. When enabled, the client uses pre-recorded fixture data and applies dynamic variations provided by the API to simulate various load variations.
-Simulation mode supports time-based energy accumulation, power fluctuation patterns for different appliance types, and per-circuit or per-branch variation controls.
+The SPAN Panel API client includes a simulation mode for development and testing without requiring a physical SPAN panel. When enabled, the client uses pre-recorded fixture data and applies dynamic variations provided by the API to simulate various load
+variations. Simulation mode supports time-based energy accumulation, power fluctuation patterns for different appliance types, and per-circuit or per-branch variation controls.
 
 For detailed information and usage examples, see [tests/docs/simulation.md](tests/docs/simulation.md).
 
@@ -183,11 +183,11 @@ asyncio.run(manual_example())
 
 ## When to Use Each Pattern
 
-| Pattern             | Use Case                                 | Pros                                                                         | Cons                                                                     |
-| ------------------- | ---------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| **Context Manager** | Scripts, one-off tasks, testing          | Automatic cleanup • Exception safe • Simple code                             | Creates/destroys connection each time |
-| **Long-Lived**      | Services, daemons, integration platforms | Efficient connection reuse Authentication persistence | Manual lifecycle management • Must handle cleanup                        |
-| **Manual**          | Custom requirements, debugging           | Full control handling                                         | Must remember to call close() • More error-prone                         |
+| Pattern             | Use Case                                 | Pros                                                  | Cons                                              |
+| ------------------- | ---------------------------------------- | ----------------------------------------------------- | ------------------------------------------------- |
+| **Context Manager** | Scripts, one-off tasks, testing          | Automatic cleanup • Exception safe • Simple code      | Creates/destroys connection each time             |
+| **Long-Lived**      | Services, daemons, integration platforms | Efficient connection reuse Authentication persistence | Manual lifecycle management • Must handle cleanup |
+| **Manual**          | Custom requirements, debugging           | Full control handling                                 | Must remember to call close() • More error-prone  |
 
 ## Error Handling
 
@@ -222,18 +222,18 @@ from span_panel_api import (
 
 ### HTTP Error Code Mapping
 
-| Status Code                     | Exception                        | Retry?               | Description                      | Action                         |
-| ------------------------------- | -------------------------------- | -------------------- | -------------------------------- | ------------------------------ |
-| **Authentication Errors**       | -                                | -                    | -                                | -                              |
-| 401, 403                        | `SpanPanelAuthError`             | Once (after re-auth) | Authentication required/failed   | Re-authenticate and retry once |
-| **Server/Network Errors**       | -                                | -                    | -                                | -                              |
-| 500                             | `SpanPanelServerError`           | No                   | Server error (non-retriable)     | Check server, report issue     |
-| 502, 503, 504                   | `SpanPanelRetriableError`        | Yes                  | Retriable server/network errors  | Retry with exponential backoff |
-| **Other HTTP Errors**           | -                                | -                    | -                                | -                              |
-| 404, 400, etc                   | `SpanPanelAPIError`              | Case by case         | Client/request errors            | Check request parameters       |
-| **Timeouts**                    | `SpanPanelTimeoutError`          | Yes                  | Request timed out                | Retry with backoff             |
-| **Validation Errors**           | `SpanPanelValidationError`       | No                   | Data validation failed           | Fix input data                 |
-| **Simulation Config Errors**    | `SimulationConfigurationError`   | No                   | Invalid/missing simulation config| Fix simulation config          |
+| Status Code                  | Exception                      | Retry?               | Description                       | Action                         |
+| ---------------------------- | ------------------------------ | -------------------- | --------------------------------- | ------------------------------ |
+| **Authentication Errors**    | -                              | -                    | -                                 | -                              |
+| 401, 403                     | `SpanPanelAuthError`           | Once (after re-auth) | Authentication required/failed    | Re-authenticate and retry once |
+| **Server/Network Errors**    | -                              | -                    | -                                 | -                              |
+| 500                          | `SpanPanelServerError`         | No                   | Server error (non-retriable)      | Check server, report issue     |
+| 502, 503, 504                | `SpanPanelRetriableError`      | Yes                  | Retriable server/network errors   | Retry with exponential backoff |
+| **Other HTTP Errors**        | -                              | -                    | -                                 | -                              |
+| 404, 400, etc                | `SpanPanelAPIError`            | Case by case         | Client/request errors             | Check request parameters       |
+| **Timeouts**                 | `SpanPanelTimeoutError`        | Yes                  | Request timed out                 | Retry with backoff             |
+| **Validation Errors**        | `SpanPanelValidationError`     | No                   | Data validation failed            | Fix input data                 |
+| **Simulation Config Errors** | `SimulationConfigurationError` | No                   | Invalid/missing simulation config | Fix simulation config          |
 
 ### Retry Strategy
 
@@ -270,9 +270,7 @@ async def example_request_with_retry():
 
 ### Exception Handling
 
-The client configures the underlying OpenAPI client with `raise_on_unexpected_status=True`,
-ensuring that HTTP errors (especially 500 responses) are converted to appropriate exceptions
-rather than being silently ignored.
+The client configures the underlying OpenAPI client with `raise_on_unexpected_status=True`, ensuring that HTTP errors (especially 500 responses) are converted to appropriate exceptions rather than being silently ignored.
 
 ## API Reference
 
@@ -340,8 +338,7 @@ await client.set_circuit_priority("circuit-1", "NICE_TO_HAVE")
 
 ### Complete Circuit Data
 
-The `get_circuits()` method includes virtual circuits for unmapped panel tabs,
-providing complete panel visibility including non-user controlled tabs.
+The `get_circuits()` method includes virtual circuits for unmapped panel tabs, providing complete panel visibility including non-user controlled tabs.
 
 - Virtual circuits have IDs like `unmapped_tab_1`, `unmapped_tab_2`
 - All energy values are correctly mapped from panel branches
@@ -365,8 +362,7 @@ print(circuits.circuits.additional_properties["unmapped_tab_5"].instant_power_w)
 The SPAN Panel API client provides timeout and retry configuration:
 
 - `timeout` (float, default: 30.0): The maximum time (in seconds) to wait for a response from the panel for each attempt.
-- `retries` (int, default: 0): The number of times to retry a failed request due to network or retriable server errors.
-`retries=0` means no retries (1 total attempt), `retries=1` means 1 retry (2 total attempts), etc.
+- `retries` (int, default: 0): The number of times to retry a failed request due to network or retriable server errors. `retries=0` means no retries (1 total attempt), `retries=1` means 1 retry (2 total attempts), etc.
 - `retry_timeout` (float, default: 0.5): The base wait time (in seconds) between retries, with exponential backoff.
 - `retry_backoff_multiplier` (float, default: 2.0): The multiplier for exponential backoff between retries.
 
@@ -408,9 +404,8 @@ Retry and timeout settings can be queried and changed at runtime.
 
 ### Caching
 
-The client includes a time-based cache that prevents redundant API calls within a
-configurable window.  This feature is particularly useful when multiple operations need the same data.
-The package itself makes multiple calls to create virtual circuits for tabs not represented in circuits data so the cache avoids unecessary calls when the user also makes requests the same data.
+The client includes a time-based cache that prevents redundant API calls within a configurable window. This feature is particularly useful when multiple operations need the same data. The package itself makes multiple calls to create virtual circuits for
+tabs not represented in circuits data so the cache avoids unecessary calls when the user also makes requests the same data.
 
 **Cache Behavior:**
 

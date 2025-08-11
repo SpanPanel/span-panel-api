@@ -107,14 +107,12 @@
             "dependsOn": "Run Tests"
         },
         {
-            "label": "Lint Markdown",
+            "label": "Format and Lint Markdown",
             "type": "shell",
-            "command": "npx",
+            "command": "bash",
             "args": [
-                "markdownlint-cli2",
-                "--config",
-                ".markdownlint.json",
-                "**/*.md"
+                "-c",
+                "poetry run format-markdown && npx markdownlint-cli2 --config .markdownlint-cli2.jsonc **/*.md"
             ],
             "group": "build",
             "presentation": {
@@ -124,7 +122,7 @@
                 "panel": "shared"
             },
             "problemMatcher": [],
-            "detail": "Lint all markdown files using markdownlint (David Anson)"
+            "detail": "Format and lint all markdown files using Prettier and markdownlint"
         },
         {
             "label": "Format Code",

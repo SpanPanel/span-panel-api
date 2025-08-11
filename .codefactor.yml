@@ -1,0 +1,18 @@
+version: 1.0
+
+# Exclude noisy or generated directories from CodeFactor analysis
+exclude_patterns:
+  - scripts/**
+  - examples/**
+  - tests/**
+  - src/span_panel_api/generated_client/**
+  - generate_client.py
+  - __pycache__/**
+  - .venv/**
+  - venv/**
+  - dist/**
+  - build/**
+  - .git/**
+  - .mypy_cache/**
+  - .pytest_cache/**
+  - .ruff_cache/**

@@ -2,9 +2,8 @@
 
 ## Overview
 
-The SPAN Panel API client includes a simulation mode for testing without a physical SPAN panel.
-The simulation engine loads YAML configuration files that define circuit templates, energy profiles, and behaviors,
-then generates realistic power and energy data based on these profiles.
+The SPAN Panel API client includes a simulation mode for testing without a physical SPAN panel. The simulation engine loads YAML configuration files that define circuit templates, energy profiles, and behaviors, then generates realistic power and energy
+data based on these profiles.
 
 ## Configuration-Based Simulation
 
@@ -30,8 +29,7 @@ async with SpanPanelClient(
 
 ### Host Parameter in Simulation Mode
 
-When `simulation_mode=True`, the `host` parameter becomes the panel serial number instead of an IP address.
-This serial number appears in status responses and allows testing with specific panel identifiers.
+When `simulation_mode=True`, the `host` parameter becomes the panel serial number instead of an IP address. This serial number appears in status responses and allows testing with specific panel identifiers.
 
 ```python
 # Simulation mode - host becomes serial number
@@ -57,10 +55,10 @@ Define reusable energy profiles for different types of equipment:
 circuit_templates:
   residential_solar:
     energy_profile:
-      mode: "producer"              # consumer, producer, bidirectional
-      power_range: [-2000.0, 0.0]   # Watts (negative = production)
-      typical_power: -1200.0        # Typical output in Watts
-      power_variation: 0.3          # 30% variation around typical
+      mode: "producer" # consumer, producer, bidirectional
+      power_range: [-2000.0, 0.0] # Watts (negative = production)
+      typical_power: -1200.0 # Typical output in Watts
+      power_variation: 0.3 # 30% variation around typical
     relay_behavior: "non_controllable"
     priority: "MUST_HAVE"
 
@@ -69,7 +67,7 @@ circuit_templates:
       mode: "consumer"
       power_range: [0.0, 11000.0]
       typical_power: 7200.0
-      power_variation: 0.8          # High variation (on/off charging)
+      power_variation: 0.8 # High variation (on/off charging)
     relay_behavior: "controllable"
     priority: "NICE_TO_HAVE"
 ```
@@ -82,7 +80,7 @@ Map specific circuits to templates:
 circuits:
   - id: "solar_inverter_main"
     name: "Solar Inverter Main"
-    tabs: [1, 3]                    # Physical panel tabs
+    tabs: [1, 3] # Physical panel tabs
     template: "residential_solar"
 
   - id: "ev_charger_garage"
@@ -97,11 +95,11 @@ Coordinate multiple tabs for 240V systems or multi-phase equipment:
 
 ```yaml
 tab_synchronizations:
-  - tabs: [30, 32]                  # Tab numbers to synchronize
-    behavior: "240v_split_phase"    # Description of coordination
-    power_split: "equal"            # equal, primary_secondary
-    energy_sync: true               # Share energy accumulation
-    template: "residential_solar"   # Template to apply
+  - tabs: [30, 32] # Tab numbers to synchronize
+    behavior: "240v_split_phase" # Description of coordination
+    power_split: "equal" # equal, primary_secondary
+    energy_sync: true # Share energy accumulation
+    template: "residential_solar" # Template to apply
 ```
 
 ### Unmapped Tabs
@@ -116,7 +114,6 @@ unmapped_tab_templates:
       power_range: [-1000.0, 0.0]
       typical_power: -600.0
       power_variation: 0.2
-
 # Tabs 30 and 32 will use solar_production template via tab_synchronizations
 ```
 
@@ -127,9 +124,9 @@ unmapped_tab_templates:
 ```yaml
 energy_profile:
   mode: "producer"
-  power_range: [-2000.0, 0.0]      # Negative values = production
-  typical_power: -1200.0           # Negative = producing power
-  power_variation: 0.3             # Varies with weather/fuel
+  power_range: [-2000.0, 0.0] # Negative values = production
+  typical_power: -1200.0 # Negative = producing power
+  power_variation: 0.3 # Varies with weather/fuel
 ```
 
 ### Consumer (Loads, Appliances)
@@ -137,9 +134,9 @@ energy_profile:
 ```yaml
 energy_profile:
   mode: "consumer"
-  power_range: [0.0, 1500.0]       # Positive values = consumption
-  typical_power: 800.0             # Positive = consuming power
-  power_variation: 0.2             # Usage patterns
+  power_range: [0.0, 1500.0] # Positive values = consumption
+  typical_power: 800.0 # Positive = consuming power
+  power_variation: 0.2 # Usage patterns
 ```
 
 ### Bidirectional (Battery Storage)
@@ -147,9 +144,9 @@ energy_profile:
 ```yaml
 energy_profile:
   mode: "bidirectional"
-  power_range: [-5000.0, 5000.0]   # Can charge or discharge
-  typical_power: 0.0               # Neutral when idle
-  power_variation: 0.4             # Charging/discharging cycles
+  power_range: [-5000.0, 5000.0] # Can charge or discharge
+  typical_power: 0.0 # Neutral when idle
+  power_variation: 0.4 # Charging/discharging cycles
 ```
 
 ## Time-Based Simulation
@@ -387,7 +384,7 @@ The simulation engine validates YAML configuration on startup and raises `Simula
 ```yaml
 circuits:
   - id: "test_circuit"
-    template: "nonexistent_template"  # Will raise SimulationConfigurationError
+    template: "nonexistent_template" # Will raise SimulationConfigurationError
 ```
 
 ### Invalid Energy Profiles
@@ -396,7 +393,7 @@ circuits:
 circuit_templates:
   invalid_template:
     energy_profile:
-      mode: "invalid_mode"  # Must be consumer, producer, or bidirectional
+      mode: "invalid_mode" # Must be consumer, producer, or bidirectional
 ```
 
 ### Invalid Simulation Time
@@ -446,24 +443,24 @@ This section provides a complete reference for all required and optional fields 
 ## Top-Level Structure
 
 ```yaml
-panel_config:         # Required
-circuit_templates:    # Required
-circuits:            # Required
-unmapped_tabs:       # Optional
+panel_config: # Required
+circuit_templates: # Required
+circuits: # Required
+unmapped_tabs: # Optional
 unmapped_tab_templates: # Optional
-tab_synchronizations:   # Optional
-simulation_params:      # Optional
+tab_synchronizations: # Optional
+simulation_params: # Optional
 ```
 
 ---
 
 ### panel_config (Required)
 
-| Field         | Type    | Description                        | Example                |
-|---------------|---------|------------------------------------|------------------------|
-| serial_number | string  | Panel serial number                | "SPAN-32-SIM-001"      |
-| total_tabs    | int     | Number of tabs (circuits)          | 32                     |
-| main_size     | int     | Main breaker size (Amps)           | 200                    |
+| Field         | Type   | Description               | Example           |
+| ------------- | ------ | ------------------------- | ----------------- |
+| serial_number | string | Panel serial number       | "SPAN-32-SIM-001" |
+| total_tabs    | int    | Number of tabs (circuits) | 32                |
+| main_size     | int    | Main breaker size (Amps)  | 200               |
 
 ---
 
@@ -471,66 +468,66 @@ simulation_params:      # Optional
 
 A mapping of template names to template definitions. Each template must include:
 
-| Field           | Type    | Required | Description                                  |
-|-----------------|---------|----------|----------------------------------------------|
-| energy_profile  | dict    | Yes      | See below                                    |
-| relay_behavior  | string  | Yes      | "controllable" or "non_controllable"         |
-| priority        | string  | Yes      | "MUST_HAVE" or "NON_ESSENTIAL"              |
-| cycling_pattern | dict    | No       | See below                                    |
-| time_of_day_profile | dict| No       | See below                                    |
-| smart_behavior  | dict    | No       | See below                                    |
-| battery_behavior| dict    | No       | See below                                    |
+| Field               | Type   | Required | Description                          |
+| ------------------- | ------ | -------- | ------------------------------------ |
+| energy_profile      | dict   | Yes      | See below                            |
+| relay_behavior      | string | Yes      | "controllable" or "non_controllable" |
+| priority            | string | Yes      | "MUST_HAVE" or "NON_ESSENTIAL"       |
+| cycling_pattern     | dict   | No       | See below                            |
+| time_of_day_profile | dict   | No       | See below                            |
+| smart_behavior      | dict   | No       | See below                            |
+| battery_behavior    | dict   | No       | See below                            |
 
 #### energy_profile (Required in each template)
 
-| Field           | Type    | Required | Description                                  |
-|-----------------|---------|----------|----------------------------------------------|
-| mode            | string  | Yes      | "consumer", "producer", or "bidirectional"   |
-| power_range     | [float, float] | Yes | [min, max] in Watts (negative for production)|
-| typical_power   | float   | Yes      | Typical power in Watts                       |
-| power_variation | float   | Yes      | 0.0 to 1.0 (percentage variation)            |
-| efficiency      | float   | No       | 0.0 to 1.0 (energy conversion efficiency)    |
+| Field           | Type           | Required | Description                                   |
+| --------------- | -------------- | -------- | --------------------------------------------- |
+| mode            | string         | Yes      | "consumer", "producer", or "bidirectional"    |
+| power_range     | [float, float] | Yes      | [min, max] in Watts (negative for production) |
+| typical_power   | float          | Yes      | Typical power in Watts                        |
+| power_variation | float          | Yes      | 0.0 to 1.0 (percentage variation)             |
+| efficiency      | float          | No       | 0.0 to 1.0 (energy conversion efficiency)     |
 
 #### cycling_pattern (Optional)
 
-| Field        | Type | Description                |
-|--------------|------|----------------------------|
-| on_duration  | int  | Seconds ON                 |
-| off_duration | int  | Seconds OFF                |
+| Field        | Type | Description |
+| ------------ | ---- | ----------- |
+| on_duration  | int  | Seconds ON  |
+| off_duration | int  | Seconds OFF |
 
 #### time_of_day_profile (Optional)
 
-| Field              | Type        | Description                                  |
-|--------------------|-------------|----------------------------------------------|
-| enabled            | bool        | Enable time-of-day modulation                |
-| peak_hours         | [int]       | List of hours (0-23) for peak activity       |
-| peak_multiplier    | float       | Multiplier during peak hours                 |
-| off_peak_multiplier| float       | Multiplier during off-peak hours             |
-| hourly_multipliers | dict[int,float] | Per-hour multipliers (hour: multiplier)  |
+| Field               | Type            | Description                             |
+| ------------------- | --------------- | --------------------------------------- |
+| enabled             | bool            | Enable time-of-day modulation           |
+| peak_hours          | [int]           | List of hours (0-23) for peak activity  |
+| peak_multiplier     | float           | Multiplier during peak hours            |
+| off_peak_multiplier | float           | Multiplier during off-peak hours        |
+| hourly_multipliers  | dict[int,float] | Per-hour multipliers (hour: multiplier) |
 
 #### smart_behavior (Optional)
 
-| Field              | Type   | Description                                   |
-|--------------------|--------|-----------------------------------------------|
-| responds_to_grid   | bool   | Whether load responds to grid events          |
-| max_power_reduction| float  | Max reduction (0.0-1.0) during grid stress    |
+| Field               | Type  | Description                                |
+| ------------------- | ----- | ------------------------------------------ |
+| responds_to_grid    | bool  | Whether load responds to grid events       |
+| max_power_reduction | float | Max reduction (0.0-1.0) during grid stress |
 
 #### battery_behavior (Optional)
 
-| Field                  | Type         | Description                                 |
-|------------------------|--------------|---------------------------------------------|
-| enabled                | bool         | Enable battery behavior                     |
-| charge_power           | float        | Charging power (W)                          |
-| discharge_power        | float        | Discharging power (W)                       |
-| idle_power             | float        | Idle power (W)                              |
-| charge_hours           | [int]        | Hours to charge (0-23)                      |
-| discharge_hours        | [int]        | Hours to discharge (0-23)                   |
-| idle_hours             | [int]        | Hours to idle (0-23)                        |
-| max_charge_power       | float        | Max charging power (W)                      |
-| max_discharge_power    | float        | Max discharging power (W)                   |
-| idle_power_range       | [float,float]| Range for idle power                        |
-| solar_intensity_profile| dict[int,float]| Per-hour solar intensity (hour: factor)   |
-| demand_factor_profile  | dict[int,float]| Per-hour demand factor (hour: factor)     |
+| Field                   | Type            | Description                             |
+| ----------------------- | --------------- | --------------------------------------- |
+| enabled                 | bool            | Enable battery behavior                 |
+| charge_power            | float           | Charging power (W)                      |
+| discharge_power         | float           | Discharging power (W)                   |
+| idle_power              | float           | Idle power (W)                          |
+| charge_hours            | [int]           | Hours to charge (0-23)                  |
+| discharge_hours         | [int]           | Hours to discharge (0-23)               |
+| idle_hours              | [int]           | Hours to idle (0-23)                    |
+| max_charge_power        | float           | Max charging power (W)                  |
+| max_discharge_power     | float           | Max discharging power (W)               |
+| idle_power_range        | [float,float]   | Range for idle power                    |
+| solar_intensity_profile | dict[int,float] | Per-hour solar intensity (hour: factor) |
+| demand_factor_profile   | dict[int,float] | Per-hour demand factor (hour: factor)   |
 
 ---
 
@@ -538,13 +535,13 @@ A mapping of template names to template definitions. Each template must include:
 
 A list of circuit definitions. Each must include:
 
-| Field     | Type        | Required | Description                                 |
-|-----------|-------------|----------|---------------------------------------------|
-| id        | string      | Yes      | Unique circuit ID                           |
-| name      | string      | Yes      | Human-readable name                         |
-| template  | string      | Yes      | Template name from circuit_templates        |
-| tabs      | [int]       | Yes      | List of tab numbers                         |
-| overrides | dict        | No       | Per-circuit field overrides (see below)     |
+| Field     | Type   | Required | Description                             |
+| --------- | ------ | -------- | --------------------------------------- |
+| id        | string | Yes      | Unique circuit ID                       |
+| name      | string | Yes      | Human-readable name                     |
+| template  | string | Yes      | Template name from circuit_templates    |
+| tabs      | [int]  | Yes      | List of tab numbers                     |
+| overrides | dict   | No       | Per-circuit field overrides (see below) |
 
 #### overrides (Optional)
 
@@ -568,13 +565,13 @@ A mapping of tab numbers (as strings) to template definitions for unmapped tabs.
 
 A list of synchronization configs for tabs (e.g., for 240V split-phase or multi-phase equipment).
 
-| Field        | Type      | Required | Description                                 |
-|--------------|-----------|----------|---------------------------------------------|
-| tabs         | [int]     | Yes      | List of tab numbers to synchronize          |
-| behavior     | string    | Yes      | Description of coordination                 |
-| power_split  | string    | Yes      | "equal", "primary_secondary", or "custom_ratio" |
-| energy_sync  | bool      | Yes      | Whether to synchronize energy accumulation  |
-| template     | string    | Yes      | Template name to apply                      |
+| Field       | Type   | Required | Description                                     |
+| ----------- | ------ | -------- | ----------------------------------------------- |
+| tabs        | [int]  | Yes      | List of tab numbers to synchronize              |
+| behavior    | string | Yes      | Description of coordination                     |
+| power_split | string | Yes      | "equal", "primary_secondary", or "custom_ratio" |
+| energy_sync | bool   | Yes      | Whether to synchronize energy accumulation      |
+| template    | string | Yes      | Template name to apply                          |
 
 ---
 
@@ -582,14 +579,14 @@ A list of synchronization configs for tabs (e.g., for 240V split-phase or multi-
 
 Global simulation parameters.
 
-| Field                   | Type    | Description                                 |
-|-------------------------|---------|---------------------------------------------|
-| update_interval         | int     | Update interval in seconds                  |
-| time_acceleration       | float   | Time progression multiplier                 |
-| noise_factor            | float   | Random noise percentage (0.0-1.0)           |
-| enable_realistic_behaviors | bool | Enable advanced simulation behaviors        |
-| simulation_start_time   | string  | ISO datetime for simulation start           |
-| use_simulation_time     | bool    | Use simulation time vs. system time         |
+| Field                      | Type   | Description                          |
+| -------------------------- | ------ | ------------------------------------ |
+| update_interval            | int    | Update interval in seconds           |
+| time_acceleration          | float  | Time progression multiplier          |
+| noise_factor               | float  | Random noise percentage (0.0-1.0)    |
+| enable_realistic_behaviors | bool   | Enable advanced simulation behaviors |
+| simulation_start_time      | string | ISO datetime for simulation start    |
+| use_simulation_time        | bool   | Use simulation time vs. system time  |
 
 ---
 

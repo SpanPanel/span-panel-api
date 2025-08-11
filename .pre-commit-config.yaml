@@ -17,7 +17,7 @@ repos:
       - id: check-merge-conflict
         exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
       - id: debug-statements
-        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
       - id: mixed-line-ending
         args: ['--fix=lf']
         exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
@@ -29,7 +29,7 @@ repos:
       # Run formatter first - exclude tests to avoid conflicts with black
       - id: ruff-format
         exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
-      # Then linter - exclude tests from strict linting
+      # Then linter - exclude tests and scripts from strict linting
       - id: ruff-check
         args: ['--fix']
         exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
@@ -46,14 +46,14 @@ repos:
           '--target-version=py312',
           '--extend-exclude=src/span_panel_api/generated_client|generate_client\.py|scripts|\.venv|venv'
         ]
-        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
   # Markdownlint for markdown files
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: v0.15.0
     hooks:
       - id: markdownlint-cli2
-        args: ['--config', '.markdownlint.json']
+        args: ['--config', '.markdownlint-cli2.jsonc', '--fix']
         exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|node_modules/.*|htmlcov/.*'
 
   # MyPy for type checking

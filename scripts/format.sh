@@ -15,9 +15,11 @@ poetry run ruff format src/ tests/ scripts/ \
 poetry run black src/ tests/ scripts/ \
   --exclude="src/span_panel_api/generated_client|scripts/coverage\.py|generate_client\.py"
 
-# Finally run ruff check on implementation only (tests are formatted but not checked)
-# Explicitly avoid generate_client.py by not including it in the paths
-poetry run ruff check src/ scripts/ \
-  --exclude=src/span_panel_api/generated_client/**,scripts/coverage.py
+# Finally run ruff check on implementation only (tests and scripts are formatted but not checked)
+poetry run ruff check src/ \
+  --exclude=src/span_panel_api/generated_client/**
+
+# Format markdown files
+poetry run format-markdown
 
 echo "✅ Formatting complete!"

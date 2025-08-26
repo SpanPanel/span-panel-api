@@ -126,10 +126,17 @@ class Circuit:
 
         tabs = cast(list[int], d.pop("tabs", UNSET))
 
+        # Apply SPAN panel sign correction for power values
+        # SPAN panels report negative power for consumption on some installations
+        # Correct the sign based on energy consumption patterns
+        corrected_instant_power_w = cls._apply_power_sign_correction(
+            instant_power_w, produced_energy_wh, consumed_energy_wh, name
+        )
+
         circuit = cls(
             id=id,
             relay_state=relay_state,
-            instant_power_w=instant_power_w,
+            instant_power_w=corrected_instant_power_w,
             instant_power_update_time_s=instant_power_update_time_s,
             produced_energy_wh=produced_energy_wh,
             consumed_energy_wh=consumed_energy_wh,
@@ -144,6 +151,55 @@ class Circuit:
 
         circuit.additional_properties = d
         return circuit
+
+    @classmethod
+    def _apply_power_sign_correction(
+        cls,
+        instant_power_w: float,
+        produced_energy_wh: float,
+        consumed_energy_wh: float,
+        name: str | Any,
+    ) -> float:
+        """Apply sign correction for SPAN panel power reporting quirks.
+        
+        Some SPAN panel installations report negative power for consumption.
+        This method corrects the sign based on energy consumption patterns:
+        - Consumer circuits: negative power -> positive (consumption)
+        - Producer circuits: positive power -> negative (production)
+        
+        Args:
+            instant_power_w: Raw instantaneous power from panel
+            produced_energy_wh: Total produced energy 
+            consumed_energy_wh: Total consumed energy
+            name: Circuit name for logging/debugging
+            
+        Returns:
+            Corrected power value with proper sign convention
+        """
+        # If power is zero, no correction needed
+        if instant_power_w == 0.0:
+            return instant_power_w
+            
+        # Determine if this is likely a producer circuit based on energy patterns
+        # Producer circuits have significantly more produced than consumed energy
+        total_energy = produced_energy_wh + consumed_energy_wh
+        if total_energy > 0:
+            production_ratio = produced_energy_wh / total_energy
+            is_likely_producer = production_ratio > 0.7  # More than 70% production
+        else:
+            # No energy history, use name-based heuristics
+            circuit_name = str(name).lower() if name and str(name) != "UNSET" else ""
+            producer_keywords = ["solar", "inverter", "generator", "battery", "production"]
+            is_likely_producer = any(keyword in circuit_name for keyword in producer_keywords)
+        
+        if is_likely_producer:
+            # Producer circuit: ensure negative power for production
+            # If power is positive, it means producing but sign is wrong
+            return -abs(instant_power_w) if instant_power_w > 0 else instant_power_w
+        else:
+            # Consumer circuit: ensure positive power for consumption  
+            # If power is negative, it means consuming but sign is wrong
+            return abs(instant_power_w)
 
     @property
     def additional_keys(self) -> list[str]:

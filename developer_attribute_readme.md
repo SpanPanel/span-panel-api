@@ -236,7 +236,6 @@ The inconsistency between `entity_description` and other `_attr_*` attributes ma
 ## Best Practices
 
 1. **Use `self._attr_*` for entity attributes** - This automatically gets you:
-
    - Protected attribute storage
    - Cached property getters/setters (via the `CachedProperties` metaclass)
    - Proper type annotation handling
@@ -245,13 +244,11 @@ The inconsistency between `entity_description` and other `_attr_*` attributes ma
 2. **Use `self.entity_description`** (never `self._attr_entity_description`) for entity descriptions
 
 3. **When extending `Entity` classes:**
-
    - Check the parent class implementation to understand the attribute pattern
    - Use the same pattern as the parent class for consistency
    - Include proper type annotations to help catch issues earlier
 
 4. **For custom entity descriptions:**
-
    - Store direct references to custom description attributes in your entity's `__init__` method
    - Use proper type annotations to avoid type checker issues
    - Test property access, especially for device_class and other properties that might come from entity_description

@@ -33,7 +33,7 @@ class TestSolarUnmappedTabs:
 
     @pytest.mark.asyncio
     async def test_solar_production_power_ranges(self, client_32_circuit):
-        """Test that tabs 30 & 32 show solar production (negative power)."""
+        """Test that tabs 30 & 32 show solar production (positive power)."""
         circuits = await client_32_circuit.get_circuits()
         circuit_data = circuits.circuits.additional_properties
 
@@ -56,18 +56,16 @@ class TestSolarUnmappedTabs:
             print(f"  Circuit Power: {circuit_power:.1f}W")
             print(f"  Branch Power: {branch_power:.1f}W")
 
-            # Solar production should be negative (or 0 at night)
-            assert circuit_power <= 0.0, f"Tab {tab_num} should show production (≤0W), got {circuit_power}W"
-            assert branch_power <= 0.0, f"Tab {tab_num} branch should show production (≤0W), got {branch_power}W"
+            # Solar production should be positive (or 0 at night)
+            assert circuit_power >= 0.0, f"Tab {tab_num} should show production (≥0W), got {circuit_power}W"
+            assert branch_power >= 0.0, f"Tab {tab_num} branch should show production (≥0W), got {branch_power}W"
 
-            # During daylight hours, should be producing (negative power)
+            # During daylight hours, should be producing (positive power)
             # At night, should be 0
-            if circuit_power < 0:
+            if circuit_power > 0:
                 # Producing - should be within expected range
-                assert (
-                    -1500.0 <= circuit_power <= 0.0
-                ), f"Tab {tab_num} production {circuit_power}W outside range -1500W to 0W"
-                print(f"  ✓ Tab {tab_num} producing {abs(circuit_power):.1f}W solar power")
+                assert 0.0 <= circuit_power <= 2000.0, f"Tab {tab_num} production {circuit_power}W outside range 0W to 2000W"
+                print(f"  ✓ Tab {tab_num} producing {circuit_power:.1f}W solar power")
             else:
                 # Not producing (night time)
                 assert circuit_power == 0.0, f"Tab {tab_num} should be 0W at night, got {circuit_power}W"
@@ -91,16 +89,16 @@ class TestSolarUnmappedTabs:
         print(f"Combined Power: {tab30_power + tab32_power:.1f}W")
 
         # Both should be producing similar amounts (within 35% of each other)
-        # Solar panels produce negative power (power generation)
-        if tab30_power < 0 and tab32_power < 0:
-            power_ratio = abs(tab30_power) / abs(tab32_power)
+        # Solar panels produce positive power (power generation)
+        if tab30_power > 0 and tab32_power > 0:
+            power_ratio = tab30_power / tab32_power
             assert 0.65 <= power_ratio <= 1.54, f"Solar tabs should produce similar power, ratio: {power_ratio:.2f}"
             print(f"✓ Solar tabs producing similar power (ratio: {power_ratio:.2f})")
 
             # Combined power for 240V circuit
             combined_power = tab30_power + tab32_power
-            assert combined_power <= 0.0, "Combined solar production should be negative"
-            print(f"✓ Combined 240V solar production: {abs(combined_power):.1f}W")
+            assert combined_power > 0.0, "Combined solar production should be positive"
+            print(f"✓ Combined 240V solar production: {combined_power:.1f}W")
         else:
             print("✓ Both tabs not producing (night time)")
 

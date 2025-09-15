@@ -30,22 +30,33 @@ class TestPanelCircuitAlignment:
             panel_state = await client.get_panel_state()
             circuits = await client.get_circuits()
 
-            # Calculate total circuit power (only count real circuits, not unmapped tabs)
-            total_circuit_power = 0.0
+            # Calculate consumption and production separately (only count real circuits, not unmapped tabs)
+            total_consumption = 0.0
+            total_production = 0.0
             total_produced_energy = 0.0
             total_consumed_energy = 0.0
 
             for circuit_id, circuit in circuits.circuits.additional_properties.items():
                 # Skip virtual circuits for unmapped tabs
                 if not circuit_id.startswith("unmapped_tab_"):
-                    total_circuit_power += circuit.instant_power_w
+                    # All circuits now show positive power values
+                    # Determine if consuming or producing based on circuit type
+                    circuit_name = circuit.name.lower() if circuit.name else ""
+                    if any(keyword in circuit_name for keyword in ["solar", "inverter", "generator", "battery"]):
+                        # Producer circuits (solar, battery when discharging)
+                        total_production += circuit.instant_power_w
+                    else:
+                        # Consumer circuits
+                        total_consumption += circuit.instant_power_w
+
                     total_produced_energy += circuit.produced_energy_wh
                     total_consumed_energy += circuit.consumed_energy_wh
 
-            # Power should align exactly (no random variation)
-            assert panel_state.instant_grid_power_w == total_circuit_power, (
+            # Panel grid power should be consumption - production
+            expected_grid_power = total_consumption - total_production
+            assert panel_state.instant_grid_power_w == expected_grid_power, (
                 f"Panel power ({panel_state.instant_grid_power_w}W) should exactly match "
-                f"circuit total ({total_circuit_power}W)"
+                f"expected grid power ({expected_grid_power}W) = consumption ({total_consumption}W) - production ({total_production}W)"
             )
 
             # Energy should match exactly
@@ -70,23 +81,33 @@ class TestPanelCircuitAlignment:
             panel_state = await client.get_panel_state()
             circuits = await client.get_circuits()
 
-            # Calculate total circuit power (exclude virtual unmapped tab circuits)
-            total_circuit_power = 0.0
+            # Calculate consumption and production separately (exclude virtual unmapped tab circuits)
+            total_consumption = 0.0
+            total_production = 0.0
             for circuit_id in circuits.circuits.additional_keys:
                 if not circuit_id.startswith("unmapped_tab_"):
                     circuit = circuits.circuits[circuit_id]
-                    total_circuit_power += circuit.instant_power_w
+                    # All circuits now show positive power values
+                    # Determine if consuming or producing based on circuit type
+                    circuit_name = circuit.name.lower() if circuit.name else ""
+                    if any(keyword in circuit_name for keyword in ["solar", "inverter", "generator", "battery"]):
+                        # Producer circuits (solar, battery when discharging)
+                        total_production += circuit.instant_power_w
+                    else:
+                        # Consumer circuits
+                        total_consumption += circuit.instant_power_w
 
-            # Panel grid power should exactly match total circuit power
+            # Panel grid power should be consumption - production
+            expected_grid_power = total_consumption - total_production
             panel_grid_power = panel_state.instant_grid_power_w
-            power_difference = abs(panel_grid_power - total_circuit_power)
+            power_difference = abs(panel_grid_power - expected_grid_power)
 
-            print(f"Panel power: {panel_grid_power}W, Circuit total: {total_circuit_power}W, Diff: {power_difference}W")
+            print(f"Panel power: {panel_grid_power}W, Expected: {expected_grid_power}W, Diff: {power_difference}W")
 
             # Power should now align exactly
             assert power_difference == 0.0, (
                 f"Panel grid power ({panel_grid_power}W) should exactly match "
-                f"total circuit power ({total_circuit_power}W). "
+                f"expected grid power ({expected_grid_power}W) = consumption ({total_consumption}W) - production ({total_production}W). "
                 f"Difference: {power_difference}W"
             )
 
@@ -143,10 +164,21 @@ class TestPanelCircuitAlignment:
                 panel_state = await client.get_panel_state()
                 circuits = await client.get_circuits()
 
-                # Calculate circuit totals
-                total_circuit_power = sum(
-                    circuits.circuits[cid].instant_power_w for cid in circuits.circuits.additional_keys
-                )
+                # Calculate consumption and production separately
+                total_consumption = 0.0
+                total_production = 0.0
+                for cid in circuits.circuits.additional_keys:
+                    circuit = circuits.circuits[cid]
+                    # All circuits now show positive power values
+                    # Determine if consuming or producing based on circuit type
+                    circuit_name = circuit.name.lower() if circuit.name else ""
+                    if any(keyword in circuit_name for keyword in ["solar", "inverter", "generator", "battery"]):
+                        # Producer circuits (solar, battery when discharging)
+                        total_production += circuit.instant_power_w
+                    else:
+                        # Consumer circuits
+                        total_consumption += circuit.instant_power_w
+
                 total_produced_energy = sum(
                     circuits.circuits[cid].produced_energy_wh for cid in circuits.circuits.additional_keys
                 )
@@ -154,8 +186,9 @@ class TestPanelCircuitAlignment:
                     circuits.circuits[cid].consumed_energy_wh for cid in circuits.circuits.additional_keys
                 )
 
-                # Verify power alignment (with current larger variation due to separate data generation)
-                power_difference = abs(panel_state.instant_grid_power_w - total_circuit_power)
+                # Panel grid power should be consumption - production
+                expected_grid_power = total_consumption - total_production
+                power_difference = abs(panel_state.instant_grid_power_w - expected_grid_power)
                 assert power_difference <= 2000.0, f"Call {i + 1}: Power misalignment too large ({power_difference}W)"
 
                 # Document that energy alignment is currently not exact due to separate data generation
@@ -175,31 +208,30 @@ class TestPanelCircuitAlignment:
             panel_state = await client.get_panel_state()
             circuits = await client.get_circuits()
 
-            # Categorize circuits by power behavior
-            producing_circuits = []
-            consuming_circuits = []
+            # Categorize circuits by power behavior (all circuits now show positive power)
+            total_consumption = 0.0
+            total_production = 0.0
 
             for circuit_id in circuits.circuits.additional_keys:
                 circuit = circuits.circuits[circuit_id]
-                if circuit.instant_power_w < 0:  # Negative = producing
-                    producing_circuits.append(circuit)
-                elif circuit.instant_power_w > 0:  # Positive = consuming
-                    consuming_circuits.append(circuit)
+                # All circuits now show positive power values
+                # Determine if consuming or producing based on circuit type
+                circuit_name = circuit.name.lower() if circuit.name else ""
+                if any(keyword in circuit_name for keyword in ["solar", "inverter", "generator", "battery"]):
+                    # Producer circuits (solar, battery when discharging)
+                    total_production += circuit.instant_power_w
+                else:
+                    # Consumer circuits
+                    total_consumption += circuit.instant_power_w
 
-            # Calculate totals
-            total_production = sum(abs(c.instant_power_w) for c in producing_circuits)
-            total_consumption = sum(c.instant_power_w for c in consuming_circuits)
-            net_power = total_consumption - total_production  # Net from grid perspective
+            # Panel grid power should be consumption - production
+            expected_grid_power = total_consumption - total_production
 
-            # Verify the math makes sense
-            total_circuit_power = sum(circuits.circuits[cid].instant_power_w for cid in circuits.circuits.additional_keys)
-            assert abs(total_circuit_power - net_power) < 0.001, "Circuit power calculation error"
-
-            # Panel should reflect this net power (with current larger variation due to separate data generation)
-            power_difference = abs(panel_state.instant_grid_power_w - total_circuit_power)
+            # Panel should reflect this expected grid power (with current larger variation due to separate data generation)
+            power_difference = abs(panel_state.instant_grid_power_w - expected_grid_power)
             assert power_difference <= 2000.0, (
                 f"Panel power ({panel_state.instant_grid_power_w}W) doesn't align with "
-                f"circuit total ({total_circuit_power}W). Difference: {power_difference}W"
+                f"expected grid power ({expected_grid_power}W) = consumption ({total_consumption}W) - production ({total_production}W). Difference: {power_difference}W"
             )
 
     async def test_panel_circuit_alignment_data_integrity(self):

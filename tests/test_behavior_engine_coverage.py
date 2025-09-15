@@ -53,8 +53,8 @@ class TestBehaviorEngineEdgeCases:
             solar_circuit = circuits.circuits.additional_properties.get("solar_array_variable")
 
             if solar_circuit is not None:
-                # Solar should be producing (negative power) or 0 depending on time
-                assert solar_circuit.instant_power_w <= 0, "Solar should produce non-positive power"
+                # Solar should be producing (positive power) or 0 depending on time
+                assert solar_circuit.instant_power_w >= 0, "Solar should produce non-negative power"
             else:
                 # If no solar circuit found, just check that circuits exist
                 assert len(circuits.circuits.additional_properties) > 0
@@ -90,12 +90,10 @@ class TestBehaviorEngineEdgeCases:
         day_time = now.replace(hour=10, minute=0, second=0, microsecond=0)
         day_timestamp = day_time.timestamp()
         day_modulated = engine._apply_time_of_day_modulation(-1000.0, solar_template, day_timestamp)
-        # Should be negative and different from base power (sine curve applied)
-        assert day_modulated < 0, "Solar should produce power during day"
-        assert day_modulated != -1000.0, "Solar power should be modulated by sine curve"
-        # Should be approximately -750W at hour 10
-        expected_approx = -750.0
-        assert abs(day_modulated - expected_approx) < 100.0, f"Expected ~{expected_approx}W, got {day_modulated}W"
+        # Should be positive and use time-of-day profile (peak factor = 1.0)
+        assert day_modulated > 0, "Solar should produce positive power during day"
+        # With peak_hours configuration, solar should produce full power during peak hours
+        assert day_modulated == 1000.0, f"Solar power should be full power during peak hours, got {day_modulated}W"
 
     def test_behavior_engine_time_of_day_modulation(self):
         """Test time-of-day modulation for regular circuits to cover specific lines."""

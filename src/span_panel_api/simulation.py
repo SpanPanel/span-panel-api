@@ -43,6 +43,10 @@ class TimeOfDayProfile(TypedDict, total=False):
 
     enabled: bool
     peak_hours: list[int]  # Hours of day for peak activity
+    hour_factors: dict[int, float]  # Hour-specific production factors
+    production_hours: list[int]  # Hours when solar should produce
+    night_hours: list[int]  # Hours when solar should not produce
+    peak_factor: float  # Peak production factor
 
 
 class SmartBehavior(TypedDict, total=False):
@@ -168,6 +172,9 @@ class RealisticBehaviorEngine:
         # Apply time-of-day modulation
         if template.get("time_of_day_profile", {}).get("enabled", False):
             base_power = self._apply_time_of_day_modulation(base_power, template, current_time)
+        elif template["energy_profile"]["mode"] == "producer":
+            # Solar producers should always have day/night cycle, even without time_of_day_profile enabled
+            base_power = self._apply_solar_day_night_cycle(base_power, current_time, template)
 
         # Apply cycling behavior
         if "cycling_pattern" in template:
@@ -192,6 +199,14 @@ class RealisticBehaviorEngine:
 
         # Clamp to template range
         min_power, max_power = energy_profile["power_range"]
+        if energy_profile["mode"] == "producer":
+            # For producers, convert negative range to positive range
+            # [-4000, 0] becomes [0, 4000]
+            # [0, -4000] becomes [0, 4000]
+            original_min, original_max = min_power, max_power
+            min_power = 0.0  # Minimum production is 0
+            # Find the maximum absolute value from the original range
+            max_power = max(abs(original_min), abs(original_max))
         final_power = max(min_power, min(max_power, final_power))
 
         return final_power
@@ -207,13 +222,8 @@ class RealisticBehaviorEngine:
         peak_hours = profile.get("peak_hours", [])
 
         if template["energy_profile"]["mode"] == "producer":
-            # Solar production pattern
-            if 6 <= current_hour <= 18:
-                # Daylight hours - use sine curve
-                hour_angle = (current_hour - 6) * math.pi / 12
-                production_factor = math.sin(hour_angle) ** 2
-                return base_power * production_factor
-            return 0.0  # No solar at night
+            # Solar production pattern - use template configuration
+            return self._apply_solar_day_night_cycle(base_power, current_time, template)
 
         if current_hour in peak_hours:
             # Peak usage hours
@@ -223,6 +233,25 @@ class RealisticBehaviorEngine:
             return base_power * 0.3
         # Normal hours
         return base_power
+
+    def _apply_solar_day_night_cycle(
+        self, base_power: float, current_time: float, template: CircuitTemplateExtended
+    ) -> float:
+        """Apply solar day/night cycle to producer circuits using template configuration.
+
+        Args:
+            base_power: Base power from template (should be negative for solar)
+            current_time: Current simulation time
+            template: Circuit template with time_of_day_profile configuration
+
+        Returns:
+            Power in watts (positive for production, 0 at night)
+        """
+        # Get production factor from template configuration
+        production_factor = self._get_solar_production_factor_from_profile(template, current_time)
+
+        # Convert negative base_power to positive production
+        return abs(base_power) * production_factor
 
     def _apply_cycling_behavior(
         self, circuit_id: str, base_power: float, template: CircuitTemplateExtended, current_time: float
@@ -293,18 +322,23 @@ class RealisticBehaviorEngine:
         """Get charging power for the current hour."""
         max_charge_power: float = battery_config.get("max_charge_power", -3000.0)
         solar_intensity = self._get_solar_intensity_from_config(current_hour, battery_config)
-        return max_charge_power * solar_intensity
+        # Convert negative charge power to positive (charging is positive power consumption)
+        return abs(max_charge_power) * solar_intensity
 
     def _get_discharge_power(self, battery_config: dict[str, Any], current_hour: int) -> float:
         """Get discharging power for the current hour."""
         max_discharge_power: float = battery_config.get("max_discharge_power", 2500.0)
         demand_factor = self._get_demand_factor_from_config(current_hour, battery_config)
-        return max_discharge_power * demand_factor
+        # Discharging is positive power production
+        return abs(max_discharge_power) * demand_factor
 
     def _get_idle_power(self, battery_config: dict[str, Any]) -> float:
         """Get idle power (minimal power flow during low activity hours)."""
         idle_range: list[float] = battery_config.get("idle_power_range", [-100.0, 100.0])
-        return random.uniform(idle_range[0], idle_range[1])  # nosec B311
+        # Convert idle range to positive values (idle is minimal consumption)
+        min_idle = abs(idle_range[0]) if idle_range[0] < 0 else idle_range[0]
+        max_idle = abs(idle_range[1]) if idle_range[1] < 0 else idle_range[1]
+        return random.uniform(min_idle, max_idle)  # nosec B311
 
     def _get_solar_intensity_from_config(self, hour: int, battery_config: dict[str, Any]) -> float:
         """Get solar intensity from YAML configuration."""
@@ -315,6 +349,68 @@ class RealisticBehaviorEngine:
         """Get demand factor from YAML configuration."""
         demand_profile: dict[int, float] = battery_config.get("demand_factor_profile", {})
         return demand_profile.get(hour, 0.3)  # Default to low demand
+
+    def _get_solar_production_factor_from_profile(self, template: CircuitTemplateExtended, current_time: float) -> float:
+        """Get solar production factor from template configuration.
+
+        Args:
+            template: Circuit template with time_of_day_profile configuration
+            current_time: Current simulation time
+
+        Returns:
+            Production factor (0.0 to 1.0) based on template configuration
+        """
+        time_profile = template.get("time_of_day_profile", {})
+        if not time_profile.get("enabled", False):
+            # Fall back to hardcoded day/night cycle if no profile configured
+            return self._get_default_solar_factor(current_time)
+
+        current_hour = datetime.fromtimestamp(current_time).hour
+
+        # Check for hour-specific production factors
+        hour_factors_raw = time_profile.get("hour_factors", {})
+        if isinstance(hour_factors_raw, dict) and current_hour in hour_factors_raw:
+            return float(hour_factors_raw[current_hour])
+
+        # Check for production hours (hours when solar should produce)
+        production_hours_raw = time_profile.get("production_hours", [])
+        if isinstance(production_hours_raw, list) and production_hours_raw and current_hour in production_hours_raw:
+            # Use peak factor if specified, otherwise default to 1.0
+            peak_factor_raw = time_profile.get("peak_factor", 1.0)
+            return float(peak_factor_raw)
+
+        # Check for peak hours (alternative name for production hours)
+        peak_hours_raw = time_profile.get("peak_hours", [])
+        if isinstance(peak_hours_raw, list) and peak_hours_raw and current_hour in peak_hours_raw:
+            # Use peak factor if specified, otherwise default to 1.0
+            peak_factor_raw = time_profile.get("peak_factor", 1.0)
+            return float(peak_factor_raw)
+
+        # Check for night hours (hours when solar should not produce)
+        night_hours_raw = time_profile.get("night_hours", [])
+        if isinstance(night_hours_raw, list) and night_hours_raw and current_hour in night_hours_raw:
+            return 0.0
+
+        # Default to no production if not explicitly configured
+        return 0.0
+
+    def _get_default_solar_factor(self, current_time: float) -> float:
+        """Get default solar production factor using hardcoded day/night cycle.
+
+        Args:
+            current_time: Current simulation time
+
+        Returns:
+            Production factor (0.0 to 1.0) using sine curve for daylight hours
+        """
+        current_hour = datetime.fromtimestamp(current_time).hour
+
+        if 6 <= current_hour <= 18:
+            # Daylight hours - use sine curve for realistic solar production
+            hour_angle = (current_hour - 6) * math.pi / 12
+            production_factor = math.sin(hour_angle) ** 2
+            return production_factor
+        return 0.0  # No solar production at night
 
 
 class DynamicSimulationEngine:
@@ -586,7 +682,8 @@ class DynamicSimulationEngine:
             raise SimulationConfigurationError("Configuration not loaded for data generation")
 
         circuits_data = {}
-        total_power = 0.0
+        total_consumption = 0.0
+        total_production = 0.0
         total_produced_energy = 0.0
         total_consumed_energy = 0.0
 
@@ -631,13 +728,25 @@ class DynamicSimulationEngine:
             if sync_config and sync_config.get("energy_sync", False):
                 # Use the first tab for energy synchronization reference
                 first_tab = circuit_tabs[0]
-                produced_energy, consumed_energy = self._synchronize_energy_for_tab(
-                    first_tab, circuit_def["id"], instant_power, current_time
-                )
+                if final_template["energy_profile"]["mode"] == "bidirectional":
+                    # Use specialized bidirectional energy calculation
+                    produced_energy, consumed_energy = self._calculate_bidirectional_energy(
+                        circuit_def["id"], instant_power, current_time, final_template
+                    )
+                else:
+                    produced_energy, consumed_energy = self._synchronize_energy_for_tab(
+                        first_tab, circuit_def["id"], instant_power, current_time, final_template["energy_profile"]["mode"]
+                    )
             else:
-                produced_energy, consumed_energy = self._calculate_accumulated_energy(
-                    circuit_def["id"], instant_power, current_time
-                )
+                if final_template["energy_profile"]["mode"] == "bidirectional":
+                    # Use specialized bidirectional energy calculation
+                    produced_energy, consumed_energy = self._calculate_bidirectional_energy(
+                        circuit_def["id"], instant_power, current_time, final_template
+                    )
+                else:
+                    produced_energy, consumed_energy = self._calculate_accumulated_energy(
+                        circuit_def["id"], instant_power, current_time, final_template["energy_profile"]["mode"]
+                    )
 
             circuit_data = {
                 "id": circuit_def["id"],
@@ -661,7 +770,24 @@ class DynamicSimulationEngine:
             circuits_data[circuit_def["id"]] = circuit_data
 
             # Aggregate for panel totals
-            total_power += instant_power
+            if template["energy_profile"]["mode"] == "producer":
+                # Solar/producer circuits contribute to production
+                total_production += instant_power
+            elif template["energy_profile"]["mode"] == "bidirectional":
+                # Battery circuits: determine if charging or discharging from profile configuration
+                battery_state = self._get_battery_state_from_profile(template, current_time)
+                if battery_state == "charging":
+                    # Battery is charging - positive power = consumption
+                    total_consumption += instant_power
+                elif battery_state == "discharging":
+                    # Battery is discharging - positive power = production
+                    total_production += instant_power
+                else:
+                    # Idle or unknown state - treat as minimal consumption
+                    total_consumption += instant_power
+            else:
+                # Consumer circuits contribute to consumption
+                total_consumption += instant_power
             total_produced_energy += produced_energy
             total_consumed_energy += consumed_energy
 
@@ -670,21 +796,24 @@ class DynamicSimulationEngine:
 
         return {
             "circuits": {"circuits": circuits_data},
-            "panel": self._generate_panel_data(total_power, total_produced_energy, total_consumed_energy),
+            "panel": self._generate_panel_data(
+                total_consumption, total_production, total_produced_energy, total_consumed_energy
+            ),
             "status": self._generate_status_data(),
             "soe": {"stateOfEnergy": 0.75},
         }
 
     def _generate_panel_data(
-        self, total_power: float, total_produced_energy: float, total_consumed_energy: float
+        self, total_consumption: float, total_production: float, total_produced_energy: float, total_consumed_energy: float
     ) -> dict[str, Any]:
         """Generate panel data aggregated from circuit data."""
         if not self._config:
             raise SimulationConfigurationError("Configuration not loaded")
 
-        # Panel grid power should exactly match the total of all circuit power
-        # Negative values indicate production (solar), positive indicates consumption
-        grid_power = total_power
+        # Panel grid power = consumption - production
+        # Negative values indicate net export (production > consumption)
+        # Positive values indicate net import (consumption > production)
+        grid_power = total_consumption - total_production
 
         return {
             "instantGridPowerW": grid_power,
@@ -756,22 +885,34 @@ class DynamicSimulationEngine:
                 sync_config = self._get_tab_sync_config(tab_num)
                 if sync_config and sync_config.get("energy_sync", False):
                     # Use synchronized energy calculation
+                    # Determine circuit mode for unmapped tabs
+                    unmapped_mode = (
+                        "producer"
+                        if unmapped_tab_config and unmapped_tab_config.get("energy_profile", {}).get("mode") == "producer"
+                        else "consumer"
+                    )
                     produced_energy, consumed_energy = self._synchronize_energy_for_tab(
-                        tab_num, circuit_id, baseline_power, current_time
+                        tab_num, circuit_id, baseline_power, current_time, unmapped_mode
                     )
                 else:
                     # Use regular energy calculation
+                    # Determine circuit mode for unmapped tabs
+                    unmapped_mode = (
+                        "producer"
+                        if unmapped_tab_config and unmapped_tab_config.get("energy_profile", {}).get("mode") == "producer"
+                        else "consumer"
+                    )
                     produced_energy, consumed_energy = self._calculate_accumulated_energy(
-                        circuit_id, baseline_power, current_time
+                        circuit_id, baseline_power, current_time, unmapped_mode
                     )
 
                 # For unmapped tabs:
-                # - Solar production (negative power) -> imported energy represents production
-                # - Consumption (positive power) -> exported energy represents consumption
-                if baseline_power < 0:
+                # - Solar production (positive power) -> exported energy represents production
+                # - Consumption (positive power) -> imported energy represents consumption
+                if unmapped_mode == "producer":
                     # Solar production
-                    imported_energy = produced_energy
-                    exported_energy = consumed_energy
+                    imported_energy = consumed_energy
+                    exported_energy = produced_energy
                 else:
                     # Consumption
                     imported_energy = consumed_energy
@@ -871,11 +1012,13 @@ class DynamicSimulationEngine:
         # Adjust based on current battery activity
         avg_battery_power = total_battery_power / battery_count
 
-        if avg_battery_power < -1000:  # Significant charging
-            # Battery is charging - higher SOE
+        # With positive power values, we need to determine if battery is charging or discharging
+        # based on the time of day and typical battery behavior patterns
+        if current_hour in [9, 10, 11, 12, 13, 14, 15, 16] and avg_battery_power > 1000:
+            # During solar hours with high power, likely charging - higher SOE
             return min(95.0, base_soe + 10.0)
-        if avg_battery_power > 1000:  # Significant discharging
-            # Battery is discharging - lower SOE
+        if current_hour in [17, 18, 19, 20, 21] and avg_battery_power > 1000:
+            # During evening hours with high power, likely discharging - lower SOE
             return max(15.0, base_soe - 15.0)
         # Minimal activity - normal SOE
         return base_soe
@@ -965,14 +1108,15 @@ class DynamicSimulationEngine:
             circuit_info["instantPowerW"] *= self._global_overrides["power_multiplier"]
 
     def _calculate_accumulated_energy(
-        self, circuit_id: str, instant_power: float, current_time: float
+        self, circuit_id: str, instant_power: float, current_time: float, circuit_mode: str = "consumer"
     ) -> tuple[float, float]:
         """Calculate accumulated energy for a circuit based on power and time elapsed.
 
         Args:
             circuit_id: Circuit identifier
-            instant_power: Current power in watts (negative for production)
+            instant_power: Current power in watts (positive for both consumption and production)
             current_time: Current timestamp
+            circuit_mode: Circuit mode ("consumer", "producer", "bidirectional")
 
         Returns:
             Tuple of (produced_energy_wh, consumed_energy_wh)
@@ -985,15 +1129,79 @@ class DynamicSimulationEngine:
         last_update = energy_state["last_update"]
         time_elapsed_hours = (current_time - last_update) / 3600.0  # Convert seconds to hours
 
-        # Calculate energy increment based on current power
+        # Calculate energy increment based on current power and circuit mode
         if instant_power > 0:
-            # Positive power = consumption
             energy_increment = instant_power * time_elapsed_hours
-            energy_state["consumed_wh"] += energy_increment
+            if circuit_mode == "producer":
+                # Solar/producer circuits: positive power = production
+                energy_state["produced_wh"] += energy_increment
+            elif circuit_mode == "bidirectional":
+                # Battery circuits: determine charging/discharging from profile configuration
+                # This requires access to the template to check battery behavior configuration
+                # For now, we'll handle this in the calling code that has access to the template
+                # Default to consumption (charging) - this will be overridden by the calling code
+                energy_state["consumed_wh"] += energy_increment
+            else:
+                # Consumer circuits: positive power = consumption
+                energy_state["consumed_wh"] += energy_increment
         elif instant_power < 0:
-            # Negative power = production
+            # Negative power (shouldn't happen with new logic, but handle for safety)
             energy_increment = abs(instant_power) * time_elapsed_hours
-            energy_state["produced_wh"] += energy_increment
+            if circuit_mode == "producer":
+                energy_state["consumed_wh"] += energy_increment
+            else:
+                energy_state["produced_wh"] += energy_increment
+
+        # Update last update time
+        energy_state["last_update"] = current_time
+
+        return energy_state["produced_wh"], energy_state["consumed_wh"]
+
+    def _calculate_bidirectional_energy(
+        self, circuit_id: str, instant_power: float, current_time: float, template: CircuitTemplateExtended
+    ) -> tuple[float, float]:
+        """Calculate accumulated energy for bidirectional circuits (batteries) based on profile configuration.
+
+        Args:
+            circuit_id: Circuit identifier
+            instant_power: Current power in watts (positive for both consumption and production)
+            current_time: Current timestamp
+            template: Circuit template with battery behavior configuration
+
+        Returns:
+            Tuple of (produced_energy_wh, consumed_energy_wh)
+        """
+        # Initialize energy state if not exists
+        if circuit_id not in self._circuit_energy_states:
+            self._circuit_energy_states[circuit_id] = {"produced_wh": 0.0, "consumed_wh": 0.0, "last_update": current_time}
+
+        energy_state = self._circuit_energy_states[circuit_id]
+        last_update = energy_state["last_update"]
+        time_elapsed_hours = (current_time - last_update) / 3600.0  # Convert seconds to hours
+
+        # Calculate energy increment based on current power and battery state
+        if instant_power > 0:
+            energy_increment = instant_power * time_elapsed_hours
+
+            # Determine battery state from profile configuration
+            battery_state = self._get_battery_state_from_profile(template, current_time)
+
+            if battery_state == "charging":
+                # Battery is charging - positive power = consumption
+                energy_state["consumed_wh"] += energy_increment
+            elif battery_state == "discharging":
+                # Battery is discharging - positive power = production
+                energy_state["produced_wh"] += energy_increment
+            elif battery_state == "idle":
+                # Battery is idle - minimal consumption
+                energy_state["consumed_wh"] += energy_increment
+            else:
+                # Unknown state - default to consumption
+                energy_state["consumed_wh"] += energy_increment
+        elif instant_power < 0:
+            # Negative power (shouldn't happen with new logic, but handle for safety)
+            energy_increment = abs(instant_power) * time_elapsed_hours
+            energy_state["consumed_wh"] += energy_increment
 
         # Update last update time
         energy_state["last_update"] = current_time
@@ -1058,27 +1266,61 @@ class DynamicSimulationEngine:
         circuit_id: str,
         instant_power: float,
         current_time: float,
+        circuit_mode: str = "consumer",
     ) -> tuple[float, float]:
         """Calculate synchronized energy for tabs in the same sync group."""
         try:
             sync_config = self._get_tab_sync_config(tab_num)
         except SimulationConfigurationError:
             # Fallback to regular energy calculation if no sync config
-            return self._calculate_accumulated_energy(circuit_id, instant_power, current_time)
+            return self._calculate_accumulated_energy(circuit_id, instant_power, current_time, circuit_mode)
 
         if not sync_config or not sync_config.get("energy_sync", False):
             # Fallback to regular energy calculation if sync not enabled
-            return self._calculate_accumulated_energy(circuit_id, instant_power, current_time)
+            return self._calculate_accumulated_energy(circuit_id, instant_power, current_time, circuit_mode)
 
         # Use a shared energy state for all tabs in the sync group
         sync_group_id = self._tab_sync_groups.get(tab_num)
         if not sync_group_id:
             # Fallback to regular energy calculation if no sync group
-            return self._calculate_accumulated_energy(circuit_id, instant_power, current_time)
+            return self._calculate_accumulated_energy(circuit_id, instant_power, current_time, circuit_mode)
 
         shared_circuit_id = f"sync_group_{sync_group_id}"
 
         # Calculate energy using the total power for the sync group
         total_power = self._sync_group_power.get(sync_group_id, instant_power * len(sync_config["tabs"]))
 
-        return self._calculate_accumulated_energy(shared_circuit_id, total_power, current_time)
+        return self._calculate_accumulated_energy(shared_circuit_id, total_power, current_time, circuit_mode)
+
+    def _get_battery_state_from_profile(self, template: CircuitTemplateExtended, current_time: float) -> str:
+        """Determine battery state (charging/discharging/idle) from profile configuration.
+
+        Args:
+            template: Circuit template with battery behavior configuration
+            current_time: Current simulation time
+
+        Returns:
+            Battery state: 'charging', 'discharging', 'idle', or 'unknown'
+        """
+        battery_config_raw = template.get("battery_behavior", {})
+        if not isinstance(battery_config_raw, dict):
+            return "unknown"
+        battery_config: dict[str, Any] = battery_config_raw
+
+        # Check if battery behavior is enabled
+        if not battery_config.get("enabled", True):
+            return "unknown"
+
+        current_hour = datetime.fromtimestamp(current_time).hour
+        charge_hours: list[int] = battery_config.get("charge_hours", [])
+        discharge_hours: list[int] = battery_config.get("discharge_hours", [])
+        idle_hours: list[int] = battery_config.get("idle_hours", [])
+
+        if current_hour in charge_hours:
+            return "charging"
+        if current_hour in discharge_hours:
+            return "discharging"
+        if current_hour in idle_hours:
+            return "idle"
+
+        return "unknown"

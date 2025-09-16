@@ -54,19 +54,21 @@ class TestPanelCircuitAlignment:
 
             # Panel grid power should be consumption - production
             expected_grid_power = total_consumption - total_production
-            assert panel_state.instant_grid_power_w == expected_grid_power, (
-                f"Panel power ({panel_state.instant_grid_power_w}W) should exactly match "
+            # Use tolerance for floating-point comparison
+            tolerance = 1e-10
+            assert abs(panel_state.instant_grid_power_w - expected_grid_power) <= tolerance, (
+                f"Panel power ({panel_state.instant_grid_power_w}W) should match "
                 f"expected grid power ({expected_grid_power}W) = consumption ({total_consumption}W) - production ({total_production}W)"
             )
 
-            # Energy should match exactly
-            assert panel_state.main_meter_energy.produced_energy_wh == total_produced_energy, (
-                f"Panel produced energy ({panel_state.main_meter_energy.produced_energy_wh}Wh) should exactly match "
+            # Energy should match with tolerance
+            assert abs(panel_state.main_meter_energy.produced_energy_wh - total_produced_energy) <= tolerance, (
+                f"Panel produced energy ({panel_state.main_meter_energy.produced_energy_wh}Wh) should match "
                 f"circuit total ({total_produced_energy}Wh)"
             )
 
-            assert panel_state.main_meter_energy.consumed_energy_wh == total_consumed_energy, (
-                f"Panel consumed energy ({panel_state.main_meter_energy.consumed_energy_wh}Wh) should exactly match "
+            assert abs(panel_state.main_meter_energy.consumed_energy_wh - total_consumed_energy) <= tolerance, (
+                f"Panel consumed energy ({panel_state.main_meter_energy.consumed_energy_wh}Wh) should match "
                 f"circuit total ({total_consumed_energy}Wh)"
             )
 

@@ -68,7 +68,8 @@ class TestSolarUnmappedTabs:
                 print(f"  ✓ Tab {tab_num} producing {circuit_power:.1f}W solar power")
             else:
                 # Not producing (night time)
-                assert circuit_power == 0.0, f"Tab {tab_num} should be 0W at night, got {circuit_power}W"
+                tolerance = 1e-10
+                assert abs(circuit_power - 0.0) <= tolerance, f"Tab {tab_num} should be 0W at night, got {circuit_power}W"
                 print(f"  ✓ Tab {tab_num} not producing (night time)")
 
     @pytest.mark.asyncio

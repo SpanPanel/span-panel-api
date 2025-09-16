@@ -1223,9 +1223,9 @@ class DynamicSimulationEngine:
             # Negative power (shouldn't happen with new logic, but handle for safety)
             energy_increment = abs(instant_power) * time_elapsed_hours
             if circuit_mode == "producer":
-                energy_state["consumed_wh"] += energy_increment
-            else:
                 energy_state["produced_wh"] += energy_increment
+            else:
+                energy_state["consumed_wh"] += energy_increment
 
         # Update last update time
         energy_state["last_update"] = current_time

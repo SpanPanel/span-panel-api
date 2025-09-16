@@ -1053,12 +1053,12 @@ class DynamicSimulationEngine:
         return {"soe": {"percentage": current_soe}}
 
     def _calculate_dynamic_soe(self) -> float:
-        """Calculate dynamic SOE based on current time and battery behavior."""
-        current_time = time.time()
-        current_hour = int((current_time % 86400) / 3600)  # Hour of day (0-23)
+        """Calculate dynamic SOE based on configured battery behavior."""
+        current_time = self.get_current_simulation_time()
 
-        # Find battery circuits to determine charging/discharging state
-        total_battery_power = 0.0
+        # Find battery circuits and determine their configured behavior
+        total_charging_power = 0.0
+        total_discharging_power = 0.0
         battery_count = 0
 
         if self._config and "circuits" in self._config:
@@ -1070,31 +1070,44 @@ class DynamicSimulationEngine:
                         continue
                     template_dict: dict[str, Any] = template_raw
                     if template_dict.get("battery_behavior", {}).get("enabled", False):
-                        # Calculate what the battery power would be at this time
-                        behavior_engine = RealisticBehaviorEngine(current_time, self._config)
                         # Convert dict to CircuitTemplateExtended for type compatibility
                         template_extended: CircuitTemplateExtended = template_dict  # type: ignore[assignment]
+
+                        # Get battery state from configured profile
+                        battery_state = self._get_battery_state_from_profile(template_extended, current_time)
+
+                        # Calculate what the battery power would be at this time
+                        behavior_engine = RealisticBehaviorEngine(self._simulation_start_time, self._config)
                         battery_power = behavior_engine.get_circuit_power(circuit_def["id"], template_extended, current_time)
-                        total_battery_power += battery_power
+
+                        # Accumulate power based on configured battery state
+                        if battery_state == "charging":
+                            total_charging_power += battery_power
+                        elif battery_state == "discharging":
+                            total_discharging_power += battery_power
+
                         battery_count += 1
 
         if battery_count == 0:
             return 75.0  # Default if no batteries
 
-        # Calculate SOE based on time of day and battery activity
-        base_soe = self._get_time_based_soe(current_hour)
+        # Calculate SOE based on configured battery behavior
+        base_soe = self._get_time_based_soe(datetime.fromtimestamp(current_time).hour)
 
-        # Adjust based on current battery activity
-        avg_battery_power = total_battery_power / battery_count
+        # Adjust SOE based on configured charging/discharging activity
+        if total_charging_power > 1000:
+            # High charging activity - increase SOE
+            return min(95.0, base_soe + 15.0)
+        if total_discharging_power > 1000:
+            # High discharging activity - decrease SOE
+            return max(15.0, base_soe - 20.0)
+        if total_charging_power > 500:
+            # Moderate charging activity - slight increase
+            return min(90.0, base_soe + 8.0)
+        if total_discharging_power > 500:
+            # Moderate discharging activity - slight decrease
+            return max(20.0, base_soe - 10.0)
 
-        # With positive power values, we need to determine if battery is charging or discharging
-        # based on the time of day and typical battery behavior patterns
-        if current_hour in [9, 10, 11, 12, 13, 14, 15, 16] and avg_battery_power > 1000:
-            # During solar hours with high power, likely charging - higher SOE
-            return min(95.0, base_soe + 10.0)
-        if current_hour in [17, 18, 19, 20, 21] and avg_battery_power > 1000:
-            # During evening hours with high power, likely discharging - lower SOE
-            return max(15.0, base_soe - 15.0)
         # Minimal activity - normal SOE
         return base_soe
 

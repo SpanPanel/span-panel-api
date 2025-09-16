@@ -99,8 +99,10 @@ class Test40TabUnmappedCoverage:
 
             # Panel grid power should be less than total circuit power since production reduces net consumption
             # and should be positive (net import) or negative (net export)
+            # Use tolerance for floating-point comparison
+            tolerance = 1e-10  # Very small tolerance for floating-point precision
             assert (
-                abs(panel_grid_power) <= total_circuit_power
+                abs(panel_grid_power) <= total_circuit_power + tolerance
             ), f"Panel power ({panel_grid_power}W) should be reasonable compared to total circuit power ({total_circuit_power}W)"
 
             # Verify we have 40 branches in panel state

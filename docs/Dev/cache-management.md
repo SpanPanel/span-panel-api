@@ -57,14 +57,17 @@ The client uses a simple time-window cache (`TimeWindowCache`) with these proper
 ### Endpoint Behavior and Cache Interaction
 
 - **`get_status()`**
+
   - **Live:** Caches under `status`. Returns cached when window is active.
   - **Simulation:** Caches under `status_sim`.
 
 - **`get_panel_state()`**
+
   - **Live:** Caches under `panel_state`. Returns cached when window is active.
   - **Simulation:** Caches full dataset under `full_sim_data` and returns `panel` portion.
 
 - **`get_circuits()`**
+
   - **Live:** Caches under `circuits`.
     - **On cache hit:** Deterministically ensures unmapped circuits are present by recomputing against cached `panel_state` (if available) and injecting any missing `unmapped_tab_#` entries into the cached result before returning it. The cache is **not**
       invalidated solely due to the absence of unmapped circuits.

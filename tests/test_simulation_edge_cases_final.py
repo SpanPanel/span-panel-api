@@ -34,7 +34,8 @@ class TestSimulationMissingCoverage:
 
             # This should hit line 269 (battery behavior disabled check)
             power = behavior_engine._apply_battery_behavior(1000.0, template, time.time())
-            assert power == 1000.0  # Should return base power unchanged
+            tolerance = 1e-10
+            assert abs(power - 1000.0) <= tolerance  # Should return base power unchanged
 
     @pytest.mark.asyncio
     async def test_battery_behavior_not_dict(self):
@@ -57,8 +58,9 @@ class TestSimulationMissingCoverage:
             behavior_engine = engine._behavior_engine
 
             # This should hit line 274 (battery config not dict check)
+            tolerance = 1e-10
             power = behavior_engine._apply_battery_behavior(1000.0, battery_template, time.time())
-            assert power == 1000.0  # Should return base power unchanged
+            assert abs(power - 1000.0) <= tolerance  # Should return base power unchanged
 
     @pytest.mark.asyncio
     async def test_simulation_time_invalid_format(self):

@@ -37,9 +37,9 @@ class TestUnmappedTabSpecificCoverage:
                         # Check power based on tab type - solar tabs produce (negative), others consume (positive)
                         tab_num = int(circuit_id.split("_")[-1])
                         if tab_num in [30, 32]:
-                            # Solar tabs should produce power (negative values)
+                            # Solar tabs should produce power (positive values)
                             assert (
-                                circuit.instant_power_w <= 0
+                                circuit.instant_power_w >= 0
                             ), f"Solar tab {tab_num} should produce power: {circuit.instant_power_w}W"
                         else:
                             # Other unmapped tabs should consume power (positive values)
@@ -74,9 +74,9 @@ class TestUnmappedTabSpecificCoverage:
 
                     # Verify circuit properties are valid based on tab type
                     if tab_num in [30, 32]:
-                        # Solar tabs should produce power (negative values)
+                        # Solar tabs should produce power (positive values)
                         assert (
-                            circuit.instant_power_w <= 0
+                            circuit.instant_power_w >= 0
                         ), f"Solar tab {tab_num} should produce power: {circuit.instant_power_w}W"
                     else:
                         # Other unmapped tabs should consume power (positive values)

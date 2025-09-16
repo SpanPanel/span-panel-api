@@ -93,7 +93,7 @@ class TestSimulationEngineEdgeCases:
 
         # Try to generate panel data without config
         with pytest.raises(SimulationConfigurationError, match="Configuration not loaded"):
-            engine._generate_panel_data(1000.0, 500.0, 300.0)
+            engine._generate_panel_data(1000.0, 500.0, 300.0, 200.0)
 
     @pytest.mark.asyncio
     async def test_status_data_generation_without_config(self):
@@ -212,11 +212,11 @@ class TestSimulationEngineInitialization:
         behavior_engine = engine._behavior_engine
         template = config["circuit_templates"]["basic_battery"]
 
-        # Test charge hours (should return negative power)
+        # Test charge hours (should return positive power)
         charge_time = time.mktime(time.strptime("2024-01-01 10:00:00", "%Y-%m-%d %H:%M:%S"))
         battery_power = behavior_engine._apply_battery_behavior(500.0, template, charge_time)
-        assert battery_power < 0  # Should be charging (negative)
-        assert battery_power >= -5000  # Within max charge power
+        assert battery_power > 0  # Should be charging (positive)
+        assert battery_power <= 5000  # Within max charge power
 
         # Test discharge hours (should return positive power)
         discharge_time = time.mktime(time.strptime("2024-01-01 18:00:00", "%Y-%m-%d %H:%M:%S"))

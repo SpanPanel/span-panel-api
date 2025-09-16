@@ -336,8 +336,18 @@ class RealisticBehaviorEngine:
         """Get idle power (minimal power flow during low activity hours)."""
         idle_range: list[float] = battery_config.get("idle_power_range", [-100.0, 100.0])
         # Convert idle range to positive values (idle is minimal consumption)
-        min_idle = abs(idle_range[0]) if idle_range[0] < 0 else idle_range[0]
-        max_idle = abs(idle_range[1]) if idle_range[1] < 0 else idle_range[1]
+        # Handle both positive and negative ranges properly
+        min_val, max_val = idle_range[0], idle_range[1]
+        if min_val < 0 and max_val < 0:
+            # Both negative: convert to positive range, swapping min/max
+            min_idle, max_idle = abs(max_val), abs(min_val)
+        elif min_val < 0:
+            # Only min is negative: use 0 as minimum, abs(max) as maximum
+            min_idle, max_idle = 0.0, abs(max_val)
+        else:
+            # Both positive or min positive: use as-is
+            min_idle, max_idle = min_val, max_val
+
         return random.uniform(min_idle, max_idle)  # nosec B311
 
     def _get_solar_intensity_from_config(self, hour: int, battery_config: dict[str, Any]) -> float:

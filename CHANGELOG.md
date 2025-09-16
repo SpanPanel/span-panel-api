@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed in v1.1.9
 
 - Simulation mode sign correction for solar and battery power values
+- Fixed battery State of Energy (SOE) calculation to use configured battery behavior instead of hardcoded time-of-day assumptions
 
 ### Changed in v1.1.9
 

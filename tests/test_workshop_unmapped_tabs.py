@@ -25,10 +25,10 @@ class TestWorkshopUnmappedTabs:
 
         # Verify assigned circuits
         expected_circuits = {
-            1: "Workshop LED Lighting",
-            2: "Table Saw & Planer",
-            3: "Power Tool Outlets",
-            4: "Workshop HVAC",
+            "workshop_led_lighting": "Workshop LED Lighting",
+            "table_saw_planer": "Table Saw & Planer",
+            "power_tool_outlets": "Power Tool Outlets",
+            "workshop_hvac": "Workshop HVAC",
         }
 
         for circuit_id, expected_name in expected_circuits.items():
@@ -69,10 +69,10 @@ class TestWorkshopUnmappedTabs:
 
         # Test power ranges for each circuit type
         power_checks = {
-            1: (20.0, 80.0),  # Workshop LED Lighting
-            2: (0.0, 3500.0),  # Table Saw & Planer
-            3: (0.0, 1800.0),  # Power Tool Outlets
-            4: (0.0, 2400.0),  # Workshop HVAC
+            "workshop_led_lighting": (20.0, 80.0),  # Workshop LED Lighting
+            "table_saw_planer": (0.0, 3500.0),  # Table Saw & Planer
+            "power_tool_outlets": (0.0, 1800.0),  # Power Tool Outlets
+            "workshop_hvac": (0.0, 2400.0),  # Workshop HVAC
         }
 
         for circuit_id, (min_power, max_power) in power_checks.items():
@@ -101,13 +101,13 @@ class TestWorkshopUnmappedTabs:
         circuit_data = circuits.circuits.additional_properties
 
         # Test controlling an assigned circuit (Table Saw)
-        table_saw = circuit_data[2]
+        table_saw = circuit_data["table_saw_planer"]
         original_state = table_saw.relay_state
         new_state = "OPEN" if original_state == "CLOSED" else "CLOSED"
 
-        result = await workshop_client.set_circuit_relay(2, new_state)
+        result = await workshop_client.set_circuit_relay("table_saw_planer", new_state)
         assert result["status"] == "success"
-        assert result["circuit_id"] == 2
+        assert result["circuit_id"] == "table_saw_planer"
         assert result["relay_state"] == new_state
 
         # Test controlling an unmapped circuit
@@ -128,10 +128,10 @@ class TestWorkshopUnmappedTabs:
 
         # Verify circuit priorities match workshop needs
         priority_checks = {
-            1: "MUST_HAVE",  # Workshop LED Lighting - essential
-            2: "NON_ESSENTIAL",  # Table Saw & Planer - can be shed
-            3: "NON_ESSENTIAL",  # Power Tool Outlets - can be shed
-            4: "NICE_TO_HAVE",  # Workshop HVAC - comfort item
+            "workshop_led_lighting": "MUST_HAVE",  # Workshop LED Lighting - essential
+            "table_saw_planer": "NON_ESSENTIAL",  # Table Saw & Planer - can be shed
+            "power_tool_outlets": "NON_ESSENTIAL",  # Power Tool Outlets - can be shed
+            "workshop_hvac": "NICE_TO_HAVE",  # Workshop HVAC - comfort item
         }
 
         for circuit_id, expected_priority in priority_checks.items():

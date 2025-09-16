@@ -28,11 +28,21 @@ class TestUnmappedTabPowerConsumption:
         for i, branch in enumerate(panel_state.branches, 1):
             print(f"Branch {i} (Tab {i}): {branch.instant_power_w:.1f}W")
 
-        # Verify unmapped tabs (5-8) have realistic power
+        # Verify unmapped tabs (5-8) have realistic power based on their configuration
+        expected_ranges = {
+            5: (0.0, 1000.0),  # Tab 5: power_range [0.0, 1000.0]
+            6: (0.0, 1500.0),  # Tab 6: power_range [0.0, 1500.0]
+            7: (0.0, 800.0),  # Tab 7: power_range [0.0, 800.0]
+            8: (0.0, 1200.0),  # Tab 8: power_range [0.0, 1200.0]
+        }
+
         for tab_num in [5, 6, 7, 8]:
             branch = panel_state.branches[tab_num - 1]  # 0-indexed
             power = branch.instant_power_w
-            assert 10.0 <= power <= 200.0, f"Tab {tab_num} power {power}W not in expected range 10-200W"
+            min_power, max_power = expected_ranges[tab_num]
+            assert (
+                min_power <= power <= max_power
+            ), f"Tab {tab_num} power {power}W not in expected range {min_power}-{max_power}W"
             print(f"✓ Unmapped Tab {tab_num}: {power:.1f}W (realistic baseline power)")
 
         # Verify unmapped circuits also reflect this power
@@ -40,7 +50,10 @@ class TestUnmappedTabPowerConsumption:
             circuit_id = f"unmapped_tab_{tab_num}"
             circuit = circuit_data[circuit_id]
             power = circuit.instant_power_w
-            assert 10.0 <= power <= 200.0, f"Unmapped circuit {circuit_id} power {power}W not in expected range"
+            min_power, max_power = expected_ranges[tab_num]
+            assert (
+                min_power <= power <= max_power
+            ), f"Unmapped circuit {circuit_id} power {power}W not in expected range {min_power}-{max_power}W"
             print(f"✓ Unmapped Circuit {circuit_id}: {power:.1f}W")
 
         print("\n✅ All unmapped tabs now show realistic power consumption!")

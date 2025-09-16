@@ -158,7 +158,7 @@ class TestYAMLConfigurationMode:
                 assert isinstance(power, (int, float))
                 # Solar should be negative (production), others positive (consumption)
                 if "solar" in circuit_data["name"].lower():
-                    assert power <= 0
+                    assert power >= 0
                 else:
                     assert power >= 0
 
@@ -784,10 +784,10 @@ class TestUnmappedTabEdgeCases:
                     # Solar tabs (30, 32) produce power (negative values), others consume (positive)
                     tab_num = int(circuit_id.split("_")[-1])
                     if tab_num in [30, 32]:
-                        # Solar tabs should produce power (negative values)
+                        # Solar tabs should produce power (positive values)
                         assert (
-                            circuit.instant_power_w <= 0
-                        ), f"Solar tab {tab_num} should produce power (negative): {circuit.instant_power_w}W"
+                            circuit.instant_power_w >= 0
+                        ), f"Solar tab {tab_num} should produce power (positive): {circuit.instant_power_w}W"
                     else:
                         # Other unmapped tabs should consume power (positive values)
                         assert (
@@ -1085,10 +1085,10 @@ class TestUnmappedTabEnergyAccumulation:
 
         # Test the charge power method directly
         charge_power = engine._get_charge_power(battery_config, 12)
-        expected = -2000.0 * 0.1  # max_charge_power * default_solar_intensity
+        expected = abs(-2000.0) * 0.1  # abs(max_charge_power) * default_solar_intensity
         assert charge_power == expected
 
-        # Test that during charge hours, battery behavior returns negative power
+        # Test that during charge hours, battery behavior returns positive power
         template = {
             "energy_profile": {
                 "mode": "bidirectional",
@@ -1109,7 +1109,7 @@ class TestUnmappedTabEnergyAccumulation:
         hour_12_time = hour_12_dt.timestamp()
 
         battery_result = engine._apply_battery_behavior(0.0, template, hour_12_time)  # type: ignore[arg-type]
-        assert battery_result < 0  # Should be negative (charging)
+        assert battery_result > 0  # Should be positive (charging)
 
     async def test_battery_behavior_discharge_hours(self) -> None:
         """Test battery behavior during discharge hours."""
@@ -1304,7 +1304,7 @@ class TestUnmappedTabEnergyAccumulation:
 
         # Test charge power with configured solar intensity
         charge_power = engine._get_charge_power(battery_config, 12)
-        expected = -2000.0 * 1.0  # max_charge_power * solar_intensity
+        expected = abs(-2000.0) * 1.0  # abs(max_charge_power) * solar_intensity (now positive)
         assert charge_power == expected
 
     async def test_demand_factor_from_config(self) -> None:

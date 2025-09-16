@@ -162,10 +162,9 @@ class Circuit:
     ) -> float:
         """Apply sign correction for SPAN panel power reporting quirks.
         
-        Some SPAN panel installations report negative power for consumption.
         This method corrects the sign based on energy consumption patterns:
-        - Consumer circuits: negative power -> positive (consumption)
-        - Producer circuits: positive power -> negative (production)
+        - Consumer circuits: ensure positive power (consumption)
+        - Producer circuits: ensure positive power (production) - HA energy convention
         
         Args:
             instant_power_w: Raw instantaneous power from panel
@@ -174,7 +173,7 @@ class Circuit:
             name: Circuit name for logging/debugging
             
         Returns:
-            Corrected power value with proper sign convention
+            Corrected power value with proper sign convention (positive for both consumption and production)
         """
         # If power is zero, no correction needed
         if instant_power_w == 0.0:
@@ -193,9 +192,9 @@ class Circuit:
             is_likely_producer = any(keyword in circuit_name for keyword in producer_keywords)
         
         if is_likely_producer:
-            # Producer circuit: ensure negative power for production
-            # If power is positive, it means producing but sign is wrong
-            return -abs(instant_power_w) if instant_power_w > 0 else instant_power_w
+            # Producer circuit: ensure positive power for production (new HA energy convention)
+            # Solar and other producers should show positive power values
+            return abs(instant_power_w)
         else:
             # Consumer circuit: ensure positive power for consumption  
             # If power is negative, it means consuming but sign is wrong

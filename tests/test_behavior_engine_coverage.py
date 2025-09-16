@@ -53,8 +53,8 @@ class TestBehaviorEngineEdgeCases:
             solar_circuit = circuits.circuits.additional_properties.get("solar_array_variable")
 
             if solar_circuit is not None:
-                # Solar should be producing (negative power) or 0 depending on time
-                assert solar_circuit.instant_power_w <= 0, "Solar should produce non-positive power"
+                # Solar should be producing (positive power) or 0 depending on time
+                assert solar_circuit.instant_power_w >= 0, "Solar should produce non-negative power"
             else:
                 # If no solar circuit found, just check that circuits exist
                 assert len(circuits.circuits.additional_properties) > 0
@@ -90,12 +90,13 @@ class TestBehaviorEngineEdgeCases:
         day_time = now.replace(hour=10, minute=0, second=0, microsecond=0)
         day_timestamp = day_time.timestamp()
         day_modulated = engine._apply_time_of_day_modulation(-1000.0, solar_template, day_timestamp)
-        # Should be negative and different from base power (sine curve applied)
-        assert day_modulated < 0, "Solar should produce power during day"
-        assert day_modulated != -1000.0, "Solar power should be modulated by sine curve"
-        # Should be approximately -750W at hour 10
-        expected_approx = -750.0
-        assert abs(day_modulated - expected_approx) < 100.0, f"Expected ~{expected_approx}W, got {day_modulated}W"
+        # Should be positive and use time-of-day profile (peak factor = 1.0)
+        assert day_modulated > 0, "Solar should produce positive power during day"
+        # With peak_hours configuration, solar should produce full power during peak hours
+        tolerance = 1e-10
+        assert (
+            abs(day_modulated - 1000.0) <= tolerance
+        ), f"Solar power should be full power during peak hours, got {day_modulated}W"
 
     def test_behavior_engine_time_of_day_modulation(self):
         """Test time-of-day modulation for regular circuits to cover specific lines."""
@@ -130,7 +131,8 @@ class TestBehaviorEngineEdgeCases:
         peak_timestamp = peak_time.timestamp()
         peak_modulated = engine._apply_time_of_day_modulation(100.0, test_template, peak_timestamp)
         expected_peak = 100.0 * 1.3
-        assert peak_modulated == expected_peak, f"Peak power should be exactly {expected_peak}W (line 218)"
+        tolerance = 1e-10
+        assert abs(peak_modulated - expected_peak) <= tolerance, f"Peak power should be {expected_peak}W (line 218)"
 
         # Test overnight hours (covers line 221 - should be 0.3x)
         # Create a proper 2 AM timestamp in current timezone
@@ -138,12 +140,12 @@ class TestBehaviorEngineEdgeCases:
         night_timestamp = night_time.timestamp()
         night_modulated = engine._apply_time_of_day_modulation(100.0, test_template, night_timestamp)
         expected_night = 100.0 * 0.3
-        assert night_modulated == expected_night, f"Night power should be exactly {expected_night}W (line 221)"
+        assert abs(night_modulated - expected_night) <= tolerance, f"Night power should be {expected_night}W (line 221)"
 
         # Test normal hours (covers line 224 - should be 1.0x)
         normal_timestamp = 15 * 3600  # 3 PM
         normal_modulated = engine._apply_time_of_day_modulation(100.0, test_template, normal_timestamp)
-        assert normal_modulated == 100.0, "Normal hours should return base power (line 224)"
+        assert abs(normal_modulated - 100.0) <= tolerance, "Normal hours should return base power (line 224)"
 
     @pytest.mark.asyncio
     async def test_simulation_engine_error_coverage(self):
@@ -208,8 +210,9 @@ class TestBehaviorEngineEdgeCases:
         }
 
         # Test OPEN relay state (covers line 170)
+        tolerance = 1e-10
         power_open = engine.get_circuit_power("test_circuit", template, current_time, relay_state="OPEN")
-        assert power_open == 0.0, "OPEN relay should return 0.0 power (line 170)"
+        assert abs(power_open - 0.0) <= tolerance, "OPEN relay should return 0.0 power (line 170)"
 
         # Test CLOSED relay state (normal operation)
         power_closed = engine.get_circuit_power("test_circuit", template, current_time, relay_state="CLOSED")

@@ -681,127 +681,202 @@ class DynamicSimulationEngine:
         if not self._config:
             raise SimulationConfigurationError("Configuration not loaded for data generation")
 
-        circuits_data = {}
-        total_consumption = 0.0
-        total_production = 0.0
-        total_produced_energy = 0.0
-        total_consumed_energy = 0.0
-
-        current_time = time.time()
-
-        for circuit_def in self._config["circuits"]:
-            template_name = circuit_def["template"]
-            template = self._config["circuit_templates"][template_name]
-
-            # Apply overrides
-            final_template = deepcopy(template)
-            if "overrides" in circuit_def:
-                final_template.update(circuit_def["overrides"])  # type: ignore[typeddict-item]
-
-            # Generate realistic power using behavior engine
-            behavior_engine = RealisticBehaviorEngine(current_time, self._config)
-            base_power = behavior_engine.get_circuit_power(circuit_def["id"], final_template, current_time)
-
-            # Check if this circuit uses synchronized tabs
-            circuit_tabs = circuit_def["tabs"]
-            sync_config = None
-            for tab_num in circuit_tabs:
-                tab_sync = self._get_tab_sync_config(tab_num)
-                if tab_sync:
-                    sync_config = tab_sync
-                    break
-
-            # Apply synchronization if needed
-            if sync_config and len(circuit_tabs) > 1:
-                # For multi-tab circuits, use the total power (don't split)
-                instant_power = base_power
-                # Store total power for synchronization with unmapped tabs in same group
-                for tab_num in circuit_tabs:
-                    if tab_num in self._tab_sync_groups:
-                        sync_group_id = self._tab_sync_groups[tab_num]
-                        self._sync_group_power[sync_group_id] = base_power
-            else:
-                instant_power = base_power
-
-            # Calculate accumulated energy based on power and time elapsed
-            # For synchronized circuits, use shared energy calculation
-            if sync_config and sync_config.get("energy_sync", False):
-                # Use the first tab for energy synchronization reference
-                first_tab = circuit_tabs[0]
-                if final_template["energy_profile"]["mode"] == "bidirectional":
-                    # Use specialized bidirectional energy calculation
-                    produced_energy, consumed_energy = self._calculate_bidirectional_energy(
-                        circuit_def["id"], instant_power, current_time, final_template
-                    )
-                else:
-                    produced_energy, consumed_energy = self._synchronize_energy_for_tab(
-                        first_tab, circuit_def["id"], instant_power, current_time, final_template["energy_profile"]["mode"]
-                    )
-            else:
-                if final_template["energy_profile"]["mode"] == "bidirectional":
-                    # Use specialized bidirectional energy calculation
-                    produced_energy, consumed_energy = self._calculate_bidirectional_energy(
-                        circuit_def["id"], instant_power, current_time, final_template
-                    )
-                else:
-                    produced_energy, consumed_energy = self._calculate_accumulated_energy(
-                        circuit_def["id"], instant_power, current_time, final_template["energy_profile"]["mode"]
-                    )
-
-            circuit_data = {
-                "id": circuit_def["id"],
-                "name": circuit_def["name"],
-                "relayState": "CLOSED",
-                "instantPowerW": instant_power,
-                "instantPowerUpdateTimeS": int(current_time),
-                "producedEnergyWh": produced_energy,
-                "consumedEnergyWh": consumed_energy,
-                "energyAccumUpdateTimeS": int(current_time),
-                "tabs": circuit_def["tabs"],
-                "priority": final_template["priority"],
-                "isUserControllable": final_template["relay_behavior"] == "controllable",
-                "isSheddable": False,
-                "isNeverBackup": False,
-            }
-
-            # Apply any dynamic overrides (including relay state changes)
-            self._apply_dynamic_overrides(circuit_def["id"], circuit_data)
-
-            circuits_data[circuit_def["id"]] = circuit_data
-
-            # Aggregate for panel totals
-            if template["energy_profile"]["mode"] == "producer":
-                # Solar/producer circuits contribute to production
-                total_production += instant_power
-            elif template["energy_profile"]["mode"] == "bidirectional":
-                # Battery circuits: determine if charging or discharging from profile configuration
-                battery_state = self._get_battery_state_from_profile(template, current_time)
-                if battery_state == "charging":
-                    # Battery is charging - positive power = consumption
-                    total_consumption += instant_power
-                elif battery_state == "discharging":
-                    # Battery is discharging - positive power = production
-                    total_production += instant_power
-                else:
-                    # Idle or unknown state - treat as minimal consumption
-                    total_consumption += instant_power
-            else:
-                # Consumer circuits contribute to consumption
-                total_consumption += instant_power
-            total_produced_energy += produced_energy
-            total_consumed_energy += consumed_energy
-
-        # Panel power calculation needs to account for all circuit power
-        # Virtual circuits for unmapped tabs are created by the client, not here
+        circuits_data, totals = await self._process_all_circuits()
 
         return {
             "circuits": {"circuits": circuits_data},
             "panel": self._generate_panel_data(
-                total_consumption, total_production, total_produced_energy, total_consumed_energy
+                totals["consumption"], totals["production"], totals["produced_energy"], totals["consumed_energy"]
             ),
             "status": self._generate_status_data(),
             "soe": {"stateOfEnergy": 0.75},
         }
+
+    async def _process_all_circuits(self) -> tuple[dict[str, dict[str, Any]], dict[str, float]]:
+        """Process all circuits and return circuit data with aggregated totals."""
+        if not self._config:
+            raise SimulationConfigurationError("Configuration not loaded for circuit processing")
+        circuits_data = {}
+        totals = {
+            "consumption": 0.0,
+            "production": 0.0,
+            "produced_energy": 0.0,
+            "consumed_energy": 0.0,
+        }
+
+        current_time = time.time()
+
+        for circuit_def in self._config["circuits"]:
+            circuit_data, power_values = await self._process_single_circuit(circuit_def, current_time)
+            circuits_data[circuit_def["id"]] = circuit_data
+
+            # Update totals
+            totals["consumption"] += power_values["consumption"]
+            totals["production"] += power_values["production"]
+            totals["produced_energy"] += power_values["produced_energy"]
+            totals["consumed_energy"] += power_values["consumed_energy"]
+
+        return circuits_data, totals
+
+    async def _process_single_circuit(
+        self, circuit_def: CircuitDefinitionExtended, current_time: float
+    ) -> tuple[dict[str, Any], dict[str, float]]:
+        """Process a single circuit and return its data and power values."""
+        if not self._config:
+            raise SimulationConfigurationError("Configuration not loaded for circuit processing")
+        template_name = circuit_def["template"]
+        template = self._config["circuit_templates"][template_name]
+
+        # Apply overrides
+        final_template = deepcopy(template)
+        if "overrides" in circuit_def:
+            final_template.update(circuit_def["overrides"])  # type: ignore[typeddict-item]
+
+        # Generate realistic power using behavior engine
+        behavior_engine = RealisticBehaviorEngine(current_time, self._config)
+        base_power = behavior_engine.get_circuit_power(circuit_def["id"], final_template, current_time)
+
+        # Handle synchronization and power calculation
+        instant_power = self._calculate_instant_power(circuit_def, base_power)
+
+        # Calculate energy
+        produced_energy, consumed_energy = self._calculate_circuit_energy(
+            circuit_def, final_template, instant_power, current_time
+        )
+
+        # Create circuit data
+        circuit_data = self._create_circuit_data(
+            circuit_def, final_template, instant_power, produced_energy, consumed_energy, current_time
+        )
+
+        # Apply any dynamic overrides (including relay state changes)
+        self._apply_dynamic_overrides(circuit_def["id"], circuit_data)
+
+        # Calculate power values for aggregation
+        power_values = self._calculate_power_values(template, instant_power, produced_energy, consumed_energy, current_time)
+
+        return circuit_data, power_values
+
+    def _calculate_instant_power(self, circuit_def: CircuitDefinitionExtended, base_power: float) -> float:
+        """Calculate instant power for a circuit, handling synchronization if needed."""
+        circuit_tabs = circuit_def["tabs"]
+        sync_config = None
+        for tab_num in circuit_tabs:
+            tab_sync = self._get_tab_sync_config(tab_num)
+            if tab_sync:
+                sync_config = tab_sync
+                break
+
+        # Apply synchronization if needed
+        if sync_config and len(circuit_tabs) > 1:
+            # For multi-tab circuits, use the total power (don't split)
+            instant_power = base_power
+            # Store total power for synchronization with unmapped tabs in same group
+            for tab_num in circuit_tabs:
+                if tab_num in self._tab_sync_groups:
+                    sync_group_id = self._tab_sync_groups[tab_num]
+                    self._sync_group_power[sync_group_id] = base_power
+        else:
+            instant_power = base_power
+
+        return instant_power
+
+    def _calculate_circuit_energy(
+        self,
+        circuit_def: CircuitDefinitionExtended,
+        final_template: CircuitTemplateExtended,
+        instant_power: float,
+        current_time: float,
+    ) -> tuple[float, float]:
+        """Calculate energy for a circuit, handling synchronization if needed."""
+        circuit_tabs = circuit_def["tabs"]
+        sync_config = None
+        for tab_num in circuit_tabs:
+            tab_sync = self._get_tab_sync_config(tab_num)
+            if tab_sync:
+                sync_config = tab_sync
+                break
+
+        # Calculate accumulated energy based on power and time elapsed
+        # For synchronized circuits, use shared energy calculation
+        if sync_config and sync_config.get("energy_sync", False):
+            # Use the first tab for energy synchronization reference
+            first_tab = circuit_tabs[0]
+            if final_template["energy_profile"]["mode"] == "bidirectional":
+                # Use specialized bidirectional energy calculation
+                return self._calculate_bidirectional_energy(circuit_def["id"], instant_power, current_time, final_template)
+            return self._synchronize_energy_for_tab(
+                first_tab, circuit_def["id"], instant_power, current_time, final_template["energy_profile"]["mode"]
+            )
+        if final_template["energy_profile"]["mode"] == "bidirectional":
+            # Use specialized bidirectional energy calculation
+            return self._calculate_bidirectional_energy(circuit_def["id"], instant_power, current_time, final_template)
+        return self._calculate_accumulated_energy(
+            circuit_def["id"], instant_power, current_time, final_template["energy_profile"]["mode"]
+        )
+
+    def _create_circuit_data(
+        self,
+        circuit_def: CircuitDefinitionExtended,
+        final_template: CircuitTemplateExtended,
+        instant_power: float,
+        produced_energy: float,
+        consumed_energy: float,
+        current_time: float,
+    ) -> dict[str, Any]:
+        """Create circuit data dictionary."""
+        return {
+            "id": circuit_def["id"],
+            "name": circuit_def["name"],
+            "relayState": "CLOSED",
+            "instantPowerW": instant_power,
+            "instantPowerUpdateTimeS": int(current_time),
+            "producedEnergyWh": produced_energy,
+            "consumedEnergyWh": consumed_energy,
+            "energyAccumUpdateTimeS": int(current_time),
+            "tabs": circuit_def["tabs"],
+            "priority": final_template["priority"],
+            "isUserControllable": final_template["relay_behavior"] == "controllable",
+            "isSheddable": False,
+            "isNeverBackup": False,
+        }
+
+    def _calculate_power_values(
+        self,
+        template: CircuitTemplateExtended,
+        instant_power: float,
+        produced_energy: float,
+        consumed_energy: float,
+        current_time: float,
+    ) -> dict[str, float]:
+        """Calculate power values for aggregation based on circuit type."""
+        power_values = {
+            "consumption": 0.0,
+            "production": 0.0,
+            "produced_energy": produced_energy,
+            "consumed_energy": consumed_energy,
+        }
+
+        if template["energy_profile"]["mode"] == "producer":
+            # Solar/producer circuits contribute to production
+            power_values["production"] = instant_power
+        elif template["energy_profile"]["mode"] == "bidirectional":
+            # Battery circuits: determine if charging or discharging from profile configuration
+            battery_state = self._get_battery_state_from_profile(template, current_time)
+            if battery_state == "charging":
+                # Battery is charging - positive power = consumption
+                power_values["consumption"] = instant_power
+            elif battery_state == "discharging":
+                # Battery is discharging - positive power = production
+                power_values["production"] = instant_power
+            else:
+                # Idle or unknown state - treat as minimal consumption
+                power_values["consumption"] = instant_power
+        else:
+            # Consumer circuits contribute to consumption
+            power_values["consumption"] = instant_power
+
+        return power_values
 
     def _generate_panel_data(
         self, total_consumption: float, total_production: float, total_produced_energy: float, total_consumed_energy: float

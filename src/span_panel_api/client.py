@@ -1107,13 +1107,45 @@ class SpanPanelClient:
         """
         # Map branch data to circuit data
         # For solar inverters: imported energy = solar production, exported energy = grid export
-        instant_power_w = getattr(branch, "instant_power_w", 0.0)
         imported_energy = getattr(branch, "imported_active_energy_wh", 0.0)
         exported_energy = getattr(branch, "exported_active_energy_wh", 0.0)
 
+        # Convert values safely, handling 'unknown' strings when panel is offline
+        def _safe_power_conversion(value: Any) -> float:
+            """Safely convert power value to float, returning 0.0 for invalid values."""
+            if value is None:
+                return 0.0
+            if isinstance(value, int | float):
+                return float(value)
+            if isinstance(value, str):
+                if value.lower() in ("unknown", "unavailable", "offline"):
+                    return 0.0
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    return 0.0
+            return 0.0
+
+        def _safe_energy_conversion(value: Any) -> float | None:
+            """Safely convert energy value, returning None for invalid values (not 0.0)."""
+            if value is None:
+                return None
+            if isinstance(value, int | float):
+                return float(value)
+            if isinstance(value, str):
+                if value.lower() in ("unknown", "unavailable", "offline"):
+                    return None  # Energy should be None when unavailable, not 0.0
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    return None
+            return None
+
+        # Safely convert all values
+        instant_power_w = _safe_power_conversion(getattr(branch, "instant_power_w", 0.0))
         # For solar tabs, imported energy represents production
-        produced_energy_wh = imported_energy
-        consumed_energy_wh = exported_energy
+        produced_energy_wh = _safe_energy_conversion(imported_energy)
+        consumed_energy_wh = _safe_energy_conversion(exported_energy)
 
         # Get timestamps (use current time as fallback)
         current_time = int(time.time())

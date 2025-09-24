@@ -255,93 +255,108 @@ class PersistentObjectCache:
         """Get cached battery storage data immediately."""
         return self._battery_cache
 
+    def _initialize_circuits_cache(self, raw_data: dict[str, Any]) -> None:
+        """Initialize circuits cache for first time."""
+        self._circuits_cache = CircuitsOut.from_dict(raw_data)
+        # Cache all circuit object references
+        for circuit_id, circuit in self._circuits_cache.circuits.additional_properties.items():
+            self._circuit_objects[circuit_id] = circuit
+        _LOGGER.debug("Cache INIT for circuits: created %d objects", len(self._circuit_objects))
+
+    def _log_circuits_debug_info(self, raw_data: dict[str, Any]) -> None:
+        """Log debug information about circuits data structure."""
+        _LOGGER.debug("Cache UPDATE circuits: raw_data keys = %s", list(raw_data.keys()))
+
+        # Debug: Check what's inside the circuits key
+        if "circuits" in raw_data:
+            circuits_data = raw_data["circuits"]
+            _LOGGER.debug(
+                "Cache UPDATE circuits: circuits keys = %s",
+                (
+                    list(circuits_data.keys())
+                    if isinstance(circuits_data, dict)
+                    else f"circuits type = {type(circuits_data)}"
+                ),
+            )
+
+            # If circuits_data is a dict, show a sample of its contents
+            if isinstance(circuits_data, dict) and circuits_data:
+                sample_key = next(iter(circuits_data.keys()))
+                _LOGGER.debug("Cache UPDATE circuits: sample circuits[%s] = %s", sample_key, type(circuits_data[sample_key]))
+
+    def _extract_circuit_data(self, raw_data: dict[str, Any]) -> dict[str, Any]:
+        """Extract circuit data from raw API response."""
+        # Try different possible paths for circuit data
+        if "circuits" in raw_data and isinstance(raw_data["circuits"], dict):
+            circuits_obj = raw_data["circuits"]
+            if "additionalProperties" in circuits_obj:
+                additional_props = circuits_obj["additionalProperties"]
+                if isinstance(additional_props, dict):
+                    _LOGGER.debug(
+                        "Cache UPDATE circuits: found circuits.additionalProperties with %d items",
+                        len(additional_props),
+                    )
+                    return additional_props
+            if "additional_properties" in circuits_obj:
+                additional_props = circuits_obj["additional_properties"]
+                if isinstance(additional_props, dict):
+                    _LOGGER.debug(
+                        "Cache UPDATE circuits: found circuits.additional_properties with %d items",
+                        len(additional_props),
+                    )
+                    return additional_props
+            # Maybe the circuits object itself contains the circuit data directly
+            # Check if any keys look like circuit IDs
+            circuit_like_keys = [
+                k
+                for k in circuits_obj
+                if isinstance(k, str) and (k.startswith("unmapped_tab_") or k.isdigit() or len(k) > 5)
+            ]
+            if circuit_like_keys:
+                _LOGGER.debug(
+                    "Cache UPDATE circuits: using circuits directly with %d circuit-like keys: %s",
+                    len(circuit_like_keys),
+                    circuit_like_keys[:5],
+                )
+                return circuits_obj
+            _LOGGER.debug("Cache UPDATE circuits: circuits keys don't look like circuit IDs: %s", list(circuits_obj.keys()))
+            return {}
+        if "additional_properties" in raw_data:
+            additional_props = raw_data["additional_properties"]
+            if isinstance(additional_props, dict):
+                _LOGGER.debug("Cache UPDATE circuits: found additional_properties with %d items", len(additional_props))
+                return additional_props
+        _LOGGER.debug("Cache UPDATE circuits: could not find circuit data in raw_data")
+        return {}
+
+    def _update_existing_circuits(self, new_circuit_data: dict[str, Any]) -> int:
+        """Update existing circuit objects with new data."""
+        updated_count = 0
+
+        for circuit_id, circuit_data in new_circuit_data.items():
+            if circuit_id in self._circuit_objects:
+                self._update_circuit_in_place(self._circuit_objects[circuit_id], circuit_data)
+                updated_count += 1
+            else:
+                # New circuit (rare after initial load)
+                new_circuit = Circuit.from_dict(circuit_data)
+                self._circuit_objects[circuit_id] = new_circuit
+                if self._circuits_cache is not None:
+                    self._circuits_cache.circuits.additional_properties[circuit_id] = new_circuit
+                _LOGGER.debug("Cache ADD new circuit: %s", circuit_id)
+
+        return updated_count
+
     def update_circuits_from_api(self, raw_data: dict[str, Any]) -> CircuitsOut:
         """Update circuits cache from API response, reusing existing objects."""
         if self._circuits_cache is None:
             # First time - create objects
-            self._circuits_cache = CircuitsOut.from_dict(raw_data)
-            # Cache all circuit object references
-            for circuit_id, circuit in self._circuits_cache.circuits.additional_properties.items():
-                self._circuit_objects[circuit_id] = circuit
-            _LOGGER.debug("Cache INIT for circuits: created %d objects", len(self._circuit_objects))
+            self._initialize_circuits_cache(raw_data)
         else:
             # Update existing objects in place
-            # Debug: Check the structure of raw_data
-            _LOGGER.debug("Cache UPDATE circuits: raw_data keys = %s", list(raw_data.keys()))
-
-            # Debug: Check what's inside the circuits key
-            if "circuits" in raw_data:
-                circuits_data = raw_data["circuits"]
-                _LOGGER.debug(
-                    "Cache UPDATE circuits: circuits keys = %s",
-                    (
-                        list(circuits_data.keys())
-                        if isinstance(circuits_data, dict)
-                        else f"circuits type = {type(circuits_data)}"
-                    ),
-                )
-
-                # If circuits_data is a dict, show a sample of its contents
-                if isinstance(circuits_data, dict) and circuits_data:
-                    sample_key = next(iter(circuits_data.keys()))
-                    _LOGGER.debug(
-                        "Cache UPDATE circuits: sample circuits[%s] = %s", sample_key, type(circuits_data[sample_key])
-                    )
-
-            # Try different possible paths for circuit data
-            new_circuit_data = None
-            if "circuits" in raw_data and isinstance(raw_data["circuits"], dict):
-                circuits_obj = raw_data["circuits"]
-                if "additionalProperties" in circuits_obj:
-                    new_circuit_data = circuits_obj["additionalProperties"]
-                    _LOGGER.debug(
-                        "Cache UPDATE circuits: found circuits.additionalProperties with %d items", len(new_circuit_data)
-                    )
-                elif "additional_properties" in circuits_obj:
-                    new_circuit_data = circuits_obj["additional_properties"]
-                    _LOGGER.debug(
-                        "Cache UPDATE circuits: found circuits.additional_properties with %d items", len(new_circuit_data)
-                    )
-                else:
-                    # Maybe the circuits object itself contains the circuit data directly
-                    # Check if any keys look like circuit IDs
-                    circuit_like_keys = [
-                        k
-                        for k in circuits_obj
-                        if isinstance(k, str) and (k.startswith("unmapped_tab_") or k.isdigit() or len(k) > 5)
-                    ]
-                    if circuit_like_keys:
-                        new_circuit_data = circuits_obj
-                        _LOGGER.debug(
-                            "Cache UPDATE circuits: using circuits directly with %d circuit-like keys: %s",
-                            len(circuit_like_keys),
-                            circuit_like_keys[:5],
-                        )
-                    else:
-                        _LOGGER.debug(
-                            "Cache UPDATE circuits: circuits keys don't look like circuit IDs: %s", list(circuits_obj.keys())
-                        )
-                        new_circuit_data = {}
-            elif "additional_properties" in raw_data:
-                new_circuit_data = raw_data["additional_properties"]
-                _LOGGER.debug("Cache UPDATE circuits: found additional_properties with %d items", len(new_circuit_data))
-            else:
-                _LOGGER.debug("Cache UPDATE circuits: could not find circuit data in raw_data")
-                new_circuit_data = {}
-
-            updated_count = 0
-
-            for circuit_id, circuit_data in new_circuit_data.items():
-                if circuit_id in self._circuit_objects:
-                    self._update_circuit_in_place(self._circuit_objects[circuit_id], circuit_data)
-                    updated_count += 1
-                else:
-                    # New circuit (rare after initial load)
-                    new_circuit = Circuit.from_dict(circuit_data)
-                    self._circuit_objects[circuit_id] = new_circuit
-                    self._circuits_cache.circuits.additional_properties[circuit_id] = new_circuit
-                    _LOGGER.debug("Cache ADD new circuit: %s", circuit_id)
-
+            self._log_circuits_debug_info(raw_data)
+            new_circuit_data = self._extract_circuit_data(raw_data)
+            updated_count = self._update_existing_circuits(new_circuit_data)
             _LOGGER.debug("Cache UPDATE circuits: updated %d objects in place", updated_count)
 
         return self._circuits_cache
@@ -1202,26 +1217,29 @@ class SpanPanelClient:
         # Add unmapped tab power to panel grid power
         panel_state.instant_grid_power_w += unmapped_tab_power
 
-    async def _synchronize_branch_power_with_circuits(self, panel_state: PanelState, full_data: dict[str, Any]) -> None:
-        """Synchronize branch power with circuit power for consistency in simulation mode."""
+    def _validate_synchronization_data(self, panel_state: PanelState, full_data: dict[str, Any]) -> dict[str, Any] | None:
+        """Validate data required for branch power synchronization."""
         if not hasattr(panel_state, "branches") or not panel_state.branches:
             _LOGGER.debug("No branches to synchronize")
-            return
+            return None
 
         circuits_data = full_data.get("circuits", {})
         if not circuits_data:
             _LOGGER.debug("No circuits data to synchronize")
-            return
+            return None
 
         # The circuits data has a nested structure: circuits -> {circuit_id: circuit_data}
         actual_circuits = circuits_data.get("circuits", circuits_data)
         if not actual_circuits:
             _LOGGER.debug("No actual circuits data to synchronize")
-            return
+            return None
 
-        _LOGGER.debug("Synchronizing branch power with %d circuits", len(actual_circuits))
+        if isinstance(actual_circuits, dict):
+            return actual_circuits
+        return None
 
-        # Create a mapping of tab -> total circuit power for that tab
+    def _build_tab_power_mapping(self, actual_circuits: dict[str, Any], panel_state: PanelState) -> dict[int, float]:
+        """Build mapping of tab numbers to total circuit power for that tab."""
         tab_power_map: dict[int, float] = {}
 
         # Process each circuit and distribute its power across its tabs
@@ -1248,14 +1266,17 @@ class SpanPanelClient:
                 if isinstance(tab_num, int) and 1 <= tab_num <= len(panel_state.branches):
                     tab_power_map[tab_num] = tab_power_map.get(tab_num, 0.0) + power_per_tab
 
-        # Update branch power to match circuit power
+        return tab_power_map
+
+    def _update_branch_power(self, panel_state: PanelState, tab_power_map: dict[int, float]) -> None:
+        """Update branch power to match circuit power."""
         for tab_num, power in tab_power_map.items():
             branch_idx = tab_num - 1
             if 0 <= branch_idx < len(panel_state.branches):
                 panel_state.branches[branch_idx].instant_power_w = power
 
-        # Calculate panel grid power as consumption - production
-        # First, we need to determine which circuits are producers vs consumers
+    def _calculate_grid_power(self, actual_circuits: dict[str, Any]) -> tuple[float, float, float]:
+        """Calculate grid power from circuit consumption and production."""
         total_consumption = 0.0
         total_production = 0.0
 
@@ -1274,7 +1295,24 @@ class SpanPanelClient:
 
         # Panel grid power = consumption - production
         # Positive = importing from grid, Negative = exporting to grid
-        panel_state.instant_grid_power_w = total_consumption - total_production
+        grid_power = total_consumption - total_production
+        return total_consumption, total_production, grid_power
+
+    async def _synchronize_branch_power_with_circuits(self, panel_state: PanelState, full_data: dict[str, Any]) -> None:
+        """Synchronize branch power with circuit power for consistency in simulation mode."""
+        actual_circuits = self._validate_synchronization_data(panel_state, full_data)
+        if actual_circuits is None:
+            return
+
+        _LOGGER.debug("Synchronizing branch power with %d circuits", len(actual_circuits))
+
+        # Build tab power mapping and update branches
+        tab_power_map = self._build_tab_power_mapping(actual_circuits, panel_state)
+        self._update_branch_power(panel_state, tab_power_map)
+
+        # Calculate and update grid power
+        total_consumption, total_production, grid_power = self._calculate_grid_power(actual_circuits)
+        panel_state.instant_grid_power_w = grid_power
 
         _LOGGER.debug(
             "Branch power synchronization complete: %d tabs updated, consumption: %.1fW, production: %.1fW, grid: %.1fW",
@@ -2066,32 +2104,18 @@ class SpanPanelClient:
         # Clear caches since behavior has changed
         self._api_cache.clear()
 
-    async def get_all_data(self, include_battery: bool = False) -> dict[str, Any]:
-        """Get all panel data in parallel for maximum performance.
-
-        This method makes concurrent API calls when cache misses occur,
-        reducing total time from ~1.5s (sequential) to ~1.0s (parallel).
-
-        Args:
-            include_battery: Whether to include battery/storage data
-
-        Returns:
-            Dictionary containing all panel data:
-            {
-                'status': StatusOut,
-                'panel_state': PanelState,
-                'circuits': CircuitsOut,
-                'storage': BatteryStorage (if include_battery=True)
-            }
-        """
-
-        # Check cache for all data types first
+    def _get_cached_data(self, include_battery: bool) -> tuple[Any, Any, Any, Any]:
+        """Get cached data for all data types."""
         cached_status = self._api_cache.get_cached_data("status")
         cached_panel = self._api_cache.get_cached_data("panel_state")
         cached_circuits = self._api_cache.get_cached_data("circuits")
         cached_storage = self._api_cache.get_cached_data("storage_soe") if include_battery else None
+        return cached_status, cached_panel, cached_circuits, cached_storage
 
-        # Debug cache status
+    def _log_cache_status(
+        self, cached_status: Any, cached_panel: Any, cached_circuits: Any, cached_storage: Any, include_battery: bool
+    ) -> None:
+        """Log cache hit status for debugging."""
         cache_hits = []
         if cached_status is not None:
             cache_hits.append("status")
@@ -2104,7 +2128,10 @@ class SpanPanelClient:
 
         _LOGGER.debug("Cache status - Hits: %s, Persistent cache enabled", cache_hits or "none")
 
-        # Use persistent cache with background refresh for performance
+    def _prepare_fetch_tasks(
+        self, cached_status: Any, cached_panel: Any, cached_circuits: Any, cached_storage: Any, include_battery: bool
+    ) -> tuple[list[Any], list[str]]:
+        """Prepare tasks for fetching uncached data and trigger background refreshes."""
         tasks = []
         task_keys = []
 
@@ -2137,13 +2164,18 @@ class SpanPanelClient:
             # Trigger background refresh
             self._create_background_task(self._refresh_battery_storage_cache())
 
-        # Execute uncached calls in parallel (should be rare after first load)
-        if tasks:
-            results = await asyncio.gather(*tasks)
-        else:
-            results = []
+        return tasks, task_keys
 
-        # Update results with fresh data
+    def _update_cached_data_from_results(
+        self,
+        cached_status: Any,
+        cached_panel: Any,
+        cached_circuits: Any,
+        cached_storage: Any,
+        results: list[Any],
+        task_keys: list[str],
+    ) -> tuple[Any, Any, Any, Any]:
+        """Update cached data with fresh results from API calls."""
         for i, key in enumerate(task_keys):
             if key == "status":
                 cached_status = results[i]
@@ -2153,6 +2185,47 @@ class SpanPanelClient:
                 cached_circuits = results[i]
             elif key == "storage":
                 cached_storage = results[i]
+        return cached_status, cached_panel, cached_circuits, cached_storage
+
+    async def get_all_data(self, include_battery: bool = False) -> dict[str, Any]:
+        """Get all panel data in parallel for maximum performance.
+
+        This method makes concurrent API calls when cache misses occur,
+        reducing total time from ~1.5s (sequential) to ~1.0s (parallel).
+
+        Args:
+            include_battery: Whether to include battery/storage data
+
+        Returns:
+            Dictionary containing all panel data:
+            {
+                'status': StatusOut,
+                'panel_state': PanelState,
+                'circuits': CircuitsOut,
+                'storage': BatteryStorage (if include_battery=True)
+            }
+        """
+        # Check cache for all data types first
+        cached_status, cached_panel, cached_circuits, cached_storage = self._get_cached_data(include_battery)
+
+        # Debug cache status
+        self._log_cache_status(cached_status, cached_panel, cached_circuits, cached_storage, include_battery)
+
+        # Prepare tasks for uncached data and trigger background refreshes
+        tasks, task_keys = self._prepare_fetch_tasks(
+            cached_status, cached_panel, cached_circuits, cached_storage, include_battery
+        )
+
+        # Execute uncached calls in parallel (should be rare after first load)
+        if tasks:
+            results = await asyncio.gather(*tasks)
+        else:
+            results = []
+
+        # Update results with fresh data
+        cached_status, cached_panel, cached_circuits, cached_storage = self._update_cached_data_from_results(
+            cached_status, cached_panel, cached_circuits, cached_storage, results, task_keys
+        )
 
         # Return all data
         result = {

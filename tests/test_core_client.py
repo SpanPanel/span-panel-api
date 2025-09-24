@@ -414,7 +414,7 @@ class TestAPIMethodsErrorPaths:
         from span_panel_api.exceptions import SpanPanelAPIError, SpanPanelAuthError
         from tests.test_factories import create_live_client
 
-        client = create_live_client(cache_window=0)
+        client = create_live_client()
         client.set_access_token("test-token")
         with patch("span_panel_api.client.get_panel_state_api_v1_panel_get") as mock_panel:
             mock_panel.asyncio = AsyncMock(side_effect=ValueError("Validation error"))
@@ -434,14 +434,16 @@ class TestAPIMethodsErrorPaths:
         from span_panel_api.exceptions import SpanPanelAPIError
         from tests.test_factories import create_live_client
 
-        client = create_live_client(cache_window=0)
+        client = create_live_client()
         client.set_access_token("test-token")
         with patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits:
             mock_circuits.asyncio = AsyncMock(side_effect=ValueError("Circuit validation error"))
+            mock_circuits.asyncio_detailed = AsyncMock(side_effect=ValueError("Circuit validation error"))
             with pytest.raises(SpanPanelAPIError, match="API error: Circuit validation error"):
                 await client.get_circuits()
         with patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits:
             mock_circuits.asyncio = AsyncMock(side_effect=RuntimeError("Circuit error"))
+            mock_circuits.asyncio_detailed = AsyncMock(side_effect=RuntimeError("Circuit error"))
             with pytest.raises(SpanPanelAPIError, match="Unexpected error: Circuit error"):
                 await client.get_circuits()
 
@@ -450,7 +452,7 @@ class TestAPIMethodsErrorPaths:
         from span_panel_api.exceptions import SpanPanelAPIError
         from tests.test_factories import create_live_client
 
-        client = create_live_client(cache_window=0)
+        client = create_live_client()
         client.set_access_token("test-token")
         with patch("span_panel_api.client.get_storage_soe_api_v1_storage_soe_get") as mock_storage:
             mock_storage.asyncio = AsyncMock(side_effect=ValueError("Storage validation error"))
@@ -466,7 +468,7 @@ class TestAPIMethodsErrorPaths:
         from span_panel_api.exceptions import SpanPanelAPIError
         from tests.test_factories import create_live_client
 
-        client = create_live_client(cache_window=0)
+        client = create_live_client()
         client.set_access_token("test-token")
         with pytest.raises(SpanPanelAPIError, match="Invalid relay state 'INVALID'"):
             await client.set_circuit_relay("circuit-1", "INVALID")
@@ -480,7 +482,7 @@ class TestAPIMethodsErrorPaths:
         from span_panel_api.exceptions import SpanPanelAPIError
         from tests.test_factories import create_live_client
 
-        client = create_live_client(cache_window=0)
+        client = create_live_client()
         client.set_access_token("test-token")
         with pytest.raises(SpanPanelAPIError, match="'INVALID' is not a valid Priority"):
             await client.set_circuit_priority("circuit-1", "INVALID")

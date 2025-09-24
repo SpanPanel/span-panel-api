@@ -34,8 +34,8 @@ def sim_client() -> SpanPanelClient:
 
 @pytest.fixture
 def sim_client_no_cache() -> SpanPanelClient:
-    """Provide a simple YAML-based simulation client with no caching."""
-    return create_simple_sim_client(cache_window=0)
+    """Provide a simple YAML-based simulation client (persistent cache always enabled)."""
+    return create_simple_sim_client()
 
 
 @pytest.fixture

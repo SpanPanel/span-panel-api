@@ -18,7 +18,7 @@ async def test_relay_behavior_demonstration():
         host="relay-test-demo",
         simulation_mode=True,
         simulation_config_path="examples/simple_test_config.yaml",
-        cache_window=0.0,  # Disable caching for real-time data
+        # Disable caching for real-time data
     )
 
     async with client:

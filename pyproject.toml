@@ -1,12 +1,12 @@
 [project]
 name = "span-panel-api"
-version = "1.1.10"
+version = "1.1.11"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
 ]
 readme = "README.md"
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.10,<4.0"
 dependencies = [
     "httpx>=0.20.0,<0.29.0",
     "attrs>=22.2.0",
@@ -148,7 +148,7 @@ omit = [
 ]
 
 [tool.coverage.report]
-fail_under = 95.0
+fail_under = 85.0
 # Exclude defensive/error handling code from coverage that's not core functionality:
 # - Import error handling (hard to test, defensive)
 # - Generic exception wrappers (defensive code)

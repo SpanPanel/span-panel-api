@@ -521,6 +521,7 @@ class TestAPIMethodErrors:
 
         with patch("span_panel_api.client.get_circuits_api_v1_circuits_get") as mock_circuits:
             mock_circuits.asyncio.side_effect = ValueError("Circuit validation failed")
+            mock_circuits.asyncio_detailed.side_effect = ValueError("Circuit validation failed")
 
             with pytest.raises(SpanPanelAPIError, match="API error: Circuit validation failed"):
                 await client.get_circuits()
@@ -777,6 +778,9 @@ class TestHTTPStatusErrorInAPIMethods:
             mock_request = MagicMock()
 
             mock_circuits.asyncio = AsyncMock(
+                side_effect=httpx.HTTPStatusError("503 Service Unavailable", request=mock_request, response=mock_response)
+            )
+            mock_circuits.asyncio_detailed = AsyncMock(
                 side_effect=httpx.HTTPStatusError("503 Service Unavailable", request=mock_request, response=mock_response)
             )
 

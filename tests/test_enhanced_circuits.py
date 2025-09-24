@@ -94,6 +94,14 @@ class TestEnhancedCircuits:
 
             mock_get_circuits.asyncio = mock_async_circuits
 
+            # Mock the asyncio_detailed method
+            from unittest.mock import AsyncMock, MagicMock
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.parsed = mock_circuits_response
+            mock_get_circuits.asyncio_detailed = AsyncMock(return_value=mock_response)
+
             # Mock get_panel_state to return an awaitable
             async def mock_async_panel_state():
                 return mock_panel_state
@@ -206,6 +214,14 @@ class TestEnhancedCircuits:
 
             mock_get_circuits.asyncio = mock_async_circuits
 
+            # Mock the asyncio_detailed method
+            from unittest.mock import AsyncMock, MagicMock
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.parsed = mock_circuits_response
+            mock_get_circuits.asyncio_detailed = AsyncMock(return_value=mock_response)
+
             # Mock get_panel_state to return an awaitable
             async def mock_async_panel_state():
                 return mock_panel_state
@@ -289,7 +305,7 @@ class TestEnhancedCircuits:
 
         from tests.test_factories import create_live_client
 
-        client = create_live_client(cache_window=0)
+        client = create_live_client()
         client.set_access_token("test-token")
 
         # Create a mock branch for testing

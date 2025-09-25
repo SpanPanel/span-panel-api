@@ -1624,7 +1624,7 @@ class SpanPanelClient:
         try:
 
             async def _get_status_operation() -> StatusOut:
-                client = self._get_client_for_endpoint(requires_auth=True)
+                client = self._get_client_for_endpoint(requires_auth=False)
                 result = await system_status_api_v1_status_get.asyncio(client=cast(AuthenticatedClient, client))
                 if result is None:
                     raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")

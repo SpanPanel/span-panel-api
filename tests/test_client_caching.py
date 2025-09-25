@@ -13,7 +13,6 @@ class TestClientCaching:
             host="test-serial",
             simulation_mode=True,
             simulation_config_path="examples/simple_test_config.yaml",
-            cache_window=1.0,
         )
 
         async with client:

@@ -9,7 +9,12 @@ class TestClientRetryProperties:
 
     def test_property_getters(self):
         """Test property getters."""
-        client = SpanPanelClient(host="test", retries=3, retry_timeout=1.5, retry_backoff_multiplier=2.0, cache_window=5.0)
+        client = SpanPanelClient(
+            host="test",
+            retries=3,
+            retry_timeout=1.5,
+            retry_backoff_multiplier=2.0,
+        )
 
         assert client.retries == 3
         assert client.retry_timeout == 1.5

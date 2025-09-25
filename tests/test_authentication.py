@@ -324,7 +324,7 @@ class TestAuthenticationRequirements:
         from span_panel_api.exceptions import SpanPanelAPIError
         from tests.test_factories import create_live_client
 
-        client = create_live_client(cache_window=0)
+        client = create_live_client()
 
         # Test ValueError in authentication
         with patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth:

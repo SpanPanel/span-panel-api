@@ -527,7 +527,7 @@ class TestSimulationCaching:
             host="relay-test-demo",
             simulation_mode=True,
             simulation_config_path=str(config_path),
-            cache_window=0.0,  # Disable caching for real-time data
+            # Disable caching for real-time data
         )
 
         async with client:

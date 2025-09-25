@@ -157,7 +157,7 @@ class TestPanelCircuitAlignment:
             host="test-panel-consistency",
             simulation_mode=True,
             simulation_config_path="examples/simple_test_config.yaml",
-            cache_window=0.0,  # Disable caching to get fresh data
+            # Disable caching to get fresh data
         )
 
         async with client:

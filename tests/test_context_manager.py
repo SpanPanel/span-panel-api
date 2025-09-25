@@ -17,7 +17,7 @@ class TestContextManagerFix:
     @pytest.mark.asyncio
     async def test_unauthenticated_requests_work_properly(self):
         """Test that unauthenticated requests (like get_status) work both inside and outside context managers."""
-        client = create_sim_client(cache_window=0)  # Use simulation mode for testing
+        client = create_sim_client()  # Use simulation mode for testing
 
         # Test unauthenticated call OUTSIDE context manager
         # This should work without any access token set
@@ -37,11 +37,13 @@ class TestContextManagerFix:
 
         # Test unauthenticated call INSIDE context manager WITH token set
         # (status endpoint should still work even if token is set since it doesn't require auth)
-        async with client:
-            client.set_access_token("test-token")
-            assert client._access_token == "test-token"
+        # Create a new client for this test since the previous one was closed
+        client2 = create_sim_client()
+        async with client2:
+            client2.set_access_token("test-token")
+            assert client2._access_token == "test-token"
 
-            status_with_token = await client.get_status()
+            status_with_token = await client2.get_status()
             assert status_with_token is not None
             assert status_with_token.system.manufacturer == "Span"
 
@@ -82,7 +84,10 @@ class TestContextManagerFix:
     @pytest.mark.asyncio
     async def test_context_manager_with_authentication_flow(self):
         """Test that authentication within a context manager doesn't break the context."""
-        client = SpanPanelClient("192.168.1.100", timeout=5.0, cache_window=0)
+        client = SpanPanelClient(
+            "192.168.1.100",
+            timeout=5.0,
+        )
 
         with (
             patch("span_panel_api.client.generate_jwt_api_v1_auth_register_post") as mock_auth,
@@ -93,7 +98,13 @@ class TestContextManagerFix:
             # Setup mock responses
             auth_response = MagicMock(access_token="test-token-12345", token_type="Bearer")
             mock_auth.asyncio = AsyncMock(return_value=auth_response)
-            mock_circuits.asyncio = AsyncMock(return_value=MagicMock(circuits=MagicMock(additional_properties={})))
+
+            # Mock circuits response with proper to_dict method
+            circuits_response = MagicMock(circuits=MagicMock(additional_properties={}))
+            circuits_response.to_dict.return_value = {"circuits": {}}
+            mock_circuits.asyncio = AsyncMock(return_value=circuits_response)
+            mock_circuits.asyncio_detailed = AsyncMock(return_value=MagicMock(status_code=200, parsed=circuits_response))
+
             mock_panel_state.asyncio = AsyncMock(return_value=MagicMock(branches=[]))
             mock_set_circuit.asyncio = AsyncMock(return_value=MagicMock(priority="MUST_HAVE"))
 
@@ -129,7 +140,10 @@ class TestContextManagerFix:
     @pytest.mark.asyncio
     async def test_context_manager_error_handling_preserves_state(self):
         """Test that errors within the context don't break the context manager state."""
-        client = SpanPanelClient("192.168.1.100", timeout=5.0, cache_window=0)
+        client = SpanPanelClient(
+            "192.168.1.100",
+            timeout=5.0,
+        )
 
         with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
             # First call succeeds, next calls fail (with retry attempts)
@@ -279,7 +293,7 @@ class TestContextManagerEdgeCases:
         mock_client = AsyncMock()
         mock_client.__aenter__ = AsyncMock(side_effect=Exception("Client enter failed"))
 
-        with patch.object(client, "_get_client", return_value=mock_client):
+        with patch.object(client, "_get_unauthenticated_client", return_value=mock_client):
             with pytest.raises(RuntimeError, match="Failed to enter client context"):
                 async with client:
                     pass
@@ -327,7 +341,7 @@ class TestContextManagerEdgeCases:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        with patch.object(client, "_get_client", return_value=mock_client):
+        with patch.object(client, "_get_unauthenticated_client", return_value=mock_client):
             async with client:
                 # Should set the client during context entry
                 assert client._client is mock_client

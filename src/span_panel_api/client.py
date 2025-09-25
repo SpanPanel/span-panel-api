@@ -418,14 +418,48 @@ class PersistentObjectCache:
 
     def _update_circuit_in_place(self, circuit: Circuit, new_data: dict[str, Any]) -> None:
         """Update circuit object attributes without recreating."""
+        # Update dynamic power/energy fields
         circuit.instant_power_w = new_data.get("instantPowerW", circuit.instant_power_w)
         circuit.produced_energy_wh = new_data.get("producedEnergyWh", circuit.produced_energy_wh)
         circuit.consumed_energy_wh = new_data.get("consumedEnergyWh", circuit.consumed_energy_wh)
         circuit.instant_power_update_time_s = new_data.get("instantPowerUpdateTimeS", circuit.instant_power_update_time_s)
         circuit.energy_accum_update_time_s = new_data.get("energyAccumUpdateTimeS", circuit.energy_accum_update_time_s)
 
+        # Update configuration fields that can change
+        if "name" in new_data:
+            circuit.name = new_data["name"]
+        if "priority" in new_data:
+            circuit.priority = Priority(new_data["priority"])
+        if "tabs" in new_data:
+            circuit.tabs = new_data["tabs"]
+        if "isUserControllable" in new_data:
+            circuit.is_user_controllable = new_data["isUserControllable"]
+        if "isSheddable" in new_data:
+            circuit.is_sheddable = new_data["isSheddable"]
+        if "isNeverBackup" in new_data:
+            circuit.is_never_backup = new_data["isNeverBackup"]
         if "relayState" in new_data:
             circuit.relay_state = RelayState(new_data["relayState"])
+
+        # Update any additional properties
+        if hasattr(circuit, "additional_properties"):
+            for key, value in new_data.items():
+                if key not in {
+                    "id",
+                    "instantPowerW",
+                    "producedEnergyWh",
+                    "consumedEnergyWh",
+                    "instantPowerUpdateTimeS",
+                    "energyAccumUpdateTimeS",
+                    "name",
+                    "priority",
+                    "tabs",
+                    "isUserControllable",
+                    "isSheddable",
+                    "isNeverBackup",
+                    "relayState",
+                }:
+                    circuit.additional_properties[key] = value
 
     def _update_panel_state_in_place(self, panel_state: PanelState, new_data: dict[str, Any]) -> None:
         """Update panel state object attributes without recreating."""

@@ -29,19 +29,19 @@ packages = [
 format-markdown = "scripts.format_markdown:main"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "8.4.1"
-pytest-asyncio = "1.1.0"
+pytest = "8.4.2"
+pytest-asyncio = "1.2.0"
 pytest-cov = "*"
 bandit = "1.8.6"
 pre-commit = "*"
 black = "*"
-ruff = "^0.12.10"
+ruff = "^0.12.12"
 mypy = "*"
 pylint = "*"
 radon = "*"
 twine = "*"
 vulture = "^2.14"
-types-pyyaml = "^6.0.12.20250822"
+types-pyyaml = "^6.0.12.20250915"
 coverage = "*"
 
 [tool.poetry.group.generate.dependencies]

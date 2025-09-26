@@ -298,40 +298,97 @@ class SpanPanelClient:
 
     def _update_status_in_place(self, existing: StatusOut, fresh: StatusOut) -> None:
         """Update existing StatusOut object with fresh data to avoid object creation."""
-        existing.software = fresh.software
-        existing.system = fresh.system
-        existing.network = fresh.network
+        # Update software attributes individually to preserve references
+        existing.software.firmware_version = fresh.software.firmware_version
+        existing.software.update_status = fresh.software.update_status
+        existing.software.env = fresh.software.env
+        existing.software.additional_properties.clear()
+        existing.software.additional_properties.update(fresh.software.additional_properties)
+
+        # Update system attributes individually to preserve references
+        existing.system.manufacturer = fresh.system.manufacturer
+        existing.system.serial = fresh.system.serial
+        existing.system.model = fresh.system.model
+        existing.system.door_state = fresh.system.door_state
+        existing.system.proximity_proven = fresh.system.proximity_proven
+        existing.system.uptime = fresh.system.uptime
+        existing.system.additional_properties.clear()
+        existing.system.additional_properties.update(fresh.system.additional_properties)
+
+        # Update network attributes individually to preserve references
+        existing.network.eth_0_link = fresh.network.eth_0_link
+        existing.network.wlan_link = fresh.network.wlan_link
+        existing.network.wwan_link = fresh.network.wwan_link
+        existing.network.additional_properties.clear()
+        existing.network.additional_properties.update(fresh.network.additional_properties)
+
         # Update additional_properties
         existing.additional_properties.clear()
         existing.additional_properties.update(fresh.additional_properties)
 
     def _update_panel_state_in_place(self, existing: PanelState, fresh: PanelState) -> None:
         """Update existing PanelState object with fresh data to avoid object creation."""
+        # Update simple attributes
         existing.main_relay_state = fresh.main_relay_state
-        existing.main_meter_energy = fresh.main_meter_energy
         existing.instant_grid_power_w = fresh.instant_grid_power_w
         existing.feedthrough_power_w = fresh.feedthrough_power_w
-        existing.feedthrough_energy = fresh.feedthrough_energy
         existing.grid_sample_start_ms = fresh.grid_sample_start_ms
         existing.grid_sample_end_ms = fresh.grid_sample_end_ms
         existing.dsm_grid_state = fresh.dsm_grid_state
         existing.dsm_state = fresh.dsm_state
         existing.current_run_config = fresh.current_run_config
-        existing.branches = fresh.branches
+
+        # Update main_meter_energy attributes individually to preserve references
+        existing.main_meter_energy.produced_energy_wh = fresh.main_meter_energy.produced_energy_wh
+        existing.main_meter_energy.consumed_energy_wh = fresh.main_meter_energy.consumed_energy_wh
+        existing.main_meter_energy.additional_properties.clear()
+        existing.main_meter_energy.additional_properties.update(fresh.main_meter_energy.additional_properties)
+
+        # Update feedthrough_energy attributes individually to preserve references
+        existing.feedthrough_energy.produced_energy_wh = fresh.feedthrough_energy.produced_energy_wh
+        existing.feedthrough_energy.consumed_energy_wh = fresh.feedthrough_energy.consumed_energy_wh
+        existing.feedthrough_energy.additional_properties.clear()
+        existing.feedthrough_energy.additional_properties.update(fresh.feedthrough_energy.additional_properties)
+
+        # Update branches - if same length, update existing branch objects; otherwise replace list
+        if len(existing.branches) == len(fresh.branches):
+            for i, fresh_branch in enumerate(fresh.branches):
+                existing_branch = existing.branches[i]
+                existing_branch.id = fresh_branch.id
+                existing_branch.relay_state = fresh_branch.relay_state
+                existing_branch.instant_power_w = fresh_branch.instant_power_w
+                existing_branch.imported_active_energy_wh = fresh_branch.imported_active_energy_wh
+                existing_branch.exported_active_energy_wh = fresh_branch.exported_active_energy_wh
+                existing_branch.measure_start_ts_ms = fresh_branch.measure_start_ts_ms
+                existing_branch.measure_duration_ms = fresh_branch.measure_duration_ms
+                existing_branch.is_measure_valid = fresh_branch.is_measure_valid
+                existing_branch.additional_properties.clear()
+                existing_branch.additional_properties.update(fresh_branch.additional_properties)
+        else:
+            # Different number of branches - replace the entire list
+            existing.branches = fresh.branches
+
         # Update additional_properties
         existing.additional_properties.clear()
         existing.additional_properties.update(fresh.additional_properties)
 
     def _update_circuits_in_place(self, existing: CircuitsOut, fresh: CircuitsOut) -> None:
         """Update existing CircuitsOut object with fresh data to avoid object creation."""
-        existing.circuits = fresh.circuits
+        # Update circuits.additional_properties (the circuit dictionary) to preserve references
+        existing.circuits.additional_properties.clear()
+        existing.circuits.additional_properties.update(fresh.circuits.additional_properties)
+
         # Update additional_properties
         existing.additional_properties.clear()
         existing.additional_properties.update(fresh.additional_properties)
 
     def _update_battery_storage_in_place(self, existing: BatteryStorage, fresh: BatteryStorage) -> None:
         """Update existing BatteryStorage object with fresh data to avoid object creation."""
-        existing.soe = fresh.soe
+        # Update soe attributes individually to preserve references
+        existing.soe.percentage = fresh.soe.percentage
+        existing.soe.additional_properties.clear()
+        existing.soe.additional_properties.update(fresh.soe.additional_properties)
+
         # Update additional_properties
         existing.additional_properties.clear()
         existing.additional_properties.update(fresh.additional_properties)

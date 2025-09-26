@@ -274,26 +274,3 @@ async def test_simulation_with_missing_config():
             assert status is not None
         finally:
             engine._config = original_config
-
-
-@pytest.mark.asyncio
-async def test_client_cache_edge_case():
-    """Test client cache edge case for complete coverage."""
-    config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
-
-    async with SpanPanelClient(
-        host="test-cache-edge", simulation_mode=True, simulation_config_path=str(config_path)
-    ) as client:
-        # Clear the cache to ensure cached_full_data is None
-        # The TimeWindowCache doesn't have a direct clear method, so we test without clearing
-        # This test will help hit the cache miss scenario
-
-        # First, get panel state normally to populate cache
-        panel_state = await client.get_panel_state()
-        assert panel_state is not None
-
-        # Test that cache has data
-        cache_key = "full_sim_data"
-        cached_data = client._api_cache.get_cached_data(cache_key)
-        # Depending on cache timing, this might be None or have data
-        # The important thing is the code path gets exercised

@@ -443,33 +443,6 @@ class TestSimulationCaching:
         config_path = Path(__file__).parent.parent / "examples" / "simple_test_config.yaml"
         return SpanPanelClient(host="cache-test-host", simulation_mode=True, simulation_config_path=str(config_path))
 
-    async def test_simulation_caching(self, sim_client: SpanPanelClient) -> None:
-        """Test that simulation results are cached appropriately."""
-        async with sim_client:
-            # Same parameters should return cached results
-            circuits1 = await sim_client.get_circuits()
-            circuits2 = await sim_client.get_circuits()
-
-            # Should get same results (from cache)
-            assert circuits1 is not None
-            assert circuits2 is not None
-
-    async def test_different_variations_not_cached(self, sim_client: SpanPanelClient) -> None:
-        """Test that different overrides create different cache entries."""
-        async with sim_client:
-            circuits1 = await sim_client.get_circuits()
-
-            # Apply override
-            await sim_client.set_circuit_overrides(global_overrides={"power_multiplier": 1.5})
-            circuits2 = await sim_client.get_circuits()
-
-            # Should get different results
-            assert circuits1 is not None
-            assert circuits2 is not None
-
-            # Clear overrides
-            await sim_client.clear_circuit_overrides()
-
     async def test_simulation_uses_host_as_serial_number(self) -> None:
         """Test that simulation mode uses the host parameter as the serial number."""
         custom_serial = "SPAN-TEST-ABC123"
@@ -634,26 +607,6 @@ class TestSimulationCaching:
 
         # Should be the same object (not re-created)
         assert first_data is second_data
-
-
-# Cache functionality tests
-async def test_cache_hit_paths() -> None:
-    """Test that cache works correctly for simulation mode."""
-    from span_panel_api.client import TimeWindowCache
-
-    cache = TimeWindowCache()
-
-    # Test basic cache functionality
-    cache.set_cached_data("test_key", {"test": "data"})
-    result = cache.get_cached_data("test_key")
-
-    assert result is not None
-    assert result["test"] == "data"
-
-    # Test cache clear
-    cache.clear()
-    result = cache.get_cached_data("test_key")
-    assert result is None
 
 
 class TestSimulationErrorConditions:

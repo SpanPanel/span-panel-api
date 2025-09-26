@@ -33,8 +33,8 @@ class Circuit:
     relay_state: RelayState
     instant_power_w: float
     instant_power_update_time_s: int
-    produced_energy_wh: float
-    consumed_energy_wh: float
+    produced_energy_wh: float | None
+    consumed_energy_wh: float | None
     energy_accum_update_time_s: int
     priority: Priority
     is_user_controllable: bool

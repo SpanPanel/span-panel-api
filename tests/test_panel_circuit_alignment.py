@@ -26,7 +26,7 @@ class TestPanelCircuitAlignment:
         )
 
         async with client:
-            # Get both panel state and circuit data from same cached dataset
+            # Get both panel state and circuit data
             panel_state = await client.get_panel_state()
             circuits = await client.get_circuits()
 

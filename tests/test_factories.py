@@ -12,39 +12,13 @@ from span_panel_api.client import SpanPanelClient
 
 @pytest.fixture
 def sim_client() -> SpanPanelClient:
-    """Factory for creating simulation mode clients with caching enabled.
+    """Factory for creating simulation mode clients.
 
     Returns:
-        SpanPanelClient configured for simulation mode with 1.0 second cache window
+        SpanPanelClient configured for simulation mode
     """
     config_path = Path(__file__).parent.parent / "examples" / "simple_test_config.yaml"
     return SpanPanelClient("yaml-sim-test", simulation_mode=True, simulation_config_path=str(config_path))
-
-
-@pytest.fixture
-def sim_client_no_cache() -> SpanPanelClient:
-    """Factory for creating simulation mode clients with caching disabled.
-
-    Returns:
-        SpanPanelClient configured for simulation mode with no caching
-    """
-    config_path = Path(__file__).parent.parent / "examples" / "simple_test_config.yaml"
-    return SpanPanelClient("yaml-sim-test", simulation_mode=True, simulation_config_path=str(config_path))
-
-
-@pytest.fixture
-def sim_client_custom_cache() -> callable:
-    """Factory function for creating simulation mode clients.
-
-    Returns:
-        Function that returns configured client
-    """
-
-    def _create_client() -> SpanPanelClient:
-        config_path = Path(__file__).parent.parent / "examples" / "simple_test_config.yaml"
-        return SpanPanelClient("yaml-sim-test", simulation_mode=True, simulation_config_path=str(config_path))
-
-    return _create_client
 
 
 def create_sim_client(host: str = "yaml-sim-test", **kwargs) -> SpanPanelClient:

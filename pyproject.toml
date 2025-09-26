@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "1.1.12"
+version = "1.1.13"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -109,6 +109,8 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+explicit_package_bases = true
+mypy_path = "src"
 exclude = [
     "src/span_panel_api/generated_client/",
     "generate_client.py",
@@ -126,6 +128,8 @@ exclude = [
 module = "span_panel_api.generated_client.*"
 follow_imports = "skip"
 ignore_errors = true
+disallow_any_generics = false
+disallow_incomplete_defs = false
 
 [[tool.mypy.overrides]]
 module = [

@@ -1025,30 +1025,43 @@ class SpanPanelClient:
         )
 
     async def _recalculate_panel_grid_power_from_circuits(self, circuits_out: CircuitsOut) -> None:
-        """Recalculate panel grid power to match the actual circuit power values."""
+        """Recalculate panel grid power to match the actual circuit power values.
+
+        This method ensures panel state consistency regardless of initialization order
+        and handles energy aggregation more robustly.
+        """
         # Calculate total circuit power and energy using the same logic as the test
         total_consumption = 0.0
         total_production = 0.0
         total_produced_energy = 0.0
         total_consumed_energy = 0.0
-        has_unavailable_energy = False
+        circuits_with_unavailable_energy = 0
+        total_circuits_processed = 0
 
         # Iterate through circuits stored in additional_properties
         for circuit_id, circuit in circuits_out.circuits.additional_properties.items():
-            # Skip virtual circuits for unmapped tabs
-            if circuit_id and not circuit_id.startswith("unmapped_tab_"):
-                # Use the same logic as the test: determine if consuming or producing based on circuit type
-                circuit_name = circuit.name.lower() if circuit.name else ""
-                if any(keyword in circuit_name for keyword in ["solar", "inverter", "generator", "battery"]):
-                    # Producer circuits (solar, battery when discharging)
-                    total_production += circuit.instant_power_w
-                else:
-                    # Consumer circuits
-                    total_consumption += circuit.instant_power_w
+            # Process all circuits with valid IDs (including empty string, but not None)
+            # Only skip None circuit_id to avoid masking data problems
+            if circuit_id is not None:
+                # Skip virtual circuits for unmapped tabs from power calculations
+                # because we already count the power for circuits that are mapped to tabs
+                # but still count them for energy aggregation consistency
+                if not circuit_id.startswith("unmapped_tab_"):
+                    # Use the same logic as the test: determine if consuming or producing based on circuit type
+                    circuit_name = circuit.name.lower() if circuit.name else ""
+                    if any(keyword in circuit_name for keyword in ["solar", "inverter", "generator", "battery"]):
+                        # Producer circuits (solar, battery when discharging)
+                        total_production += circuit.instant_power_w
+                    else:
+                        # Consumer circuits
+                        total_consumption += circuit.instant_power_w
+
+                # Count circuits with unavailable energy data for better aggregation logic
+                total_circuits_processed += 1
+                if circuit.produced_energy_wh is None or circuit.consumed_energy_wh is None:
+                    circuits_with_unavailable_energy += 1
 
                 # Sum up energy values (skip None values which indicate unavailable data)
-                if circuit.produced_energy_wh is None or circuit.consumed_energy_wh is None:
-                    has_unavailable_energy = True
                 if circuit.produced_energy_wh is not None:
                     total_produced_energy += circuit.produced_energy_wh
                 if circuit.consumed_energy_wh is not None:
@@ -1057,17 +1070,45 @@ class SpanPanelClient:
         # Update panel grid power to match circuit totals
         expected_grid_power = total_consumption - total_production
 
-        # Update the panel state object if it exists
-        if self._panel_state_object is not None:
-            self._panel_state_object.instant_grid_power_w = expected_grid_power
-            # Update energy values to match circuit totals
-            # If any circuit has unavailable energy data, set main meter to None
-            if has_unavailable_energy:
-                self._panel_state_object.main_meter_energy.produced_energy_wh = None
-                self._panel_state_object.main_meter_energy.consumed_energy_wh = None
-            else:
-                self._panel_state_object.main_meter_energy.produced_energy_wh = total_produced_energy
-                self._panel_state_object.main_meter_energy.consumed_energy_wh = total_consumed_energy
+        # Always ensure panel state object exists to avoid order dependency
+        if self._panel_state_object is None:
+            # If panel state doesn't exist yet, we can't update it
+            # This is expected in some call orders and should not cause errors
+            _LOGGER.debug("Panel state object not initialized, skipping grid power update")
+            return
+
+        # Update panel state with calculated values
+        self._panel_state_object.instant_grid_power_w = expected_grid_power
+
+        # More nuanced energy aggregation: only set to None if significant portion is unavailable
+        # This prevents a single circuit with unavailable data from invalidating all energy data
+        if total_circuits_processed == 0:
+            # No circuits processed, keep existing energy values
+            return
+
+        unavailable_ratio = circuits_with_unavailable_energy / total_circuits_processed
+
+        # Only set energy to None if more than 50% of circuits have unavailable energy
+        # This provides better resilience while still indicating when data is significantly incomplete
+        if unavailable_ratio > 0.5:
+            self._panel_state_object.main_meter_energy.produced_energy_wh = None
+            self._panel_state_object.main_meter_energy.consumed_energy_wh = None
+            _LOGGER.debug(
+                "Setting panel energy to None: %d/%d circuits have unavailable energy (%.1f%%)",
+                circuits_with_unavailable_energy,
+                total_circuits_processed,
+                unavailable_ratio * 100,
+            )
+        else:
+            self._panel_state_object.main_meter_energy.produced_energy_wh = total_produced_energy
+            self._panel_state_object.main_meter_energy.consumed_energy_wh = total_consumed_energy
+            if circuits_with_unavailable_energy > 0:
+                _LOGGER.debug(
+                    "Panel energy aggregated despite %d/%d circuits with unavailable energy (%.1f%%)",
+                    circuits_with_unavailable_energy,
+                    total_circuits_processed,
+                    unavailable_ratio * 100,
+                )
 
     async def _get_panel_state_live(self) -> PanelState:
         """Get panel state data from live panel."""

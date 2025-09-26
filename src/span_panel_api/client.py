@@ -977,14 +977,8 @@ class SpanPanelClient:
         has_unavailable_energy = False
 
         # Iterate through circuits stored in additional_properties
-        for circuit in circuits_out.circuits.additional_properties.values():
+        for circuit_id, circuit in circuits_out.circuits.additional_properties.items():
             # Skip virtual circuits for unmapped tabs
-            circuit_id = None
-            for cid, c in circuits_out.circuits.additional_properties.items():
-                if c is circuit:
-                    circuit_id = cid
-                    break
-
             if circuit_id and not circuit_id.startswith("unmapped_tab_"):
                 # Use the same logic as the test: determine if consuming or producing based on circuit type
                 circuit_name = circuit.name.lower() if circuit.name else ""

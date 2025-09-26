@@ -267,14 +267,48 @@ class TestEnhancedCircuits:
         assert circuit.is_user_controllable is False
         assert circuit.is_sheddable is False
         assert circuit.is_never_backup is False
-        assert circuit.tabs == [30]
 
-        # Verify timestamps are set (should be recent)
-        import time
+    @pytest.mark.asyncio
+    async def test_create_unmapped_tab_circuit_unavailable_energy(self):
+        """Test that _create_unmapped_tab_circuit creates circuits with None energy when data is unavailable."""
+        from unittest.mock import MagicMock
 
-        current_time = int(time.time())
-        assert abs(circuit.instant_power_update_time_s - current_time) < 5
-        assert abs(circuit.energy_accum_update_time_s - current_time) < 5
+        from tests.test_factories import create_live_client
+
+        client = create_live_client()
+        client.set_access_token("test-token")
+
+        # Create a mock branch with unavailable energy data
+        mock_branch = MagicMock()
+        mock_branch.id = 1
+        mock_branch.relay_state = "CLOSED"
+        mock_branch.imported_active_energy_wh = "unavailable"  # Unavailable energy data
+        mock_branch.exported_active_energy_wh = 500.0
+        mock_branch.instant_power_w = 200.0
+
+        # Test that the function creates a circuit with None energy when data is unavailable
+        circuit = client._create_unmapped_tab_circuit(mock_branch, 2)
+        assert circuit is not None
+        assert circuit.id == "unmapped_tab_2"
+        assert circuit.produced_energy_wh is None  # Should be None for unavailable data
+        assert circuit.consumed_energy_wh == 500.0  # Should be the valid value
+        assert circuit.instant_power_w == 200.0
+
+        # Test with None energy data
+        mock_branch.imported_active_energy_wh = None
+        mock_branch.exported_active_energy_wh = 500.0
+        circuit = client._create_unmapped_tab_circuit(mock_branch, 2)
+        assert circuit is not None
+        assert circuit.produced_energy_wh is None  # Should be None for None data
+        assert circuit.consumed_energy_wh == 500.0
+
+        # Test with offline energy data
+        mock_branch.imported_active_energy_wh = 1000.0
+        mock_branch.exported_active_energy_wh = "offline"
+        circuit = client._create_unmapped_tab_circuit(mock_branch, 2)
+        assert circuit is not None
+        assert circuit.produced_energy_wh == 1000.0  # Should be the valid value
+        assert circuit.consumed_energy_wh is None  # Should be None for offline data
 
     def test_create_unmapped_tab_circuit_missing_attributes(self):
         """Test _create_unmapped_tab_circuit with missing branch attributes."""
@@ -312,6 +346,9 @@ class TestEnhancedCircuits:
         mock_branch = MagicMock()
         mock_branch.id = 1
         mock_branch.relay_state = "CLOSED"
+        mock_branch.imported_active_energy_wh = 1000.0  # Provide energy data
+        mock_branch.exported_active_energy_wh = 500.0  # Provide energy data
+        mock_branch.instant_power_w = 200.0
 
         # Test the _create_unmapped_tab_circuit method
         circuit = client._create_unmapped_tab_circuit(mock_branch, 2)

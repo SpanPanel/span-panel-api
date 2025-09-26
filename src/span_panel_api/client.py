@@ -974,6 +974,7 @@ class SpanPanelClient:
         total_production = 0.0
         total_produced_energy = 0.0
         total_consumed_energy = 0.0
+        has_unavailable_energy = False
 
         # Iterate through circuits stored in additional_properties
         for circuit in circuits_out.circuits.additional_properties.values():
@@ -994,9 +995,13 @@ class SpanPanelClient:
                     # Consumer circuits
                     total_consumption += circuit.instant_power_w
 
-                # Sum up energy values
-                total_produced_energy += circuit.produced_energy_wh
-                total_consumed_energy += circuit.consumed_energy_wh
+                # Sum up energy values (skip None values which indicate unavailable data)
+                if circuit.produced_energy_wh is None or circuit.consumed_energy_wh is None:
+                    has_unavailable_energy = True
+                if circuit.produced_energy_wh is not None:
+                    total_produced_energy += circuit.produced_energy_wh
+                if circuit.consumed_energy_wh is not None:
+                    total_consumed_energy += circuit.consumed_energy_wh
 
         # Update panel grid power to match circuit totals
         expected_grid_power = total_consumption - total_production
@@ -1005,8 +1010,13 @@ class SpanPanelClient:
         if self._panel_state_object is not None:
             self._panel_state_object.instant_grid_power_w = expected_grid_power
             # Update energy values to match circuit totals
-            self._panel_state_object.main_meter_energy.produced_energy_wh = total_produced_energy
-            self._panel_state_object.main_meter_energy.consumed_energy_wh = total_consumed_energy
+            # If any circuit has unavailable energy data, set main meter to None
+            if has_unavailable_energy:
+                self._panel_state_object.main_meter_energy.produced_energy_wh = None
+                self._panel_state_object.main_meter_energy.consumed_energy_wh = None
+            else:
+                self._panel_state_object.main_meter_energy.produced_energy_wh = total_produced_energy
+                self._panel_state_object.main_meter_energy.consumed_energy_wh = total_consumed_energy
 
     async def _get_panel_state_live(self) -> PanelState:
         """Get panel state data from live panel."""
@@ -1253,14 +1263,14 @@ class SpanPanelClient:
             return 0.0
 
         def _safe_energy_conversion(value: Any) -> float | None:
-            """Safely convert energy value, returning None for invalid values (not 0.0)."""
+            """Safely convert energy value, returning None for unavailable values."""
             if value is None:
                 return None
             if isinstance(value, int | float):
                 return float(value)
             if isinstance(value, str):
                 if value.lower() in ("unknown", "unavailable", "offline"):
-                    return None  # Energy should be None when unavailable, not 0.0
+                    return None  # Energy should be None when unavailable
                 try:
                     return float(value)
                 except (ValueError, TypeError):
@@ -1270,8 +1280,9 @@ class SpanPanelClient:
         # Safely convert all values
         instant_power_w = _safe_power_conversion(getattr(branch, "instant_power_w", 0.0))
         # For solar tabs, imported energy represents production
-        produced_energy_wh = _safe_energy_conversion(imported_energy) or 0.0
-        consumed_energy_wh = _safe_energy_conversion(exported_energy) or 0.0
+        # Preserve None values for unavailable energy data
+        produced_energy_wh = _safe_energy_conversion(imported_energy)
+        consumed_energy_wh = _safe_energy_conversion(exported_energy)
 
         # Get timestamps (use current time as fallback)
         current_time = int(time.time())

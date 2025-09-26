@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import suppress
 import logging
 import time
-from typing import Any, NoReturn, TypeVar, cast
+from typing import Any, NoReturn, TypeVar
 
 import httpx
 
@@ -123,403 +123,6 @@ except ImportError as e:
 # Remove the RetryConfig class - using simple parameters instead
 
 
-class TimeWindowCache:
-    """Time-based cache for API data to avoid redundant API calls.
-
-    This cache implements a simple time-window based caching strategy:
-
-    Cache Window Behavior:
-    1. Cache window is created only when successful data is obtained from an API call
-    2. During an active cache window, all requests return cached data (no network calls)
-    3. Cache window expires after the configured duration (default 1 second)
-    4. After expiration, there is a gap with no active cache window
-    5. Next request goes to the network, and if successful, creates a new cache window
-
-    Cache Lifecycle:
-    - Active Window: [successful_response] ----window_duration----> [expires]
-    - Gap Period: [no cache exists - network calls required]
-    - New Window: [successful_response] ----window_duration----> [expires]
-
-    Retry Interaction:
-    - If network calls fail and retry, the cache window may expire during retries
-    - When retry eventually succeeds, it creates a fresh cache window
-    - This is acceptable behavior - slow networks may cause cache expiration
-
-    Thread Safety:
-    - This implementation is not thread-safe
-    - Intended for single-threaded async usage
-    """
-
-    def __init__(self, window_duration: float = 1.0) -> None:
-        """Initialize the cache.
-
-        Args:
-            window_duration: Cache window duration in seconds (default: 1.0)
-                           Set to 0 to disable caching entirely
-        """
-        if window_duration < 0:
-            raise ValueError("Cache window duration must be non-negative")
-
-        self._window_duration = window_duration
-        self._cache_entries: dict[str, tuple[Any, float]] = {}
-
-    def get_cached_data(self, cache_key: str) -> Any | None:
-        """Get cached data if within the cache window, otherwise None.
-
-        Args:
-            cache_key: Unique identifier for the cached data
-
-        Returns:
-            Cached data if valid, None if expired or not found
-        """
-        # If cache window is 0, caching is disabled
-        if self._window_duration == 0:
-            return None
-
-        if cache_key not in self._cache_entries:
-            _LOGGER.debug("Cache MISS for %s: not in cache", cache_key)
-            return None
-
-        cached_data, cache_timestamp = self._cache_entries[cache_key]
-
-        # Check if cache window has expired
-        elapsed = time.time() - cache_timestamp
-        if elapsed > self._window_duration:
-            # Cache expired - remove it and return None
-            del self._cache_entries[cache_key]
-            _LOGGER.debug("Cache EXPIRED for %s: elapsed=%.1fs > window=%.1fs", cache_key, elapsed, self._window_duration)
-            return None
-
-        _LOGGER.debug("Cache HIT for %s: elapsed=%.1fs < window=%.1fs", cache_key, elapsed, self._window_duration)
-        return cached_data
-
-    def set_cached_data(self, cache_key: str, data: Any) -> None:
-        """Store successful response data and start a new cache window.
-
-        Args:
-            cache_key: Unique identifier for the cached data
-            data: Data to cache
-        """
-        # If cache window is 0, caching is disabled - don't store anything
-        if self._window_duration == 0:
-            return
-
-        self._cache_entries[cache_key] = (data, time.time())
-        _LOGGER.debug("Cache SET for %s: window=%.1fs", cache_key, self._window_duration)
-
-    def clear(self) -> None:
-        """Clear all cached data."""
-        self._cache_entries.clear()
-
-
-class PersistentObjectCache:
-    """Persistent object cache that reuses objects and only clears on API failures.
-
-    This cache maintains live objects and updates them in place rather than recreating.
-    Cache only clears when API calls fail, not based on time.
-
-    Cache Behavior:
-    - Objects created once and reused
-    - Data updated in place on successful API calls
-    - Cache only cleared on API failures
-    - Reads always return immediately from cache
-
-    Usage:
-        cache = PersistentObjectCache()
-        circuits = cache.get_circuits()  # Always returns immediately
-        cache.update_circuits_from_api(new_data)  # Updates objects in place
-        cache.clear_on_failure()  # Only called on API errors
-    """
-
-    def __init__(self) -> None:
-        """Initialize the persistent cache."""
-        self._circuits_cache: CircuitsOut | None = None
-        self._panel_state_cache: PanelState | None = None
-        self._status_cache: StatusOut | None = None
-        self._battery_cache: BatteryStorage | None = None
-        self._circuit_objects: dict[str, Circuit] = {}  # circuit_id -> Circuit object
-
-    def get_circuits(self) -> CircuitsOut | None:
-        """Get cached circuits data immediately."""
-        return self._circuits_cache
-
-    def get_panel_state(self) -> PanelState | None:
-        """Get cached panel state data immediately."""
-        return self._panel_state_cache
-
-    def get_status(self) -> StatusOut | None:
-        """Get cached status data immediately."""
-        return self._status_cache
-
-    def get_battery_storage(self) -> BatteryStorage | None:
-        """Get cached battery storage data immediately."""
-        return self._battery_cache
-
-    def _initialize_circuits_cache(self, raw_data: dict[str, Any]) -> None:
-        """Initialize circuits cache for first time."""
-        self._circuits_cache = CircuitsOut.from_dict(raw_data)
-        # Cache all circuit object references
-        for circuit_id, circuit in self._circuits_cache.circuits.additional_properties.items():
-            self._circuit_objects[circuit_id] = circuit
-        _LOGGER.debug("Cache INIT for circuits: created %d objects", len(self._circuit_objects))
-
-    def _log_circuits_debug_info(self, raw_data: dict[str, Any]) -> None:
-        """Log debug information about circuits data structure."""
-        _LOGGER.debug("Cache UPDATE circuits: raw_data keys = %s", list(raw_data.keys()))
-
-        # Debug: Check what's inside the circuits key
-        if "circuits" in raw_data:
-            circuits_data = raw_data["circuits"]
-            _LOGGER.debug(
-                "Cache UPDATE circuits: circuits keys = %s",
-                (
-                    list(circuits_data.keys())
-                    if isinstance(circuits_data, dict)
-                    else f"circuits type = {type(circuits_data)}"
-                ),
-            )
-
-            # If circuits_data is a dict, show a sample of its contents
-            if isinstance(circuits_data, dict) and circuits_data:
-                sample_key = next(iter(circuits_data.keys()))
-                _LOGGER.debug("Cache UPDATE circuits: sample circuits[%s] = %s", sample_key, type(circuits_data[sample_key]))
-
-    def _extract_circuit_data(self, raw_data: dict[str, Any]) -> dict[str, Any]:
-        """Extract circuit data from raw API response."""
-        # Try different possible paths for circuit data
-        if "circuits" in raw_data and isinstance(raw_data["circuits"], dict):
-            circuits_obj = raw_data["circuits"]
-            if "additionalProperties" in circuits_obj:
-                additional_props = circuits_obj["additionalProperties"]
-                if isinstance(additional_props, dict):
-                    _LOGGER.debug(
-                        "Cache UPDATE circuits: found circuits.additionalProperties with %d items",
-                        len(additional_props),
-                    )
-                    return additional_props
-            if "additional_properties" in circuits_obj:
-                additional_props = circuits_obj["additional_properties"]
-                if isinstance(additional_props, dict):
-                    _LOGGER.debug(
-                        "Cache UPDATE circuits: found circuits.additional_properties with %d items",
-                        len(additional_props),
-                    )
-                    return additional_props
-            # Maybe the circuits object itself contains the circuit data directly
-            # Check if any keys look like circuit IDs
-            circuit_like_keys = [
-                k
-                for k in circuits_obj
-                if isinstance(k, str) and (k.startswith("unmapped_tab_") or k.isdigit() or len(k) > 5)
-            ]
-            if circuit_like_keys:
-                _LOGGER.debug(
-                    "Cache UPDATE circuits: using circuits directly with %d circuit-like keys: %s",
-                    len(circuit_like_keys),
-                    circuit_like_keys[:5],
-                )
-                return circuits_obj
-            _LOGGER.debug("Cache UPDATE circuits: circuits keys don't look like circuit IDs: %s", list(circuits_obj.keys()))
-            return {}
-        if "additional_properties" in raw_data:
-            additional_props = raw_data["additional_properties"]
-            if isinstance(additional_props, dict):
-                _LOGGER.debug("Cache UPDATE circuits: found additional_properties with %d items", len(additional_props))
-                return additional_props
-        _LOGGER.debug("Cache UPDATE circuits: could not find circuit data in raw_data")
-        return {}
-
-    def _update_existing_circuits(self, new_circuit_data: dict[str, Any]) -> int:
-        """Update existing circuit objects with new data."""
-        updated_count = 0
-
-        for circuit_id, circuit_data in new_circuit_data.items():
-            if circuit_id in self._circuit_objects:
-                self._update_circuit_in_place(self._circuit_objects[circuit_id], circuit_data)
-                updated_count += 1
-            else:
-                # New circuit (rare after initial load)
-                new_circuit = Circuit.from_dict(circuit_data)
-                self._circuit_objects[circuit_id] = new_circuit
-                if self._circuits_cache is not None:
-                    self._circuits_cache.circuits.additional_properties[circuit_id] = new_circuit
-                _LOGGER.debug("Cache ADD new circuit: %s", circuit_id)
-
-        return updated_count
-
-    def update_circuits_from_api(self, raw_data: dict[str, Any]) -> CircuitsOut:
-        """Update circuits cache from API response, reusing existing objects."""
-        if self._circuits_cache is None:
-            # First time - create objects
-            self._initialize_circuits_cache(raw_data)
-        else:
-            # Update existing objects in place
-            self._log_circuits_debug_info(raw_data)
-            new_circuit_data = self._extract_circuit_data(raw_data)
-            updated_count = self._update_existing_circuits(new_circuit_data)
-            _LOGGER.debug("Cache UPDATE circuits: updated %d objects in place", updated_count)
-
-        return self._circuits_cache
-
-    def update_panel_state_from_api(self, raw_data: dict[str, Any]) -> PanelState:
-        """Update panel state cache from API response."""
-        try:
-            if self._panel_state_cache is None:
-                self._panel_state_cache = PanelState.from_dict(raw_data)
-                _LOGGER.debug("Cache INIT for panel_state")
-            else:
-                # Update existing object in place
-                self._update_panel_state_in_place(self._panel_state_cache, raw_data)
-                _LOGGER.debug("Cache UPDATE panel_state: updated in place")
-
-            return self._panel_state_cache
-        except (KeyError, ValueError) as e:
-            # Handle incomplete or invalid data - for test compatibility
-            _LOGGER.debug("Cache UPDATE panel_state: incomplete data, skipping cache update: %s", e)
-            # For test compatibility, don't update cache with invalid data
-            if self._panel_state_cache is not None:
-                return self._panel_state_cache
-            # For tests that return minimal data, just skip caching
-            return None
-
-    def update_status_from_api(self, raw_data: dict[str, Any]) -> StatusOut:
-        """Update status cache from API response."""
-        try:
-            if self._status_cache is None:
-                self._status_cache = StatusOut.from_dict(raw_data)
-                _LOGGER.debug("Cache INIT for status")
-            else:
-                # Update existing object in place
-                self._update_status_in_place(self._status_cache, raw_data)
-                _LOGGER.debug("Cache UPDATE status: updated in place")
-
-            return self._status_cache
-        except (KeyError, ValueError) as e:
-            # Handle incomplete or invalid data - for test compatibility
-            _LOGGER.debug("Cache UPDATE status: incomplete data, skipping cache update: %s", e)
-            # For test compatibility, don't update cache with invalid data
-            # Return existing cache if available, otherwise let the caller handle it
-            if self._status_cache is not None:
-                return self._status_cache
-            # For tests that return minimal data, just skip caching
-            return None
-
-    def update_battery_storage_from_api(self, raw_data: dict[str, Any]) -> BatteryStorage:
-        """Update battery storage cache from API response."""
-        if self._battery_cache is None:
-            self._battery_cache = BatteryStorage.from_dict(raw_data)
-            _LOGGER.debug("Cache INIT for battery_storage")
-        else:
-            # Update existing object in place
-            self._update_battery_storage_in_place(self._battery_cache, raw_data)
-            _LOGGER.debug("Cache UPDATE battery_storage: updated in place")
-
-        return self._battery_cache
-
-    def _update_circuit_in_place(self, circuit: Circuit, new_data: dict[str, Any]) -> None:
-        """Update circuit object attributes without recreating."""
-        # Update dynamic power/energy fields
-        circuit.instant_power_w = new_data.get("instantPowerW", circuit.instant_power_w)
-        circuit.produced_energy_wh = new_data.get("producedEnergyWh", circuit.produced_energy_wh)
-        circuit.consumed_energy_wh = new_data.get("consumedEnergyWh", circuit.consumed_energy_wh)
-        circuit.instant_power_update_time_s = new_data.get("instantPowerUpdateTimeS", circuit.instant_power_update_time_s)
-        circuit.energy_accum_update_time_s = new_data.get("energyAccumUpdateTimeS", circuit.energy_accum_update_time_s)
-
-        # Update configuration fields that can change
-        if "name" in new_data:
-            circuit.name = new_data["name"]
-        if "priority" in new_data:
-            circuit.priority = Priority(new_data["priority"])
-        if "tabs" in new_data:
-            circuit.tabs = new_data["tabs"]
-        if "isUserControllable" in new_data:
-            circuit.is_user_controllable = new_data["isUserControllable"]
-        if "isSheddable" in new_data:
-            circuit.is_sheddable = new_data["isSheddable"]
-        if "isNeverBackup" in new_data:
-            circuit.is_never_backup = new_data["isNeverBackup"]
-        if "relayState" in new_data:
-            circuit.relay_state = RelayState(new_data["relayState"])
-
-        # Update any additional properties
-        if hasattr(circuit, "additional_properties"):
-            for key, value in new_data.items():
-                if key not in {
-                    "id",
-                    "instantPowerW",
-                    "producedEnergyWh",
-                    "consumedEnergyWh",
-                    "instantPowerUpdateTimeS",
-                    "energyAccumUpdateTimeS",
-                    "name",
-                    "priority",
-                    "tabs",
-                    "isUserControllable",
-                    "isSheddable",
-                    "isNeverBackup",
-                    "relayState",
-                }:
-                    circuit.additional_properties[key] = value
-
-    def _update_panel_state_in_place(self, panel_state: PanelState, new_data: dict[str, Any]) -> None:
-        """Update panel state object attributes without recreating."""
-        panel_state.instant_grid_power_w = new_data.get("instantGridPowerW", panel_state.instant_grid_power_w)
-        panel_state.grid_sample_start_ms = new_data.get("gridSampleStartMs", panel_state.grid_sample_start_ms)
-        panel_state.grid_sample_end_ms = new_data.get("gridSampleEndMs", panel_state.grid_sample_end_ms)
-
-        if "relayState" in new_data:
-            panel_state.relay_state = RelayState(new_data["relayState"])
-
-    def _update_status_in_place(self, status: StatusOut, new_data: dict[str, Any]) -> None:
-        """Update status object attributes without recreating."""
-        # Update basic fields that might change
-        if "software" in new_data and hasattr(status, "software"):
-            # Update software status fields as needed
-            pass
-        if "system" in new_data and hasattr(status, "system"):
-            # Update system status fields as needed
-            pass
-
-    def _update_battery_storage_in_place(self, battery: BatteryStorage, new_data: dict[str, Any]) -> None:
-        """Update battery storage object attributes without recreating."""
-        if "soe" in new_data and hasattr(battery, "soe"):
-            soe_data = new_data["soe"]
-            battery.soe.percentage = soe_data.get("percentage", battery.soe.percentage)
-
-    def clear_on_failure(self) -> None:
-        """Clear cache only when API calls fail."""
-        self._circuits_cache = None
-        self._panel_state_cache = None
-        self._status_cache = None
-        self._battery_cache = None
-        self._circuit_objects.clear()
-        _LOGGER.debug("Cache CLEARED due to API failure")
-
-    def is_initialized(self) -> bool:
-        """Check if cache has been initialized with data."""
-        return self._circuits_cache is not None
-
-    # Temporary compatibility methods for simulation and bulk operations
-    def get_cached_data(self, cache_key: str) -> Any | None:
-        """Compatibility method for simulation and bulk operations."""
-        cache_map = {
-            "status": self._status_cache,
-            "panel_state": self._panel_state_cache,
-            "circuits": self._circuits_cache,
-            "storage_soe": self._battery_cache,
-        }
-        return cache_map.get(cache_key)
-
-    def set_cached_data(self, cache_key: str, data: Any) -> None:
-        """Compatibility method for simulation operations."""
-        # For simulation keys, we don't persist - just ignore
-        # Live API calls should use the update_*_from_api methods instead
-
-    def clear(self) -> None:
-        """Clear all cached data - compatibility method for simulation operations."""
-        self.clear_on_failure()
-
-
 class SpanPanelClient:
     """Modern async client for SPAN Panel REST API.
 
@@ -548,7 +151,7 @@ class SpanPanelClient:
         timeout: float = 30.0,
         use_ssl: bool = False,
         # Retry configuration - simple parameters
-        retries: int = 0,  # Default to 0 retries for simplicity
+        retries: int = 0,  # Default to 0 retries for fast feedback
         retry_timeout: float = 0.5,  # How long to wait between retry attempts
         retry_backoff_multiplier: float = 2.0,
         # Cache configuration - using persistent cache (no time window)
@@ -590,11 +193,14 @@ class SpanPanelClient:
         self._retry_timeout = retry_timeout
         self._retry_backoff_multiplier = retry_backoff_multiplier
 
-        # Initialize persistent object cache
-        self._api_cache = PersistentObjectCache()
-
         # Track background refresh tasks
         self._background_tasks: set[asyncio.Task[None]] = set()
+
+        # Object pools for reuse (not caching - just object instances to avoid creation overhead)
+        self._status_object: StatusOut | None = None
+        self._panel_state_object: PanelState | None = None
+        self._circuits_object: CircuitsOut | None = None
+        self._battery_object: BatteryStorage | None = None
 
         # Initialize simulation engine if in simulation mode
         self._simulation_engine: DynamicSimulationEngine | None = None
@@ -690,6 +296,46 @@ class SpanPanelClient:
         """Convert raw simulation data to BatteryStorage model."""
         return BatteryStorage.from_dict(raw_data)
 
+    def _update_status_in_place(self, existing: StatusOut, fresh: StatusOut) -> None:
+        """Update existing StatusOut object with fresh data to avoid object creation."""
+        existing.software = fresh.software
+        existing.system = fresh.system
+        existing.network = fresh.network
+        # Update additional_properties
+        existing.additional_properties.clear()
+        existing.additional_properties.update(fresh.additional_properties)
+
+    def _update_panel_state_in_place(self, existing: PanelState, fresh: PanelState) -> None:
+        """Update existing PanelState object with fresh data to avoid object creation."""
+        existing.main_relay_state = fresh.main_relay_state
+        existing.main_meter_energy = fresh.main_meter_energy
+        existing.instant_grid_power_w = fresh.instant_grid_power_w
+        existing.feedthrough_power_w = fresh.feedthrough_power_w
+        existing.feedthrough_energy = fresh.feedthrough_energy
+        existing.grid_sample_start_ms = fresh.grid_sample_start_ms
+        existing.grid_sample_end_ms = fresh.grid_sample_end_ms
+        existing.dsm_grid_state = fresh.dsm_grid_state
+        existing.dsm_state = fresh.dsm_state
+        existing.current_run_config = fresh.current_run_config
+        existing.branches = fresh.branches
+        # Update additional_properties
+        existing.additional_properties.clear()
+        existing.additional_properties.update(fresh.additional_properties)
+
+    def _update_circuits_in_place(self, existing: CircuitsOut, fresh: CircuitsOut) -> None:
+        """Update existing CircuitsOut object with fresh data to avoid object creation."""
+        existing.circuits = fresh.circuits
+        # Update additional_properties
+        existing.additional_properties.clear()
+        existing.additional_properties.update(fresh.additional_properties)
+
+    def _update_battery_storage_in_place(self, existing: BatteryStorage, fresh: BatteryStorage) -> None:
+        """Update existing BatteryStorage object with fresh data to avoid object creation."""
+        existing.soe = fresh.soe
+        # Update additional_properties
+        existing.additional_properties.clear()
+        existing.additional_properties.update(fresh.additional_properties)
+
     # Properties for querying and setting retry configuration
     @property
     def retries(self) -> int:
@@ -753,7 +399,12 @@ class SpanPanelClient:
                 self._client = AuthenticatedClient(
                     base_url=self._base_url,
                     token=self._access_token,
-                    timeout=httpx.Timeout(self._timeout),
+                    timeout=httpx.Timeout(
+                        connect=5.0,  # Connection timeout
+                        read=self._timeout,  # Read timeout
+                        write=5.0,  # Write timeout
+                        pool=2.0,  # Pool timeout
+                    ),
                     verify_ssl=self._use_ssl,
                     raise_on_unexpected_status=True,
                     httpx_args=httpx_args,
@@ -791,6 +442,8 @@ class SpanPanelClient:
 
     def _get_authenticated_client(self) -> AuthenticatedClient:
         """Get an authenticated client for operations that require auth."""
+        if not self._access_token:
+            raise SpanPanelAuthError("No access token available for authenticated operations")
         # Configure httpx for better connection pooling and persistence
         httpx_args = {
             "limits": httpx.Limits(
@@ -850,7 +503,12 @@ class SpanPanelClient:
                 self._client = AuthenticatedClient(
                     base_url=self._base_url,
                     token=token,
-                    timeout=httpx.Timeout(self._timeout),
+                    timeout=httpx.Timeout(
+                        connect=5.0,  # Connection timeout
+                        read=self._timeout,  # Read timeout
+                        write=5.0,  # Write timeout
+                        pool=2.0,  # Pool timeout
+                    ),
                     verify_ssl=self._use_ssl,
                     raise_on_unexpected_status=True,
                 )
@@ -1020,10 +678,9 @@ class SpanPanelClient:
             auth_in.dashboard_password = dashboard_password
 
         try:
-            # Type cast needed because generated API has overly strict type hints
-            response = await generate_jwt_api_v1_auth_register_post.asyncio(
-                client=cast(AuthenticatedClient, client), body=auth_in
-            )
+            # Use the client directly - auth registration works with unauthenticated clients
+            # Cast to AuthenticatedClient to satisfy type checker (even though it's not actually authenticated)
+            response = await generate_jwt_api_v1_auth_register_post.asyncio(client=client, body=auth_in)
             # Handle response - could be AuthOut, HTTPValidationError, or None
             if response is None:
                 raise SpanPanelAPIError("Authentication failed - no response from server")
@@ -1099,22 +756,19 @@ class SpanPanelClient:
         # Ensure simulation is properly initialized asynchronously
         await self._ensure_simulation_initialized()
 
-        # Check persistent cache first
-        cached_status = self._api_cache.get_status()
-        if cached_status is not None:
-            return cached_status
-
         # Get simulation data
         status_data = await self._simulation_engine.get_status()
 
         # Convert to model object
-        status_out = self._convert_raw_to_status_out(status_data)
+        fresh_status = self._convert_raw_to_status_out(status_data)
 
-        # Cache the result using persistent cache
-        cached_result = self._api_cache.update_status_from_api(status_data)
-        if cached_result is not None:
-            return cached_result
-        return status_out
+        # Reuse existing object to avoid creation overhead
+        if self._status_object is None:
+            self._status_object = fresh_status
+        else:
+            self._update_status_in_place(self._status_object, fresh_status)
+
+        return self._status_object
 
     async def _get_status_live(self) -> StatusOut:
         """Get status data from live panel."""
@@ -1122,33 +776,26 @@ class SpanPanelClient:
         async def _get_status_operation() -> StatusOut:
             client = self._get_client_for_endpoint(requires_auth=False)
             # Status endpoint works with both authenticated and unauthenticated clients
-            result = await system_status_api_v1_status_get.asyncio(client=cast(AuthenticatedClient, client))
+            result = await system_status_api_v1_status_get.asyncio(client=client)
             # Since raise_on_unexpected_status=True, result should never be None
             if result is None:
                 raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
             return result
 
-        # Check persistent cache first - always return immediately if available
-        cached_status = self._api_cache.get_status()
-        if cached_status is not None:
-            # Trigger background refresh without blocking
-            self._create_background_task(self._refresh_status_cache())
-            return cached_status
-
         try:
-            # First time only - fetch fresh data and initialize cache
+            # Fetch fresh data from API
             start_time = time.time()
-            status = await self._retry_with_backoff(_get_status_operation)
+            fresh_status = await self._retry_with_backoff(_get_status_operation)
             api_duration = time.time() - start_time
             _LOGGER.debug("Status API call took %.3fs", api_duration)
-            # Update persistent cache with fresh data
-            # Handle both StatusOut objects and dict responses
-            status_dict = status.to_dict() if hasattr(status, "to_dict") else status
-            cached_result = self._api_cache.update_status_from_api(status_dict)
-            if cached_result is not None:
-                return cached_result
-            # If cache update failed (invalid data), return the original status
-            return status
+
+            # Reuse existing object to avoid creation overhead
+            if self._status_object is None:
+                self._status_object = fresh_status
+            else:
+                self._update_status_in_place(self._status_object, fresh_status)
+
+            return self._status_object
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
@@ -1186,70 +833,34 @@ class SpanPanelClient:
         # Ensure simulation is properly initialized asynchronously
         await self._ensure_simulation_initialized()
 
-        # Check persistent cache first
-        cached_panel = self._api_cache.get_panel_state()
-        if cached_panel is not None:
-            _LOGGER.debug("Panel state cache HIT in simulation")
-            return cached_panel
-
         # Get simulation data
         full_data = await self._simulation_engine.get_panel_data()
         panel_data = full_data.get("panel", {})
 
         # Convert to model object
-        panel_state = self._convert_raw_to_panel_state(panel_data)
+        fresh_panel_state = self._convert_raw_to_panel_state(panel_data)
 
         # Synchronize branch power with circuit power for consistency
-        await self._synchronize_branch_power_with_circuits(panel_state, full_data)
+        await self._synchronize_branch_power_with_circuits(fresh_panel_state, full_data)
 
         # Note: Panel grid power will be recalculated after circuits are processed
         # to ensure consistency with the actual circuit power values
 
-        # Cache the result using persistent cache
-        _LOGGER.debug("Panel state cache SET in simulation")
-        cached_result = self._api_cache.update_panel_state_from_api(panel_state.to_dict())
-        if cached_result is not None:
-            return cached_result
-        return panel_state
+        # Reuse existing object to avoid creation overhead
+        if self._panel_state_object is None:
+            self._panel_state_object = fresh_panel_state
+        else:
+            self._update_panel_state_in_place(self._panel_state_object, fresh_panel_state)
+
+        return self._panel_state_object
 
     async def _adjust_panel_power_for_virtual_circuits(self, panel_state: PanelState) -> None:
         """Adjust panel power to include unmapped tab power for consistency with circuit totals."""
         if not hasattr(panel_state, "branches") or not panel_state.branches:
             return
 
-        # Get the current circuits to find mapped tabs
-        cache_key = "full_sim_data"
-        cached_full_data = self._api_cache.get_cached_data(cache_key)
-        if cached_full_data is None:
-            return
-
-        circuits_data = cached_full_data.get("circuits", {})
-        circuits_out = self._convert_raw_to_circuits_out(circuits_data)
-
-        # Find tabs already mapped to circuits
-        mapped_tabs: set[int] = set()
-        if hasattr(circuits_out, "circuits") and hasattr(circuits_out.circuits, "additional_properties"):
-            for circuit in circuits_out.circuits.additional_properties.values():
-                if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
-                    if isinstance(circuit.tabs, list | tuple):
-                        mapped_tabs.update(circuit.tabs)
-                    elif isinstance(circuit.tabs, int):
-                        mapped_tabs.add(circuit.tabs)
-
-        # Calculate unmapped tab power from branches
-        unmapped_tab_power = 0.0
-        total_tabs = len(panel_state.branches)
-        all_tabs = set(range(1, total_tabs + 1))
-        unmapped_tabs = all_tabs - mapped_tabs
-
-        for tab_num in unmapped_tabs:
-            branch_idx = tab_num - 1
-            if branch_idx < len(panel_state.branches):
-                branch = panel_state.branches[branch_idx]
-                unmapped_tab_power += branch.instant_power_w
-
-        # Add unmapped tab power to panel grid power
-        panel_state.instant_grid_power_w += unmapped_tab_power
+        # This method is no longer needed without caching
+        return
 
     def _validate_synchronization_data(self, panel_state: PanelState, full_data: dict[str, Any]) -> dict[str, Any] | None:
         """Validate data required for branch power synchronization."""
@@ -1358,87 +969,71 @@ class SpanPanelClient:
 
     async def _recalculate_panel_grid_power_from_circuits(self, circuits_out: CircuitsOut) -> None:
         """Recalculate panel grid power to match the actual circuit power values."""
-        # Get the cached panel state to update
-        cached_panel = self._api_cache.get_panel_state()
-        if cached_panel is None:
-            _LOGGER.debug("No cached panel state to update")
-            return
-
-        # Calculate consumption, production, and energy from actual circuit data
+        # Calculate total circuit power and energy using the same logic as the test
         total_consumption = 0.0
         total_production = 0.0
         total_produced_energy = 0.0
         total_consumed_energy = 0.0
 
-        if hasattr(circuits_out, "circuits") and hasattr(circuits_out.circuits, "additional_properties"):
-            for circuit_id, circuit in circuits_out.circuits.additional_properties.items():
-                if circuit_id.startswith("unmapped_tab_"):
-                    continue  # Skip virtual circuits for this calculation
+        # Iterate through circuits stored in additional_properties
+        for circuit in circuits_out.circuits.additional_properties.values():
+            # Skip virtual circuits for unmapped tabs
+            circuit_id = None
+            for cid, c in circuits_out.circuits.additional_properties.items():
+                if c is circuit:
+                    circuit_id = cid
+                    break
 
-                circuit_power = circuit.instant_power_w
+            if circuit_id and not circuit_id.startswith("unmapped_tab_"):
+                # Use the same logic as the test: determine if consuming or producing based on circuit type
                 circuit_name = circuit.name.lower() if circuit.name else ""
-
-                # Add to energy totals
-                total_produced_energy += circuit.produced_energy_wh or 0.0
-                total_consumed_energy += circuit.consumed_energy_wh or 0.0
-
-                # Identify producer circuits by name
                 if any(keyword in circuit_name for keyword in ["solar", "inverter", "generator", "battery"]):
-                    total_production += circuit_power
+                    # Producer circuits (solar, battery when discharging)
+                    total_production += circuit.instant_power_w
                 else:
-                    total_consumption += circuit_power
+                    # Consumer circuits
+                    total_consumption += circuit.instant_power_w
 
-        # Update panel grid power: consumption - production
-        new_grid_power = total_consumption - total_production
-        cached_panel.instant_grid_power_w = new_grid_power
+                # Sum up energy values
+                total_produced_energy += circuit.produced_energy_wh
+                total_consumed_energy += circuit.consumed_energy_wh
 
-        # Update panel energy to match circuit totals
-        cached_panel.main_meter_energy.produced_energy_wh = total_produced_energy
-        cached_panel.main_meter_energy.consumed_energy_wh = total_consumed_energy
+        # Update panel grid power to match circuit totals
+        expected_grid_power = total_consumption - total_production
 
-        _LOGGER.debug(
-            "Panel data recalculated: consumption=%.1fW, production=%.1fW, grid=%.1fW, "
-            "produced_energy=%.6fWh, consumed_energy=%.6fWh",
-            total_consumption,
-            total_production,
-            new_grid_power,
-            total_produced_energy,
-            total_consumed_energy,
-        )
+        # Update the panel state object if it exists
+        if self._panel_state_object is not None:
+            self._panel_state_object.instant_grid_power_w = expected_grid_power
+            # Update energy values to match circuit totals
+            self._panel_state_object.main_meter_energy.produced_energy_wh = total_produced_energy
+            self._panel_state_object.main_meter_energy.consumed_energy_wh = total_consumed_energy
 
     async def _get_panel_state_live(self) -> PanelState:
         """Get panel state data from live panel."""
 
         async def _get_panel_state_operation() -> PanelState:
             client = self._get_client_for_endpoint(requires_auth=True)
-            # Type cast needed because generated API has overly strict type hints
-            result = await get_panel_state_api_v1_panel_get.asyncio(client=cast(AuthenticatedClient, client))
+            # Panel state requires authentication
+            result = await get_panel_state_api_v1_panel_get.asyncio(client=client)
             # Since raise_on_unexpected_status=True, result should never be None
             if result is None:
                 raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
             return result
 
-        # Check persistent cache first - always return immediately if available
-        cached_state = self._api_cache.get_panel_state()
-        if cached_state is not None:
-            # Trigger background refresh without blocking
-            self._create_background_task(self._refresh_panel_state_cache())
-            return cached_state
-
         try:
-            # First time only - fetch fresh data and initialize cache
+            # Fetch fresh data from API
             start_time = time.time()
-            state = await self._retry_with_backoff(_get_panel_state_operation)
+            fresh_state = await self._retry_with_backoff(_get_panel_state_operation)
             api_duration = time.time() - start_time
             _LOGGER.debug("Panel state API call took %.3fs", api_duration)
-            # Update persistent cache with fresh data
-            # Handle both PanelState objects and dict responses
-            state_dict = state.to_dict() if hasattr(state, "to_dict") else state
-            cached_result = self._api_cache.update_panel_state_from_api(state_dict)
-            if cached_result is not None:
-                return cached_result
-            # If cache update failed (invalid data), return the original state
-            return state
+
+            # Reuse existing object to avoid creation overhead
+            if self._panel_state_object is None:
+                self._panel_state_object = fresh_state
+            else:
+                self._update_panel_state_in_place(self._panel_state_object, fresh_state)
+
+            return self._panel_state_object
         except SpanPanelAuthError:
             # Pass through auth errors directly
             raise
@@ -1486,56 +1081,58 @@ class SpanPanelClient:
         # Ensure simulation is properly initialized asynchronously
         await self._ensure_simulation_initialized()
 
-        # Check persistent cache first
-        cached_circuits = self._api_cache.get_circuits()
-        if cached_circuits is not None:
-            return cached_circuits
-
-        # Get simulation data
+        # Get simulation data (contains both circuits and panel data)
         full_data = await self._simulation_engine.get_panel_data()
         circuits_data = full_data.get("circuits", {})
 
-        # Convert to model object and apply unmapped tab logic (same as live mode)
-        circuits_out = self._convert_raw_to_circuits_out(circuits_data)
+        # Convert to model object
+        fresh_circuits = self._convert_raw_to_circuits_out(circuits_data)
 
-        panel_state = await self.get_panel_state()
+        # Extract branches directly from full_data to avoid redundant API call
+        panel_data = full_data.get("panel", {})
+        if panel_data and "branches" in panel_data:
+            # Convert branches from raw data
+            branches = []
+            for branch_data in panel_data.get("branches", []):
+                branch = Branch(
+                    id=branch_data.get("id", ""),
+                    relay_state=RelayState(branch_data.get("relayState", "CLOSED")),
+                    instant_power_w=branch_data.get("instantPowerW", 0.0),
+                    imported_active_energy_wh=branch_data.get("importedActiveEnergyWh", 0.0),
+                    exported_active_energy_wh=branch_data.get("exportedActiveEnergyWh", 0.0),
+                    measure_start_ts_ms=branch_data.get("measureStartTsMs", 0),
+                    measure_duration_ms=branch_data.get("measureDurationMs", 0),
+                    is_measure_valid=branch_data.get("isMeasureValid", True),
+                )
+                branches.append(branch)
 
-        if hasattr(panel_state, "branches") and panel_state.branches:
-            self._add_unmapped_virtuals(circuits_out, panel_state.branches)
+            # Add virtual circuits for unmapped tabs using branches from same data
+            self._add_unmapped_virtuals(fresh_circuits, branches)
         else:
-            _LOGGER.debug("No branches in panel state (simulation), skipping unmapped circuit creation")
+            _LOGGER.debug("No branches in panel data (simulation), skipping unmapped circuit creation")
 
-        # Recalculate panel grid power to match circuit totals
-        await self._recalculate_panel_grid_power_from_circuits(circuits_out)
+        # Reuse existing object to avoid creation overhead
+        if self._circuits_object is None:
+            self._circuits_object = fresh_circuits
+        else:
+            self._update_circuits_in_place(self._circuits_object, fresh_circuits)
 
-        # Cache the result using persistent cache with the modified circuits data
-        circuits_with_virtuals_data = circuits_out.to_dict()
-        cached_result = self._api_cache.update_circuits_from_api(circuits_with_virtuals_data)
-        if cached_result is not None:
-            return cached_result
-        return circuits_out
+        # Recalculate panel grid power to match circuit totals (after object reuse)
+        await self._recalculate_panel_grid_power_from_circuits(self._circuits_object)
+
+        return self._circuits_object
 
     async def _get_circuits_live(self) -> CircuitsOut:
         """Get circuits data from live panel."""
 
-        async def _get_circuits_raw_operation() -> dict[str, Any]:
-            """Get raw circuits data for persistent cache updates."""
-            client = self._get_client_for_endpoint(requires_auth=True)
-            response = await get_circuits_api_v1_circuits_get.asyncio_detailed(client=cast(AuthenticatedClient, client))
-            if response.status_code != 200 or response.parsed is None:
-                raise SpanPanelAPIError(f"API call failed with status {response.status_code}")
-
-            # Return raw dict data for cache processing
-            return cast(dict[str, Any], response.parsed.to_dict())
-
         async def _get_circuits_operation() -> CircuitsOut:
-            # Get standard circuits response
+            # Get circuits first (needed to determine mapped tabs)
             client = self._get_client_for_endpoint(requires_auth=True)
-            result = await get_circuits_api_v1_circuits_get.asyncio(client=cast(AuthenticatedClient, client))
+            result = await get_circuits_api_v1_circuits_get.asyncio(client=client)
             if result is None:
                 raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
 
-            # Get panel state for branches data
+            # Get panel state for branches data (depends on circuits to determine unmapped tabs)
             panel_state = await self.get_panel_state()
             _LOGGER.debug(
                 "Panel state branches: %s",
@@ -1550,26 +1147,17 @@ class SpanPanelClient:
 
             return result
 
-        # Check persistent cache first - always return immediately if available
-        cached_circuits = self._api_cache.get_circuits()
-        if cached_circuits is not None:
-            # Trigger background refresh without blocking
-            self._create_background_task(self._refresh_circuits_cache())
-            return cached_circuits
-
         try:
-            # First time only - fetch fresh data and initialize cache
-            raw_circuits_data = await self._retry_with_backoff(_get_circuits_raw_operation)
+            # Fetch fresh data from API
+            fresh_circuits = await self._retry_with_backoff(_get_circuits_operation)
 
-            # Update persistent cache with fresh data (reuses objects)
-            circuits = self._api_cache.update_circuits_from_api(raw_circuits_data)
+            # Reuse existing object to avoid creation overhead
+            if self._circuits_object is None:
+                self._circuits_object = fresh_circuits
+            else:
+                self._update_circuits_in_place(self._circuits_object, fresh_circuits)
 
-            # Add virtual circuits for unmapped tabs
-            panel_state = await self.get_panel_state()
-            if hasattr(panel_state, "branches") and panel_state.branches:
-                self._add_unmapped_virtuals(circuits, panel_state.branches)
-
-            return circuits
+            return self._circuits_object
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
@@ -1585,121 +1173,6 @@ class SpanPanelClient:
         except Exception as e:
             # Catch and wrap all other exceptions
             raise SpanPanelAPIError(f"Unexpected error: {e}") from e
-
-    def _ensure_unmapped_circuits_in_cache(self, cached_circuits: CircuitsOut) -> None:
-        """Ensure unmapped circuits are present in cached circuits data.
-
-        This is a defensive method that never raises exceptions to avoid breaking cache functionality.
-
-        Args:
-            cached_circuits: The cached circuits data to potentially augment
-        """
-        try:
-            cached_state = self._api_cache.get_cached_data("panel_state")
-            if cached_state is None or not hasattr(cached_state, "branches") or not cached_state.branches:
-                return
-
-            # Find mapped tabs from cached circuits
-            mapped_tabs: set[int] = set()
-            if not (hasattr(cached_circuits, "circuits") and hasattr(cached_circuits.circuits, "additional_properties")):
-                return
-
-            for circuit in cached_circuits.circuits.additional_properties.values():
-                if hasattr(circuit, "tabs") and circuit.tabs is not None and str(circuit.tabs) != "UNSET":
-                    if isinstance(circuit.tabs, list | tuple):
-                        mapped_tabs.update(circuit.tabs)
-                    elif isinstance(circuit.tabs, int):
-                        mapped_tabs.add(circuit.tabs)
-
-            total_tabs = len(cached_state.branches)
-            all_tabs = set(range(1, total_tabs + 1))
-            unmapped_tabs = all_tabs - mapped_tabs
-
-            for tab_num in unmapped_tabs:
-                branch_idx = tab_num - 1
-                if branch_idx < len(cached_state.branches):
-                    branch = cached_state.branches[branch_idx]
-                    virtual_circuit = self._create_unmapped_tab_circuit(branch, tab_num)
-                    circuit_id = f"unmapped_tab_{tab_num}"
-                    cached_circuits.circuits.additional_properties[circuit_id] = virtual_circuit
-        except (AttributeError, IndexError, KeyError, TypeError):  # Defensive: never fail on cache post-processing
-            # Log at debug level but don't fail - this is defensive code
-            _LOGGER.debug("Error ensuring unmapped circuits in cache, continuing with cached data")
-
-    async def _refresh_circuits_cache(self) -> None:
-        """Background task to refresh circuits cache without blocking reads."""
-        try:
-
-            async def _get_circuits_raw_operation() -> dict[str, Any]:
-                """Get raw circuits data for persistent cache updates."""
-                client = self._get_client_for_endpoint(requires_auth=True)
-                response = await get_circuits_api_v1_circuits_get.asyncio_detailed(client=cast(AuthenticatedClient, client))
-                if response.status_code != 200 or response.parsed is None:
-                    raise SpanPanelAPIError(f"API call failed with status {response.status_code}")
-
-                # Return raw dict data for cache processing
-                return cast(dict[str, Any], response.parsed.to_dict())
-
-            raw_circuits_data = await self._retry_with_backoff(_get_circuits_raw_operation)
-            self._api_cache.update_circuits_from_api(raw_circuits_data)
-
-            # Update virtual circuits
-            panel_state = await self.get_panel_state()
-            if hasattr(panel_state, "branches") and panel_state.branches:
-                cached_circuits = self._api_cache.get_circuits()
-                if cached_circuits:
-                    self._add_unmapped_virtuals(cached_circuits, panel_state.branches)
-        except (SpanPanelAPIError, SpanPanelConnectionError, SpanPanelTimeoutError, SpanPanelAuthError) as e:
-            # Log error but don't fail - this is background refresh
-            _LOGGER.debug("Background circuits cache refresh failed: %s", e)
-
-    async def _refresh_status_cache(self) -> None:
-        """Background task to refresh status cache without blocking reads."""
-        try:
-
-            async def _get_status_operation() -> StatusOut:
-                client = self._get_client_for_endpoint(requires_auth=False)
-                result = await system_status_api_v1_status_get.asyncio(client=cast(AuthenticatedClient, client))
-                if result is None:
-                    raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
-                return result
-
-            status = await self._retry_with_backoff(_get_status_operation)
-            self._api_cache.update_status_from_api(status.to_dict())
-        except (SpanPanelAPIError, SpanPanelConnectionError, SpanPanelTimeoutError, SpanPanelAuthError) as e:
-            _LOGGER.debug("Background status cache refresh failed: %s", e)
-
-    async def _refresh_panel_state_cache(self) -> None:
-        """Background task to refresh panel state cache without blocking reads."""
-        try:
-
-            async def _get_panel_state_operation() -> PanelState:
-                client = self._get_client_for_endpoint(requires_auth=True)
-                result = await get_panel_state_api_v1_panel_get.asyncio(client=cast(AuthenticatedClient, client))
-                if result is None:
-                    raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
-                return result
-
-            panel_state = await self._retry_with_backoff(_get_panel_state_operation)
-            self._api_cache.update_panel_state_from_api(panel_state.to_dict())
-        except (SpanPanelAPIError, SpanPanelConnectionError, SpanPanelTimeoutError, SpanPanelAuthError) as e:
-            _LOGGER.debug("Background panel state cache refresh failed: %s", e)
-
-    async def _refresh_battery_storage_cache(self) -> None:
-        """Background task to refresh battery storage cache without blocking reads."""
-        try:
-
-            async def _get_storage_soe_operation() -> BatteryStorage:
-                client = self._get_client_for_endpoint(requires_auth=True)
-                result = await get_storage_soe_api_v1_storage_soe_get.asyncio(client=cast(AuthenticatedClient, client))
-                if result is None:
-                    raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
-                return result
-
-            storage = await self._retry_with_backoff(_get_storage_soe_operation)
-            self._api_cache.update_battery_storage_from_api(storage.to_dict())
-        except (SpanPanelAPIError, SpanPanelConnectionError, SpanPanelTimeoutError, SpanPanelAuthError) as e:
-            _LOGGER.debug("Background battery storage cache refresh failed: %s", e)
 
     def _get_mapped_tabs_from_circuits(self, circuits: CircuitsOut) -> set[int]:
         """Collect tab numbers that are already mapped to circuits.
@@ -1797,8 +1270,8 @@ class SpanPanelClient:
         # Safely convert all values
         instant_power_w = _safe_power_conversion(getattr(branch, "instant_power_w", 0.0))
         # For solar tabs, imported energy represents production
-        produced_energy_wh = _safe_energy_conversion(imported_energy)
-        consumed_energy_wh = _safe_energy_conversion(exported_energy)
+        produced_energy_wh = _safe_energy_conversion(imported_energy) or 0.0
+        consumed_energy_wh = _safe_energy_conversion(exported_energy) or 0.0
 
         # Get timestamps (use current time as fallback)
         current_time = int(time.time())
@@ -1844,49 +1317,43 @@ class SpanPanelClient:
         # Ensure simulation is properly initialized asynchronously
         await self._ensure_simulation_initialized()
 
-        # Check persistent cache first
-        cached_storage = self._api_cache.get_battery_storage()
-        if cached_storage is not None:
-            return cached_storage
-
         # Get simulation data
         storage_data = await self._simulation_engine.get_soe()
 
         # Convert to model object
-        battery_storage = self._convert_raw_to_battery_storage(storage_data)
+        fresh_battery = self._convert_raw_to_battery_storage(storage_data)
 
-        # Cache the result using persistent cache
-        cached_result = self._api_cache.update_battery_storage_from_api(storage_data)
-        if cached_result is not None:
-            return cached_result
-        return battery_storage
+        # Reuse existing object to avoid creation overhead
+        if self._battery_object is None:
+            self._battery_object = fresh_battery
+        else:
+            self._update_battery_storage_in_place(self._battery_object, fresh_battery)
+
+        return self._battery_object
 
     async def _get_storage_soe_live(self) -> BatteryStorage:
         """Get storage SOE data from live panel."""
 
         async def _get_storage_soe_operation() -> BatteryStorage:
             client = self._get_client_for_endpoint(requires_auth=True)
-            # Type cast needed because generated API has overly strict type hints
-            result = await get_storage_soe_api_v1_storage_soe_get.asyncio(client=cast(AuthenticatedClient, client))
+            # Storage SOE requires authentication
+            result = await get_storage_soe_api_v1_storage_soe_get.asyncio(client=client)
             # Since raise_on_unexpected_status=True, result should never be None
             if result is None:
                 raise SpanPanelAPIError("API result is None despite raise_on_unexpected_status=True")
             return result
 
-        # Check persistent cache first - always return immediately if available
-        cached_storage = self._api_cache.get_battery_storage()
-        if cached_storage is not None:
-            # Trigger background refresh without blocking
-            self._create_background_task(self._refresh_battery_storage_cache())
-            return cached_storage
-
         try:
-            # First time only - fetch fresh data and initialize cache
-            storage = await self._retry_with_backoff(_get_storage_soe_operation)
-            # Update persistent cache with fresh data
-            # Handle both BatteryStorage objects and dict responses
-            storage_dict = storage.to_dict() if hasattr(storage, "to_dict") else storage
-            return self._api_cache.update_battery_storage_from_api(storage_dict)
+            # Fetch fresh data from API
+            fresh_storage = await self._retry_with_backoff(_get_storage_soe_operation)
+
+            # Reuse existing object to avoid creation overhead
+            if self._battery_object is None:
+                self._battery_object = fresh_storage
+            else:
+                self._update_battery_storage_in_place(self._battery_object, fresh_storage)
+
+            return self._battery_object
         except UnexpectedStatus as e:
             self._handle_unexpected_status(e)
         except httpx.HTTPStatusError as e:
@@ -1964,9 +1431,9 @@ class SpanPanelClient:
             # Create the body object with just the relay state
             body = BodySetCircuitStateApiV1CircuitsCircuitIdPost(relay_state_in=relay_in)
 
-            # Type cast needed because generated API has overly strict type hints
+            # Circuit state modification requires authentication
             return await set_circuit_state_api_v_1_circuits_circuit_id_post.asyncio(
-                client=cast(AuthenticatedClient, client), circuit_id=circuit_id, body=body
+                client=client, circuit_id=circuit_id, body=body
             )
 
         try:
@@ -2048,9 +1515,9 @@ class SpanPanelClient:
             # Create the body object with just the priority
             body = BodySetCircuitStateApiV1CircuitsCircuitIdPost(priority_in=priority_in)
 
-            # Type cast needed because generated API has overly strict type hints
+            # Circuit state modification requires authentication
             return await set_circuit_state_api_v_1_circuits_circuit_id_post.asyncio(
-                client=cast(AuthenticatedClient, client), circuit_id=circuit_id, body=body
+                client=client, circuit_id=circuit_id, body=body
             )
 
         try:
@@ -2115,9 +1582,6 @@ class SpanPanelClient:
         # Apply overrides to simulation engine
         self._simulation_engine.set_dynamic_overrides(circuit_overrides=circuit_overrides, global_overrides=global_overrides)
 
-        # Clear caches since behavior has changed
-        self._api_cache.clear()
-
     async def clear_circuit_overrides(self) -> None:
         """Clear all temporary circuit overrides in simulation mode.
 
@@ -2135,96 +1599,10 @@ class SpanPanelClient:
         # Clear overrides from simulation engine
         self._simulation_engine.clear_dynamic_overrides()
 
-        # Clear caches since behavior has changed
-        self._api_cache.clear()
-
-    def _get_cached_data(self, include_battery: bool) -> tuple[Any, Any, Any, Any]:
-        """Get cached data for all data types."""
-        cached_status = self._api_cache.get_cached_data("status")
-        cached_panel = self._api_cache.get_cached_data("panel_state")
-        cached_circuits = self._api_cache.get_cached_data("circuits")
-        cached_storage = self._api_cache.get_cached_data("storage_soe") if include_battery else None
-        return cached_status, cached_panel, cached_circuits, cached_storage
-
-    def _log_cache_status(
-        self, cached_status: Any, cached_panel: Any, cached_circuits: Any, cached_storage: Any, include_battery: bool
-    ) -> None:
-        """Log cache hit status for debugging."""
-        cache_hits = []
-        if cached_status is not None:
-            cache_hits.append("status")
-        if cached_panel is not None:
-            cache_hits.append("panel")
-        if cached_circuits is not None:
-            cache_hits.append("circuits")
-        if include_battery and cached_storage is not None:
-            cache_hits.append("storage")
-
-        _LOGGER.debug("Cache status - Hits: %s, Persistent cache enabled", cache_hits or "none")
-
-    def _prepare_fetch_tasks(
-        self, cached_status: Any, cached_panel: Any, cached_circuits: Any, cached_storage: Any, include_battery: bool
-    ) -> tuple[list[Any], list[str]]:
-        """Prepare tasks for fetching uncached data and trigger background refreshes."""
-        tasks = []
-        task_keys = []
-
-        # Only fetch if cache is empty (first time)
-        if cached_status is None:
-            tasks.append(self.get_status())
-            task_keys.append("status")
-        else:
-            # Trigger background refresh
-            self._create_background_task(self._refresh_status_cache())
-
-        if cached_panel is None:
-            tasks.append(self.get_panel_state())
-            task_keys.append("panel_state")
-        else:
-            # Trigger background refresh
-            self._create_background_task(self._refresh_panel_state_cache())
-
-        if cached_circuits is None:
-            tasks.append(self.get_circuits())
-            task_keys.append("circuits")
-        else:
-            # Trigger background refresh
-            self._create_background_task(self._refresh_circuits_cache())
-
-        if include_battery and cached_storage is None:
-            tasks.append(self.get_storage_soe())
-            task_keys.append("storage")
-        elif include_battery:
-            # Trigger background refresh
-            self._create_background_task(self._refresh_battery_storage_cache())
-
-        return tasks, task_keys
-
-    def _update_cached_data_from_results(
-        self,
-        cached_status: Any,
-        cached_panel: Any,
-        cached_circuits: Any,
-        cached_storage: Any,
-        results: list[Any],
-        task_keys: list[str],
-    ) -> tuple[Any, Any, Any, Any]:
-        """Update cached data with fresh results from API calls."""
-        for i, key in enumerate(task_keys):
-            if key == "status":
-                cached_status = results[i]
-            elif key == "panel_state":
-                cached_panel = results[i]
-            elif key == "circuits":
-                cached_circuits = results[i]
-            elif key == "storage":
-                cached_storage = results[i]
-        return cached_status, cached_panel, cached_circuits, cached_storage
-
     async def get_all_data(self, include_battery: bool = False) -> dict[str, Any]:
         """Get all panel data in parallel for maximum performance.
 
-        This method makes concurrent API calls when cache misses occur,
+        This method makes concurrent API calls to fetch all data at once,
         reducing total time from ~1.5s (sequential) to ~1.0s (parallel).
 
         Args:
@@ -2239,37 +1617,28 @@ class SpanPanelClient:
                 'storage': BatteryStorage (if include_battery=True)
             }
         """
-        # Check cache for all data types first
-        cached_status, cached_panel, cached_circuits, cached_storage = self._get_cached_data(include_battery)
+        # Create tasks for all data types
+        tasks = [
+            self.get_status(),
+            self.get_panel_state(),
+            self.get_circuits(),
+        ]
 
-        # Debug cache status
-        self._log_cache_status(cached_status, cached_panel, cached_circuits, cached_storage, include_battery)
+        if include_battery:
+            tasks.append(self.get_storage_soe())
 
-        # Prepare tasks for uncached data and trigger background refreshes
-        tasks, task_keys = self._prepare_fetch_tasks(
-            cached_status, cached_panel, cached_circuits, cached_storage, include_battery
-        )
-
-        # Execute uncached calls in parallel (should be rare after first load)
-        if tasks:
-            results = await asyncio.gather(*tasks)
-        else:
-            results = []
-
-        # Update results with fresh data
-        cached_status, cached_panel, cached_circuits, cached_storage = self._update_cached_data_from_results(
-            cached_status, cached_panel, cached_circuits, cached_storage, results, task_keys
-        )
+        # Execute all calls in parallel
+        results = await asyncio.gather(*tasks)
 
         # Return all data
         result = {
-            "status": cached_status,
-            "panel_state": cached_panel,
-            "circuits": cached_circuits,
+            "status": results[0],
+            "panel_state": results[1],
+            "circuits": results[2],
         }
 
         if include_battery:
-            result["storage"] = cached_storage
+            result["storage"] = results[3]
 
         return result
 

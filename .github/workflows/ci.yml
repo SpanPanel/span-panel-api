@@ -82,7 +82,7 @@ jobs:
         poetry run bandit -r src/ -f json -o bandit-report.json || true
 
     - name: Upload Bandit scan results
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: bandit-report
         path: bandit-report.json
@@ -118,7 +118,7 @@ jobs:
       run: poetry run twine check dist/*
 
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: dist
         path: dist/

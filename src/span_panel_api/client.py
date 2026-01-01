@@ -235,8 +235,10 @@ class SpanPanelClient:
                 self._client = self._get_unauthenticated_client()
 
         # Enter the httpx client context
+        # Must manually call __aenter__ - can't use async with because we need the client
+        # to stay open until __aexit__ is called (split context management pattern)
         try:
-            await self._client.__aenter__()
+            await self._client.__aenter__()  # pylint: disable=unnecessary-dunder-call
         except Exception as e:
             # Reset state on failure
             self._client = None
@@ -448,7 +450,7 @@ class SpanPanelClient:
                     "limits": httpx.Limits(
                         max_keepalive_connections=5,  # Keep connections alive
                         max_connections=10,  # Allow multiple connections
-                        keepalive_expiry=30.0,  # Keep connections alive for 30 seconds
+                        keepalive_expiry=4.0,  # Close before server's 5s keep-alive timeout
                     ),
                 }
 
@@ -480,7 +482,7 @@ class SpanPanelClient:
             "limits": httpx.Limits(
                 max_keepalive_connections=5,  # Keep connections alive
                 max_connections=10,  # Allow multiple connections
-                keepalive_expiry=30.0,  # Keep connections alive for 30 seconds
+                keepalive_expiry=4.0,  # Close before server's 5s keep-alive timeout
             ),
         }
 
@@ -506,7 +508,7 @@ class SpanPanelClient:
             "limits": httpx.Limits(
                 max_keepalive_connections=5,  # Keep connections alive
                 max_connections=10,  # Allow multiple connections
-                keepalive_expiry=30.0,  # Keep connections alive for 30 seconds
+                keepalive_expiry=4.0,  # Close before server's 5s keep-alive timeout
             ),
         }
 
@@ -695,6 +697,27 @@ class SpanPanelClient:
                     await _delay_registry.call_delay(delay)
                     continue
                 # Last attempt - re-raise
+                raise
+            except httpx.RemoteProtocolError:
+                # Server closed connection (stale keep-alive) - all pooled connections likely dead
+                # Destroy client to force fresh connection pool on retry
+                if self._client is not None:
+                    with suppress(Exception):
+                        await self._client.__aexit__(None, None, None)
+                    self._client = None
+
+                # If in context mode, recreate client to maintain invariant that _client is not None
+                if self._in_context:
+                    if self._access_token:
+                        self._client = self._get_authenticated_client()
+                    else:
+                        self._client = self._get_unauthenticated_client()
+                    # Must manually enter context - can't use async with here as we're already in a context
+                    # and need to keep client alive for retry. This matches the pattern in __aenter__ (line 239).
+                    await self._client.__aenter__()  # pylint: disable=unnecessary-dunder-call
+
+                if attempt < max_attempts - 1:
+                    continue  # Immediate retry - no delay needed
                 raise
 
         # This should never be reached, but required for mypy type checking

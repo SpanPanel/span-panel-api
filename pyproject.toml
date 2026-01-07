@@ -29,7 +29,7 @@ packages = [
 format-markdown = "scripts.format_markdown:main"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "8.4.2"
+pytest = "9.0.2"
 pytest-asyncio = "1.3.0"
 pytest-cov = "*"
 bandit = "1.9.2"

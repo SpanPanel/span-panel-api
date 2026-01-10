@@ -870,3 +870,218 @@ class TestHTTPStatusErrorInAPIMethods:
 
             with pytest.raises(SpanPanelTimeoutError, match="Request timed out after 30.0s"):
                 await client.authenticate("test-app", "Test Application")
+
+
+class TestNetworkErrorRetryLogic:
+    """Test retry logic for network errors (ReadError, WriteError, CloseError).
+
+    These errors can occur when parallel requests share a client and one request
+    destroys the client while others are in-flight. They should be handled the
+    same way as RemoteProtocolError - with immediate retry and client recreation.
+
+    See: https://github.com/SpanPanel/span-panel-api/issues/89
+    """
+
+    @pytest.mark.asyncio
+    async def test_read_error_triggers_immediate_retry(self):
+        """Test that ReadError triggers immediate retry without exponential backoff."""
+        client = SpanPanelClient("192.168.1.100", retries=2, retry_timeout=0.5)
+
+        call_count = 0
+        start_time = asyncio.get_event_loop().time()
+
+        async def mock_operation():
+            nonlocal call_count
+            call_count += 1
+            raise httpx.ReadError("Connection reset by peer")
+
+        with pytest.raises(httpx.ReadError):
+            await client._retry_with_backoff(mock_operation)
+
+        end_time = asyncio.get_event_loop().time()
+        elapsed = end_time - start_time
+
+        # Should have retried the expected number of times
+        assert call_count == 3  # retries=2 means 3 total attempts
+
+        # Should be fast (immediate retry, not exponential backoff)
+        # With exponential backoff at 0.5s base, we'd see 0.5 + 1.0 = 1.5s delay
+        # With immediate retry, we should see < 0.1s total
+        assert elapsed < 0.3, f"Expected immediate retry but took {elapsed}s"
+
+    @pytest.mark.asyncio
+    async def test_write_error_triggers_immediate_retry(self):
+        """Test that WriteError triggers immediate retry without exponential backoff."""
+        client = SpanPanelClient("192.168.1.100", retries=2, retry_timeout=0.5)
+
+        call_count = 0
+        start_time = asyncio.get_event_loop().time()
+
+        async def mock_operation():
+            nonlocal call_count
+            call_count += 1
+            raise httpx.WriteError("Broken pipe")
+
+        with pytest.raises(httpx.WriteError):
+            await client._retry_with_backoff(mock_operation)
+
+        end_time = asyncio.get_event_loop().time()
+        elapsed = end_time - start_time
+
+        # Should have retried the expected number of times
+        assert call_count == 3  # retries=2 means 3 total attempts
+
+        # Should be fast (immediate retry, not exponential backoff)
+        assert elapsed < 0.3, f"Expected immediate retry but took {elapsed}s"
+
+    @pytest.mark.asyncio
+    async def test_close_error_triggers_immediate_retry(self):
+        """Test that CloseError triggers immediate retry without exponential backoff."""
+        client = SpanPanelClient("192.168.1.100", retries=2, retry_timeout=0.5)
+
+        call_count = 0
+        start_time = asyncio.get_event_loop().time()
+
+        async def mock_operation():
+            nonlocal call_count
+            call_count += 1
+            raise httpx.CloseError("Connection closed unexpectedly")
+
+        with pytest.raises(httpx.CloseError):
+            await client._retry_with_backoff(mock_operation)
+
+        end_time = asyncio.get_event_loop().time()
+        elapsed = end_time - start_time
+
+        # Should have retried the expected number of times
+        assert call_count == 3  # retries=2 means 3 total attempts
+
+        # Should be fast (immediate retry, not exponential backoff)
+        assert elapsed < 0.3, f"Expected immediate retry but took {elapsed}s"
+
+    @pytest.mark.asyncio
+    async def test_remote_protocol_error_triggers_immediate_retry(self):
+        """Test that RemoteProtocolError still triggers immediate retry (regression test)."""
+        client = SpanPanelClient("192.168.1.100", retries=2, retry_timeout=0.5)
+
+        call_count = 0
+        start_time = asyncio.get_event_loop().time()
+
+        async def mock_operation():
+            nonlocal call_count
+            call_count += 1
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response")
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            await client._retry_with_backoff(mock_operation)
+
+        end_time = asyncio.get_event_loop().time()
+        elapsed = end_time - start_time
+
+        # Should have retried the expected number of times
+        assert call_count == 3  # retries=2 means 3 total attempts
+
+        # Should be fast (immediate retry, not exponential backoff)
+        assert elapsed < 0.3, f"Expected immediate retry but took {elapsed}s"
+
+    @pytest.mark.asyncio
+    async def test_network_error_recovers_on_retry(self):
+        """Test that network errors can recover on retry."""
+        client = SpanPanelClient("192.168.1.100", retries=2, retry_timeout=0.001)
+
+        call_count = 0
+
+        async def mock_operation():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise httpx.ReadError("")  # Empty message like in the issue
+            return "success"
+
+        result = await client._retry_with_backoff(mock_operation)
+
+        assert result == "success"
+        assert call_count == 2  # First failed, second succeeded
+
+    @pytest.mark.asyncio
+    async def test_connect_error_still_uses_exponential_backoff(self):
+        """Test that ConnectError still uses exponential backoff (not immediate retry)."""
+        client = SpanPanelClient("192.168.1.100", retries=1, retry_timeout=0.2, retry_backoff_multiplier=2.0)
+
+        call_count = 0
+        start_time = asyncio.get_event_loop().time()
+
+        async def mock_operation():
+            nonlocal call_count
+            call_count += 1
+            raise httpx.ConnectError("Connection refused")
+
+        with pytest.raises(httpx.ConnectError):
+            await client._retry_with_backoff(mock_operation)
+
+        end_time = asyncio.get_event_loop().time()
+        elapsed = end_time - start_time
+
+        # Should have retried
+        assert call_count == 2  # retries=1 means 2 total attempts
+
+        # ConnectError should use exponential backoff (at least 0.2s delay)
+        assert elapsed >= 0.15, f"Expected exponential backoff but only took {elapsed}s"
+
+    @pytest.mark.asyncio
+    async def test_empty_error_message_handling(self):
+        """Test that errors with empty messages are handled correctly.
+
+        This tests the scenario from issue #89 where httpx exceptions with empty
+        messages were causing confusing 'Unexpected error: ' log messages.
+        """
+        client = SpanPanelClient("192.168.1.100", retries=0)
+
+        # Test each network error type with empty message
+        for error_class in [httpx.ReadError, httpx.WriteError, httpx.CloseError]:
+
+            async def mock_operation(err_cls=error_class):
+                raise err_cls("")
+
+            with pytest.raises(error_class):
+                await client._retry_with_backoff(mock_operation)
+
+    @pytest.mark.asyncio
+    async def test_network_error_destroys_client_in_context_mode(self):
+        """Test that network errors destroy and recreate client when in context mode."""
+        client = SpanPanelClient("192.168.1.100", retries=1, retry_timeout=0.001)
+        client.set_access_token("test-token")
+
+        clients_created = []
+
+        # Track client creation
+        original_get_auth_client = client._get_authenticated_client
+
+        def tracking_get_auth_client():
+            result = original_get_auth_client()
+            clients_created.append(result)
+            return result
+
+        client._get_authenticated_client = tracking_get_auth_client
+
+        with patch("span_panel_api.client.system_status_api_v1_status_get") as mock_status:
+            call_count = 0
+
+            async def side_effect(*args, **kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    raise httpx.ReadError("Connection reset")
+                return MagicMock(system=MagicMock(manufacturer="SPAN"))
+
+            mock_status.asyncio = AsyncMock(side_effect=side_effect)
+
+            async with client:
+                initial_client_count = len(clients_created)
+                status = await client.get_status()
+                assert status is not None
+
+                # Client should have been recreated after the error
+                # Note: The initial client is created when entering context
+                # After ReadError, a new client should be created
+                assert len(clients_created) > initial_client_count

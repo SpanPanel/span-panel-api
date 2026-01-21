@@ -698,9 +698,13 @@ class SpanPanelClient:
                     continue
                 # Last attempt - re-raise
                 raise
-            except httpx.RemoteProtocolError:
-                # Server closed connection (stale keep-alive) - all pooled connections likely dead
-                # Destroy client to force fresh connection pool on retry
+            except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError, httpx.CloseError):
+                # Server closed connection or network error during request.
+                # This can happen due to:
+                # - Stale keep-alive connections (RemoteProtocolError)
+                # - Parallel requests where one request destroyed the shared client while others
+                #   were in-flight (ReadError, WriteError, CloseError)
+                # All pooled connections are likely dead - destroy client to force fresh connection pool
                 if self._client is not None:
                     with suppress(Exception):
                         await self._client.__aexit__(None, None, None)

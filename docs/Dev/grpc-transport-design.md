@@ -213,6 +213,112 @@ If any field IDs or message structure differs from production firmware, `grpc/co
 
 ---
 
+## Developer Setup for Hardware Testing
+
+The gRPC protobuf decoders must be validated against a live Gen3 panel. Publishing the library between every decode fix is impractical — use an **editable install** so changes to `grpc/client.py` or `grpc/const.py` are picked up on the next integration
+reload without reinstalling anything.
+
+### Prerequisites
+
+- Gen3 panel (MLO48 or MAIN40) reachable on port 50065
+- Python 3.12+, `git`
+- Both repos cloned side-by-side: `span-panel-api/` (this library) and `span/` (HA integration)
+
+### Option A — Local HA Core (fastest iteration)
+
+```bash
+# 1. Create a dedicated HA environment (once)
+python -m venv ha-venv
+source ha-venv/bin/activate
+pip install homeassistant
+
+# 2. Install the library in editable mode (once; survives HA restarts)
+pip install -e /path/to/span-panel-api[grpc]
+
+# 3. Confirm editable install — Location must be a file path, not site-packages
+pip show span-panel-api
+
+# 4. Link the integration into HA config
+mkdir -p ~/ha-config/custom_components
+ln -s /path/to/span/custom_components/span_panel ~/ha-config/custom_components/span_panel
+
+# 5. Run HA
+hass -c ~/ha-config
+```
+
+After the editable install, any edit to `src/span_panel_api/grpc/client.py` or `grpc/const.py` is live on the next integration reload — no `pip install` needed.
+
+### Option B — HA in Docker (Home Assistant Container)
+
+```bash
+# 1. Start HA with both repos volume-mounted
+docker run -d \
+  --name homeassistant \
+  -v /path/to/span-panel-api:/span-panel-api \
+  -v /path/to/span/custom_components/span_panel:/config/custom_components/span_panel \
+  -v ~/ha-config:/config \
+  --network host \
+  ghcr.io/home-assistant/home-assistant:stable
+
+# 2. Install the library in editable mode inside the container
+docker exec homeassistant pip install -e /span-panel-api[grpc]
+
+# 3. Confirm
+docker exec homeassistant pip show span-panel-api
+
+# 4. Restart to pick up the new library
+docker restart homeassistant
+```
+
+The editable install persists across container restarts. If the container is **removed and recreated** (`docker rm`), re-run step 2.
+
+### Enable Debug Logging
+
+Add to `~/ha-config/configuration.yaml` before starting HA:
+
+```yaml
+logger:
+  default: warning
+  logs:
+    custom_components.span_panel: debug
+```
+
+Key log messages to watch for:
+
+| Log message                                             | Meaning                                       |
+| ------------------------------------------------------- | --------------------------------------------- |
+| `Span Panel coordinator: Gen3 push-streaming mode`      | Capability detection succeeded                |
+| `Registered Gen3 push-streaming coordinator callback`   | Streaming wired up correctly                  |
+| `Gen3 push update failed: …`                            | Push callback raised — check the error detail |
+| `SPAN Panel update cycle completed` in rapid succession | Push-driven updates are flowing               |
+
+### Iteration Workflow
+
+1. **Edit** `src/span_panel_api/grpc/client.py` or `grpc/const.py`
+2. **Reload** the integration: HA UI → Settings → Devices & Services → SPAN Panel → ⋮ → Reload
+3. **Check logs** — no HA restart required for most decode changes
+4. Commit only after the log output confirms correct circuit count and live power readings
+
+### Diagnostic Symptom Table
+
+| Symptom                           | Where to look                                                      |
+| --------------------------------- | ------------------------------------------------------------------ |
+| No circuits discovered            | `_parse_instances()` — check `GetInstances` trait filtering        |
+| Circuits found but power stays 0  | `_decode_and_store_metric()` — check field indices                 |
+| Circuit names wrong or swapped    | `_get_circuit_name_by_iid()`, `CircuitInfo.name_iid`               |
+| No push updates (entities frozen) | `_streaming_loop()` — check `Subscribe` stream delivery            |
+| Connection refused on port 50065  | `grpc/const.py` — verify `VENDOR_SPAN`, `PRODUCT_GEN3_PANEL`, port |
+| Wrong circuit count               | `_parse_instances()` — count of trait 26 IIDs vs physical circuits |
+
+### What a Working Integration Looks Like
+
+- Circuit count matches panel model (MAIN40 → 40, MLO48 → 48)
+- Power readings update within seconds of real load changes
+- `main_power_w` approximately equals the sum of active circuit powers
+- Log shows `SPAN Panel update cycle completed` on each push notification (not on a fixed polling cadence)
+
+---
+
 ## How the HA Integration Uses This
 
 ### Phase 1 — Implemented (span v1.3.2, span-panel-api v1.1.15)

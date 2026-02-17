@@ -26,7 +26,6 @@ from .const import (
     BREAKER_OFF_VOLTAGE_MV,
     DEFAULT_GRPC_PORT,
     MAIN_FEED_IID,
-    METRIC_IID_OFFSET,
     PRODUCT_GEN3_PANEL,
     TRAIT_CIRCUIT_NAMES,
     TRAIT_POWER_METRICS,
@@ -358,6 +357,8 @@ class SpanGrpcClient:
         self._data = PanelData()
         self._callbacks: list[Callable[[], None]] = []
         self._connected = False
+        # Reverse map built at connect time: metric IID -> positional circuit_id
+        self._metric_iid_to_circuit: dict[int, int] = {}
 
     # ------------------------------------------------------------------
     # SpanPanelClientProtocol implementation
@@ -521,9 +522,18 @@ class SpanGrpcClient:
         self._parse_instances(response)
 
     def _parse_instances(self, data: bytes) -> None:
-        """Parse GetInstancesResponse to discover circuits and panel resource ID."""
+        """Parse GetInstancesResponse to discover circuit topology via positional pairing.
+
+        Trait 16 IIDs (circuit names) and trait 26 IIDs (power metrics) are collected
+        independently, sorted, deduplicated, and paired by position. This avoids any
+        fixed IID offset assumption — the offset varies between panel models and firmware
+        versions (e.g. MAIN40 uses offset ~27, MLO48 uses different offsets).
+        """
         fields = _parse_protobuf_fields(data)
         items = fields.get(1, [])
+
+        raw_name_iids: list[int] = []
+        raw_metric_iids: list[int] = []
 
         for item_data in items:
             if not isinstance(item_data, bytes):
@@ -581,15 +591,46 @@ class SpanGrpcClient:
             if product_id == PRODUCT_GEN3_PANEL and resource_id_str and not self._data.panel_resource_id:
                 self._data.panel_resource_id = resource_id_str
 
-            # Detect power metric circuits (trait 26)
-            if trait_id == TRAIT_POWER_METRICS and vendor_id == VENDOR_SPAN:
-                circuit_id = instance_id - METRIC_IID_OFFSET
-                if 1 <= circuit_id <= 50 and circuit_id not in self._data.circuits:
-                    self._data.circuits[circuit_id] = CircuitInfo(
-                        circuit_id=circuit_id,
-                        name=f"Circuit {circuit_id}",
-                        metric_iid=instance_id,
-                    )
+            if vendor_id != VENDOR_SPAN or instance_id <= 0:
+                continue
+
+            if trait_id == TRAIT_CIRCUIT_NAMES:
+                raw_name_iids.append(instance_id)
+            elif trait_id == TRAIT_POWER_METRICS and instance_id != MAIN_FEED_IID:
+                raw_metric_iids.append(instance_id)
+
+        # Deduplicate and sort both IID lists before pairing
+        name_iids = sorted(set(raw_name_iids))
+        metric_iids = sorted(set(raw_metric_iids))
+
+        _LOGGER.debug(
+            "Discovered %d name instances (trait 16) and %d metric instances (trait 26, excl main feed). "
+            "Name IIDs: %s, Metric IIDs: %s",
+            len(name_iids),
+            len(metric_iids),
+            name_iids[:10],
+            metric_iids[:10],
+        )
+        if len(name_iids) != len(metric_iids):
+            _LOGGER.warning(
+                "Trait 16 has %d instances but trait 26 has %d — pairing by position (some circuits may be unnamed)",
+                len(name_iids),
+                len(metric_iids),
+            )
+
+        # Pair by position: circuit_id is a stable 1-based positional index
+        for idx, metric_iid in enumerate(metric_iids):
+            circuit_id = idx + 1
+            name_iid = name_iids[idx] if idx < len(name_iids) else 0
+            self._data.circuits[circuit_id] = CircuitInfo(
+                circuit_id=circuit_id,
+                name=f"Circuit {circuit_id}",
+                metric_iid=metric_iid,
+                name_iid=name_iid,
+            )
+
+        # Reverse map for O(1) lookup during streaming
+        self._metric_iid_to_circuit = {info.metric_iid: cid for cid, info in self._data.circuits.items()}
 
     # ------------------------------------------------------------------
     # Internal: circuit names
@@ -597,23 +638,25 @@ class SpanGrpcClient:
 
     async def _fetch_circuit_names(self) -> None:
         """Fetch circuit names from trait 16 via GetRevision."""
-        for circuit_id in list(self._data.circuits.keys()):
+        for circuit_id, info in list(self._data.circuits.items()):
+            if info.name_iid == 0:
+                continue
             try:
-                name = await self._get_circuit_name(circuit_id)
+                name = await self._get_circuit_name_by_iid(info.name_iid)
                 if name:
                     self._data.circuits[circuit_id].name = name
             except Exception:  # pylint: disable=broad-exception-caught
-                _LOGGER.debug("Failed to get name for circuit %d", circuit_id)
+                _LOGGER.debug("Failed to get name for circuit %d (name_iid=%d)", circuit_id, info.name_iid)
 
-    async def _get_circuit_name(self, circuit_id: int) -> str | None:
-        """Get a single circuit name via GetRevision on trait 16."""
+    async def _get_circuit_name_by_iid(self, name_iid: int) -> str | None:
+        """Get a single circuit name via GetRevision on trait 16 using the trait instance ID."""
         if self._channel is None:
             return None
         request = self._build_get_revision_request(
             vendor_id=VENDOR_SPAN,
             product_id=PRODUCT_GEN3_PANEL,
             trait_id=TRAIT_CIRCUIT_NAMES,
-            instance_id=circuit_id,
+            instance_id=name_iid,
         )
         try:
             response: bytes = await self._channel.unary_unary(_GET_REVISION)(request)
@@ -763,28 +806,26 @@ class SpanGrpcClient:
 
     def _decode_and_store_metric(self, iid: int, raw: bytes) -> None:
         """Decode a raw metric payload and store it in self._data."""
-        top_fields = _parse_protobuf_fields(raw)
-
         # Main feed (IID 1) uses field 14 with deeper nesting
         if iid == MAIN_FEED_IID:
             self._data.main_feed = _decode_main_feed(raw)
             return
 
-        circuit_id = iid - METRIC_IID_OFFSET
-        if not 1 <= circuit_id <= 50:
+        circuit_id = self._metric_iid_to_circuit.get(iid)
+        if circuit_id is None:
             return
+
+        top_fields = _parse_protobuf_fields(raw)
 
         # Dual-phase (field 12) — check first (more specific)
         dual_data = _get_field(top_fields, 12)
         if isinstance(dual_data, bytes):
             self._data.metrics[circuit_id] = _decode_dual_phase(dual_data)
-            if circuit_id in self._data.circuits:
-                self._data.circuits[circuit_id].is_dual_phase = True
+            self._data.circuits[circuit_id].is_dual_phase = True
             return
 
         # Single-phase (field 11)
         single_data = _get_field(top_fields, 11)
         if isinstance(single_data, bytes):
             self._data.metrics[circuit_id] = _decode_single_phase(single_data)
-            if circuit_id in self._data.circuits:
-                self._data.circuits[circuit_id].is_dual_phase = False
+            self._data.circuits[circuit_id].is_dual_phase = False

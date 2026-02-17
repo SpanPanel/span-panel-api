@@ -17,7 +17,8 @@ class CircuitInfo:
 
     circuit_id: int
     name: str
-    metric_iid: int
+    metric_iid: int  # trait 26 IID — used to match Subscribe stream notifications
+    name_iid: int = 0  # trait 16 IID — used for GetRevision name lookups
     is_dual_phase: bool = False
 
 

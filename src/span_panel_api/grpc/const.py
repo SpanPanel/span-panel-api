@@ -17,9 +17,6 @@ VENDOR_SPAN: int = 1
 PRODUCT_GEN3_PANEL: int = 4
 PRODUCT_GEN3_GATEWAY: int = 5
 
-# Metric IID offset: circuit N -> metric IID = N + METRIC_IID_OFFSET
-METRIC_IID_OFFSET: int = 27
-
 # Main feed IID (always 1 for trait 26)
 MAIN_FEED_IID: int = 1
 

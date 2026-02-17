@@ -1843,6 +1843,9 @@ class SpanPanelClient:
                 energy_consumed_wh=circuit.consumed_energy_wh,
             )
 
+        main_meter_energy = panel_state.main_meter_energy
+        feedthrough_energy = panel_state.feedthrough_energy
+
         return SpanPanelSnapshot(
             panel_generation=PanelGeneration.GEN2,
             serial_number=status.system.serial,
@@ -1854,6 +1857,24 @@ class SpanPanelClient:
             battery_soe=battery_soe,
             dsm_state=panel_state.dsm_state,
             dsm_grid_state=panel_state.dsm_grid_state,
+            # Panel data
+            feedthrough_power_w=panel_state.feedthrough_power_w,
+            main_meter_energy_produced_wh=main_meter_energy.produced_energy_wh,
+            main_meter_energy_consumed_wh=main_meter_energy.consumed_energy_wh,
+            feedthrough_energy_produced_wh=feedthrough_energy.produced_energy_wh,
+            feedthrough_energy_consumed_wh=feedthrough_energy.consumed_energy_wh,
+            current_run_config=panel_state.current_run_config,
+            # Hardware status
+            hardware_door_state=str(status.system.door_state),
+            hardware_uptime=status.system.uptime,
+            hardware_is_ethernet_connected=status.network.eth_0_link,
+            hardware_is_wifi_connected=status.network.wlan_link,
+            hardware_is_cellular_connected=status.network.wwan_link,
+            hardware_update_status=status.software.update_status,
+            hardware_env=status.software.env,
+            hardware_manufacturer=status.system.manufacturer,
+            hardware_model=status.system.model,
+            hardware_proximity_proven=getattr(status.system, "proximity_proven", None),
         )
 
     async def close(self) -> None:

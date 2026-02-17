@@ -84,12 +84,29 @@ class SpanPanelSnapshot:
     firmware_version: str = ""
     circuits: dict[str, SpanCircuitSnapshot] = field(default_factory=dict)
     main_power_w: float = 0.0
-    # Gen2-only
+    # Gen2-only panel fields
     main_relay_state: str | None = None
     grid_power_w: float | None = None
     battery_soe: float | None = None
     dsm_state: str | None = None
     dsm_grid_state: str | None = None
+    feedthrough_power_w: float | None = None
+    feedthrough_energy_produced_wh: float | None = None
+    feedthrough_energy_consumed_wh: float | None = None
+    main_meter_energy_produced_wh: float | None = None
+    main_meter_energy_consumed_wh: float | None = None
+    current_run_config: str | None = None
+    # Gen2-only hardware status fields
+    hardware_door_state: str | None = None
+    hardware_uptime: int | None = None
+    hardware_is_ethernet_connected: bool | None = None
+    hardware_is_wifi_connected: bool | None = None
+    hardware_is_cellular_connected: bool | None = None
+    hardware_update_status: str | None = None
+    hardware_env: str | None = None
+    hardware_manufacturer: str | None = None
+    hardware_model: str | None = None
+    hardware_proximity_proven: bool | None = None
     # Gen3-only
     main_voltage_v: float | None = None
     main_current_a: float | None = None

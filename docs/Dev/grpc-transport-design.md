@@ -131,7 +131,9 @@ pip install span-panel-api[grpc]
 
 ## Unified Snapshot
 
-`get_snapshot()` is available on all transport clients and returns a `SpanPanelSnapshot` containing the current state. Fields not supported by a transport are `None`.
+`get_snapshot()` is the **primary interface** between the library and the HA integration. It is available on all transport clients and returns a `SpanPanelSnapshot` containing the current state. Fields not supported by a transport are `None`.
+
+The integration should call `get_snapshot()` exclusively and never use generation-specific client methods (OpenAPI calls, gRPC trait calls) directly. This keeps the integration insulated from both transport implementations.
 
 ```python
 snapshot = await client.get_snapshot()
@@ -153,6 +155,13 @@ print(snapshot.main_voltage_v)
 print(snapshot.main_frequency_hz)
 ```
 
+### What `get_snapshot()` does per transport
+
+| Transport                | Implementation                                                                                                                                                                                                       |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SpanPanelClient` (Gen2) | Fires `get_status()`, `get_panel_state()`, `get_circuits()`, `get_storage_soe()` concurrently; maps OpenAPI types to `SpanPanelSnapshot`. Individual methods are internal — callers should not invoke them directly. |
+| `SpanGrpcClient` (Gen3)  | Reads the in-memory `PanelData` cache the streaming loop maintains. No I/O — safe and cheap to call from a push-update callback.                                                                                     |
+
 ---
 
 ## Gen3 gRPC Implementation Notes
@@ -161,6 +170,24 @@ print(snapshot.main_frequency_hz)
 - **Manual protobuf**: The client uses hand-written varint/field parsing to avoid requiring generated stubs — only `grpcio` is needed.
 - **Push streaming**: After `start_streaming()`, the client calls registered callbacks on every `Subscribe` notification. Use `get_snapshot()` inside a callback to read the latest data.
 - **Circuit discovery**: On `connect()`, `GetInstances` is called to discover all circuit IIDs (trait 26, offset 27), then `GetRevision` on trait 16 fetches the human-readable name for each circuit.
+
+---
+
+## Hardware Validation Required
+
+The following items are implemented but **untested against real Gen3 hardware** (MLO48 / MAIN40). They were derived from PR #169 (`Griswoldlabs:gen3-grpc-support`) which demonstrated connectivity but whose transport code was not merged.
+
+| Item                            | File             | What to validate                                                                                                                           |
+| ------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `connect()` + circuit discovery | `grpc/client.py` | `GetInstances` response parses correctly; circuits populated with correct IIDs                                                             |
+| Streaming loop                  | `grpc/client.py` | `Subscribe` stream delivers notifications; callbacks fire on metric updates                                                                |
+| Protobuf field IDs              | `grpc/const.py`  | Trait IDs 15/16/17/26/27/31, `VENDOR_SPAN`, `PRODUCT_GEN3_PANEL`, `MAIN_FEED_IID`, `METRIC_IID_OFFSET` are correct for production firmware |
+| `_decode_main_feed()`           | `grpc/client.py` | Field 14 in `Subscribe` notification contains main feed metrics; power/voltage/current parse correctly                                     |
+| `_decode_circuit_metrics()`     | `grpc/client.py` | Per-circuit metrics (power, voltage A/B, dual-phase detection) decode correctly                                                            |
+| `get_snapshot()` conversion     | `grpc/client.py` | `SpanCircuitSnapshot` fields populated with correct values from live data                                                                  |
+| Auto-detection                  | `factory.py`     | Gen2 HTTP probe completes before Gen3 gRPC probe when both fail; Gen3 detected on port 50065 when panel is present                         |
+
+If any field IDs or message structure differs from production firmware, `grpc/const.py` and the decode functions in `grpc/client.py` are the only files that need updating — no protocol or model changes required.
 
 ---
 
@@ -182,8 +209,19 @@ print(snapshot.main_frequency_hz)
 
 5. **`const.py`**: Added `CONF_PANEL_GENERATION = "panel_generation"`.
 
-### Phase 2 — Deferred (requires Gen3 hardware)
+### Phase 2a — Snapshot migration (Gen2 hardware sufficient)
 
-- **`coordinator.py`**: `SpanPanelPushCoordinator` — calls `client.register_callback()` and `start_streaming()`, drives entity updates without polling.
+The integration currently populates its domain objects from four individual API calls. This phase migrates to `get_snapshot()` as the single data-fetch path, removing all OpenAPI type dependencies above the library boundary:
+
+- **`span_panel_api.py`**: `update()` calls `client.get_snapshot()` instead of individual methods.
+- **`span_panel.py`**: Populated from `SpanPanelSnapshot` fields rather than OpenAPI response objects.
+- **`span_panel_circuit.py`**: Wraps `SpanCircuitSnapshot` instead of the OpenAPI `Circuit` type. Entity classes need no changes.
+
+After this phase, entities already read from `SpanCircuitSnapshot`-backed properties, so overlapping Gen3 metrics (power) require no additional entity work.
+
+### Phase 2b — Gen3 runtime wiring (requires Gen3 hardware, depends on 2a)
+
 - **`span_panel_api.py`**: `_create_client()` Gen3 branch — instantiates `SpanGrpcClient` when `CONF_PANEL_GENERATION == "gen3"`; widens `_client` to `SpanPanelClientProtocol | None`.
-- **`sensors/factory.py`**: Gen3 power-metric sensor entities (voltage, current, apparent power, reactive power, frequency, power factor per circuit).
+- **`coordinator.py`**: `SpanPanelPushCoordinator` — calls `client.register_callback()` and `start_streaming()`, drives entity updates without polling. `get_snapshot()` in the callback is a cheap in-memory read.
+- **`__init__.py`**: Coordinator selected at setup time based on `PUSH_STREAMING` capability.
+- **`sensors/factory.py`**: Gen3-only sensor entities — voltage, current, apparent power, reactive power, frequency, power factor per circuit. These have no Gen2 equivalent and are created only when the field is non-`None` in the first snapshot.

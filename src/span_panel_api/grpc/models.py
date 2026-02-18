@@ -20,6 +20,7 @@ class CircuitInfo:
     metric_iid: int  # trait 26 IID — used to match Subscribe stream notifications
     name_iid: int = 0  # trait 16 IID — used for GetRevision name lookups
     is_dual_phase: bool = False
+    breaker_position: int = 0  # physical slot number (1-48) in the panel
 
 
 @dataclass

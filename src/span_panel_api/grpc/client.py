@@ -27,6 +27,7 @@ from .const import (
     DEFAULT_GRPC_PORT,
     MAIN_FEED_IID,
     PRODUCT_GEN3_PANEL,
+    TRAIT_BREAKER_GROUPS,
     TRAIT_CIRCUIT_NAMES,
     TRAIT_POWER_METRICS,
     VENDOR_SPAN,
@@ -381,6 +382,7 @@ class SpanGrpcClient:
                 ],
             )
             await self._fetch_instances()
+            await self._fetch_breaker_groups()
             await self._fetch_circuit_names()
             self._connected = True
             _LOGGER.info(
@@ -522,18 +524,18 @@ class SpanGrpcClient:
         self._parse_instances(response)
 
     def _parse_instances(self, data: bytes) -> None:
-        """Parse GetInstancesResponse to discover circuit topology via positional pairing.
+        """Parse GetInstancesResponse to discover trait instance IIDs.
 
-        Trait 16 IIDs (circuit names) and trait 26 IIDs (power metrics) are collected
-        independently, sorted, deduplicated, and paired by position. This avoids any
-        fixed IID offset assumption — the offset varies between panel models and firmware
-        versions (e.g. MAIN40 uses offset ~27, MLO48 uses different offsets).
+        Collects IIDs for traits 15 (breaker groups), 16 (names), and 26 (metrics).
+        The actual circuit mapping is deferred to _fetch_breaker_groups() which uses
+        trait 15 as the authoritative source for metric→name IID mapping.
         """
         fields = _parse_protobuf_fields(data)
         items = fields.get(1, [])
 
-        raw_name_iids: list[int] = []
-        raw_metric_iids: list[int] = []
+        self._raw_bg_iids: list[int] = []
+        self._raw_name_iids: list[int] = []
+        self._raw_metric_iids: list[int] = []
 
         for item_data in items:
             if not isinstance(item_data, bytes):
@@ -594,31 +596,191 @@ class SpanGrpcClient:
             if vendor_id != VENDOR_SPAN or instance_id <= 0:
                 continue
 
-            if trait_id == TRAIT_CIRCUIT_NAMES:
-                raw_name_iids.append(instance_id)
+            if trait_id == TRAIT_BREAKER_GROUPS:
+                self._raw_bg_iids.append(instance_id)
+            elif trait_id == TRAIT_CIRCUIT_NAMES:
+                self._raw_name_iids.append(instance_id)
             elif trait_id == TRAIT_POWER_METRICS and instance_id != MAIN_FEED_IID:
-                raw_metric_iids.append(instance_id)
-
-        # Deduplicate and sort both IID lists before pairing
-        name_iids = sorted(set(raw_name_iids))
-        metric_iids = sorted(set(raw_metric_iids))
+                self._raw_metric_iids.append(instance_id)
 
         _LOGGER.debug(
-            "Discovered %d name instances (trait 16) and %d metric instances (trait 26, excl main feed). "
-            "Name IIDs: %s, Metric IIDs: %s",
-            len(name_iids),
-            len(metric_iids),
-            name_iids[:10],
-            metric_iids[:10],
+            "Discovered %d BG instances (trait 15), %d name instances (trait 16), "
+            "%d metric instances (trait 26, excl main feed)",
+            len(set(self._raw_bg_iids)),
+            len(set(self._raw_name_iids)),
+            len(set(self._raw_metric_iids)),
         )
-        if len(name_iids) != len(metric_iids):
-            _LOGGER.warning(
-                "Trait 16 has %d instances but trait 26 has %d — pairing by position (some circuits may be unnamed)",
-                len(name_iids),
-                len(metric_iids),
+
+    # ------------------------------------------------------------------
+    # Internal: breaker group mapping (authoritative)
+    # ------------------------------------------------------------------
+
+    async def _fetch_breaker_groups(self) -> None:
+        """Use trait 15 (Breaker Groups) to build the authoritative metric→name mapping.
+
+        Each BG instance shares the same IID as its corresponding trait 26 metric IID.
+        The BG data contains an explicit reference to the trait 16 name IID, eliminating
+        the need for positional pairing which fails when phantom metric IIDs exist
+        (e.g. IID 2, 401, 402 on MAIN40) or when name/metric counts differ (MLO48).
+
+        Single-phase BGs use field 11; dual-phase use field 13. The name reference is
+        nested at different depths depending on the phase type.
+
+        Falls back to positional pairing if no BG instances are available.
+        """
+        bg_iids = sorted(set(self._raw_bg_iids))
+
+        if not bg_iids:
+            _LOGGER.warning("No trait 15 (Breaker Groups) found — falling back to positional pairing")
+            self._build_circuits_positional()
+            return
+
+        # Query each BG to extract name_iid, breaker position, and phase type
+        bg_map: dict[int, tuple[int, int, bool]] = {}  # bg_iid -> (name_iid, brk_pos, is_dual)
+
+        for bg_iid in bg_iids:
+            try:
+                name_iid, brk_pos, is_dual = await self._query_breaker_group(bg_iid)
+                bg_map[bg_iid] = (name_iid, brk_pos, is_dual)
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.debug("Failed to query BG IID %d", bg_iid)
+
+        if not bg_map:
+            _LOGGER.warning("All BG queries failed — falling back to positional pairing")
+            self._build_circuits_positional()
+            return
+
+        # Build circuits from BG mapping
+        for idx, bg_iid in enumerate(sorted(bg_map.keys())):
+            name_iid, brk_pos, is_dual = bg_map[bg_iid]
+            circuit_id = idx + 1
+            self._data.circuits[circuit_id] = CircuitInfo(
+                circuit_id=circuit_id,
+                name=f"Circuit {circuit_id}",
+                metric_iid=bg_iid,  # BG IID == metric IID
+                name_iid=name_iid,
+                is_dual_phase=is_dual,
+                breaker_position=brk_pos,
             )
 
-        # Pair by position: circuit_id is a stable 1-based positional index
+        # Reverse map for O(1) lookup during streaming
+        self._metric_iid_to_circuit = {
+            info.metric_iid: cid for cid, info in self._data.circuits.items()
+        }
+
+        _LOGGER.info(
+            "Built %d circuits from BG mapping (%d dual-phase). "
+            "Excluded %d non-circuit metric IIDs",
+            len(self._data.circuits),
+            sum(1 for _, _, d in bg_map.values() if d),
+            len(set(self._raw_metric_iids)) - len(bg_map),
+        )
+
+    async def _query_breaker_group(self, bg_iid: int) -> tuple[int, int, bool]:
+        """Query a single BG instance to extract its mapping data.
+
+        Returns (name_iid, breaker_position, is_dual_phase).
+        """
+        if self._channel is None:
+            return (0, 0, False)
+
+        request = self._build_get_revision_request(
+            vendor_id=VENDOR_SPAN,
+            product_id=PRODUCT_GEN3_PANEL,
+            trait_id=TRAIT_BREAKER_GROUPS,
+            instance_id=bg_iid,
+        )
+        response: bytes = await self._channel.unary_unary(_GET_REVISION)(request)
+        return self._parse_breaker_group(response)
+
+    @staticmethod
+    def _extract_trait_ref_iid(ref_data: bytes) -> int:
+        """Extract an IID from a trait reference sub-message.
+
+        Trait references use: field 2 → field 1 = iid (varint).
+        Returns 0 if the data cannot be parsed.
+        """
+        if not ref_data or not isinstance(ref_data, bytes):
+            return 0
+        ref_fields = _parse_protobuf_fields(ref_data)
+        iid_data = _get_field(ref_fields, 2)
+        if isinstance(iid_data, bytes):
+            iid_fields = _parse_protobuf_fields(iid_data)
+            return _get_field(iid_fields, 1, 0)
+        return 0
+
+    @staticmethod
+    def _parse_breaker_group(data: bytes) -> tuple[int, int, bool]:
+        """Parse a BG GetRevision response.
+
+        Returns (name_iid, breaker_position, is_dual_phase).
+
+        Single-pole (field 11):
+          f11.f1 → CircuitNames ref (f2.f1 = name_iid)
+          f11.f2 → BreakerConfig ref (f2.f1 = breaker position)
+        Dual-pole (field 13):
+          f13.f1.f1 → CircuitNames ref (f2.f1 = name_iid)
+          f13.f4    → BreakerConfig leg A ref (f2.f1 = breaker position)
+        """
+        fields = _parse_protobuf_fields(data)
+        sr_data = _get_field(fields, 3)
+        if not isinstance(sr_data, bytes):
+            return (0, 0, False)
+
+        sr_fields = _parse_protobuf_fields(sr_data)
+        payload = _get_field(sr_fields, 2)
+        if not isinstance(payload, bytes):
+            return (0, 0, False)
+
+        pl_fields = _parse_protobuf_fields(payload)
+        f1 = _get_field(pl_fields, 1)
+        if not isinstance(f1, bytes):
+            return (0, 0, False)
+
+        group_fields = _parse_protobuf_fields(f1)
+
+        # Single-pole (field 11)
+        refs_data = _get_field(group_fields, 11)
+        if isinstance(refs_data, bytes):
+            refs = _parse_protobuf_fields(refs_data)
+            name_ref = _get_field(refs, 1)
+            config_ref = _get_field(refs, 2)
+            name_iid = SpanGrpcClient._extract_trait_ref_iid(name_ref or b"")
+            brk_pos = SpanGrpcClient._extract_trait_ref_iid(config_ref or b"")
+            return (name_iid, brk_pos, False)
+
+        # Dual-pole (field 13)
+        dual_data = _get_field(group_fields, 13)
+        if isinstance(dual_data, bytes):
+            dual_fields = _parse_protobuf_fields(dual_data)
+            name_iid = 0
+            name_wrapper = _get_field(dual_fields, 1)
+            if isinstance(name_wrapper, bytes):
+                wf = _parse_protobuf_fields(name_wrapper)
+                name_ref = _get_field(wf, 1)
+                if isinstance(name_ref, bytes):
+                    name_iid = SpanGrpcClient._extract_trait_ref_iid(name_ref)
+            leg_a_ref = _get_field(dual_fields, 4)
+            brk_pos = SpanGrpcClient._extract_trait_ref_iid(leg_a_ref or b"")
+            return (name_iid, brk_pos, True)
+
+        return (0, 0, False)
+
+    def _build_circuits_positional(self) -> None:
+        """Fallback: build circuits via positional pairing of name and metric IIDs.
+
+        Used only when trait 15 (Breaker Groups) is not available. This approach
+        can produce incorrect mappings when phantom metric IIDs exist.
+        """
+        name_iids = sorted(set(self._raw_name_iids))
+        metric_iids = sorted(set(self._raw_metric_iids))
+
+        _LOGGER.warning(
+            "Positional pairing: %d name IIDs, %d metric IIDs",
+            len(name_iids),
+            len(metric_iids),
+        )
+
         for idx, metric_iid in enumerate(metric_iids):
             circuit_id = idx + 1
             name_iid = name_iids[idx] if idx < len(name_iids) else 0
@@ -629,8 +791,9 @@ class SpanGrpcClient:
                 name_iid=name_iid,
             )
 
-        # Reverse map for O(1) lookup during streaming
-        self._metric_iid_to_circuit = {info.metric_iid: cid for cid, info in self._data.circuits.items()}
+        self._metric_iid_to_circuit = {
+            info.metric_iid: cid for cid, info in self._data.circuits.items()
+        }
 
     # ------------------------------------------------------------------
     # Internal: circuit names

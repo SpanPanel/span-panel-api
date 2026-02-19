@@ -384,12 +384,19 @@ class SpanGrpcClient:
             await self._fetch_instances()
             await self._fetch_breaker_groups()
             await self._fetch_circuit_names()
+
+            # Use panel_resource_id as serial number fallback.
+            # Gen3 gRPC does not expose serial/firmware via a dedicated trait yet.
+            if not self._data.serial and self._data.panel_resource_id:
+                self._data.serial = self._data.panel_resource_id
+
             self._connected = True
             _LOGGER.info(
-                "Connected to Gen3 panel at %s:%s — %d circuits discovered",
+                "Connected to Gen3 panel at %s:%s — %d circuits discovered (serial=%s)",
                 self._host,
                 self._port,
                 len(self._data.circuits),
+                self._data.serial,
             )
             return True
         except Exception:  # pylint: disable=broad-exception-caught

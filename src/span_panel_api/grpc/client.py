@@ -226,6 +226,41 @@ def _extract_deepest_value(data: bytes, target_field: int = 3) -> int:
     return best
 
 
+def _decode_main_feed_leg(leg_data: bytes) -> tuple[float, float, float]:
+    """Decode a single leg from main feed data.
+
+    Returns ``(power_w, voltage_v, frequency_hz)``.  Any undecodable field is
+    returned as ``0.0``.
+    """
+    leg_fields = _parse_protobuf_fields(leg_data)
+
+    power_w = 0.0
+    power_stats = _get_field(leg_fields, 3)
+    if isinstance(power_stats, bytes):
+        power_w = _extract_deepest_value(power_stats) / 2000.0
+
+    voltage_v = 0.0
+    voltage_stats = _get_field(leg_fields, 2)
+    if isinstance(voltage_stats, bytes):
+        vs_fields = _parse_protobuf_fields(voltage_stats)
+        f2 = _get_field(vs_fields, 2)
+        if isinstance(f2, bytes):
+            inner = _parse_protobuf_fields(f2)
+            v = _get_field(inner, 3, 0)
+            if isinstance(v, int) and v > 0:
+                voltage_v = v / 1000.0
+
+    frequency_hz = 0.0
+    freq_stats = _get_field(leg_fields, 4)
+    if isinstance(freq_stats, bytes):
+        freq_fields = _parse_protobuf_fields(freq_stats)
+        freq_val = _get_field(freq_fields, 3, 0)
+        if isinstance(freq_val, int) and freq_val > 0:
+            frequency_hz = freq_val / 1000.0
+
+    return power_w, voltage_v, frequency_hz
+
+
 def _decode_main_feed(data: bytes) -> CircuitMetrics:
     """Decode main feed metrics from protobuf field 14.
 
@@ -246,47 +281,14 @@ def _decode_main_feed(data: bytes) -> CircuitMetrics:
     # Primary data block (field 1 = leg A)
     leg_a = _get_field(main_fields, 1)
     if isinstance(leg_a, bytes):
-        la_fields = _parse_protobuf_fields(leg_a)
-
-        power_stats = _get_field(la_fields, 3)
-        if isinstance(power_stats, bytes):
-            metrics.power_w = _extract_deepest_value(power_stats) / 2000.0
-
-        voltage_stats = _get_field(la_fields, 2)
-        if isinstance(voltage_stats, bytes):
-            vs_fields = _parse_protobuf_fields(voltage_stats)
-            f2 = _get_field(vs_fields, 2)
-            if isinstance(f2, bytes):
-                inner = _parse_protobuf_fields(f2)
-                v = _get_field(inner, 3, 0)
-                if isinstance(v, int) and v > 0:
-                    metrics.voltage_a_v = v / 1000.0
-
-        freq_stats = _get_field(la_fields, 4)
-        if isinstance(freq_stats, bytes):
-            freq_fields = _parse_protobuf_fields(freq_stats)
-            freq_val = _get_field(freq_fields, 3, 0)
-            if isinstance(freq_val, int) and freq_val > 0:
-                metrics.frequency_hz = freq_val / 1000.0
+        metrics.power_w, metrics.voltage_a_v, metrics.frequency_hz = _decode_main_feed_leg(leg_a)
 
     # Leg B (field 2)
     leg_b = _get_field(main_fields, 2)
     if isinstance(leg_b, bytes):
-        lb_fields = _parse_protobuf_fields(leg_b)
-        power_stats = _get_field(lb_fields, 3)
-        if isinstance(power_stats, bytes):
-            lb_power = _extract_deepest_value(power_stats) / 2000.0
-            if lb_power > 0:
-                metrics.power_w += lb_power
-        voltage_stats = _get_field(lb_fields, 2)
-        if isinstance(voltage_stats, bytes):
-            vs_fields = _parse_protobuf_fields(voltage_stats)
-            f2 = _get_field(vs_fields, 2)
-            if isinstance(f2, bytes):
-                inner = _parse_protobuf_fields(f2)
-                v = _get_field(inner, 3, 0)
-                if isinstance(v, int) and v > 0:
-                    metrics.voltage_b_v = v / 1000.0
+        lb_power, metrics.voltage_b_v, _ = _decode_main_feed_leg(leg_b)
+        if lb_power > 0:
+            metrics.power_w += lb_power
 
     # Combined voltage (split-phase: leg A + leg B, or 2x leg A if symmetric)
     if metrics.voltage_b_v > 0:
@@ -360,6 +362,10 @@ class SpanGrpcClient:
         self._connected = False
         # Reverse map built at connect time: metric IID -> positional circuit_id
         self._metric_iid_to_circuit: dict[int, int] = {}
+        # Populated by _parse_instances during connect
+        self._raw_bg_iids: list[int] = []
+        self._raw_name_iids: list[int] = []
+        self._raw_metric_iids: list[int] = []
 
     # ------------------------------------------------------------------
     # SpanPanelClientProtocol implementation
@@ -530,6 +536,67 @@ class SpanGrpcClient:
         response: bytes = await self._channel.unary_unary(_GET_INSTANCES)(b"")
         self._parse_instances(response)
 
+    @staticmethod
+    def _parse_instance_item(
+        item_data: bytes,
+    ) -> tuple[int, int, int, int, str] | None:
+        """Parse a single GetInstances item.
+
+        Returns ``(vendor_id, product_id, trait_id, instance_id, resource_id_str)``
+        or ``None`` if the item is malformed / missing required fields.
+        """
+        item_fields = _parse_protobuf_fields(item_data)
+
+        trait_info_data = _get_field(item_fields, 1)
+        if not isinstance(trait_info_data, bytes):
+            return None
+
+        trait_info_fields = _parse_protobuf_fields(trait_info_data)
+        external_data = _get_field(trait_info_fields, 2)
+        if not isinstance(external_data, bytes):
+            return None
+
+        ext_fields = _parse_protobuf_fields(external_data)
+
+        # resource_id (field 1)
+        resource_id_str = ""
+        resource_data = _get_field(ext_fields, 1)
+        if isinstance(resource_data, bytes):
+            rid_fields = _parse_protobuf_fields(resource_data)
+            rid_val = _get_field(rid_fields, 1)
+            if isinstance(rid_val, bytes):
+                resource_id_str = rid_val.decode("utf-8", errors="replace")
+
+        # trait_info (field 2)
+        inner_info = _get_field(ext_fields, 2)
+        if not isinstance(inner_info, bytes):
+            return None
+
+        inner_fields = _parse_protobuf_fields(inner_info)
+        meta_data = _get_field(inner_fields, 1)
+        if not isinstance(meta_data, bytes):
+            return None
+
+        meta_fields = _parse_protobuf_fields(meta_data)
+        vendor_id = _get_field(meta_fields, 1, 0)
+        product_id = _get_field(meta_fields, 2, 0)
+        trait_id = _get_field(meta_fields, 3, 0)
+
+        instance_id = 0
+        instance_data = _get_field(inner_fields, 2)
+        if isinstance(instance_data, bytes):
+            iid_fields = _parse_protobuf_fields(instance_data)
+            iid_raw = _get_field(iid_fields, 1, 0)
+            instance_id = iid_raw if isinstance(iid_raw, int) else 0
+
+        return (
+            vendor_id if isinstance(vendor_id, int) else 0,
+            product_id if isinstance(product_id, int) else 0,
+            trait_id if isinstance(trait_id, int) else 0,
+            instance_id,
+            resource_id_str,
+        )
+
     def _parse_instances(self, data: bytes) -> None:
         """Parse GetInstancesResponse to discover trait instance IIDs.
 
@@ -540,61 +607,17 @@ class SpanGrpcClient:
         fields = _parse_protobuf_fields(data)
         items = fields.get(1, [])
 
-        self._raw_bg_iids: list[int] = []
-        self._raw_name_iids: list[int] = []
-        self._raw_metric_iids: list[int] = []
+        self._raw_bg_iids = []
+        self._raw_name_iids = []
+        self._raw_metric_iids = []
 
         for item_data in items:
             if not isinstance(item_data, bytes):
                 continue
-            item_fields = _parse_protobuf_fields(item_data)
-
-            trait_info_data = _get_field(item_fields, 1)
-            if not isinstance(trait_info_data, bytes):
+            result = self._parse_instance_item(item_data)
+            if result is None:
                 continue
-
-            trait_info_fields = _parse_protobuf_fields(trait_info_data)
-
-            external_data = _get_field(trait_info_fields, 2)
-            if not isinstance(external_data, bytes):
-                continue
-
-            ext_fields = _parse_protobuf_fields(external_data)
-
-            # resource_id (field 1)
-            resource_data = _get_field(ext_fields, 1)
-            resource_id_str = ""
-            if isinstance(resource_data, bytes):
-                rid_fields = _parse_protobuf_fields(resource_data)
-                rid_val = _get_field(rid_fields, 1)
-                if isinstance(rid_val, bytes):
-                    resource_id_str = rid_val.decode("utf-8", errors="replace")
-
-            # trait_info (field 2)
-            inner_info = _get_field(ext_fields, 2)
-            if not isinstance(inner_info, bytes):
-                continue
-
-            inner_fields = _parse_protobuf_fields(inner_info)
-
-            meta_data = _get_field(inner_fields, 1)
-            if not isinstance(meta_data, bytes):
-                continue
-
-            meta_fields = _parse_protobuf_fields(meta_data)
-            vendor_id_raw = _get_field(meta_fields, 1, 0)
-            product_id_raw = _get_field(meta_fields, 2, 0)
-            trait_id_raw = _get_field(meta_fields, 3, 0)
-            vendor_id = vendor_id_raw if isinstance(vendor_id_raw, int) else 0
-            product_id = product_id_raw if isinstance(product_id_raw, int) else 0
-            trait_id = trait_id_raw if isinstance(trait_id_raw, int) else 0
-
-            instance_data = _get_field(inner_fields, 2)
-            instance_id = 0
-            if isinstance(instance_data, bytes):
-                iid_fields = _parse_protobuf_fields(instance_data)
-                iid_raw = _get_field(iid_fields, 1, 0)
-                instance_id = iid_raw if isinstance(iid_raw, int) else 0
+            vendor_id, product_id, trait_id, instance_id, resource_id_str = result
 
             # Capture panel resource_id
             if product_id == PRODUCT_GEN3_PANEL and resource_id_str and not self._data.panel_resource_id:
@@ -671,13 +694,10 @@ class SpanGrpcClient:
             )
 
         # Reverse map for O(1) lookup during streaming
-        self._metric_iid_to_circuit = {
-            info.metric_iid: cid for cid, info in self._data.circuits.items()
-        }
+        self._metric_iid_to_circuit = {info.metric_iid: cid for cid, info in self._data.circuits.items()}
 
         _LOGGER.info(
-            "Built %d circuits from BG mapping (%d dual-phase). "
-            "Excluded %d non-circuit metric IIDs",
+            "Built %d circuits from BG mapping (%d dual-phase). Excluded %d non-circuit metric IIDs",
             len(self._data.circuits),
             sum(1 for _, _, d in bg_map.values() if d),
             len(set(self._raw_metric_iids)) - len(bg_map),
@@ -701,19 +721,20 @@ class SpanGrpcClient:
         return self._parse_breaker_group(response)
 
     @staticmethod
-    def _extract_trait_ref_iid(ref_data: bytes) -> int:
+    def _extract_trait_ref_iid(ref_data: ProtobufValue | None) -> int:
         """Extract an IID from a trait reference sub-message.
 
         Trait references use: field 2 → field 1 = iid (varint).
         Returns 0 if the data cannot be parsed.
         """
-        if not ref_data or not isinstance(ref_data, bytes):
+        if not isinstance(ref_data, bytes):
             return 0
         ref_fields = _parse_protobuf_fields(ref_data)
         iid_data = _get_field(ref_fields, 2)
         if isinstance(iid_data, bytes):
             iid_fields = _parse_protobuf_fields(iid_data)
-            return _get_field(iid_fields, 1, 0)
+            raw = _get_field(iid_fields, 1, 0)
+            return raw if isinstance(raw, int) else 0
         return 0
 
     @staticmethod
@@ -752,8 +773,8 @@ class SpanGrpcClient:
             refs = _parse_protobuf_fields(refs_data)
             name_ref = _get_field(refs, 1)
             config_ref = _get_field(refs, 2)
-            name_iid = SpanGrpcClient._extract_trait_ref_iid(name_ref or b"")
-            brk_pos = SpanGrpcClient._extract_trait_ref_iid(config_ref or b"")
+            name_iid = SpanGrpcClient._extract_trait_ref_iid(name_ref)
+            brk_pos = SpanGrpcClient._extract_trait_ref_iid(config_ref)
             return (name_iid, brk_pos, False)
 
         # Dual-pole (field 13)
@@ -768,7 +789,7 @@ class SpanGrpcClient:
                 if isinstance(name_ref, bytes):
                     name_iid = SpanGrpcClient._extract_trait_ref_iid(name_ref)
             leg_a_ref = _get_field(dual_fields, 4)
-            brk_pos = SpanGrpcClient._extract_trait_ref_iid(leg_a_ref or b"")
+            brk_pos = SpanGrpcClient._extract_trait_ref_iid(leg_a_ref)
             return (name_iid, brk_pos, True)
 
         return (0, 0, False)
@@ -798,9 +819,7 @@ class SpanGrpcClient:
                 name_iid=name_iid,
             )
 
-        self._metric_iid_to_circuit = {
-            info.metric_iid: cid for cid, info in self._data.circuits.items()
-        }
+        self._metric_iid_to_circuit = {info.metric_iid: cid for cid, info in self._data.circuits.items()}
 
     # ------------------------------------------------------------------
     # Internal: circuit names

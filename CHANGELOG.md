@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.15] - 2/19/2026
+
+### Added
+
+- **Gen3 gRPC transport** (`grpc/` subpackage): `SpanGrpcClient` connects to Gen3 panels (MAIN40 / MLO48) on port 50065 via manual protobuf encoding. Supports push-streaming via `Subscribe` RPC with registered callbacks. No authentication required. Thanks
+  to @Griswoldlabs for the Gen3 implementation (PR #169 in `SpanPanel/span`).
+- **Protocol abstraction**: `SpanPanelClientProtocol` and capability-mixin protocols (`AuthCapableProtocol`, `CircuitControlProtocol`, `StreamingCapableProtocol`, etc.) provide static type-safe dispatch across transports.
+- **`PanelCapability` flags**: Runtime advertisement of transport features. Gen2 advertises `GEN2_FULL`; Gen3 advertises `GEN3_INITIAL` (`PUSH_STREAMING` only).
+- **Unified snapshot model**: `SpanPanelSnapshot` and `SpanCircuitSnapshot` are returned by `get_snapshot()` on both transports. Gen2- and Gen3-only fields are `None` where not applicable.
+- **`create_span_client()` factory** (`factory.py`): Creates the appropriate client by generation or auto-detects by probing Gen2 HTTP then Gen3 gRPC.
+- **Circuit IID mapping fix**: `_parse_instances()` now collects trait-16 and trait-26 IIDs independently, deduplicates and sorts both lists, and pairs them by position. A `_metric_iid_to_circuit` reverse map enables O(1) streaming lookup. Replaces the
+  hardcoded `METRIC_IID_OFFSET` assumption that failed on MLO48 panels.
+- **gRPC exception classes**: `SpanPanelGrpcError`, `SpanPanelGrpcConnectionError`.
+- **`grpcio` optional dependency**: Install with `span-panel-api[grpc]` for Gen3 support.
+
 ## [1.1.14] - 12/2025
 
 ### Fixed in v1.1.14

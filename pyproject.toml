@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "1.1.14"
+version = "1.1.15"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -16,6 +16,9 @@ dependencies = [
     "pyyaml>=6.0.0",
 ]
 
+[project.optional-dependencies]
+grpc = ["grpcio>=1.50.0"]
+
 [project.urls]
 Homepage = "https://github.com/SpanPanel/span-panel-api"
 Issues = "https://github.com/SpanPanel/span-panel-api/issues"
@@ -24,6 +27,12 @@ Issues = "https://github.com/SpanPanel/span-panel-api/issues"
 packages = [
     {include = "span_panel_api", from = "src"},
 ]
+
+[tool.poetry.extras]
+grpc = ["grpcio"]
+
+[tool.poetry.dependencies]
+grpcio = {version = ">=1.50.0", optional = true}
 
 [tool.poetry.scripts]
 format-markdown = "scripts.format_markdown:main"
@@ -104,7 +113,7 @@ combine-as-imports = true
 split-on-trailing-comma = false
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
@@ -138,12 +147,22 @@ module = [
 ]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = [
+    "grpc",
+    "grpc.*",
+    "grpc.aio",
+]
+ignore_missing_imports = true
+
 
 [tool.coverage.run]
 data_file = ".local_coverage_data"
 source = ["src/span_panel_api"]
 omit = [
     "src/span_panel_api/generated_client/*",
+    "src/span_panel_api/grpc/*",
+    "src/span_panel_api/factory.py",
     "generate_client.py",
     "tests/*",
     "*/tests/*",
@@ -268,7 +287,7 @@ max-line-length = 125
 
 [tool.black]
 line-length = 125
-target-version = ["py312"]
+target-version = ["py313"]
 skip-string-normalization = true
 # Allow magic trailing comma for better line length handling
 skip-magic-trailing-comma = false

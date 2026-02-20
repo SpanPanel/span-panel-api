@@ -42,3 +42,11 @@ class SpanPanelServerError(SpanPanelAPIError):
 
 class SimulationConfigurationError(SpanPanelError):
     """Simulation configuration is invalid or missing required data."""
+
+
+class SpanPanelGrpcError(SpanPanelError):
+    """Base class for gRPC transport errors."""
+
+
+class SpanPanelGrpcConnectionError(SpanPanelGrpcError):
+    """Failed to connect to panel via gRPC."""

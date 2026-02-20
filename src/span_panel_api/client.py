@@ -24,6 +24,7 @@ from .exceptions import (
     SpanPanelServerError,
     SpanPanelTimeoutError,
 )
+from .models import PanelCapability, PanelGeneration, SpanCircuitSnapshot, SpanPanelSnapshot
 from .simulation import DynamicSimulationEngine
 
 T = TypeVar("T")
@@ -1771,6 +1772,114 @@ class SpanPanelClient:
             result["storage"] = results[3]
 
         return result
+
+    # ---------------------------------------------------------------------------
+    # SpanPanelClientProtocol conformance
+    # ---------------------------------------------------------------------------
+
+    @property
+    def capabilities(self) -> PanelCapability:
+        """Return the full Gen2 capability set."""
+        return PanelCapability.GEN2_FULL
+
+    async def connect(self) -> bool:
+        """Probe the panel to verify connectivity.
+
+        Unlike the async context manager (``async with client``), this method
+        does not open a persistent httpx connection pool.  It is intended for
+        one-shot reachability checks and auto-detection.
+
+        Returns:
+            ``True`` if the panel responded, ``False`` otherwise.
+        """
+        return await self.ping()
+
+    async def ping(self) -> bool:
+        """Return ``True`` if the panel is reachable and responds to status requests."""
+        try:
+            await self.get_status()
+            return True
+        except Exception:  # pylint: disable=broad-exception-caught
+            return False
+
+    async def get_snapshot(self) -> SpanPanelSnapshot:
+        """Return a unified, transport-agnostic snapshot of the current panel state.
+
+        Fetches status, panel state, and circuits concurrently.  Battery SOE
+        is attempted separately and silently omitted if the panel has no
+        storage hardware.
+        """
+        from .generated_client.types import UNSET  # pylint: disable=import-outside-toplevel
+
+        status, panel_state, circuits_out = await asyncio.gather(
+            self.get_status(),
+            self.get_panel_state(),
+            self.get_circuits(),
+        )
+
+        battery_soe: float | None = None
+        with suppress(Exception):  # pylint: disable=broad-exception-caught
+            storage = await self.get_storage_soe()
+            pct = storage.soe.percentage
+            if isinstance(pct, int):
+                battery_soe = float(pct)
+
+        circuit_snapshots: dict[str, SpanCircuitSnapshot] = {}
+        for circuit_id, circuit in circuits_out.circuits.additional_properties.items():
+            name: str = str(circuit.name) if circuit.name is not UNSET else f"Circuit {circuit_id}"
+            tabs_raw = circuit.tabs
+            tabs: list[int] | None = list(tabs_raw) if isinstance(tabs_raw, list) else None
+            relay_str: str | None = str(circuit.relay_state) if circuit.relay_state else None
+            priority_str: str | None = str(circuit.priority) if circuit.priority else None
+            is_on = str(circuit.relay_state) == "CLOSED"
+
+            circuit_snapshots[circuit_id] = SpanCircuitSnapshot(
+                circuit_id=circuit_id,
+                name=name,
+                power_w=circuit.instant_power_w,
+                voltage_v=0.0,
+                current_a=0.0,
+                is_on=is_on,
+                relay_state=relay_str,
+                priority=priority_str,
+                tabs=tabs,
+                energy_produced_wh=circuit.produced_energy_wh,
+                energy_consumed_wh=circuit.consumed_energy_wh,
+            )
+
+        main_meter_energy = panel_state.main_meter_energy
+        feedthrough_energy = panel_state.feedthrough_energy
+
+        return SpanPanelSnapshot(
+            panel_generation=PanelGeneration.GEN2,
+            serial_number=status.system.serial,
+            firmware_version=status.software.firmware_version,
+            circuits=circuit_snapshots,
+            main_power_w=panel_state.instant_grid_power_w,
+            main_relay_state=str(panel_state.main_relay_state),
+            grid_power_w=panel_state.instant_grid_power_w,
+            battery_soe=battery_soe,
+            dsm_state=panel_state.dsm_state,
+            dsm_grid_state=panel_state.dsm_grid_state,
+            # Panel data
+            feedthrough_power_w=panel_state.feedthrough_power_w,
+            main_meter_energy_produced_wh=main_meter_energy.produced_energy_wh,
+            main_meter_energy_consumed_wh=main_meter_energy.consumed_energy_wh,
+            feedthrough_energy_produced_wh=feedthrough_energy.produced_energy_wh,
+            feedthrough_energy_consumed_wh=feedthrough_energy.consumed_energy_wh,
+            current_run_config=panel_state.current_run_config,
+            # Hardware status
+            hardware_door_state=str(status.system.door_state),
+            hardware_uptime=status.system.uptime,
+            hardware_is_ethernet_connected=status.network.eth_0_link,
+            hardware_is_wifi_connected=status.network.wlan_link,
+            hardware_is_cellular_connected=status.network.wwan_link,
+            hardware_update_status=status.software.update_status,
+            hardware_env=status.software.env,
+            hardware_manufacturer=status.system.manufacturer,
+            hardware_model=status.system.model,
+            hardware_proximity_proven=getattr(status.system, "proximity_proven", None),
+        )
 
     async def close(self) -> None:
         """Close the client and cleanup resources."""

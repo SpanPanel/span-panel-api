@@ -269,8 +269,8 @@ Use `DataUpdateCoordinator` with `update_interval=None` (no polling timer). MQTT
 
 ```text
 MQTT broker
-  → paho-mqtt network thread
-    → AsyncMqttBridge (call_soon_threadsafe)
+  → paho socket → asyncio add_reader
+    → loop_read() → paho internal dispatch (no background thread)
       → HomieDeviceConsumer._handle_property()     ← cheap dict write, no HA
         → property_values[node_id][prop_id] = value
 
@@ -361,6 +361,217 @@ The following work is required in the **span** Home Assistant integration to com
 
 ---
 
+## Step 7: Refactor AsyncMqttBridge to HA Core's Async MQTT Pattern
+
+### Problem
+
+The current `AsyncMqttBridge` (`mqtt/connection.py`) uses paho-mqtt's `loop_start()` which spawns a background thread. MQTT callbacks run on that thread and are bridged to the asyncio event loop via `call_soon_threadsafe()`. Shared state is protected by
+`threading.Lock`.
+
+This does **not** match HA core's MQTT pattern. HA core's `homeassistant.components.mqtt` uses paho-mqtt with a fundamentally different architecture:
+
+- **No background thread** — paho's socket is registered with the asyncio event loop via `add_reader`/`add_writer`, calling `loop_read()`/`loop_write()`/`loop_misc()` directly from the event loop
+- **NullLock** — `AsyncMQTTClient` subclasses paho's `Client` and replaces all 7 internal threading locks with no-ops (everything runs on the single event loop thread)
+- **Zero threading** — no `loop_start()`, no `threading.Lock`
+
+span-panel-api must conform to this pattern before the integration can be considered for HA core submission.
+
+### Reference implementation (read-only)
+
+| File                                                                 | Content                                                                           |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `~/projects/HA/core/homeassistant/components/mqtt/async_client.py`   | `NullLock` (lines 21-45), `AsyncMQTTClient` (lines 47-74)                         |
+| `~/projects/HA/core/homeassistant/components/mqtt/client.py:312-410` | `MqttClientSetup` — client creation in executor                                   |
+| `~/projects/HA/core/homeassistant/components/mqtt/client.py:500-678` | Socket callbacks: `add_reader`/`add_writer`, `loop_read`/`loop_write`/`loop_misc` |
+| `~/projects/HA/core/homeassistant/components/mqtt/client.py:705-777` | `async_connect` (executor), `_reconnect_loop` (async)                             |
+
+### Design decision: Replicate pattern, do NOT depend on HA
+
+span-panel-api replicates the async MQTT pattern (~80 lines of stable code) without importing from `homeassistant`. Reasons:
+
+1. **HA core requires independence.** PyPI libraries listed in `manifest.json` requirements must not import from `homeassistant`. The library sits below the HA boundary.
+2. **Circular dependency.** `span (integration)` → `span-panel-api` → `homeassistant` would require the full HA environment to install the library.
+3. **Simulation engine stays standalone.** `DynamicSimulationEngine` produces snapshots without any HA context — tests run in <1s with zero HA dependency.
+4. **Version decoupling.** HA's MQTT internals (lock names, socket callback signatures) are not a public API. Importing them creates fragile coupling.
+
+The overhead is ~80 lines of trivially stable code (paho-mqtt's 7 internal lock names haven't changed across major versions).
+
+### Step 7a: New file `mqtt/async_client.py`
+
+Port of HA core's `async_client.py` (74 lines):
+
+```python
+class NullLock:
+    """No-op lock for single-threaded event loop execution."""
+    # __enter__, __exit__, acquire, release — all no-ops
+    # @lru_cache(maxsize=7) on each method
+
+class AsyncMQTTClient(paho.Client):
+    """paho Client subclass with NullLock replacing all 7 internal locks."""
+    def setup(self) -> None:
+        self._in_callback_mutex = NullLock()
+        self._callback_mutex = NullLock()
+        self._msgtime_mutex = NullLock()
+        self._out_message_mutex = NullLock()
+        self._in_message_mutex = NullLock()
+        self._reconnect_delay_mutex = NullLock()
+        self._mid_generate_mutex = NullLock()
+```
+
+### Step 7b: Rewrite `mqtt/connection.py`
+
+Replace the thread-based `AsyncMqttBridge` with event-loop-only implementation.
+
+**Remove:**
+
+- `import threading`
+- `self._lock = threading.Lock()` and all `with self._lock:` blocks
+- `self._client.loop_start()` / `self._client.loop_stop()`
+- `call_soon_threadsafe()` in `_on_connect`, `_on_disconnect`, `_on_message`
+
+**Add — Socket callback plumbing:**
+
+| Callback                            | Purpose                                                        | Source pattern       |
+| ----------------------------------- | -------------------------------------------------------------- | -------------------- |
+| `_async_reader_callback`            | `loop.add_reader` handler → calls `client.loop_read()`         | HA core line 552-556 |
+| `_async_writer_callback`            | `loop.add_writer` handler → calls `client.loop_write()`        | HA core line 646-650 |
+| `_async_start_misc_periodic`        | Schedules `client.loop_misc()` every 1s via `loop.call_at()`   | HA core line 558-573 |
+| `_async_on_socket_open`             | Register reader + start misc timer                             | HA core line 614-628 |
+| `_async_on_socket_close`            | Remove reader, cancel misc timer                               | HA core line 630-644 |
+| `_async_on_socket_register_write`   | Register writer                                                | HA core line 660-668 |
+| `_async_on_socket_unregister_write` | Remove writer                                                  | HA core line 670-678 |
+| `_on_socket_open_sync`              | Executor-time bridge → `call_soon_threadsafe` to async version | HA core line 606-612 |
+| `_on_socket_register_write_sync`    | Executor-time bridge → `call_soon_threadsafe` to async version | HA core line 652-658 |
+
+**Connect flow — executor pattern:**
+
+```python
+async def connect(self) -> None:
+    self._loop = asyncio.get_running_loop()
+    self._connect_event = asyncio.Event()
+
+    # Build AsyncMQTTClient (replaces paho.Client)
+    self._client = AsyncMQTTClient(
+        callback_api_version=CallbackAPIVersion.VERSION2,
+        transport=self._transport,
+        reconnect_on_failure=False,  # We manage reconnection ourselves
+    )
+    self._client.setup()  # Replace paho locks with NullLock
+
+    # TLS, auth, LWT configuration (unchanged)
+    ...
+
+    # Wire callbacks — run directly on event loop (no thread dispatch)
+    self._client.on_connect = self._on_connect
+    self._client.on_disconnect = self._on_disconnect
+    self._client.on_message = self._on_message
+    self._client.on_socket_close = self._async_on_socket_close
+    self._client.on_socket_unregister_write = self._async_on_socket_unregister_write
+
+    # Connect in executor (blocking DNS + TCP + TLS)
+    # During executor connect, socket callbacks need sync→async bridge
+    try:
+        self._client.on_socket_open = self._on_socket_open_sync
+        self._client.on_socket_register_write = self._on_socket_register_write_sync
+        await self._loop.run_in_executor(
+            None,
+            partial(self._client.connect, host=..., port=..., keepalive=...),
+        )
+    finally:
+        # Switch to direct async callbacks after executor returns
+        self._client.on_socket_open = self._async_on_socket_open
+        self._client.on_socket_register_write = self._async_on_socket_register_write
+
+    # Wait for CONNACK
+    await asyncio.wait_for(self._connect_event.wait(), timeout=MQTT_CONNECT_TIMEOUT_S)
+```
+
+**Callback simplification — no locks, no thread dispatch:**
+
+```python
+# BEFORE (thread-based):
+def _on_connect(self, ...):
+    with self._lock:
+        self._connected = connected
+    if self._loop is not None:
+        self._loop.call_soon_threadsafe(self._connect_event.set)
+
+# AFTER (event-loop-only):
+def _on_connect(self, ...):
+    self._connected = connected        # No lock — single-threaded
+    if self._connect_event is not None:
+        self._connect_event.set()       # No call_soon_threadsafe — already on loop
+```
+
+**Reconnection — async loop replaces paho's built-in:**
+
+```python
+async def _reconnect_loop(self) -> None:
+    delay = MQTT_RECONNECT_MIN_DELAY_S
+    while self._should_reconnect:
+        if not self._connected:
+            try:
+                self._client.on_socket_open = self._on_socket_open_sync
+                self._client.on_socket_register_write = self._on_socket_register_write_sync
+                await self._loop.run_in_executor(None, self._client.reconnect)
+            except OSError:
+                _LOGGER.debug("Reconnect failed, retrying in %ss", delay)
+            finally:
+                self._client.on_socket_open = self._async_on_socket_open
+                self._client.on_socket_register_write = self._async_on_socket_register_write
+        await asyncio.sleep(delay)
+        delay = min(delay * MQTT_RECONNECT_BACKOFF_MULTIPLIER, MQTT_RECONNECT_MAX_DELAY_S)
+```
+
+### Step 7c: Update tests
+
+Existing tests for `HomieDeviceConsumer` and snapshot building are unaffected (they don't touch the connection layer).
+
+New tests:
+
+| Test file                        | Coverage                                                                      |
+| -------------------------------- | ----------------------------------------------------------------------------- |
+| `tests/test_async_client.py`     | NullLock no-op behavior, AsyncMQTTClient.setup() replaces 7 locks             |
+| `tests/test_connection_async.py` | Executor connect, socket callback registration, misc timer, reconnect backoff |
+
+### Step 7d: Verify no threading remains
+
+```bash
+# No threading imports in mqtt/:
+grep -r "threading" src/span_panel_api/mqtt/
+# Should return nothing
+
+# call_soon_threadsafe only in executor-time sync bridges:
+grep "call_soon_threadsafe" src/span_panel_api/mqtt/connection.py
+# Should only appear in _on_socket_open_sync and _on_socket_register_write_sync
+
+# No loop_start/loop_stop:
+grep "loop_start\|loop_stop" src/span_panel_api/mqtt/
+# Should return nothing
+```
+
+### Impact on `SpanMqttClient` (`client.py`)
+
+Minimal. The client delegates to `AsyncMqttBridge` and its public API (connect, disconnect, subscribe, publish, callbacks) is unchanged. The `_on_message` and `_on_connection_change` callbacks already assume they run on the event loop — no code changes
+needed.
+
+### Updated data flow (after refactor)
+
+```text
+MQTT broker
+  → paho socket → asyncio add_reader
+    → loop_read() → paho internal dispatch
+      → _on_message()                              ← runs on event loop, no thread
+        → HomieDeviceConsumer._handle_property()
+          → property_values[node_id][prop_id] = value   ← cheap dict write
+
+(on controlled interval)
+HomieDeviceConsumer.build_snapshot()               ← builds frozen dataclass
+  → coordinator.async_set_updated_data(snapshot)   ← single coordinator push
+```
+
+---
+
 ## Final Package Structure
 
 ```text
@@ -377,8 +588,9 @@ src/span_panel_api/
 ├── simulation.py        # Simulation engine (produces snapshots)
 └── mqtt/
     ├── __init__.py
+    ├── async_client.py  # NullLock + AsyncMQTTClient (HA core pattern)
     ├── client.py        # SpanMqttClient
-    ├── connection.py    # AsyncMqttBridge (paho-mqtt wrapper)
+    ├── connection.py    # AsyncMqttBridge (event-loop-driven, no threads)
     ├── const.py         # MQTT/Homie constants + UUID helpers
     ├── homie.py         # HomieDeviceConsumer (Homie v5 parser)
     └── models.py        # MqttClientConfig, MqttTransport

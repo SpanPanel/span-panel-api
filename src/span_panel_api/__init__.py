@@ -17,14 +17,7 @@ from .exceptions import (
     SpanPanelValidationError,
 )
 from .factory import create_span_client
-from .models import (
-    SpanBatterySnapshot,
-    SpanBranchSnapshot,
-    SpanCircuitSnapshot,
-    SpanPanelSnapshot,
-    V2AuthResponse,
-    V2StatusInfo,
-)
+from .models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanPanelSnapshot, V2AuthResponse, V2StatusInfo
 from .mqtt import MqttClientConfig, SpanMqttClient
 from .phase_validation import (
     PhaseDistribution,
@@ -47,7 +40,6 @@ __all__ = [  # noqa: RUF022
     "StreamingCapableProtocol",
     # Snapshots
     "SpanBatterySnapshot",
-    "SpanBranchSnapshot",
     "SpanCircuitSnapshot",
     "SpanPanelSnapshot",
     # Factory

@@ -20,7 +20,7 @@ import yaml
 
 from span_panel_api.const import DSM_GRID_UP, DSM_ON_GRID, MAIN_RELAY_CLOSED, PANEL_ON_GRID
 from span_panel_api.exceptions import SimulationConfigurationError
-from span_panel_api.models import SpanBatterySnapshot, SpanBranchSnapshot, SpanCircuitSnapshot, SpanPanelSnapshot
+from span_panel_api.models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanPanelSnapshot
 
 
 # New YAML configuration types
@@ -920,107 +920,7 @@ class DynamicSimulationEngine:
             "gridSampleStartMs": int(time.time() * 1000),
             "gridSampleEndMs": int(time.time() * 1000),
             "currentRunConfig": PANEL_ON_GRID,
-            "branches": self._generate_branches(),
         }
-
-    def _generate_branches(self) -> list[dict[str, Any]]:
-        """Generate branch data for all tabs in the panel."""
-        if not self._config:
-            return []
-
-        total_tabs = self._config["panel_config"].get("total_tabs", 32)
-        branches = []
-
-        # Find which tabs are mapped to circuits
-        mapped_tabs = set()
-        for circuit_def in self._config.get("circuits", []):
-            mapped_tabs.update(circuit_def.get("tabs", []))
-
-        for tab_num in range(1, total_tabs + 1):
-            # Create a branch for each tab with all required fields
-            current_sim_time = self.get_current_simulation_time()
-            current_time_ms = int(current_sim_time * 1000)
-
-            # Handle unmapped tabs
-            if tab_num not in mapped_tabs:
-                # Check if this unmapped tab has a specific template defined
-                unmapped_tab_config = self._config.get("unmapped_tab_templates", {}).get(str(tab_num))
-                if unmapped_tab_config:
-                    # Apply behavior engine to unmapped tab with its template
-                    behavior_engine = RealisticBehaviorEngine(self._simulation_start_time, self._config)
-                    current_sim_time = self.get_current_simulation_time()
-                    base_power = behavior_engine.get_circuit_power(
-                        f"unmapped_tab_{tab_num}", unmapped_tab_config, current_sim_time
-                    )
-
-                    # Apply tab synchronization if configured
-                    sync_config = self._get_tab_sync_config(tab_num)
-                    if sync_config:
-                        baseline_power = self._get_synchronized_power(tab_num, base_power, sync_config)
-                    else:
-                        baseline_power = base_power
-                else:
-                    # Default unmapped tab baseline consumption (10-200W)
-                    baseline_power = random.uniform(10.0, 200.0)  # nosec B311
-
-                # Calculate accumulated energy for unmapped tabs with synchronization support
-                current_time = self.get_current_simulation_time()
-                circuit_id = f"unmapped_tab_{tab_num}"
-
-                # Check if this tab has synchronization configuration
-                sync_config = self._get_tab_sync_config(tab_num)
-                if sync_config and sync_config.get("energy_sync", False):
-                    # Use synchronized energy calculation
-                    # Determine circuit mode for unmapped tabs
-                    unmapped_mode = (
-                        "producer"
-                        if unmapped_tab_config and unmapped_tab_config.get("energy_profile", {}).get("mode") == "producer"
-                        else "consumer"
-                    )
-                    produced_energy, consumed_energy = self._synchronize_energy_for_tab(
-                        tab_num, circuit_id, baseline_power, current_time, unmapped_mode
-                    )
-                else:
-                    # Use regular energy calculation
-                    # Determine circuit mode for unmapped tabs
-                    unmapped_mode = (
-                        "producer"
-                        if unmapped_tab_config and unmapped_tab_config.get("energy_profile", {}).get("mode") == "producer"
-                        else "consumer"
-                    )
-                    produced_energy, consumed_energy = self._calculate_accumulated_energy(
-                        circuit_id, baseline_power, current_time, unmapped_mode
-                    )
-
-                # For unmapped tabs:
-                # - Solar production (positive power) -> exported energy represents production
-                # - Consumption (positive power) -> imported energy represents consumption
-                if unmapped_mode == "producer":
-                    # Solar production
-                    imported_energy = consumed_energy
-                    exported_energy = produced_energy
-                else:
-                    # Consumption
-                    imported_energy = consumed_energy
-                    exported_energy = produced_energy
-            else:
-                baseline_power = 0.0  # Mapped tabs get power from circuit definitions
-                imported_energy = 0.0
-                exported_energy = 0.0
-
-            branch = {
-                "id": f"branch_{tab_num}",
-                "relayState": "CLOSED",
-                "instantPowerW": baseline_power,
-                "importedActiveEnergyWh": imported_energy,
-                "exportedActiveEnergyWh": exported_energy,
-                "measureStartTsMs": current_time_ms,
-                "measureDurationMs": 5000,  # 5 second measurement window
-                "isMeasureValid": True,
-            }
-            branches.append(branch)
-
-        return branches
 
     def _generate_status_data(self) -> dict[str, Any]:
         """Generate status data from configuration."""
@@ -1193,21 +1093,30 @@ class DynamicSimulationEngine:
                 instant_power_update_time_s=int(cdata["instantPowerUpdateTimeS"]),
             )
 
-        # --- Branches ---
-        branch_snapshots: list[SpanBranchSnapshot] = []
+        # --- Unmapped tabs ---
         panel = raw["panel"]
-        for branch in panel["branches"]:
-            branch_id: str = branch["id"]
-            tab_number = int(branch_id.split("_")[1])
-            branch_snapshots.append(
-                SpanBranchSnapshot(
-                    tab_number=tab_number,
-                    relay_state=str(branch["relayState"]),
-                    instant_power_w=float(branch["instantPowerW"]),
-                    imported_energy_wh=float(branch["importedActiveEnergyWh"]),
-                    exported_energy_wh=float(branch["exportedActiveEnergyWh"]),
-                )
-            )
+        occupied_tabs: set[int] = set()
+        for circuit in circuit_snapshots.values():
+            occupied_tabs.update(circuit.tabs)
+        if occupied_tabs:
+            total_tabs = self._config["panel_config"].get("total_tabs", 32) if self._config else 32
+            panel_size = max(*occupied_tabs, total_tabs)
+            for tab in range(1, panel_size + 1):
+                if tab not in occupied_tabs:
+                    cid = f"unmapped_tab_{tab}"
+                    circuit_snapshots[cid] = SpanCircuitSnapshot(
+                        circuit_id=cid,
+                        name=f"Unmapped Tab {tab}",
+                        relay_state="CLOSED",
+                        instant_power_w=0.0,
+                        produced_energy_wh=0.0,
+                        consumed_energy_wh=0.0,
+                        tabs=[tab],
+                        priority="UNKNOWN",
+                        is_user_controllable=False,
+                        is_sheddable=False,
+                        is_never_backup=False,
+                    )
 
         # --- Battery ---
         soe_percentage = float(soe_data["soe"]["percentage"])
@@ -1239,7 +1148,6 @@ class DynamicSimulationEngine:
             wlan_link=bool(network["wlanLink"]),
             wwan_link=bool(network["wwanLink"]),
             circuits=circuit_snapshots,
-            branches=branch_snapshots,
             battery=battery_snapshot,
         )
 

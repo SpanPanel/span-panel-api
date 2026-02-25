@@ -4,7 +4,7 @@ Tests cover:
 - Snapshot structure: get_snapshot() returns SpanPanelSnapshot with correct types
 - Field accuracy: Snapshot fields match values from get_panel_data(), get_status(), get_soe()
 - Circuit mapping: All configured circuits appear with correct field values
-- Branch mapping: All branches appear with correct tab numbers and power values
+- Unmapped tab synthesis: Unoccupied tabs synthesized as zero-power circuit entries
 - Battery SOE: SOE percentage propagated correctly
 - Package exports: DynamicSimulationEngine and SimulationConfig in __init__
 """
@@ -19,7 +19,6 @@ from span_panel_api import DynamicSimulationEngine
 from span_panel_api.simulation import SimulationConfig
 from span_panel_api.models import (
     SpanBatterySnapshot,
-    SpanBranchSnapshot,
     SpanCircuitSnapshot,
     SpanPanelSnapshot,
 )
@@ -65,14 +64,6 @@ class TestSnapshotStructure:
         for cid, circuit in snapshot.circuits.items():
             assert isinstance(cid, str)
             assert isinstance(circuit, SpanCircuitSnapshot)
-
-    @pytest.mark.asyncio
-    async def test_branches_are_branch_snapshots(self) -> None:
-        engine = await _make_engine()
-        snapshot = await engine.get_snapshot()
-        assert len(snapshot.branches) > 0
-        for branch in snapshot.branches:
-            assert isinstance(branch, SpanBranchSnapshot)
 
     @pytest.mark.asyncio
     async def test_battery_is_battery_snapshot(self) -> None:
@@ -166,7 +157,8 @@ class TestCircuitMapping:
         snapshot = await engine.get_snapshot()
         panel_data = await engine.get_panel_data()
         raw_circuits = panel_data["circuits"]["circuits"]
-        assert set(snapshot.circuits.keys()) == set(raw_circuits.keys())
+        # Snapshot includes both configured circuits and unmapped tab entries
+        assert set(raw_circuits.keys()).issubset(set(snapshot.circuits.keys()))
 
     @pytest.mark.asyncio
     async def test_circuit_field_values(self) -> None:
@@ -199,44 +191,52 @@ class TestCircuitMapping:
 
 
 # ---------------------------------------------------------------------------
-# Branch mapping
+# Unmapped tab synthesis
 # ---------------------------------------------------------------------------
 
 
-class TestBranchMapping:
-    """All branches appear with correct tab numbers and power values."""
+class TestUnmappedTabs:
+    """Unoccupied tab positions are synthesized as zero-power circuit entries."""
 
     @pytest.mark.asyncio
-    async def test_branch_count_matches_total_tabs(self) -> None:
-        """8-tab config should produce 8 branches."""
+    async def test_unmapped_tabs_present(self) -> None:
+        """8-tab config with fewer circuits should have unmapped entries."""
         engine = await _make_engine(CONFIG_8TAB)
         snapshot = await engine.get_snapshot()
-        assert len(snapshot.branches) == 8
+        unmapped = {cid: c for cid, c in snapshot.circuits.items() if cid.startswith("unmapped_tab_")}
+        # Should have some unmapped tabs (8 total minus configured circuits)
+        assert len(unmapped) > 0
 
     @pytest.mark.asyncio
-    async def test_branch_tab_numbers_sequential(self) -> None:
+    async def test_unmapped_tabs_have_zero_power(self) -> None:
         engine = await _make_engine(CONFIG_8TAB)
         snapshot = await engine.get_snapshot()
-        tab_numbers = [b.tab_number for b in snapshot.branches]
-        assert tab_numbers == list(range(1, 9))
+        for cid, circuit in snapshot.circuits.items():
+            if cid.startswith("unmapped_tab_"):
+                assert circuit.instant_power_w == 0.0
+                assert circuit.produced_energy_wh == 0.0
+                assert circuit.consumed_energy_wh == 0.0
 
     @pytest.mark.asyncio
-    async def test_branch_field_types(self) -> None:
-        engine = await _make_engine()
+    async def test_unmapped_tabs_not_controllable(self) -> None:
+        engine = await _make_engine(CONFIG_8TAB)
         snapshot = await engine.get_snapshot()
-        for branch in snapshot.branches:
-            assert isinstance(branch.tab_number, int)
-            assert isinstance(branch.relay_state, str)
-            assert isinstance(branch.instant_power_w, float)
-            assert isinstance(branch.imported_energy_wh, float)
-            assert isinstance(branch.exported_energy_wh, float)
+        for cid, circuit in snapshot.circuits.items():
+            if cid.startswith("unmapped_tab_"):
+                assert circuit.is_user_controllable is False
+                assert circuit.is_sheddable is False
+                assert circuit.is_never_backup is False
 
     @pytest.mark.asyncio
-    async def test_32_circuit_branch_count(self) -> None:
-        """32-circuit config should produce 32 branches."""
-        engine = await _make_engine(CONFIG_32)
+    async def test_total_tabs_covered(self) -> None:
+        """All tab positions 1..N should be covered by circuits or unmapped entries."""
+        engine = await _make_engine(CONFIG_8TAB)
         snapshot = await engine.get_snapshot()
-        assert len(snapshot.branches) == 32
+        all_tabs: set[int] = set()
+        for circuit in snapshot.circuits.values():
+            all_tabs.update(circuit.tabs)
+        # Should cover all positions up to at least 8
+        assert all_tabs.issuperset(set(range(1, 9)))
 
 
 # ---------------------------------------------------------------------------

@@ -242,6 +242,84 @@ Once unmapped tab synthesis is in place, `SpanBranchSnapshot` serves no purpose 
 
 ---
 
+## Integration Architecture: Hybrid Coordinator Model
+
+### Problem: Pure Push vs. Polling
+
+HA supports two entity update models:
+
+1. **Polling:** `DataUpdateCoordinator` calls the library on a timer, gets data, pushes to entities. This is what the v1 REST integration does.
+2. **Pure push:** Each entity subscribes to MQTT callbacks, calls `async_write_ha_state()` on every update. This is what dcj's span-hass does.
+
+Pure push has a **CPU cost problem** on SPAN panels. A 32-circuit panel publishes `active-power`, `exported-energy`, `imported-energy`, `relay`, `shed-priority`, and more per circuit — 160+ properties. Power values update continuously. Each
+`async_write_ha_state()` call triggers:
+
+- State machine write
+- Event bus fire (`state_changed` event)
+- All state change listeners notified (automations, templates, logbook)
+- Recorder queues a DB write (batched at ~1s, but still per-entity)
+
+On Raspberry Pi hardware common among HA users, hundreds of state writes per second is significant. **HA does not rate-limit or coalesce these.**
+
+### Solution: Hybrid Coordinator
+
+Use `DataUpdateCoordinator` with `update_interval=None` (no polling timer). MQTT pushes trigger snapshot builds on a controlled cadence rather than per-property.
+
+**Data flow:**
+
+```text
+MQTT broker
+  → paho-mqtt network thread
+    → AsyncMqttBridge (call_soon_threadsafe)
+      → HomieDeviceConsumer._handle_property()     ← cheap dict write, no HA
+        → property_values[node_id][prop_id] = value
+
+(on controlled interval or debounced after burst)
+
+HomieDeviceConsumer.build_snapshot()               ← builds frozen dataclass
+  → coordinator.async_set_updated_data(snapshot)   ← single coordinator push
+    → each entity reads its field from snapshot
+      → async_write_ha_state() ONLY if value changed
+```
+
+**Key properties:**
+
+- MQTT messages accumulate in `HomieDeviceConsumer`'s property dict with zero HA involvement — just Python dict writes
+- Snapshot is built only when the coordinator requests it, not on every MQTT message
+- `async_set_updated_data()` triggers all entities to re-read, but each entity compares its current value against the snapshot and only writes state if changed
+- The snapshot is the **natural coalescing boundary** — many MQTT property updates collapse into one snapshot, one coordinator push, and selective entity state writes
+
+### Why Not Pure Push
+
+dcj's span-hass uses pure push (`should_poll = False`, per-entity MQTT callbacks). This works but:
+
+- Every MQTT property change fires entity state writes through HA's full pipeline — no coalescing
+- Each entity parses raw MQTT strings independently — duplicated conversion logic across entity classes
+- No single point-of-truth for panel state — harder to implement cross-entity logic (e.g., grid power = sum of circuits)
+- The gRPC prototype arrived at the same conclusion: snapshot polling outperformed per-property push on real hardware
+
+### Why Not Pure Polling
+
+The v1 REST integration polls on a timer (e.g., every 30s). This works but:
+
+- MQTT data is already being pushed — polling wastes it
+- Timer-based updates add latency (up to one full interval)
+- The coordinator's `update_interval=None` + `async_set_updated_data()` gives us push semantics with coordinator lifecycle management
+
+### Coordinator Implementation Notes
+
+The integration's coordinator should:
+
+1. On setup: call `SpanMqttClient.connect()`, then `register_snapshot_callback(on_snapshot)` and `start_streaming()`
+2. In `on_snapshot` callback: call `coordinator.async_set_updated_data(snapshot)`
+3. The library's `_dispatch_snapshot()` is already debounced by the MQTT message arrival rate — further debouncing in the integration is optional but recommended for burst scenarios (e.g., `asyncio.call_later` with a 0.5s delay, resetting on each new
+   snapshot)
+4. On teardown: call `stop_streaming()` then `SpanMqttClient.close()`
+
+Entities inherit from `CoordinatorEntity` and read from `self.coordinator.data` (the `SpanPanelSnapshot`). No entity subscribes to MQTT directly.
+
+---
+
 ## Integration Impact (span repo)
 
 The following work is required in the **span** Home Assistant integration to complete the v2 transition:
@@ -261,9 +339,12 @@ The following work is required in the **span** Home Assistant integration to com
 
 ### Coordinator
 
-- Replace REST polling with `SpanMqttClient.connect()` + `get_snapshot()`
-- Optionally use `register_snapshot_callback()` / `start_streaming()` for push-based updates instead of timed polling
+- Replace REST polling `DataUpdateCoordinator` with hybrid model (see above)
+- `update_interval=None` — no polling timer
+- `register_snapshot_callback()` + `start_streaming()` for push-based updates
+- `on_snapshot` callback calls `coordinator.async_set_updated_data(snapshot)`
 - Snapshot model is unchanged — entity code needs no modification beyond UUID migration
+- Entities remain `CoordinatorEntity` subclasses reading from `coordinator.data`
 
 ### Config Flow
 

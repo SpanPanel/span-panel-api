@@ -6,7 +6,6 @@ import pytest
 
 from span_panel_api.models import (
     SpanBatterySnapshot,
-    SpanBranchSnapshot,
     SpanCircuitSnapshot,
     SpanPanelSnapshot,
 )
@@ -242,35 +241,6 @@ class TestSpanCircuitSnapshot:
 
 
 # ===================================================================
-# SpanBranchSnapshot tests
-# ===================================================================
-
-
-class TestSpanBranchSnapshot:
-    def test_construction(self):
-        branch = SpanBranchSnapshot(
-            tab_number=1,
-            relay_state="CLOSED",
-            instant_power_w=200.0,
-            imported_energy_wh=1000.0,
-            exported_energy_wh=50.0,
-        )
-        assert branch.tab_number == 1
-        assert branch.instant_power_w == 200.0
-
-    def test_frozen_rejects_mutation(self):
-        branch = SpanBranchSnapshot(
-            tab_number=1,
-            relay_state="CLOSED",
-            instant_power_w=200.0,
-            imported_energy_wh=1000.0,
-            exported_energy_wh=50.0,
-        )
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            branch.tab_number = 2  # type: ignore[misc]
-
-
-# ===================================================================
 # SpanBatterySnapshot tests
 # ===================================================================
 
@@ -322,7 +292,6 @@ class TestSpanPanelSnapshot:
     def test_default_collections(self):
         snapshot = _make_panel_snapshot()
         assert snapshot.circuits == {}
-        assert snapshot.branches == []
         assert snapshot.battery == SpanBatterySnapshot()
 
     def test_frozen_rejects_mutation(self):
@@ -335,17 +304,6 @@ class TestSpanPanelSnapshot:
         snapshot = _make_panel_snapshot(circuits={"abc123": circuit})
         assert len(snapshot.circuits) == 1
         assert snapshot.circuits["abc123"].name == "Kitchen"
-
-    def test_with_branches(self):
-        branch = SpanBranchSnapshot(
-            tab_number=1,
-            relay_state="CLOSED",
-            instant_power_w=200.0,
-            imported_energy_wh=1000.0,
-            exported_energy_wh=50.0,
-        )
-        snapshot = _make_panel_snapshot(branches=[branch])
-        assert len(snapshot.branches) == 1
 
     def test_with_battery(self):
         battery = SpanBatterySnapshot(soe_percentage=75.0, soe_kwh=9.6)
@@ -386,4 +344,3 @@ class TestSpanPanelSnapshot:
         a = _make_panel_snapshot()
         b = _make_panel_snapshot()
         assert a.circuits is not b.circuits
-        assert a.branches is not b.branches

@@ -38,23 +38,6 @@ class SpanCircuitSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class SpanBranchSnapshot:
-    """Per-tab branch data.
-
-    Populated by the REST transport only. SpanMqttClient always produces
-    an empty list — v2 Homie has no branch concept. The integration
-    derives tab occupancy from SpanCircuitSnapshot.tabs when branches
-    is empty.
-    """
-
-    tab_number: int
-    relay_state: str
-    instant_power_w: float
-    imported_energy_wh: float
-    exported_energy_wh: float
-
-
-@dataclass(frozen=True, slots=True)
 class SpanBatterySnapshot:
     """Battery state — populated only when BESS node is commissioned."""
 
@@ -140,5 +123,4 @@ class SpanPanelSnapshot:
 
     # Collections
     circuits: dict[str, SpanCircuitSnapshot] = field(default_factory=dict)
-    branches: list[SpanBranchSnapshot] = field(default_factory=list)
     battery: SpanBatterySnapshot = field(default_factory=SpanBatterySnapshot)

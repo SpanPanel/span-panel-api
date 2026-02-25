@@ -457,6 +457,5 @@ class HomieDeviceConsumer:
             wifi_ssid=wifi_ssid,
             vendor_cloud=vendor_cloud,
             circuits=circuits,
-            branches=[],  # MQTT transport has no branch concept
             battery=battery,
         )

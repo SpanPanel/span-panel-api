@@ -401,11 +401,6 @@ class TestHomieBattery:
 
 
 class TestHomieSnapshot:
-    def test_branches_always_empty(self):
-        consumer = _build_ready_consumer()
-        snapshot = consumer.build_snapshot()
-        assert snapshot.branches == []
-
     def test_serial_number_preserved(self):
         consumer = _build_ready_consumer()
         snapshot = consumer.build_snapshot()

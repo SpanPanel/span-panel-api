@@ -24,7 +24,7 @@ class TestExamplePhaseValidation:
     @pytest.fixture
     def example_configs(self) -> Dict[str, Dict[str, Any]]:
         """Load all example YAML configurations."""
-        examples_dir = Path(__file__).parent.parent / "examples"
+        examples_dir = Path(__file__).parent / "fixtures" / "configs"
         configs = {}
 
         # Load all YAML files in examples directory

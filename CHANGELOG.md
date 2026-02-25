@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 02/2026
+
+### Added in v2.0.0
+
+- **Protocol-based architecture** — Six typed protocols (`SpanPanelClientProtocol`, `CircuitControlProtocol`, `CircuitCorrelationProtocol`, `StreamingCapableProtocol`) and `PanelCapability` flag enum defining transport-agnostic contracts
+- **Snapshot dataclasses** — Immutable `SpanPanelSnapshot`, `SpanCircuitSnapshot`, `SpanBranchSnapshot`, `SpanBatterySnapshot` with v2-native fields
+- **REST client extraction** — `SpanRestClient` extracted from `SpanPanelClient` with `get_snapshot()` support, `auth_refresh_callback`, and deprecation header parsing
+- **v2 REST endpoints** — `register_v2`, `download_ca_cert`, `get_homie_schema`, `get_v2_status`, `regenerate_passphrase` for SPAN v2 firmware
+- **API version detection** — `detect_api_version()` probes `/api/v2/status` and returns `DetectionResult` with firmware/serial info
+- **v2 data models** — `V2AuthResponse`, `V2StatusInfo`, `V2HomieSchema`, `DeprecationInfo` frozen dataclasses
+- **MQTT/Homie transport** — Full MQTT transport package (`span_panel_api.mqtt`):
+  - `AsyncMqttBridge`: paho-mqtt v2 wrapper with TLS/WebSocket support
+  - `HomieDeviceConsumer`: Homie v5 state machine parsing MQTT topics into snapshots
+  - `SpanMqttClient`: Implements all three protocols (panel, circuit control, streaming)
+  - `MqttClientConfig`: Frozen config with transport type and TLS settings
+- **Factory function** — `create_span_client()` with auto-detection, v1/v2 routing, passphrase registration, and REST correlation injection
+- **Circuit correlation** — `CircuitCorrelationProtocol` with identity mapping (Scenario A) and name+tab fallback (Scenario B) for v1↔v2 UUID translation
+- **Simulation snapshot support** — `DynamicSimulationEngine.get_snapshot()` returns `SpanPanelSnapshot`; `SpanRestClient` delegates in simulation mode
+- **Public API cleanup** — Semantic grouping in `__all__`; internal symbols (`AsyncMqttBridge`, `HomieDeviceConsumer`, `DeprecationInfo`, `RestClientConfig`, `SimulationConfig`, `V2HomieSchema`, `get_v2_status`) moved to submodule-only access
+
+### Changed in v2.0.0
+
+- `412 Precondition Failed` now treated as auth error (`AUTH_ERROR_CODES` updated)
+- `paho-mqtt>=2.0.0` added as optional dependency (`[mqtt]` extra)
+- Version bumped from 1.1.14 to 2.0.0
+
+### Fixed in v2.0.0
+
+- Extend retry logic to handle `httpx.ReadError`, `httpx.WriteError`, and `httpx.CloseError` in addition to `RemoteProtocolError` — these can occur when parallel requests in `get_all_data()` share a client and one request destroys the client while others
+  are in-flight ([@NickBorgers](https://github.com/NickBorgers))
+
 ## [1.1.14] - 12/2025
 
 ### Fixed in v1.1.14
@@ -197,3 +228,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **v1.1.6**: Major simulation API improvements with YAML configuration
 - **v1.1.8**: Power sign correction in simulation mode
 - **v1.1.9**: Additional simulation sign corrections and dependency updates
+- **v1.1.14**: Keep-Alive and RemoteProtocolError handling
+- **v2.0.0**: Dual-transport architecture (REST + MQTT/Homie), v2 firmware support, protocol-based API

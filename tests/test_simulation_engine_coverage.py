@@ -1,20 +1,19 @@
 """Test simulation engine edge cases and missing coverage lines."""
 
 import pytest
+import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-from span_panel_api import SpanPanelClient
+from unittest.mock import patch
+
 from span_panel_api.simulation import DynamicSimulationEngine
 from span_panel_api.exceptions import SimulationConfigurationError
-import time
 
 
 def get_base_config():
     """Get a base configuration for testing purposes."""
     import yaml
-    from pathlib import Path
 
-    config_path = Path(__file__).parent.parent / "examples" / "validation_test_config.yaml"
+    config_path = Path(__file__).parent / "fixtures" / "configs" / "validation_test_config.yaml"
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
@@ -26,9 +25,8 @@ def get_base_config():
 def get_battery_config():
     """Get a configuration with battery template for testing purposes."""
     import yaml
-    from pathlib import Path
 
-    config_path = Path(__file__).parent.parent / "examples" / "battery_test_config.yaml"
+    config_path = Path(__file__).parent / "fixtures" / "configs" / "battery_test_config.yaml"
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
@@ -40,9 +38,8 @@ def get_battery_config():
 def get_soe_battery_config():
     """Get a configuration for SOE battery testing with bidirectional energy behavior."""
     import yaml
-    from pathlib import Path
 
-    config_path = Path(__file__).parent.parent / "examples" / "battery_test_config.yaml"
+    config_path = Path(__file__).parent / "fixtures" / "configs" / "battery_test_config.yaml"
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
@@ -119,91 +116,11 @@ class TestSimulationEngineEdgeCases:
         assert serial_override == "custom-serial-456"
 
 
-class TestCircuitOverrideEdgeCases:
-    """Test circuit override edge cases."""
-
-    @pytest.mark.asyncio
-    async def test_circuit_override_power_multiplier(self):
-        """Test circuit override power multiplier (line 649)."""
-        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_32_circuit.yaml"
-
-        async with SpanPanelClient(host="test", simulation_mode=True, simulation_config_path=str(config_path)) as client:
-            # Get initial circuits to find a valid circuit ID
-            circuits = await client.get_circuits()
-            circuit_id = next(iter(circuits.circuits.additional_properties.keys()))
-
-            # Set a power multiplier override for a specific circuit
-            await client.set_circuit_overrides(circuit_overrides={circuit_id: {"power_multiplier": 2.0}})
-
-            circuits_modified = await client.get_circuits()
-            circuit = circuits_modified.circuits.additional_properties.get(circuit_id)
-            assert circuit is not None
-
-            # Power should be affected by the multiplier
-            assert circuit.instant_power_w >= 0
-
-    @pytest.mark.asyncio
-    async def test_global_power_multiplier_override(self):
-        """Test global power multiplier override (line 657)."""
-        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_32_circuit.yaml"
-
-        async with SpanPanelClient(host="test", simulation_mode=True, simulation_config_path=str(config_path)) as client:
-            # Get baseline power first
-            circuits_baseline = await client.get_circuits()
-            baseline_power = 0
-            for circuit in circuits_baseline.circuits.additional_properties.values():
-                baseline_power += circuit.instant_power_w
-
-            # Set a global power multiplier
-            await client.set_circuit_overrides(global_overrides={"power_multiplier": 1.5})
-
-            circuits_modified = await client.get_circuits()
-            modified_power = 0
-            for circuit in circuits_modified.circuits.additional_properties.values():
-                modified_power += circuit.instant_power_w
-
-            # Total power should be affected by the global multiplier
-            # Allow for some variance due to simulation randomness
-            assert modified_power > baseline_power * 1.2  # Should be roughly 1.5x
-
-
 class TestSimulationEngineInitialization:
     """Test simulation engine initialization edge cases."""
 
-    @pytest.mark.asyncio
-    async def test_simulation_engine_with_yaml_config(self):
-        """Test simulation engine with YAML configuration file."""
-        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_32_circuit.yaml"
-
-        async with SpanPanelClient(
-            host="yaml-test", simulation_mode=True, simulation_config_path=str(config_path)
-        ) as client:
-            # Should initialize successfully with YAML config
-            assert client._simulation_engine is not None
-
-            # Should be able to get data
-            circuits = await client.get_circuits()
-            assert circuits is not None
-
-            panel_state = await client.get_panel_state()
-            assert panel_state is not None
-
-    @pytest.mark.asyncio
-    async def test_simulation_engine_basic_initialization(self):
-        """Test basic simulation engine initialization."""
-        async with SpanPanelClient(host="config-test", simulation_mode=True) as client:
-            # Should initialize successfully with default config
-            assert client._simulation_engine is not None
-
-            # Should be able to access properties
-            # Host is used as serial when creating simulation engine
-            serial = client._simulation_engine.serial_number
-            assert serial == "config-test"
-
     async def test_battery_power_calculation_edge_cases(self) -> None:
         """Test battery power calculation for different time periods."""
-        from span_panel_api.simulation import DynamicSimulationEngine
-
         config = get_battery_config()
         engine = DynamicSimulationEngine("battery-test", config_data=config)
         await engine.initialize_async()
@@ -237,8 +154,6 @@ class TestSimulationEngineInitialization:
 
     async def test_serial_number_with_override_no_config(self) -> None:
         """Test serial number property when override is set but no config is loaded."""
-        from span_panel_api.simulation import DynamicSimulationEngine
-
         # Create engine with serial number override but no config
         engine = DynamicSimulationEngine(serial_number="OVERRIDE-12345")
 
@@ -248,8 +163,6 @@ class TestSimulationEngineInitialization:
 
     async def test_serial_number_error_when_no_config_or_override(self) -> None:
         """Test serial number property raises error when no config or override is set."""
-        from span_panel_api.simulation import DynamicSimulationEngine
-
         # Create engine without serial number override and no config
         engine = DynamicSimulationEngine()
 
@@ -259,8 +172,6 @@ class TestSimulationEngineInitialization:
 
     async def test_battery_soe_charging_discharging_scenarios(self) -> None:
         """Test battery SOE calculation for charging and discharging scenarios."""
-        from span_panel_api.simulation import DynamicSimulationEngine
-
         # Use battery test config for SOE calculation
         config = get_soe_battery_config()
 

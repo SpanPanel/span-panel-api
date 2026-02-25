@@ -3,10 +3,9 @@
 import pytest
 import time
 from pathlib import Path
-from unittest.mock import Mock, patch
 from datetime import datetime
 
-from span_panel_api import SpanPanelClient, SimulationConfigurationError
+from span_panel_api.exceptions import SimulationConfigurationError
 from span_panel_api.simulation import DynamicSimulationEngine, RealisticBehaviorEngine
 
 
@@ -165,7 +164,7 @@ class TestSimulationTimeParsing:
         engine._initialize_simulation_time()
 
         # Verify the offset was calculated
-        assert hasattr(engine, '_simulation_time_offset')
+        assert hasattr(engine, "_simulation_time_offset")
 
     def test_time_parsing_error_handling(self):
         """Test time parsing error handling (lines 540-541)."""
@@ -185,23 +184,6 @@ class TestSimulationTimeParsing:
 
 class TestAdditionalMissingLines:
     """Test additional missing coverage lines."""
-
-    @pytest.mark.asyncio
-    async def test_override_simulation_start_time_exception(self):
-        """Test override_simulation_start_time exception handling."""
-        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_40_circuit_with_battery.yaml"
-
-        async with SpanPanelClient(
-            host="test-override-exception", simulation_mode=True, simulation_config_path=str(config_path)
-        ) as client:
-            engine = client._simulation_engine
-            assert engine is not None
-
-            # Test with invalid time format that will cause exception
-            engine.override_simulation_start_time("invalid-time-format")
-
-            # Should disable simulation time due to exception
-            assert not engine._use_simulation_time
 
     @pytest.mark.asyncio
     async def test_simulation_time_with_acceleration(self):

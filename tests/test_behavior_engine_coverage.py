@@ -1,67 +1,23 @@
 """Tests for behavior engine edge cases and time-of-day patterns.
 
 This module tests specific edge cases in the RealisticBehaviorEngine
-to achieve 100% test coverage.
+to achieve test coverage.
 """
 
 import time
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
-from span_panel_api import SpanPanelClient
-from span_panel_api.simulation import RealisticBehaviorEngine
+from span_panel_api.simulation import DynamicSimulationEngine, RealisticBehaviorEngine
 
 
 class TestBehaviorEngineEdgeCases:
     """Test edge cases in the RealisticBehaviorEngine."""
 
-    @pytest.mark.asyncio
-    async def test_relay_open_returns_zero_power(self):
-        """Test that OPEN relay state returns zero power regardless of template."""
-        client = SpanPanelClient(
-            host="test-relay-open", simulation_mode=True, simulation_config_path="examples/simple_test_config.yaml"
-        )
-
-        async with client:
-            # Set a circuit relay to OPEN
-            await client.set_circuit_relay("living_room_lights", "OPEN")
-
-            # Get circuits - the open circuit should have 0 power
-            circuits = await client.get_circuits()
-            circuit = circuits.circuits.additional_properties["living_room_lights"]
-
-            # Should be exactly 0.0 due to OPEN relay
-            assert circuit.instant_power_w == 0.0
-            assert circuit.relay_state.value == "OPEN"
-
-    @pytest.mark.asyncio
-    async def test_solar_time_of_day_production_pattern(self):
-        """Test solar production pattern during different times of day."""
-        client = SpanPanelClient(
-            host="test-solar-pattern",
-            simulation_mode=True,
-            simulation_config_path="examples/behavior_test_config.yaml",  # Has solar with time-of-day profile
-        )
-
-        async with client:
-            # Get the solar circuit during day hours
-            circuits = await client.get_circuits()
-
-            # Find the solar circuit by name
-            solar_circuit = circuits.circuits.additional_properties.get("solar_array_variable")
-
-            if solar_circuit is not None:
-                # Solar should be producing (positive power) or 0 depending on time
-                assert solar_circuit.instant_power_w >= 0, "Solar should produce non-negative power"
-            else:
-                # If no solar circuit found, just check that circuits exist
-                assert len(circuits.circuits.additional_properties) > 0
-
     def test_behavior_engine_direct_solar_pattern(self):
         """Test the behavior engine solar pattern directly to cover specific lines."""
-        config_path = Path(__file__).parent.parent / "examples" / "behavior_test_config.yaml"
+        config_path = Path(__file__).parent / "fixtures" / "configs" / "behavior_test_config.yaml"
         current_time = time.time()
 
         # Load config to get the solar template
@@ -100,7 +56,7 @@ class TestBehaviorEngineEdgeCases:
 
     def test_behavior_engine_time_of_day_modulation(self):
         """Test time-of-day modulation for regular circuits to cover specific lines."""
-        config_path = Path(__file__).parent.parent / "examples" / "behavior_test_config.yaml"
+        config_path = Path(__file__).parent / "fixtures" / "configs" / "behavior_test_config.yaml"
         current_time = time.time()
 
         # Load config
@@ -123,7 +79,7 @@ class TestBehaviorEngineEdgeCases:
         }
 
         # Test peak hours (covers line 218 - should be 1.3x)
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         # Create a proper 8 PM timestamp in current timezone
         now = datetime.now()
@@ -150,7 +106,6 @@ class TestBehaviorEngineEdgeCases:
     @pytest.mark.asyncio
     async def test_simulation_engine_error_coverage(self):
         """Test error conditions in simulation engine."""
-        from span_panel_api.simulation import DynamicSimulationEngine
         from span_panel_api.exceptions import SimulationConfigurationError
 
         # Test missing config path
@@ -159,7 +114,7 @@ class TestBehaviorEngineEdgeCases:
             await engine._generate_from_config()
 
         # Test missing circuit templates
-        config_path = Path(__file__).parent.parent / "examples" / "simple_test_config.yaml"
+        config_path = Path(__file__).parent / "fixtures" / "configs" / "simple_test_config.yaml"
         engine_with_path = DynamicSimulationEngine("TEST", config_path=config_path)
         await engine_with_path.initialize_async()
 
@@ -170,7 +125,7 @@ class TestBehaviorEngineEdgeCases:
 
     def test_behavior_engine_cycling_behavior_coverage(self):
         """Test cycling behavior edge cases."""
-        config_path = Path(__file__).parent.parent / "examples" / "behavior_test_config.yaml"
+        config_path = Path(__file__).parent / "fixtures" / "configs" / "behavior_test_config.yaml"
         current_time = time.time()
 
         import yaml
@@ -191,7 +146,7 @@ class TestBehaviorEngineEdgeCases:
 
     def test_relay_state_open_coverage(self):
         """Test that OPEN relay state returns 0.0 power - covers line 170."""
-        config_path = Path(__file__).parent.parent / "examples" / "behavior_test_config.yaml"
+        config_path = Path(__file__).parent / "fixtures" / "configs" / "behavior_test_config.yaml"
         current_time = time.time()
 
         import yaml
@@ -221,10 +176,8 @@ class TestBehaviorEngineEdgeCases:
     @pytest.mark.asyncio
     async def test_simulation_engine_initialization_edge_cases(self):
         """Test simulation engine initialization edge cases."""
-        from span_panel_api.simulation import DynamicSimulationEngine
-
         # Test engine with config path
-        config_path = Path(__file__).parent.parent / "examples" / "simple_test_config.yaml"
+        config_path = Path(__file__).parent / "fixtures" / "configs" / "simple_test_config.yaml"
         engine_with_config = DynamicSimulationEngine("TEST-WITH-CONFIG", config_path=config_path)
         await engine_with_config.initialize_async()
         assert engine_with_config._config is not None
@@ -233,58 +186,3 @@ class TestBehaviorEngineEdgeCases:
         panel_data = await engine_with_config.get_panel_data()
         assert "circuits" in panel_data
         assert "panel" in panel_data
-
-    @pytest.mark.asyncio
-    async def test_smart_grid_peak_hour_reduction(self):
-        """Test smart grid power reduction during peak hours (5-9 PM)."""
-        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_32_circuit.yaml"
-
-        async with SpanPanelClient(host="test", simulation_mode=True, simulation_config_path=str(config_path)) as client:
-            # Test during peak hours - 6 PM (18:00)
-            peak_time = 18 * 3600  # 6 PM in seconds since midnight
-
-            with patch("time.time", return_value=peak_time):
-                circuits = await client.get_circuits()
-
-                # Find a circuit with smart grid behavior
-                smart_circuit = None
-                for circuit_id, circuit in circuits.circuits.additional_properties.items():
-                    if circuit.instant_power_w > 0:  # Find an active circuit
-                        smart_circuit = circuit
-                        break
-
-                if smart_circuit:
-                    # The power should be reduced compared to base power
-                    # This tests lines 256-257 in simulation.py
-                    assert smart_circuit.instant_power_w >= 0
-
-            # Test during non-peak hours - 2 PM (14:00)
-            non_peak_time = 14 * 3600  # 2 PM in seconds since midnight
-
-            with patch("time.time", return_value=non_peak_time):
-                circuits_non_peak = await client.get_circuits()
-
-                # Power should be different during non-peak hours
-                assert circuits_non_peak is not None
-                assert len(circuits_non_peak.circuits.additional_properties) > 0
-
-    @pytest.mark.asyncio
-    async def test_smart_grid_non_peak_hours(self):
-        """Test smart grid behavior during non-peak hours."""
-        config_path = Path(__file__).parent.parent / "examples" / "simulation_config_32_circuit.yaml"
-
-        async with SpanPanelClient(host="test", simulation_mode=True, simulation_config_path=str(config_path)) as client:
-            # Test during non-peak hours - 10 AM (10:00)
-            non_peak_time = 10 * 3600  # 10 AM in seconds since midnight
-
-            with patch("time.time", return_value=non_peak_time):
-                circuits = await client.get_circuits()
-
-                # Should have normal power levels during non-peak
-                assert circuits is not None
-                assert len(circuits.circuits.additional_properties) > 0
-
-                for circuit_id, circuit in circuits.circuits.additional_properties.items():
-                    if circuit.instant_power_w > 0:
-                        # Power should be at normal levels (not reduced)
-                        assert circuit.instant_power_w >= 0

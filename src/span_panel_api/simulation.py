@@ -20,6 +20,7 @@ import yaml
 
 from span_panel_api.const import DSM_GRID_UP, DSM_ON_GRID, MAIN_RELAY_CLOSED, PANEL_ON_GRID
 from span_panel_api.exceptions import SimulationConfigurationError
+from span_panel_api.models import SpanBatterySnapshot, SpanBranchSnapshot, SpanCircuitSnapshot, SpanPanelSnapshot
 
 
 # New YAML configuration types
@@ -1161,6 +1162,86 @@ class DynamicSimulationEngine:
     async def get_status(self) -> dict[str, Any]:
         """Get status data."""
         return self._generate_status_data()
+
+    async def get_snapshot(self) -> SpanPanelSnapshot:
+        """Build a transport-agnostic snapshot directly from simulation data.
+
+        Bypasses the OpenAPI model layer — goes straight from the simulation
+        engine's internal dicts to frozen snapshot dataclasses.
+        """
+        raw = await self._generate_from_config()
+        soe_data = await self.get_soe()
+
+        # --- Circuits ---
+        circuit_snapshots: dict[str, SpanCircuitSnapshot] = {}
+        circuits_dict: dict[str, dict[str, Any]] = raw["circuits"]["circuits"]
+        for cid, cdata in circuits_dict.items():
+            tabs_raw: list[int] = cdata["tabs"]
+            circuit_snapshots[cid] = SpanCircuitSnapshot(
+                circuit_id=str(cdata["id"]),
+                name=str(cdata["name"]),
+                relay_state=str(cdata["relayState"]),
+                instant_power_w=float(cdata["instantPowerW"]),
+                produced_energy_wh=float(cdata["producedEnergyWh"]),
+                consumed_energy_wh=float(cdata["consumedEnergyWh"]),
+                tabs=tabs_raw,
+                priority=str(cdata["priority"]),
+                is_user_controllable=bool(cdata["isUserControllable"]),
+                is_sheddable=bool(cdata["isSheddable"]),
+                is_never_backup=bool(cdata["isNeverBackup"]),
+                energy_accum_update_time_s=int(cdata["energyAccumUpdateTimeS"]),
+                instant_power_update_time_s=int(cdata["instantPowerUpdateTimeS"]),
+            )
+
+        # --- Branches ---
+        branch_snapshots: list[SpanBranchSnapshot] = []
+        panel = raw["panel"]
+        for branch in panel["branches"]:
+            branch_id: str = branch["id"]
+            tab_number = int(branch_id.split("_")[1])
+            branch_snapshots.append(
+                SpanBranchSnapshot(
+                    tab_number=tab_number,
+                    relay_state=str(branch["relayState"]),
+                    instant_power_w=float(branch["instantPowerW"]),
+                    imported_energy_wh=float(branch["importedActiveEnergyWh"]),
+                    exported_energy_wh=float(branch["exportedActiveEnergyWh"]),
+                )
+            )
+
+        # --- Battery ---
+        soe_percentage = float(soe_data["soe"]["percentage"])
+        battery_snapshot = SpanBatterySnapshot(soe_percentage=soe_percentage)
+
+        # --- Status ---
+        status: dict[str, Any] = raw["status"]
+        system: dict[str, Any] = status["system"]
+        network: dict[str, Any] = status["network"]
+        software: dict[str, Any] = status["software"]
+
+        return SpanPanelSnapshot(
+            serial_number=str(system["serial"]),
+            firmware_version=str(software["firmwareVersion"]),
+            main_relay_state=str(panel["mainRelayState"]),
+            instant_grid_power_w=float(panel["instantGridPowerW"]),
+            feedthrough_power_w=float(panel["feedthroughPowerW"]),
+            main_meter_energy_consumed_wh=float(panel["mainMeterEnergy"]["consumedEnergyWh"]),
+            main_meter_energy_produced_wh=float(panel["mainMeterEnergy"]["producedEnergyWh"]),
+            feedthrough_energy_consumed_wh=float(panel["feedthroughEnergy"]["consumedEnergyWh"]),
+            feedthrough_energy_produced_wh=float(panel["feedthroughEnergy"]["producedEnergyWh"]),
+            dsm_state=str(panel["dsmState"]),
+            dsm_grid_state=str(panel["dsmGridState"]),
+            current_run_config=str(panel["currentRunConfig"]),
+            door_state=str(system["doorState"]),
+            proximity_proven=bool(system["proximityProven"]),
+            uptime_s=int(system["uptime"]),
+            eth0_link=bool(network["eth0Link"]),
+            wlan_link=bool(network["wlanLink"]),
+            wwan_link=bool(network["wwanLink"]),
+            circuits=circuit_snapshots,
+            branches=branch_snapshots,
+            battery=battery_snapshot,
+        )
 
     def set_dynamic_overrides(
         self, circuit_overrides: dict[str, dict[str, Any]] | None = None, global_overrides: dict[str, Any] | None = None

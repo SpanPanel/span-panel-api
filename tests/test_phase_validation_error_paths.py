@@ -7,8 +7,6 @@ from span_panel_api.phase_validation import (
     validate_solar_tabs,
     get_phase_distribution,
     suggest_balanced_pairing,
-    get_valid_tabs_from_panel_data,
-    get_valid_tabs_from_branches,
 )
 
 
@@ -161,104 +159,6 @@ class TestPhaseValidationErrorPaths:
         l2_only_tabs = [3, 4, 7, 8]
         pairs = suggest_balanced_pairing(l2_only_tabs)
         assert pairs == []  # No L1 tabs, so no pairs possible
-
-    def test_get_valid_tabs_from_panel_data_missing_branches(self):
-        """Test get_valid_tabs_from_panel_data with missing branches."""
-        # Panel data without branches
-        panel_data = {"panel": {"serial_number": "test123"}}
-
-        tabs = get_valid_tabs_from_panel_data(panel_data)
-        assert tabs == []
-
-    def test_get_valid_tabs_from_panel_data_empty_branches(self):
-        """Test get_valid_tabs_from_panel_data with empty branches."""
-        panel_data = {"branches": []}  # Empty list instead of dict
-
-        tabs = get_valid_tabs_from_panel_data(panel_data)
-        assert tabs == []
-
-    def test_get_valid_tabs_from_panel_data_branches_not_list(self):
-        """Test get_valid_tabs_from_panel_data with branches as dict instead of list."""
-        panel_data = {"branches": {}}  # Dict instead of list
-
-        with pytest.raises(TypeError, match="Invalid branches data in panel state"):
-            get_valid_tabs_from_panel_data(panel_data)
-
-    def test_get_valid_tabs_from_branches_empty_input(self):
-        """Test get_valid_tabs_from_branches with empty branches."""
-        tabs = get_valid_tabs_from_branches([])
-        assert tabs == []
-
-    def test_get_valid_tabs_from_panel_data_invalid_type(self):
-        """Test get_valid_tabs_from_panel_data with invalid panel_state type."""
-        # Test line 36: TypeError for invalid panel_state type
-        with pytest.raises(TypeError, match="panel_state must be a dictionary"):
-            get_valid_tabs_from_panel_data("not_a_dict")
-
-        with pytest.raises(TypeError, match="panel_state must be a dictionary"):
-            get_valid_tabs_from_panel_data(None)
-
-        with pytest.raises(TypeError, match="panel_state must be a dictionary"):
-            get_valid_tabs_from_panel_data([])
-
-    def test_get_valid_tabs_from_panel_data_branch_validation(self):
-        """Test branch validation logic in get_valid_tabs_from_panel_data."""
-        # Test lines 44-47: Branch validation logic
-        panel_data = {
-            "branches": [
-                {"id": 1},  # Valid
-                {"name": "no_id"},  # Missing id
-                {"id": "not_int"},  # Non-integer id
-                {"id": 0},  # Zero id
-                {"id": -1},  # Negative id
-                "not_dict",  # Not a dict
-                {"id": 5},  # Valid
-            ]
-        }
-
-        tabs = get_valid_tabs_from_panel_data(panel_data)
-        assert tabs == [1, 5]  # Only valid tabs should be included
-
-    def test_get_valid_tabs_from_branches_object_handling(self):
-        """Test get_valid_tabs_from_branches with Branch objects."""
-        # Test lines 65-73: Branch object handling with hasattr
-
-        # Mock Branch object
-        class MockBranch:
-            def __init__(self, tab_id):
-                self.id = tab_id
-
-        # Test with Branch objects
-        branches = [
-            MockBranch(1),  # Valid object
-            MockBranch("not_int"),  # Invalid object
-            MockBranch(0),  # Invalid object
-            MockBranch(-1),  # Invalid object
-            MockBranch(5),  # Valid object
-        ]
-
-        tabs = get_valid_tabs_from_branches(branches)
-        assert tabs == [1, 5]  # Only valid tabs should be included
-
-    def test_get_valid_tabs_from_branches_mixed_types(self):
-        """Test get_valid_tabs_from_branches with mixed object and dict types."""
-
-        # Test mixed Branch objects and dictionaries
-        class MockBranch:
-            def __init__(self, tab_id):
-                self.id = tab_id
-
-        branches = [
-            MockBranch(1),  # Valid object
-            {"id": 2},  # Valid dict
-            MockBranch("not_int"),  # Invalid object
-            {"name": "no_id"},  # Invalid dict
-            MockBranch(3),  # Valid object
-            {"id": 4},  # Valid dict
-        ]
-
-        tabs = get_valid_tabs_from_branches(branches)
-        assert tabs == [1, 2, 3, 4]  # All valid tabs should be included
 
     def test_validate_solar_tabs_value_error_handling(self):
         """Test validate_solar_tabs ValueError exception handling."""

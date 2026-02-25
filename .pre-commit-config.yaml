@@ -79,6 +79,7 @@ repos:
           - typing-extensions
           - pytest
           - types-PyYAML
+          - paho-mqtt
         args: ['--config-file=pyproject.toml']
         exclude: '^src/span_panel_api/generated_client/.*|scripts/.*|tests/.*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
 
@@ -96,6 +97,7 @@ repos:
           - typing-extensions
           - pytest
           - pyyaml
+          - paho-mqtt
         exclude: '^src/span_panel_api/generated_client/.*|tests/.*|generate_client\.py|scripts/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
   # Check for common security issues

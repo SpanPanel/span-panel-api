@@ -159,7 +159,7 @@ class HomieDeviceConsumer:
         for cb in self._property_callbacks:
             try:
                 cb(node_id, prop_id, value, old_value)
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 _LOGGER.debug("Property callback error for %s/%s", node_id, prop_id)
 
     # -- Snapshot building --------------------------------------------------
@@ -204,11 +204,15 @@ class HomieDeviceConsumer:
         # imported-energy = production (panel imports FROM circuit)
         produced_wh = _parse_float(self._get_prop(node_id, "imported-energy"))
 
-        # Tabs (space property) — single integer, wrap in list
+        # Tabs: derived from space + dipole
+        # Dipole circuits occupy two consecutive spaces on the same bus bar
+        # side: [space, space + 2] (odd+odd or even+even)
         space_val = self._get_prop(node_id, "space")
+        is_dipole = _parse_bool(self._get_prop(node_id, "dipole"))
         tabs: list[int] = []
         if space_val:
-            tabs = [_parse_int(space_val)]
+            space = _parse_int(space_val)
+            tabs = [space, space + 2] if is_dipole else [space]
 
         always_on = _parse_bool(self._get_prop(node_id, "always-on"))
 
@@ -292,6 +296,46 @@ class HomieDeviceConsumer:
             return "PANEL_OFF_GRID"
         return "UNKNOWN"
 
+    def _build_unmapped_tabs(self, circuits: dict[str, SpanCircuitSnapshot]) -> dict[str, SpanCircuitSnapshot]:
+        """Synthesize unmapped tab entries for breaker positions with no circuit.
+
+        Determines panel size from the highest occupied tab, then creates
+        zero-power SpanCircuitSnapshot entries for unoccupied positions.
+        """
+        # Collect all occupied tabs from commissioned circuits
+        occupied_tabs: set[int] = set()
+        for circuit in circuits.values():
+            occupied_tabs.update(circuit.tabs)
+
+        if not occupied_tabs:
+            return {}
+
+        # Panel size is the highest occupied tab (rounded up to even
+        # to cover both bus bar sides)
+        max_tab = max(occupied_tabs)
+        panel_size = max_tab if max_tab % 2 == 0 else max_tab + 1
+
+        # Synthesize entries for unoccupied positions
+        unmapped: dict[str, SpanCircuitSnapshot] = {}
+        for tab in range(1, panel_size + 1):
+            if tab not in occupied_tabs:
+                circuit_id = f"unmapped_tab_{tab}"
+                unmapped[circuit_id] = SpanCircuitSnapshot(
+                    circuit_id=circuit_id,
+                    name=f"Unmapped Tab {tab}",
+                    relay_state="CLOSED",
+                    instant_power_w=0.0,
+                    produced_energy_wh=0.0,
+                    consumed_energy_wh=0.0,
+                    tabs=[tab],
+                    priority="UNKNOWN",
+                    is_user_controllable=False,
+                    is_sheddable=False,
+                    is_never_backup=False,
+                )
+
+        return unmapped
+
     def _build_snapshot(self) -> SpanPanelSnapshot:
         """Build full snapshot from accumulated property values."""
         core_node = self._find_node_by_type(TYPE_CORE)
@@ -367,6 +411,10 @@ class HomieDeviceConsumer:
             if self._is_circuit_node(node_id):
                 circuit = self._build_circuit(node_id)
                 circuits[circuit.circuit_id] = circuit
+
+        # Synthesize unmapped tab entries
+        unmapped = self._build_unmapped_tabs(circuits)
+        circuits.update(unmapped)
 
         # Battery
         battery = self._build_battery()

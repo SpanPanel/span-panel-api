@@ -57,7 +57,7 @@ No remaining imports from `rest.` or `generated_client.` anywhere in `src/`.
 
 - Remove `DeprecationInfo` dataclass
 - Remove `deprecation_info` field from `SpanPanelSnapshot`
-- Keep `SpanBranchSnapshot` (MQTT returns empty list; model stays for type completeness)
+- ~~Keep `SpanBranchSnapshot`~~ → **Remove after Step 6** (unmapped tab synthesis replaces branch-based derivation; MQTT has no branch concept)
 
 ### `src/span_panel_api/exceptions.py`
 
@@ -172,6 +172,76 @@ All files in `examples/` that use `SpanPanelClient`. Keep `examples/README.md` i
 
 ---
 
+## Step 6: Unmapped Tab Synthesis in MQTT Transport
+
+### Background
+
+In v1, the REST client fetched both `/api/v1/circuits` (commissioned circuits) and `/api/v1/panel` (all 32 branch positions). Branches that had no circuit mapped were synthesized as `unmapped_tab_N` entries in `snapshot.circuits`. The integration consumed
+these identically to real circuits — they backed solar inverter sensors and appeared as hidden entities for synthetic calculations.
+
+In v2 MQTT, the Homie broker only publishes circuit nodes for commissioned circuits. There is no branch concept. **Unmapped tabs must be synthesized in the library** to preserve the integration's existing consumption pattern.
+
+### Live Panel Verification (2026-02-25)
+
+Tested against panel `nj-2316-005k6` (firmware `spanos2/r202603/05`):
+
+- 23 circuit nodes published via MQTT, 7 non-circuit nodes (core, lugs, pcs, bess, pv, power-flows)
+- Circuit UUIDs are **identical dashless strings** in both v1 REST and v2 MQTT — no correlation needed for current firmware
+- Each circuit has `space` (int) and `dipole` (bool) properties
+- Dipole formula: `tabs = [space, space + 2]` (same bus bar side, not `space + 1`). Verified against all 6 dipole circuits — matches v1 `tabs` exactly.
+- Unmapped tabs derived by subtraction: all 32 spaces minus occupied tabs = unmapped positions
+
+### Implementation in `HomieDeviceConsumer`
+
+When building `SpanPanelSnapshot` from MQTT state:
+
+1. **Determine panel size** — default 32 spaces (standard SPAN panel). May be derivable from `core/breaker-rating` or `$description` metadata in future firmware. For now, hardcode 32 with a constant.
+
+2. **Collect occupied tabs** from all circuit nodes:
+
+   - Single-pole (`dipole` absent or `false`): occupied = `[space]`
+   - Dipole (`dipole == true`): occupied = `[space, space + 2]`
+
+3. **Derive unmapped tabs** — `set(range(1, panel_size + 1)) - occupied`
+
+4. **Synthesize `SpanCircuitSnapshot` entries** for each unmapped tab:
+
+   ```python
+   SpanCircuitSnapshot(
+       circuit_id=f"unmapped_tab_{tab_number}",
+       name=f"Unmapped Tab {tab_number}",
+       relay_state="CLOSED",
+       instant_power_w=0.0,
+       produced_energy_wh=0.0,
+       consumed_energy_wh=0.0,
+       tabs=[tab_number],
+       priority="UNKNOWN",
+       is_user_controllable=False,
+       is_sheddable=False,
+       is_never_backup=False,
+   )
+   ```
+
+5. **Include in `snapshot.circuits`** alongside real circuit entries. The integration filters on `circuit_id.startswith("unmapped_tab_")` to identify these.
+
+### `SpanBranchSnapshot` removal
+
+Once unmapped tab synthesis is in place, `SpanBranchSnapshot` serves no purpose — it was the v1 mechanism for the same data. Remove:
+
+- `SpanBranchSnapshot` dataclass from `models.py`
+- `branches` field from `SpanPanelSnapshot`
+- Export from `__init__.py` and `__all__`
+
+### Tests
+
+- Test that a snapshot with N circuit nodes and known space/dipole values produces the correct set of `unmapped_tab_` entries
+- Test dipole formula: `[space, space + 2]` for dipole circuits
+- Test single-pole: `[space]` for non-dipole circuits
+- Test that unmapped entries have zero power/energy values
+- Test edge case: fully occupied panel (no unmapped tabs)
+
+---
+
 ## Integration Impact (span repo)
 
 The following work is required in the **span** Home Assistant integration to complete the v2 transition:
@@ -185,10 +255,8 @@ The following work is required in the **span** Home Assistant integration to com
 
 ### Circuit UUID Correlation (v1 → v2)
 
-- Entity registry contains v1 dashless UUIDs as `unique_id` — these will not match v2 UUIDs
-- On first coordinator refresh after upgrade, build a correlation map: match v1 `unique_id` to v2 circuit by `(name, sorted(tabs))` pairs from the snapshot
-- Migrate entity registry entries: update `unique_id` from v1 UUID to v2 UUID
-- One-time operation — once migrated, v2 UUIDs are used going forward
+- **Live panel verification (2026-02-25):** v2 Homie circuit node IDs are **identical dashless UUIDs** to v1 REST circuit IDs. All 22 circuits matched exactly. No correlation or migration needed for current firmware.
+- Defensive fallback should still be implemented for future firmware: try direct match → try dash-stripping → fall back to `(name, tabs)` pairs
 - No library involvement needed; the integration has both sides (registry + snapshot)
 
 ### Coordinator
@@ -202,6 +270,7 @@ The following work is required in the **span** Home Assistant integration to com
 - Detection: `detect_api_version()` to confirm v2 firmware before setup
 - Remove v1 token-entry path entirely (users told not to upgrade integration without v2 firmware)
 - New fields: passphrase input step, optional MQTT transport selection (tcp vs websockets)
+- Passphrase step must include user guidance: _"Open the SPAN Home app → Settings → All Settings → On-Premise Settings → Passphrase"_
 
 ### Dependency
 

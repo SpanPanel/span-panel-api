@@ -230,7 +230,7 @@ class TestHomieCircuitSnapshot:
         assert circuit.name == "Kitchen"
         assert circuit.relay_state == "CLOSED"
         assert circuit.priority == "NEVER"
-        assert circuit.tabs == [5]
+        assert circuit.tabs == [5, 7]  # dipole: [space, space + 2]
         assert circuit.is_240v is True
         assert circuit.is_sheddable is True
         assert circuit.is_never_backup is False
@@ -748,3 +748,221 @@ class TestHomieEdgeCases:
         circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
         assert circuit.current_a is None
         assert circuit.breaker_rating_a is None
+
+
+# ---------------------------------------------------------------------------
+# HomieDeviceConsumer — unmapped tab synthesis
+# ---------------------------------------------------------------------------
+
+
+class TestUnmappedTabSynthesis:
+    """Tests for _build_unmapped_tabs and dipole tab derivation."""
+
+    def test_single_pole_tabs(self):
+        """Single-pole circuit gets tabs = [space]."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = _build_ready_consumer(nodes)
+        node = "aaaaaaaa-1111-2222-3333-444444444444"
+        consumer.handle_message(f"{PREFIX}/{node}/space", "3")
+        consumer.handle_message(f"{PREFIX}/{node}/dipole", "false")
+
+        snapshot = consumer.build_snapshot()
+        circuit = snapshot.circuits["aaaaaaaa111122223333444444444444"]
+        assert circuit.tabs == [3]
+
+    def test_dipole_tabs(self):
+        """Dipole circuit gets tabs = [space, space + 2] (same bus bar side)."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = _build_ready_consumer(nodes)
+        node = "aaaaaaaa-1111-2222-3333-444444444444"
+        consumer.handle_message(f"{PREFIX}/{node}/space", "11")
+        consumer.handle_message(f"{PREFIX}/{node}/dipole", "true")
+
+        snapshot = consumer.build_snapshot()
+        circuit = snapshot.circuits["aaaaaaaa111122223333444444444444"]
+        assert circuit.tabs == [11, 13]
+
+    def test_dipole_even_side(self):
+        """Dipole on even bus bar: [30, 32]."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = _build_ready_consumer(nodes)
+        node = "aaaaaaaa-1111-2222-3333-444444444444"
+        consumer.handle_message(f"{PREFIX}/{node}/space", "30")
+        consumer.handle_message(f"{PREFIX}/{node}/dipole", "true")
+
+        snapshot = consumer.build_snapshot()
+        circuit = snapshot.circuits["aaaaaaaa111122223333444444444444"]
+        assert circuit.tabs == [30, 32]
+
+    def test_unmapped_tabs_generated(self):
+        """Unmapped positions should produce synthetic circuit entries."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+            "bbbbbbbb-5555-6666-7777-888888888888": {"type": TYPE_CIRCUIT},
+        }
+        consumer = _build_ready_consumer(nodes)
+        # Circuit A at space 1 (single-pole)
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
+        # Circuit B at space 3 (dipole → occupies 3 and 5)
+        consumer.handle_message(f"{PREFIX}/bbbbbbbb-5555-6666-7777-888888888888/space", "3")
+        consumer.handle_message(f"{PREFIX}/bbbbbbbb-5555-6666-7777-888888888888/dipole", "true")
+
+        snapshot = consumer.build_snapshot()
+
+        # Highest occupied tab is 5 (odd), panel_size rounds to 6
+        # Occupied: {1, 3, 5}, unmapped: {2, 4, 6}
+        assert "unmapped_tab_2" in snapshot.circuits
+        assert "unmapped_tab_4" in snapshot.circuits
+        assert "unmapped_tab_6" in snapshot.circuits
+        # Occupied positions should NOT have unmapped entries
+        assert "unmapped_tab_1" not in snapshot.circuits
+        assert "unmapped_tab_3" not in snapshot.circuits
+        assert "unmapped_tab_5" not in snapshot.circuits
+
+    def test_unmapped_tab_properties(self):
+        """Unmapped tab entries have zero power/energy and correct attributes."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = _build_ready_consumer(nodes)
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
+
+        snapshot = consumer.build_snapshot()
+        unmapped = snapshot.circuits["unmapped_tab_2"]
+
+        assert unmapped.circuit_id == "unmapped_tab_2"
+        assert unmapped.name == "Unmapped Tab 2"
+        assert unmapped.relay_state == "CLOSED"
+        assert unmapped.instant_power_w == 0.0
+        assert unmapped.produced_energy_wh == 0.0
+        assert unmapped.consumed_energy_wh == 0.0
+        assert unmapped.tabs == [2]
+        assert unmapped.priority == "UNKNOWN"
+        assert unmapped.is_user_controllable is False
+        assert unmapped.is_sheddable is False
+        assert unmapped.is_never_backup is False
+
+    def test_fully_occupied_panel_no_unmapped(self):
+        """When all positions are occupied, no unmapped tabs are generated."""
+        # Create 4 circuits occupying spaces 1, 2, 3, 4
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+            "bbbbbbbb-5555-6666-7777-888888888888": {"type": TYPE_CIRCUIT},
+            "cccccccc-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+            "dddddddd-5555-6666-7777-888888888888": {"type": TYPE_CIRCUIT},
+        }
+        consumer = _build_ready_consumer(nodes)
+        for i, node in enumerate(
+            [
+                "aaaaaaaa-1111-2222-3333-444444444444",
+                "bbbbbbbb-5555-6666-7777-888888888888",
+                "cccccccc-1111-2222-3333-444444444444",
+                "dddddddd-5555-6666-7777-888888888888",
+            ],
+            start=1,
+        ):
+            consumer.handle_message(f"{PREFIX}/{node}/space", str(i))
+            consumer.handle_message(f"{PREFIX}/{node}/dipole", "false")
+
+        snapshot = consumer.build_snapshot()
+        unmapped_ids = [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
+        assert unmapped_ids == []
+
+    def test_no_circuits_no_unmapped(self):
+        """When no circuits exist, no unmapped tabs are generated."""
+        nodes = {"core": {"type": TYPE_CORE}}
+        consumer = _build_ready_consumer(nodes)
+        snapshot = consumer.build_snapshot()
+        unmapped_ids = [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
+        assert unmapped_ids == []
+
+    def test_no_space_property_no_unmapped(self):
+        """Circuits without space property don't contribute to tab tracking."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = _build_ready_consumer(nodes)
+        # Don't set space property
+        snapshot = consumer.build_snapshot()
+        unmapped_ids = [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
+        assert unmapped_ids == []
+
+    def test_panel_size_rounds_to_even(self):
+        """Panel size rounds up to even when highest tab is odd."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = _build_ready_consumer(nodes)
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "7")
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
+
+        snapshot = consumer.build_snapshot()
+        # Highest tab=7 (odd) → panel_size=8
+        # Occupied: {7}, unmapped: {1,2,3,4,5,6,8}
+        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
+        assert unmapped_ids == [
+            "unmapped_tab_1",
+            "unmapped_tab_2",
+            "unmapped_tab_3",
+            "unmapped_tab_4",
+            "unmapped_tab_5",
+            "unmapped_tab_6",
+            "unmapped_tab_8",
+        ]
+
+    def test_panel_size_exact_when_even(self):
+        """Panel size stays as-is when highest tab is even."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = _build_ready_consumer(nodes)
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "6")
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
+
+        snapshot = consumer.build_snapshot()
+        # Highest tab=6 (even) → panel_size=6
+        # Occupied: {6}, unmapped: {1,2,3,4,5}
+        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
+        assert unmapped_ids == [
+            "unmapped_tab_1",
+            "unmapped_tab_2",
+            "unmapped_tab_3",
+            "unmapped_tab_4",
+            "unmapped_tab_5",
+        ]
+
+    def test_dipole_occupies_correct_tabs_in_unmapped_calc(self):
+        """Dipole circuits remove both occupied tabs from unmapped set."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = _build_ready_consumer(nodes)
+        # Dipole at space 1 → occupies 1 and 3
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "true")
+
+        snapshot = consumer.build_snapshot()
+        # Highest tab = 3 (odd) → panel_size = 4
+        # Occupied: {1, 3}, unmapped: {2, 4}
+        assert "unmapped_tab_1" not in snapshot.circuits
+        assert "unmapped_tab_2" in snapshot.circuits
+        assert "unmapped_tab_3" not in snapshot.circuits
+        assert "unmapped_tab_4" in snapshot.circuits

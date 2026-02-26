@@ -4,7 +4,7 @@ Tests cover:
 - MqttClientConfig model
 - HomieDeviceConsumer message parsing and snapshot building
 - Circuit ID normalization/denormalization
-- Energy sign conventions (active-power negation, kW→W conversion)
+- Energy sign conventions (active-power negation)
 - Lugs direction mapping
 - Battery snapshot building
 - DSM state derivation
@@ -32,6 +32,9 @@ from span_panel_api.mqtt.const import (
     TYPE_CIRCUIT,
     TYPE_CORE,
     TYPE_LUGS,
+    TYPE_LUGS_DOWNSTREAM,
+    TYPE_LUGS_UPSTREAM,
+    TYPE_PV,
 )
 from span_panel_api.mqtt.homie import HomieDeviceConsumer
 from span_panel_api.mqtt.models import MqttClientConfig
@@ -66,8 +69,8 @@ def _core_description() -> dict:
 def _full_description() -> dict:
     return {
         "core": {"type": TYPE_CORE},
-        "upstream-lugs": {"type": TYPE_LUGS},
-        "downstream-lugs": {"type": TYPE_LUGS},
+        "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM},
+        "lugs-downstream": {"type": TYPE_LUGS_DOWNSTREAM},
         "aabbccdd-1122-3344-5566-778899001122": {"type": TYPE_CIRCUIT},
         "bess-0": {"type": TYPE_BESS},
     }
@@ -179,24 +182,24 @@ class TestHomieCircuitSnapshot:
         # Already dashed passes through
         assert denormalize_circuit_id("aabbccdd-1122-3344-5566-778899001122") == "aabbccdd-1122-3344-5566-778899001122"
 
-    def test_circuit_power_negation_and_kw_to_w(self):
-        """active-power in kW, negative=consumption → positive=consumption in W."""
+    def test_circuit_power_negation(self):
+        """active-power in W, negative=consumption → positive=consumption in snapshot."""
         consumer = _build_ready_consumer()
         node = "aabbccdd-1122-3344-5566-778899001122"
-        # -1.5 kW consumption → 1500 W positive
-        consumer.handle_message(f"{PREFIX}/{node}/active-power", "-1.5")
+        # -150.0 W consumption → 150.0 W positive in snapshot
+        consumer.handle_message(f"{PREFIX}/{node}/active-power", "-150.0")
         snapshot = consumer.build_snapshot()
         circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
-        assert circuit.instant_power_w == 1500.0
+        assert circuit.instant_power_w == 150.0
 
     def test_circuit_power_positive_generation(self):
         """Positive active-power (generation) → negative in snapshot."""
         consumer = _build_ready_consumer()
         node = "aabbccdd-1122-3344-5566-778899001122"
-        consumer.handle_message(f"{PREFIX}/{node}/active-power", "2.0")
+        consumer.handle_message(f"{PREFIX}/{node}/active-power", "200.0")
         snapshot = consumer.build_snapshot()
         circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
-        assert circuit.instant_power_w == -2000.0
+        assert circuit.instant_power_w == -200.0
 
     def test_circuit_energy_mapping(self):
         """exported-energy → consumed, imported-energy → produced."""
@@ -252,6 +255,73 @@ class TestHomieCircuitSnapshot:
         circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
         assert before <= circuit.instant_power_update_time_s <= after
         assert before <= circuit.energy_accum_update_time_s <= after
+
+    def test_pv_metadata_node_annotates_circuit(self):
+        """PV metadata node's feed property sets device_type and relative_position."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "pv": {"type": TYPE_PV},
+                "bess-0": {"type": TYPE_BESS},
+            }
+        )
+        # PV node references the circuit via feed and has relative-position
+        consumer.handle_message(f"{PREFIX}/pv/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/pv/relative-position", "IN_PANEL")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/name", "Solar Panels")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/space", "30")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/dipole", "true")
+
+        snapshot = consumer.build_snapshot()
+        circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
+        assert circuit.device_type == "pv"
+        assert circuit.relative_position == "IN_PANEL"
+        assert circuit.name == "Solar Panels"
+        # PV metadata node itself should NOT appear in circuits
+        assert "pv" not in snapshot.circuits
+
+    def test_pv_downstream_has_breaker_position(self):
+        """PV with relative-position=DOWNSTREAM indicates a breaker-connected PV."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "pv": {"type": TYPE_PV},
+                "bess-0": {"type": TYPE_BESS},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/pv/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/pv/relative-position", "DOWNSTREAM")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/name", "Solar Breaker")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/space", "15")
+
+        snapshot = consumer.build_snapshot()
+        circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
+        assert circuit.device_type == "pv"
+        assert circuit.relative_position == "DOWNSTREAM"
+
+    def test_pv_metadata_node_excluded_from_circuits(self):
+        """PV/EVSE metadata nodes should not appear as circuit entities."""
+        consumer = _build_ready_consumer()
+        consumer.handle_message(f"{PREFIX}/pv/feed", "aabbccdd-1122-3344-5566-778899001122")
+
+        snapshot = consumer.build_snapshot()
+        # The "pv" node itself should not be in circuits
+        assert "pv" not in snapshot.circuits
+
+    def test_circuit_default_device_type(self):
+        """Regular circuits without PV/EVSE feed have device_type='circuit' and no relative_position."""
+        consumer = _build_ready_consumer()
+        node = "aabbccdd-1122-3344-5566-778899001122"
+        consumer.handle_message(f"{PREFIX}/{node}/name", "Kitchen")
+
+        snapshot = consumer.build_snapshot()
+        circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
+        assert circuit.device_type == "circuit"
+        assert circuit.relative_position == ""
 
 
 # ---------------------------------------------------------------------------
@@ -349,28 +419,57 @@ class TestHomieDsmDerivation:
 
 class TestHomieLugs:
     def test_upstream_lugs_to_main_meter(self):
+        """Test typed lugs (energy.ebus.device.lugs.upstream) map to main meter."""
         consumer = _build_ready_consumer()
-        consumer.handle_message(f"{PREFIX}/upstream-lugs/direction", "UPSTREAM")
-        consumer.handle_message(f"{PREFIX}/upstream-lugs/active-power", "5000.0")
-        consumer.handle_message(f"{PREFIX}/upstream-lugs/exported-energy", "100000.0")
-        consumer.handle_message(f"{PREFIX}/upstream-lugs/imported-energy", "5000.0")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "5000.0")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/imported-energy", "100000.0")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/exported-energy", "5000.0")
 
         snapshot = consumer.build_snapshot()
         assert snapshot.instant_grid_power_w == 5000.0
+        # imported-energy = consumed from grid, exported-energy = produced (solar)
         assert snapshot.main_meter_energy_consumed_wh == 100000.0
         assert snapshot.main_meter_energy_produced_wh == 5000.0
 
     def test_downstream_lugs_to_feedthrough(self):
+        """Test typed lugs (energy.ebus.device.lugs.downstream) map to feedthrough."""
         consumer = _build_ready_consumer()
-        consumer.handle_message(f"{PREFIX}/downstream-lugs/direction", "DOWNSTREAM")
-        consumer.handle_message(f"{PREFIX}/downstream-lugs/active-power", "1000.0")
-        consumer.handle_message(f"{PREFIX}/downstream-lugs/exported-energy", "50000.0")
-        consumer.handle_message(f"{PREFIX}/downstream-lugs/imported-energy", "1000.0")
+        consumer.handle_message(f"{PREFIX}/lugs-downstream/active-power", "1000.0")
+        consumer.handle_message(f"{PREFIX}/lugs-downstream/imported-energy", "50000.0")
+        consumer.handle_message(f"{PREFIX}/lugs-downstream/exported-energy", "1000.0")
 
         snapshot = consumer.build_snapshot()
         assert snapshot.feedthrough_power_w == 1000.0
         assert snapshot.feedthrough_energy_consumed_wh == 50000.0
         assert snapshot.feedthrough_energy_produced_wh == 1000.0
+
+    def test_generic_lugs_with_direction_property(self):
+        """Test fallback: generic TYPE_LUGS + direction property."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "upstream-lugs": {"type": TYPE_LUGS},
+                "downstream-lugs": {"type": TYPE_LUGS},
+                "bess-0": {"type": TYPE_BESS},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/upstream-lugs/direction", "UPSTREAM")
+        consumer.handle_message(f"{PREFIX}/upstream-lugs/active-power", "800.0")
+        consumer.handle_message(f"{PREFIX}/upstream-lugs/imported-energy", "90000.0")
+        consumer.handle_message(f"{PREFIX}/upstream-lugs/exported-energy", "3000.0")
+
+        consumer.handle_message(f"{PREFIX}/downstream-lugs/direction", "DOWNSTREAM")
+        consumer.handle_message(f"{PREFIX}/downstream-lugs/active-power", "200.0")
+        consumer.handle_message(f"{PREFIX}/downstream-lugs/imported-energy", "40000.0")
+        consumer.handle_message(f"{PREFIX}/downstream-lugs/exported-energy", "500.0")
+
+        snapshot = consumer.build_snapshot()
+        assert snapshot.instant_grid_power_w == 800.0
+        assert snapshot.main_meter_energy_consumed_wh == 90000.0
+        assert snapshot.main_meter_energy_produced_wh == 3000.0
+        assert snapshot.feedthrough_power_w == 200.0
+        assert snapshot.feedthrough_energy_consumed_wh == 40000.0
+        assert snapshot.feedthrough_energy_produced_wh == 500.0
 
 
 # ---------------------------------------------------------------------------

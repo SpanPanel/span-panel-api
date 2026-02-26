@@ -11,6 +11,7 @@ from collections.abc import Callable
 import json
 import logging
 import time
+from typing import ClassVar
 
 from ..models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanPanelSnapshot
 from .const import (
@@ -21,7 +22,11 @@ from .const import (
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_CORE,
+    TYPE_EVSE,
     TYPE_LUGS,
+    TYPE_LUGS_DOWNSTREAM,
+    TYPE_LUGS_UPSTREAM,
+    TYPE_PV,
     normalize_circuit_id,
 )
 
@@ -74,6 +79,16 @@ class HomieDeviceConsumer:
     def is_ready(self) -> bool:
         """True when $state == ready and $description has been parsed."""
         return self._state == HOMIE_STATE_READY and self._description is not None
+
+    def circuit_nodes_missing_names(self) -> list[str]:
+        """Return circuit-like node IDs that have no ``name`` property yet."""
+        missing: list[str] = []
+        for node_id, node_type in self._node_types.items():
+            if node_type in self._CIRCUIT_LIKE_TYPES:
+                name = self._property_values.get(node_id, {}).get("name")
+                if not name:  # None or ""
+                    missing.append(node_id)
+        return missing
 
     def handle_message(self, topic: str, payload: str) -> None:
         """Route an MQTT message to the appropriate handler."""
@@ -180,24 +195,75 @@ class HomieDeviceConsumer:
         return None
 
     def _find_lugs_node(self, direction: str) -> str | None:
-        """Find the lugs node with a specific direction."""
+        """Find the lugs node with a specific direction.
+
+        Handles two firmware conventions:
+        - Typed: node type is ``energy.ebus.device.lugs.upstream`` / ``.downstream``
+        - Generic: node type is ``energy.ebus.device.lugs`` with a ``direction`` property
+        """
+        # Typed variant (direction embedded in the type string)
+        typed_map = {
+            LUGS_UPSTREAM: TYPE_LUGS_UPSTREAM,
+            LUGS_DOWNSTREAM: TYPE_LUGS_DOWNSTREAM,
+        }
+        target_type = typed_map.get(direction)
+        if target_type:
+            for node_id, node_type in self._node_types.items():
+                if node_type == target_type:
+                    return node_id
+
+        # Generic variant (single TYPE_LUGS with direction property)
         for node_id, node_type in self._node_types.items():
-            if node_type == TYPE_LUGS and self._property_values.get(node_id, {}).get("direction") == direction:
-                return node_id
+            if node_type == TYPE_LUGS:
+                prop_dir = self._property_values.get(node_id, {}).get("direction", "")
+                if prop_dir.upper() == direction:
+                    return node_id
         return None
 
-    def _is_circuit_node(self, node_id: str) -> bool:
-        """Check if node is a circuit by its type in $description."""
-        return self._node_types.get(node_id) == TYPE_CIRCUIT
+    # Only TYPE_CIRCUIT nodes have the full MQTT property schema (power,
+    # energy, relay, space, etc.).  PV and EVSE nodes are metadata-only
+    # (feed, nameplate-capacity, vendor-name) and reference the physical
+    # circuit via their ``feed`` property.
+    _CIRCUIT_LIKE_TYPES: frozenset[str] = frozenset({TYPE_CIRCUIT})
 
-    def _build_circuit(self, node_id: str) -> SpanCircuitSnapshot:
+    # Metadata node types whose ``feed`` property points to a circuit,
+    # annotating it with a device_type.
+    _FEED_TYPE_MAP: ClassVar[dict[str, str]] = {
+        TYPE_PV: "pv",
+        TYPE_EVSE: "evse",
+    }
+
+    def _is_circuit_node(self, node_id: str) -> bool:
+        """Check if node is a circuit device."""
+        return self._node_types.get(node_id, "") in self._CIRCUIT_LIKE_TYPES
+
+    def _build_feed_metadata(self) -> dict[str, dict[str, str]]:
+        """Build mapping of circuit node_id → metadata from PV/EVSE feed references.
+
+        Returns dict keyed by circuit node_id with values containing:
+          - device_type: "pv" | "evse"
+          - relative_position: "IN_PANEL" | "UPSTREAM" | "DOWNSTREAM" | ""
+        """
+        feed_meta: dict[str, dict[str, str]] = {}
+        for node_id, node_type in self._node_types.items():
+            device_type = self._FEED_TYPE_MAP.get(node_type)
+            if device_type:
+                feed_circuit = self._get_prop(node_id, "feed")
+                if feed_circuit:
+                    rel_pos = self._get_prop(node_id, "relative-position")
+                    feed_meta[feed_circuit] = {
+                        "device_type": device_type,
+                        "relative_position": rel_pos.upper() if rel_pos else "",
+                    }
+        return feed_meta
+
+    def _build_circuit(self, node_id: str, device_type: str = "circuit", relative_position: str = "") -> SpanCircuitSnapshot:
         """Build a circuit snapshot from accumulated properties."""
         circuit_id = normalize_circuit_id(node_id)
 
-        # active-power in schema is kW for circuits — convert to W
-        raw_power_kw = _parse_float(self._get_prop(node_id, "active-power"))
-        # Negate: Homie negative=consumption → positive=consumption
-        instant_power_w = -raw_power_kw * 1000.0
+        # active-power is in watts; negate so positive = consumption
+        raw_power_w = _parse_float(self._get_prop(node_id, "active-power"))
+        instant_power_w = -raw_power_w
 
         # Energy: exported-energy = consumption (panel exports TO circuit)
         consumed_wh = _parse_float(self._get_prop(node_id, "exported-energy"))
@@ -235,6 +301,8 @@ class HomieDeviceConsumer:
             is_user_controllable=not always_on,
             is_sheddable=_parse_bool(self._get_prop(node_id, "sheddable")),
             is_never_backup=_parse_bool(self._get_prop(node_id, "never-backup")),
+            device_type=device_type,
+            relative_position=relative_position,
             is_240v=_parse_bool(self._get_prop(node_id, "dipole")),
             current_a=_parse_float(self._get_prop(node_id, "current")) if self._get_prop(node_id, "current") else None,
             breaker_rating_a=(
@@ -386,15 +454,17 @@ class HomieDeviceConsumer:
             ws = self._get_prop(core_node, "wifi-ssid")
             wifi_ssid = ws if ws else None
 
-        # Upstream lugs → main meter
+        # Upstream lugs → main meter (grid connection)
+        # imported-energy = energy imported from the grid = consumed by the house
+        # exported-energy = energy exported to the grid = produced (solar)
         grid_power = 0.0
         main_consumed = 0.0
         main_produced = 0.0
         if upstream_lugs is not None:
             # Lugs active-power is in W (unlike circuit which is kW)
             grid_power = _parse_float(self._get_prop(upstream_lugs, "active-power"))
-            main_consumed = _parse_float(self._get_prop(upstream_lugs, "exported-energy"))
-            main_produced = _parse_float(self._get_prop(upstream_lugs, "imported-energy"))
+            main_consumed = _parse_float(self._get_prop(upstream_lugs, "imported-energy"))
+            main_produced = _parse_float(self._get_prop(upstream_lugs, "exported-energy"))
 
         # Downstream lugs → feedthrough
         feedthrough_power = 0.0
@@ -402,14 +472,20 @@ class HomieDeviceConsumer:
         feedthrough_produced = 0.0
         if downstream_lugs is not None:
             feedthrough_power = _parse_float(self._get_prop(downstream_lugs, "active-power"))
-            feedthrough_consumed = _parse_float(self._get_prop(downstream_lugs, "exported-energy"))
-            feedthrough_produced = _parse_float(self._get_prop(downstream_lugs, "imported-energy"))
+            feedthrough_consumed = _parse_float(self._get_prop(downstream_lugs, "imported-energy"))
+            feedthrough_produced = _parse_float(self._get_prop(downstream_lugs, "exported-energy"))
+
+        # Build metadata annotations from PV/EVSE metadata nodes
+        feed_metadata = self._build_feed_metadata()
 
         # Circuits
         circuits: dict[str, SpanCircuitSnapshot] = {}
         for node_id in self._node_types:
             if self._is_circuit_node(node_id):
-                circuit = self._build_circuit(node_id)
+                meta = feed_metadata.get(node_id, {})
+                device_type = meta.get("device_type", "circuit")
+                relative_position = meta.get("relative_position", "")
+                circuit = self._build_circuit(node_id, device_type, relative_position)
                 circuits[circuit.circuit_id] = circuit
 
         # Synthesize unmapped tab entries

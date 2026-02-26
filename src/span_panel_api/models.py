@@ -28,6 +28,8 @@ class SpanCircuitSnapshot:
     is_user_controllable: bool  # v1: Circuit.isUserControllable | v2: not always_on
     is_sheddable: bool  # v1: Circuit.isSheddable | v2: circuit/sheddable
     is_never_backup: bool  # v1: Circuit.isNeverBackup | v2: circuit/never-backup
+    device_type: str = "circuit"  # "circuit" | "pv" | "evse"
+    relative_position: str = ""  # PV/EVSE: "IN_PANEL" | "UPSTREAM" | "DOWNSTREAM"
     is_240v: bool = False
     current_a: float | None = None
     breaker_rating_a: float | None = None

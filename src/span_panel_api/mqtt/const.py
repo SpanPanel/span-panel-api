@@ -24,6 +24,8 @@ HOMIE_STATE_ALERT = "alert"
 # Homie type strings from schema
 TYPE_CORE = "energy.ebus.device.distribution-enclosure.core"
 TYPE_LUGS = "energy.ebus.device.lugs"
+TYPE_LUGS_UPSTREAM = "energy.ebus.device.lugs.upstream"
+TYPE_LUGS_DOWNSTREAM = "energy.ebus.device.lugs.downstream"
 TYPE_CIRCUIT = "energy.ebus.device.circuit"
 TYPE_BESS = "energy.ebus.device.bess"
 TYPE_PV = "energy.ebus.device.pv"

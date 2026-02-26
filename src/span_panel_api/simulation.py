@@ -826,6 +826,16 @@ class DynamicSimulationEngine:
             circuit_def["id"], instant_power, current_time, final_template["energy_profile"]["mode"]
         )
 
+    @staticmethod
+    def _device_type_from_template(template: CircuitTemplateExtended) -> str:
+        """Derive device_type from the template's energy profile mode."""
+        mode = template.get("energy_profile", {}).get("mode", "consumer")
+        if mode == "producer":
+            return "pv"
+        if mode == "bidirectional":
+            return "evse"
+        return "circuit"
+
     def _create_circuit_data(
         self,
         circuit_def: CircuitDefinitionExtended,
@@ -850,6 +860,7 @@ class DynamicSimulationEngine:
             "isUserControllable": final_template["relay_behavior"] == "controllable",
             "isSheddable": False,
             "isNeverBackup": False,
+            "deviceType": self._device_type_from_template(final_template),
         }
 
     def _calculate_power_values(
@@ -1089,6 +1100,7 @@ class DynamicSimulationEngine:
                 is_user_controllable=bool(cdata["isUserControllable"]),
                 is_sheddable=bool(cdata["isSheddable"]),
                 is_never_backup=bool(cdata["isNeverBackup"]),
+                device_type=str(cdata.get("deviceType", "circuit")),
                 energy_accum_update_time_s=int(cdata["energyAccumUpdateTimeS"]),
                 instant_power_update_time_s=int(cdata["instantPowerUpdateTimeS"]),
             )

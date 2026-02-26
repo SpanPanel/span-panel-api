@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 
 import httpx
 
@@ -34,15 +35,19 @@ def _int(val: object) -> int:
 async def register_v2(
     host: str,
     name: str,
-    passphrase: str,
+    passphrase: str | None = None,
     timeout: float = 10.0,
 ) -> V2AuthResponse:
     """Register with the SPAN Panel v2 API and obtain access + MQTT credentials.
 
+    A random suffix is appended to ``name`` to ensure uniqueness per panel.
+    If ``passphrase`` is provided, it is sent as ``hopPassphrase``; omitting
+    it enables door-bypass registration.
+
     Args:
         host: IP address or hostname of the SPAN Panel
-        name: Client display name (e.g., "Home Assistant")
-        passphrase: Panel passphrase (printed on label or set by owner)
+        name: Client display name base (e.g., "home-assistant"); a UUID suffix is appended
+        passphrase: Panel passphrase (printed on label or set by owner). None for door bypass.
         timeout: Request timeout in seconds
 
     Returns:
@@ -55,7 +60,13 @@ async def register_v2(
         SpanPanelAPIError: Unexpected response
     """
     url = f"http://{host}/api/v2/auth/register"
-    payload = {"name": name, "passphrase": passphrase}
+    # The panel requires unique client names — append a random suffix.
+    # The passphrase field must be "hopPassphrase" per the SPAN v2 API spec.
+    suffix = uuid.uuid4().hex[:8]
+    unique_name = f"{name}-{suffix}"
+    payload: dict[str, str] = {"name": unique_name}
+    if passphrase:
+        payload["hopPassphrase"] = passphrase
 
     try:
         async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501

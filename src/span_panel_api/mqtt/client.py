@@ -21,6 +21,11 @@ from .models import MqttClientConfig
 
 _LOGGER = logging.getLogger(__name__)
 
+# How long to wait for circuit name properties after device ready.
+# Retained messages typically arrive within 1-2s, but allow headroom.
+_CIRCUIT_NAMES_TIMEOUT_S = 10.0
+_CIRCUIT_NAMES_POLL_INTERVAL_S = 0.25
+
 
 class SpanMqttClient:
     """MQTT transport — implements all span-panel-api protocols."""
@@ -105,6 +110,11 @@ class SpanMqttClient:
         except asyncio.TimeoutError as exc:
             await self.close()
             raise SpanPanelConnectionError(f"Timed out waiting for Homie device ready ({self._serial_number})") from exc
+
+        # Wait for circuit name properties to arrive (retained messages
+        # may arrive after $state=ready). Without this, the first snapshot
+        # has empty circuit names and entities are created without labels.
+        await self._wait_for_circuit_names(timeout=_CIRCUIT_NAMES_TIMEOUT_S)
 
     async def close(self) -> None:
         """Disconnect from broker and clean up."""
@@ -214,11 +224,35 @@ class SpanMqttClient:
         else:
             _LOGGER.debug("MQTT connection lost")
 
+    async def _wait_for_circuit_names(self, timeout: float) -> None:
+        """Wait for all circuit-like nodes to have a ``name`` property.
+
+        Retained MQTT messages may arrive after the Homie device transitions
+        to ready. This polls the HomieDeviceConsumer at short intervals and
+        returns as soon as all circuit names are populated, or when the
+        timeout elapses (non-fatal — entities will use fallback names).
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            missing = self._homie.circuit_nodes_missing_names()
+            if not missing:
+                _LOGGER.debug("All circuit names received")
+                return
+            await asyncio.sleep(_CIRCUIT_NAMES_POLL_INTERVAL_S)
+
+        still_missing = self._homie.circuit_nodes_missing_names()
+        if still_missing:
+            _LOGGER.warning(
+                "Timed out waiting for circuit names (%d still missing): %s",
+                len(still_missing),
+                still_missing[:5],
+            )
+
     async def _dispatch_snapshot(self) -> None:
         """Build snapshot and send to all registered callbacks."""
         snapshot = self._homie.build_snapshot()
         for cb in list(self._snapshot_callbacks):
             try:
                 await cb(snapshot)
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 _LOGGER.warning("Snapshot callback error", exc_info=True)

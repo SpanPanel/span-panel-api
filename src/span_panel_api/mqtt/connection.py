@@ -33,7 +33,6 @@ from .const import (
     MQTT_RECONNECT_BACKOFF_MULTIPLIER,
     MQTT_RECONNECT_MAX_DELAY_S,
     MQTT_RECONNECT_MIN_DELAY_S,
-    STATE_TOPIC_FMT,
 )
 from .models import MqttTransport
 
@@ -115,6 +114,7 @@ class AsyncMqttBridge:
         self._should_reconnect = True
 
         # Fetch CA cert from panel for TLS
+        _LOGGER.debug("BRIDGE: Fetching CA cert from %s (use_tls=%s)", self._panel_host, self._use_tls)
         ca_cert_path: Path | None = None
         if self._use_tls:
             try:
@@ -140,17 +140,6 @@ class AsyncMqttBridge:
 
             self._client.username_pw_set(self._username, self._password)
 
-            if self._use_tls and ca_cert_path is not None:
-                self._client.tls_set(
-                    ca_certs=str(ca_cert_path),
-                    cert_reqs=ssl.CERT_REQUIRED,
-                    tls_version=ssl.PROTOCOL_TLS_CLIENT,
-                )
-
-            # Last Will and Testament
-            lwt_topic = STATE_TOPIC_FMT.format(serial=self._serial_number)
-            self._client.will_set(lwt_topic, payload="lost", qos=1, retain=True)
-
             # Wire socket callbacks (async versions by default)
             self._client.on_socket_close = self._async_on_socket_close
             self._client.on_socket_unregister_write = self._async_on_socket_unregister_write
@@ -160,21 +149,31 @@ class AsyncMqttBridge:
             self._client.on_disconnect = self._on_disconnect
             self._client.on_message = self._on_message
 
-            # Connect in executor (blocking DNS + TCP + TLS handshake).
+            # TLS setup + connect in executor (blocking file I/O for
+            # load_verify_locations, DNS, TCP, and TLS handshake).
             # During executor connect, socket callbacks bridge to the event
             # loop via call_soon_threadsafe.
+            def _blocking_tls_and_connect() -> None:
+                """Run TLS configuration and connect in executor thread."""
+                assert self._client is not None
+                if self._use_tls and ca_cert_path is not None:
+                    self._client.tls_set(
+                        ca_certs=str(ca_cert_path),
+                        cert_reqs=ssl.CERT_REQUIRED,
+                        tls_version=ssl.PROTOCOL_TLS_CLIENT,
+                    )
+                self._client.connect(
+                    host=self._host,
+                    port=self._port,
+                    keepalive=MQTT_KEEPALIVE_S,
+                )
+
             try:
                 self._client.on_socket_open = self._on_socket_open_sync
                 self._client.on_socket_register_write = self._on_socket_register_write_sync
-                await self._loop.run_in_executor(
-                    None,
-                    partial(
-                        self._client.connect,
-                        host=self._host,
-                        port=self._port,
-                        keepalive=MQTT_KEEPALIVE_S,
-                    ),
-                )
+                _LOGGER.debug("BRIDGE: Running TLS+connect in executor to %s:%s", self._host, self._port)
+                await self._loop.run_in_executor(None, _blocking_tls_and_connect)
+                _LOGGER.debug("BRIDGE: Executor connect returned, waiting for CONNACK...")
             finally:
                 # Switch to async-only socket callbacks now that we are
                 # back on the event loop thread.

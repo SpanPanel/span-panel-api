@@ -71,13 +71,12 @@ class TestBridgeConnect:
         mqtt_client_mock.tls_set.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_connect_sets_lwt(self, mqtt_client_mock: MagicMock) -> None:
+    async def test_connect_does_not_set_lwt(self, mqtt_client_mock: MagicMock) -> None:
+        """Consumer must not set LWT on the device's $state topic."""
         bridge = _make_bridge()
         await bridge.connect()
 
-        mqtt_client_mock.will_set.assert_called_once()
-        lwt_call = mqtt_client_mock.will_set.call_args
-        assert SERIAL in lwt_call.args[0]
+        mqtt_client_mock.will_set.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_connect_no_tls(self, mqtt_client_mock: MagicMock) -> None:

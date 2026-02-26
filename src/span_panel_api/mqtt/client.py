@@ -81,6 +81,13 @@ class SpanMqttClient:
         self._loop = asyncio.get_running_loop()
         self._ready_event = asyncio.Event()
 
+        _LOGGER.debug(
+            "MQTT: Creating bridge to %s:%s (serial=%s)",
+            self._broker_config.broker_host,
+            self._broker_config.effective_port,
+            self._serial_number,
+        )
+
         self._bridge = AsyncMqttBridge(
             host=self._broker_config.broker_host,
             port=self._broker_config.effective_port,
@@ -98,11 +105,14 @@ class SpanMqttClient:
         self._bridge.set_connection_callback(self._on_connection_change)
 
         # Connect to broker
+        _LOGGER.debug("MQTT: Connecting to broker...")
         await self._bridge.connect()
+        _LOGGER.debug("MQTT: Broker connected, subscribing...")
 
         # Subscribe to all device topics
         wildcard = WILDCARD_TOPIC_FMT.format(serial=self._serial_number)
         self._bridge.subscribe(wildcard, qos=0)
+        _LOGGER.debug("MQTT: Subscribed to %s, waiting for Homie ready...", wildcard)
 
         # Wait for Homie ready state
         try:
@@ -111,10 +121,13 @@ class SpanMqttClient:
             await self.close()
             raise SpanPanelConnectionError(f"Timed out waiting for Homie device ready ({self._serial_number})") from exc
 
+        _LOGGER.debug("MQTT: Homie device ready, waiting for circuit names...")
+
         # Wait for circuit name properties to arrive (retained messages
         # may arrive after $state=ready). Without this, the first snapshot
         # has empty circuit names and entities are created without labels.
         await self._wait_for_circuit_names(timeout=_CIRCUIT_NAMES_TIMEOUT_S)
+        _LOGGER.debug("MQTT: Connection fully established")
 
     async def close(self) -> None:
         """Disconnect from broker and clean up."""

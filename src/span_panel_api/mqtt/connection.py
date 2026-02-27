@@ -155,7 +155,8 @@ class AsyncMqttBridge:
             # loop via call_soon_threadsafe.
             def _blocking_tls_and_connect() -> None:
                 """Run TLS configuration and connect in executor thread."""
-                assert self._client is not None
+                if self._client is None:
+                    raise RuntimeError("MQTT client not initialised before connect")
                 if self._use_tls and ca_cert_path is not None:
                     self._client.tls_set(
                         ca_certs=str(ca_cert_path),

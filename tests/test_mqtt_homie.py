@@ -873,7 +873,7 @@ class TestSpanMqttClientControl:
         await client.set_circuit_relay("aabbccdd112233445566778899001122", "OPEN")
 
         mock_bridge.publish.assert_called_once_with(
-            f"{TOPIC_PREFIX}/{SERIAL}/aabbccdd-1122-3344-5566-778899001122/relay/set",
+            f"{TOPIC_PREFIX}/{SERIAL}/aabbccdd112233445566778899001122/relay/set",
             "OPEN",
             qos=1,
         )
@@ -891,7 +891,7 @@ class TestSpanMqttClientControl:
         await client.set_circuit_priority("aabbccdd112233445566778899001122", "NEVER")
 
         mock_bridge.publish.assert_called_once_with(
-            f"{TOPIC_PREFIX}/{SERIAL}/aabbccdd-1122-3344-5566-778899001122/shed-priority/set",
+            f"{TOPIC_PREFIX}/{SERIAL}/aabbccdd112233445566778899001122/shed-priority/set",
             "NEVER",
             qos=1,
         )

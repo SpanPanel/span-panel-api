@@ -15,7 +15,7 @@ from ..exceptions import SpanPanelConnectionError
 from ..models import SpanPanelSnapshot
 from ..protocol import PanelCapability
 from .connection import AsyncMqttBridge
-from .const import MQTT_READY_TIMEOUT_S, PROPERTY_SET_TOPIC_FMT, WILDCARD_TOPIC_FMT, denormalize_circuit_id
+from .const import MQTT_READY_TIMEOUT_S, PROPERTY_SET_TOPIC_FMT, WILDCARD_TOPIC_FMT
 from .homie import HomieDeviceConsumer
 from .models import MqttClientConfig
 
@@ -158,11 +158,10 @@ class SpanMqttClient:
         """Publish relay state change for a circuit.
 
         Args:
-            circuit_id: Dashless UUID
+            circuit_id: Dashless UUID (matches wire format)
             state: "OPEN" or "CLOSED"
         """
-        dashed = denormalize_circuit_id(circuit_id)
-        topic = PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=dashed, prop="relay")
+        topic = PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=circuit_id, prop="relay")
         if self._bridge is not None:
             self._bridge.publish(topic, state, qos=1)
 
@@ -170,11 +169,10 @@ class SpanMqttClient:
         """Publish shed-priority change for a circuit.
 
         Args:
-            circuit_id: Dashless UUID
+            circuit_id: Dashless UUID (matches wire format)
             priority: v2 enum value (NEVER, SOC_THRESHOLD, OFF_GRID)
         """
-        dashed = denormalize_circuit_id(circuit_id)
-        topic = PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=dashed, prop="shed-priority")
+        topic = PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=circuit_id, prop="shed-priority")
         if self._bridge is not None:
             self._bridge.publish(topic, priority, qos=1)
 

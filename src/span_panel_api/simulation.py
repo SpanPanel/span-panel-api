@@ -18,9 +18,9 @@ from typing import Any, NotRequired, TypedDict
 
 import yaml
 
-from span_panel_api.const import DSM_GRID_UP, DSM_ON_GRID, MAIN_RELAY_CLOSED, PANEL_ON_GRID
+from span_panel_api.const import DSM_ON_GRID, MAIN_RELAY_CLOSED, PANEL_ON_GRID
 from span_panel_api.exceptions import SimulationConfigurationError
-from span_panel_api.models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanPanelSnapshot
+from span_panel_api.models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanPanelSnapshot, SpanPVSnapshot
 
 
 # New YAML configuration types
@@ -917,8 +917,7 @@ class DynamicSimulationEngine:
             "instantPanelStateOfEnergyPercent": random.uniform(0.6, 0.9),  # nosec B311
             "serialNumber": self._config["panel_config"]["serial_number"],
             "mainRelayState": MAIN_RELAY_CLOSED,
-            "dsmGridState": DSM_GRID_UP,
-            "dsmState": DSM_ON_GRID,
+            "dsmGridState": DSM_ON_GRID,
             "mainMeterEnergy": {
                 "producedEnergyWh": total_produced_energy,
                 "consumedEnergyWh": total_consumed_energy,
@@ -1140,17 +1139,22 @@ class DynamicSimulationEngine:
         network: dict[str, Any] = status["network"]
         software: dict[str, Any] = status["software"]
 
+        # Simulation always presents as grid-connected with standard values
+        total_tabs = self._config["panel_config"].get("total_tabs", 32) if self._config else 32
+        main_size = self._config["panel_config"].get("main_size", 200) if self._config else 200
+        grid_power = float(panel["instantGridPowerW"])
+        feedthrough_power = float(panel["feedthroughPowerW"])
+
         return SpanPanelSnapshot(
             serial_number=str(system["serial"]),
             firmware_version=str(software["firmwareVersion"]),
             main_relay_state=str(panel["mainRelayState"]),
-            instant_grid_power_w=float(panel["instantGridPowerW"]),
-            feedthrough_power_w=float(panel["feedthroughPowerW"]),
+            instant_grid_power_w=grid_power,
+            feedthrough_power_w=feedthrough_power,
             main_meter_energy_consumed_wh=float(panel["mainMeterEnergy"]["consumedEnergyWh"]),
             main_meter_energy_produced_wh=float(panel["mainMeterEnergy"]["producedEnergyWh"]),
             feedthrough_energy_consumed_wh=float(panel["feedthroughEnergy"]["consumedEnergyWh"]),
             feedthrough_energy_produced_wh=float(panel["feedthroughEnergy"]["producedEnergyWh"]),
-            dsm_state=str(panel["dsmState"]),
             dsm_grid_state=str(panel["dsmGridState"]),
             current_run_config=str(panel["currentRunConfig"]),
             door_state=str(system["doorState"]),
@@ -1159,8 +1163,25 @@ class DynamicSimulationEngine:
             eth0_link=bool(network["eth0Link"]),
             wlan_link=bool(network["wlanLink"]),
             wwan_link=bool(network["wwanLink"]),
+            dominant_power_source="GRID",
+            grid_islandable=False,
+            l1_voltage=120.0,
+            l2_voltage=120.0,
+            main_breaker_rating_a=main_size,
+            wifi_ssid="SimulatedNetwork",
+            vendor_cloud="CONNECTED",
+            panel_size=total_tabs,
+            power_flow_battery=0.0,
+            power_flow_site=grid_power,
+            power_flow_grid=grid_power,
+            power_flow_pv=0.0,
+            upstream_l1_current_a=abs(grid_power / 240.0),
+            upstream_l2_current_a=abs(grid_power / 240.0),
+            downstream_l1_current_a=abs(feedthrough_power / 240.0),
+            downstream_l2_current_a=abs(feedthrough_power / 240.0),
             circuits=circuit_snapshots,
             battery=battery_snapshot,
+            pv=SpanPVSnapshot(),
         )
 
     def set_dynamic_overrides(

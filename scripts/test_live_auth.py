@@ -103,7 +103,7 @@ async def bearer_auth_validation(panel_ip: str, jwt_token: str) -> None:  # prag
                 print(f"   🔌 Main relay: {panel_state.main_relay_state}")
                 print(f"   ⚡ Grid power: {panel_state.instant_grid_power_w}W")
                 print(f"   🏭 Run config: {panel_state.current_run_config}")
-                print(f"   🌐 DSM state: {panel_state.dsm_state}")
+                print(f"   🌐 Grid state: {panel_state.dsm_grid_state}")
                 print()
             except SpanPanelAuthError as e:
                 print(f"❌ Authentication failed: {e}")

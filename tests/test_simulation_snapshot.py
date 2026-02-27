@@ -138,9 +138,37 @@ class TestFieldAccuracy:
         engine = await _make_engine()
         snapshot = await engine.get_snapshot()
         assert snapshot.main_relay_state == "CLOSED"
-        assert snapshot.dsm_grid_state == "DSM_GRID_UP"
-        assert snapshot.dsm_state == "DSM_ON_GRID"
+        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
         assert snapshot.current_run_config == "PANEL_ON_GRID"
+
+    @pytest.mark.asyncio
+    async def test_v2_native_fields_populated(self) -> None:
+        engine = await _make_engine()
+        snapshot = await engine.get_snapshot()
+        assert snapshot.dominant_power_source == "GRID"
+        assert snapshot.grid_islandable is False
+        assert snapshot.l1_voltage == 120.0
+        assert snapshot.l2_voltage == 120.0
+        assert isinstance(snapshot.main_breaker_rating_a, int)
+        assert snapshot.wifi_ssid == "SimulatedNetwork"
+        assert snapshot.vendor_cloud == "CONNECTED"
+        assert isinstance(snapshot.panel_size, int)
+
+    @pytest.mark.asyncio
+    async def test_power_flow_fields_populated(self) -> None:
+        engine = await _make_engine()
+        snapshot = await engine.get_snapshot()
+        assert isinstance(snapshot.power_flow_battery, float)
+        assert isinstance(snapshot.power_flow_site, float)
+        assert isinstance(snapshot.power_flow_grid, float)
+        assert isinstance(snapshot.power_flow_pv, float)
+
+    @pytest.mark.asyncio
+    async def test_lugs_current_fields_populated(self) -> None:
+        engine = await _make_engine()
+        snapshot = await engine.get_snapshot()
+        assert isinstance(snapshot.upstream_l1_current_a, float)
+        assert isinstance(snapshot.upstream_l2_current_a, float)
 
 
 # ---------------------------------------------------------------------------

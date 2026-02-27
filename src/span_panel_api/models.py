@@ -40,6 +40,15 @@ class SpanCircuitSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class SpanPVSnapshot:
+    """PV inverter metadata — populated only when a PV node is commissioned."""
+
+    vendor_name: str | None = None  # pv/vendor-name
+    product_name: str | None = None  # pv/product-name
+    nameplate_capacity_kw: float | None = None  # pv/nameplate-capacity (kW)
+
+
+@dataclass(frozen=True, slots=True)
 class SpanBatterySnapshot:
     """Battery state — populated only when BESS node is commissioned."""
 
@@ -47,6 +56,11 @@ class SpanBatterySnapshot:
     # Note: field name is historically misnamed (soe = kWh, soc = %).
     # Name is preserved to avoid entity/dashboard breaks in the integration.
     soe_kwh: float | None = None  # bess/soe (kWh) — new v2 field, no v1 equivalent
+
+    # BESS metadata
+    vendor_name: str | None = None  # bess/vendor-name
+    product_name: str | None = None  # bess/product-name
+    nameplate_capacity_kwh: float | None = None  # bess/nameplate-capacity (kWh)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,9 +115,8 @@ class SpanPanelSnapshot:
     feedthrough_energy_produced_wh: float
 
     # v1 field names preserved — MQTT transport derives these from v2 data
-    dsm_state: str  # v1: direct | v2: derived from dominant-power-source
-    dsm_grid_state: str  # v1: direct | v2: derived from bess/grid-state
-    current_run_config: str  # v1: direct | v2: derived from dominant-power-source
+    dsm_grid_state: str  # v1: direct | v2: multi-signal heuristic
+    current_run_config: str  # v1: direct | v2: tri-state from grid_state + islandable + DPS
 
     # Hardware status — v1 field names preserved
     door_state: str  # v1: direct | v2: core/door
@@ -122,7 +135,23 @@ class SpanPanelSnapshot:
     main_breaker_rating_a: int | None = None  # v2: core/breaker-rating (A)
     wifi_ssid: str | None = None  # v2: core/wifi-ssid
     vendor_cloud: str | None = None  # v2: core/vendor-cloud
+    panel_size: int | None = None  # v2: core/panel-size (total breaker spaces)
+
+    # Power flows (None when node not present)
+    power_flow_pv: float | None = None  # v2: power-flows/pv (W)
+    power_flow_battery: float | None = None  # v2: power-flows/battery (W)
+    power_flow_grid: float | None = None  # v2: power-flows/grid (W)
+    power_flow_site: float | None = None  # v2: power-flows/site (W)
+
+    # Upstream lugs per-phase current (None when not available)
+    upstream_l1_current_a: float | None = None  # v2: upstream-lugs/l1-current (A)
+    upstream_l2_current_a: float | None = None  # v2: upstream-lugs/l2-current (A)
+
+    # Downstream lugs per-phase current (None when not available)
+    downstream_l1_current_a: float | None = None  # v2: downstream-lugs/l1-current (A)
+    downstream_l2_current_a: float | None = None  # v2: downstream-lugs/l2-current (A)
 
     # Collections
     circuits: dict[str, SpanCircuitSnapshot] = field(default_factory=dict)
     battery: SpanBatterySnapshot = field(default_factory=SpanBatterySnapshot)
+    pv: SpanPVSnapshot = field(default_factory=SpanPVSnapshot)

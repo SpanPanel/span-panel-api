@@ -14,7 +14,7 @@ if [[ ! -f ".deps-installed" ]] || [[ "pyproject.toml" -nt ".deps-installed" ]] 
         echo "Forcing update to latest versions..."
         poetry update
     else
-        poetry install --with dev,generate
+        poetry install --with dev
     fi
 
     if [[ $? -ne 0 ]]; then

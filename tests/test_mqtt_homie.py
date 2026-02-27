@@ -34,6 +34,7 @@ from span_panel_api.mqtt.const import (
     TYPE_LUGS,
     TYPE_LUGS_DOWNSTREAM,
     TYPE_LUGS_UPSTREAM,
+    TYPE_POWER_FLOWS,
     TYPE_PV,
 )
 from span_panel_api.mqtt.homie import HomieDeviceConsumer
@@ -378,38 +379,124 @@ class TestHomieCoreNode:
 
 
 class TestHomieDsmDerivation:
-    def test_dsm_state_grid(self):
-        consumer = _build_ready_consumer()
-        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "GRID")
-        snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_state == "DSM_GRID_UP"
-        assert snapshot.current_run_config == "PANEL_ON_GRID"
+    """Tests for the multi-signal dsm_grid_state and tri-state run_config derivations."""
 
-    def test_dsm_state_battery(self):
-        consumer = _build_ready_consumer()
-        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
-        snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_state == "DSM_GRID_DOWN"
-        assert snapshot.current_run_config == "PANEL_OFF_GRID"
+    # -- dsm_grid_state: BESS authoritative --
 
-    def test_dsm_state_unknown(self):
-        consumer = _build_ready_consumer()
-        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "NONE")
-        snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_state == "UNKNOWN"
-
-    def test_dsm_grid_state_on_grid(self):
+    def test_bess_on_grid_authoritative(self):
         consumer = _build_ready_consumer()
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "ON_GRID")
         snapshot = consumer.build_snapshot()
         assert snapshot.dsm_grid_state == "DSM_ON_GRID"
         assert snapshot.grid_state == "ON_GRID"
 
-    def test_dsm_grid_state_off_grid(self):
+    def test_bess_off_grid_authoritative(self):
         consumer = _build_ready_consumer()
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
         snapshot = consumer.build_snapshot()
         assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+
+    # -- dsm_grid_state: DPS fallback (no BESS) --
+
+    def test_dps_grid_implies_on_grid(self):
+        """DPS=GRID → DSM_ON_GRID even without BESS."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "GRID")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+
+    def test_dps_battery_with_grid_power_on_grid(self):
+        """DPS=BATTERY but grid still exchanging power → DSM_ON_GRID."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "500.0")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+
+    def test_dps_battery_zero_grid_power_off_grid(self):
+        """DPS=BATTERY and zero grid power → DSM_OFF_GRID."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "0.0")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+
+    def test_dps_pv_with_grid_power_on_grid(self):
+        """DPS=PV but grid still exchanging → DSM_ON_GRID."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "PV")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "-200.0")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+
+    def test_dps_none_returns_unknown(self):
+        """DPS=NONE → UNKNOWN (not a known power source)."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "NONE")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_grid_state == "UNKNOWN"
+
+    def test_no_core_returns_unknown(self):
+        """No core node at all → UNKNOWN."""
+        consumer = _build_ready_consumer({"bess-0": {"type": TYPE_BESS}})
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_grid_state == "UNKNOWN"
+
+    # -- current_run_config: tri-state derivation --
+
+    def test_on_grid_dps_grid(self):
+        """DPS=GRID → PANEL_ON_GRID."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "GRID")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.current_run_config == "PANEL_ON_GRID"
+
+    def test_off_grid_battery_islandable_backup(self):
+        """Off-grid + islandable + BATTERY → PANEL_BACKUP."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "bess-0": {"type": TYPE_BESS}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
+        consumer.handle_message(f"{PREFIX}/core/grid-islandable", "true")
+        consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.current_run_config == "PANEL_BACKUP"
+
+    def test_off_grid_pv_islandable_off_grid(self):
+        """Off-grid + islandable + PV → PANEL_OFF_GRID (intentional off-grid)."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "bess-0": {"type": TYPE_BESS}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "PV")
+        consumer.handle_message(f"{PREFIX}/core/grid-islandable", "true")
+        consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.current_run_config == "PANEL_OFF_GRID"
+
+    def test_off_grid_generator_islandable_off_grid(self):
+        """Off-grid + islandable + GENERATOR → PANEL_OFF_GRID."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "bess-0": {"type": TYPE_BESS}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "GENERATOR")
+        consumer.handle_message(f"{PREFIX}/core/grid-islandable", "true")
+        consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.current_run_config == "PANEL_OFF_GRID"
+
+    def test_off_grid_not_islandable_unknown(self):
+        """Off-grid + not islandable → UNKNOWN (shouldn't happen)."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "bess-0": {"type": TYPE_BESS}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
+        consumer.handle_message(f"{PREFIX}/core/grid-islandable", "false")
+        consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.current_run_config == "UNKNOWN"
+
+    def test_off_grid_islandable_dps_none_unknown(self):
+        """Off-grid + islandable + DPS=NONE → UNKNOWN."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "bess-0": {"type": TYPE_BESS}})
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "NONE")
+        consumer.handle_message(f"{PREFIX}/core/grid-islandable", "true")
+        consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.current_run_config == "UNKNOWN"
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +579,172 @@ class TestHomieBattery:
         snapshot = consumer.build_snapshot()
         assert snapshot.battery.soe_percentage is None
         assert snapshot.battery.soe_kwh is None
+
+    def test_battery_metadata(self):
+        """BESS metadata properties are parsed into the battery snapshot."""
+        consumer = _build_ready_consumer()
+        consumer.handle_message(f"{PREFIX}/bess-0/soc", "85.0")
+        consumer.handle_message(f"{PREFIX}/bess-0/vendor-name", "Tesla")
+        consumer.handle_message(f"{PREFIX}/bess-0/product-name", "Powerwall 3")
+        consumer.handle_message(f"{PREFIX}/bess-0/nameplate-capacity", "13.5")
+
+        snapshot = consumer.build_snapshot()
+        assert snapshot.battery.vendor_name == "Tesla"
+        assert snapshot.battery.product_name == "Powerwall 3"
+        assert snapshot.battery.nameplate_capacity_kwh == 13.5
+
+    def test_battery_metadata_absent(self):
+        """BESS node without metadata properties has None values."""
+        consumer = _build_ready_consumer()
+        consumer.handle_message(f"{PREFIX}/bess-0/soc", "50.0")
+
+        snapshot = consumer.build_snapshot()
+        assert snapshot.battery.soe_percentage == 50.0
+        assert snapshot.battery.vendor_name is None
+        assert snapshot.battery.product_name is None
+        assert snapshot.battery.nameplate_capacity_kwh is None
+
+
+# ---------------------------------------------------------------------------
+# HomieDeviceConsumer — PV metadata
+# ---------------------------------------------------------------------------
+
+
+class TestHomiePVMetadata:
+    def test_pv_metadata_parsed(self):
+        """PV metadata properties are parsed into the pv snapshot."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "bess-0": {"type": TYPE_BESS},
+                "pv-0": {"type": TYPE_PV},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/pv-0/vendor-name", "Enphase")
+        consumer.handle_message(f"{PREFIX}/pv-0/product-name", "IQ8+")
+        consumer.handle_message(f"{PREFIX}/pv-0/nameplate-capacity", "3960")
+
+        snapshot = consumer.build_snapshot()
+        assert snapshot.pv.vendor_name == "Enphase"
+        assert snapshot.pv.product_name == "IQ8+"
+        assert snapshot.pv.nameplate_capacity_kw == 3960.0
+
+    def test_no_pv_node(self):
+        """Without PV node, pv snapshot has None values."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
+        snapshot = consumer.build_snapshot()
+        assert snapshot.pv.vendor_name is None
+        assert snapshot.pv.product_name is None
+        assert snapshot.pv.nameplate_capacity_kw is None
+
+    def test_pv_metadata_partial(self):
+        """PV node with only some properties populated."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "pv-0": {"type": TYPE_PV},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/pv-0/vendor-name", "Other")
+
+        snapshot = consumer.build_snapshot()
+        assert snapshot.pv.vendor_name == "Other"
+        assert snapshot.pv.product_name is None
+        assert snapshot.pv.nameplate_capacity_kw is None
+
+
+# ---------------------------------------------------------------------------
+# HomieDeviceConsumer — power flows
+# ---------------------------------------------------------------------------
+
+
+class TestHomiePowerFlows:
+    def test_power_flows_parsed(self):
+        """Power-flows node properties map to snapshot fields."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "power-flows": {"type": TYPE_POWER_FLOWS},
+                "bess-0": {"type": TYPE_BESS},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/power-flows/pv", "3500.0")
+        consumer.handle_message(f"{PREFIX}/power-flows/battery", "-1200.0")
+        consumer.handle_message(f"{PREFIX}/power-flows/grid", "800.0")
+        consumer.handle_message(f"{PREFIX}/power-flows/site", "3100.0")
+
+        snapshot = consumer.build_snapshot()
+        assert snapshot.power_flow_pv == 3500.0
+        assert snapshot.power_flow_battery == -1200.0
+        assert snapshot.power_flow_grid == 800.0
+        assert snapshot.power_flow_site == 3100.0
+
+    def test_no_power_flows_node(self):
+        """Without power-flows node, fields are None."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
+        snapshot = consumer.build_snapshot()
+        assert snapshot.power_flow_pv is None
+        assert snapshot.power_flow_battery is None
+        assert snapshot.power_flow_grid is None
+        assert snapshot.power_flow_site is None
+
+    def test_partial_power_flows(self):
+        """Only populated properties get values; others remain None."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "power-flows": {"type": TYPE_POWER_FLOWS},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/power-flows/battery", "500.0")
+
+        snapshot = consumer.build_snapshot()
+        assert snapshot.power_flow_battery == 500.0
+        assert snapshot.power_flow_pv is None
+        assert snapshot.power_flow_grid is None
+        assert snapshot.power_flow_site is None
+
+
+# ---------------------------------------------------------------------------
+# HomieDeviceConsumer — lugs per-phase current
+# ---------------------------------------------------------------------------
+
+
+class TestHomieLugsCurrent:
+    def test_upstream_lugs_current(self):
+        """l1-current and l2-current from upstream lugs map to snapshot."""
+        consumer = _build_ready_consumer()
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/l1-current", "45.2")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/l2-current", "42.8")
+
+        snapshot = consumer.build_snapshot()
+        assert snapshot.upstream_l1_current_a == 45.2
+        assert snapshot.upstream_l2_current_a == 42.8
+
+    def test_no_lugs_current(self):
+        """Without l1/l2-current, fields are None."""
+        consumer = _build_ready_consumer()
+        snapshot = consumer.build_snapshot()
+        assert snapshot.upstream_l1_current_a is None
+        assert snapshot.upstream_l2_current_a is None
+
+
+# ---------------------------------------------------------------------------
+# HomieDeviceConsumer — panel_size
+# ---------------------------------------------------------------------------
+
+
+class TestHomiePanelSize:
+    def test_panel_size_parsed(self):
+        consumer = _build_ready_consumer()
+        consumer.handle_message(f"{PREFIX}/core/panel-size", "32")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.panel_size == 32
+
+    def test_panel_size_none_when_missing(self):
+        consumer = _build_ready_consumer()
+        snapshot = consumer.build_snapshot()
+        assert snapshot.panel_size is None
 
 
 # ---------------------------------------------------------------------------

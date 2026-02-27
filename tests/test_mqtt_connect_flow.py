@@ -257,7 +257,7 @@ class TestBridgeReconnect:
 # ---------------------------------------------------------------------------
 
 
-def _make_span_client() -> SpanMqttClient:
+def _make_span_client(snapshot_interval: float = 0) -> SpanMqttClient:
     config = MqttClientConfig(
         broker_host="broker.local",
         username="user",
@@ -267,6 +267,7 @@ def _make_span_client() -> SpanMqttClient:
         host="192.168.1.1",
         serial_number=SERIAL,
         broker_config=config,
+        snapshot_interval=snapshot_interval,
     )
 
 

@@ -35,10 +35,12 @@ class SpanMqttClient:
         host: str,
         serial_number: str,
         broker_config: MqttClientConfig,
+        snapshot_interval: float = 1.0,
     ) -> None:
         self._host = host
         self._serial_number = serial_number
         self._broker_config = broker_config
+        self._snapshot_interval = snapshot_interval
 
         self._bridge: AsyncMqttBridge | None = None
         self._homie = HomieDeviceConsumer(serial_number)
@@ -47,6 +49,7 @@ class SpanMqttClient:
         self._ready_event: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._snapshot_timer: asyncio.TimerHandle | None = None
 
     # -- SpanPanelClientProtocol -------------------------------------------
 
@@ -132,6 +135,7 @@ class SpanMqttClient:
     async def close(self) -> None:
         """Disconnect from broker and clean up."""
         self._streaming = False
+        self._cancel_snapshot_timer()
         for task in self._background_tasks:
             task.cancel()
         self._background_tasks.clear()
@@ -203,6 +207,7 @@ class SpanMqttClient:
     async def stop_streaming(self) -> None:
         """Disable snapshot callback dispatch."""
         self._streaming = False
+        self._cancel_snapshot_timer()
 
     # -- Internal callbacks ------------------------------------------------
 
@@ -217,12 +222,12 @@ class SpanMqttClient:
 
         # Dispatch snapshot callbacks if streaming
         if self._streaming and self._homie.is_ready() and self._loop is not None:
-            task = self._loop.create_task(
-                self._dispatch_snapshot(),
-                name="span_mqtt_dispatch_snapshot",
-            )
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
+            if self._snapshot_interval <= 0:
+                # No debounce — dispatch immediately (backward compat)
+                self._create_dispatch_task()
+            elif self._snapshot_timer is None:
+                # Schedule debounced dispatch
+                self._snapshot_timer = self._loop.call_later(self._snapshot_interval, self._fire_snapshot)
 
     def _on_connection_change(self, connected: bool) -> None:
         """Handle MQTT connection state change (called from asyncio loop)."""
@@ -258,6 +263,38 @@ class SpanMqttClient:
                 len(still_missing),
                 still_missing[:5],
             )
+
+    def _create_dispatch_task(self) -> None:
+        """Create a background task to build and dispatch a snapshot."""
+        if self._loop is None:
+            return
+        task = self._loop.create_task(
+            self._dispatch_snapshot(),
+            name="span_mqtt_dispatch_snapshot",
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    def _fire_snapshot(self) -> None:
+        """Timer callback — clear timer and dispatch one snapshot."""
+        self._snapshot_timer = None
+        self._create_dispatch_task()
+
+    def _cancel_snapshot_timer(self) -> None:
+        """Cancel any pending debounce timer."""
+        if self._snapshot_timer is not None:
+            self._snapshot_timer.cancel()
+            self._snapshot_timer = None
+
+    def set_snapshot_interval(self, interval: float) -> None:
+        """Update the snapshot debounce interval at runtime.
+
+        Args:
+            interval: Seconds between snapshot dispatches. 0 = no debounce.
+        """
+        self._snapshot_interval = interval
+        # Cancel any pending timer so the new interval takes effect on next message
+        self._cancel_snapshot_timer()
 
     async def _dispatch_snapshot(self) -> None:
         """Build snapshot and send to all registered callbacks."""

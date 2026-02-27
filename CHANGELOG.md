@@ -6,67 +6,96 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [2.0.0] - 02/2026
 
-### Added in v2.0.0
+v2.0.0 is a ground-up rewrite. The REST/OpenAPI transport has been removed entirely in favor of MQTT/Homie — the SPAN Panel's native v2 protocol. This is a breaking change: all consumer code must be updated to use the new API surface.
 
-- **Protocol-based architecture** — Six typed protocols (`SpanPanelClientProtocol`, `CircuitControlProtocol`, `CircuitCorrelationProtocol`, `StreamingCapableProtocol`) and `PanelCapability` flag enum defining transport-agnostic contracts
-- **Snapshot dataclasses** — Immutable `SpanPanelSnapshot`, `SpanCircuitSnapshot`, `SpanBranchSnapshot`, `SpanBatterySnapshot` with v2-native fields
-- **REST client extraction** — `SpanRestClient` extracted from `SpanPanelClient` with `get_snapshot()` support, `auth_refresh_callback`, and deprecation header parsing
-- **v2 REST endpoints** — `register_v2`, `download_ca_cert`, `get_homie_schema`, `get_v2_status`, `regenerate_passphrase` for SPAN v2 firmware
-- **API version detection** — `detect_api_version()` probes `/api/v2/status` and returns `DetectionResult` with firmware/serial info
-- **v2 data models** — `V2AuthResponse`, `V2StatusInfo`, `V2HomieSchema`, `DeprecationInfo` frozen dataclasses
-- **MQTT/Homie transport** — Full MQTT transport package (`span_panel_api.mqtt`):
-  - `AsyncMqttBridge`: paho-mqtt v2 wrapper with TLS/WebSocket support
-  - `HomieDeviceConsumer`: Homie v5 state machine parsing MQTT topics into snapshots
-  - `SpanMqttClient`: Implements all three protocols (panel, circuit control, streaming)
-  - `MqttClientConfig`: Frozen config with transport type and TLS settings
-- **Factory function** — `create_span_client()` with auto-detection, v1/v2 routing, passphrase registration, and REST correlation injection
-- **Circuit correlation** — `CircuitCorrelationProtocol` with identity mapping (Scenario A) and name+tab fallback (Scenario B) for v1↔v2 UUID translation
-- **Simulation snapshot support** — `DynamicSimulationEngine.get_snapshot()` returns `SpanPanelSnapshot`; `SpanRestClient` delegates in simulation mode
-- **Public API cleanup** — Semantic grouping in `__all__`; internal symbols (`AsyncMqttBridge`, `HomieDeviceConsumer`, `DeprecationInfo`, `RestClientConfig`, `SimulationConfig`, `V2HomieSchema`, `get_v2_status`) moved to submodule-only access
+### v1.x Sunset
 
-### Changed in v2.0.0
+Package versions prior to 2.0.0 depend on the SPAN v1 REST API. SPAN will sunset v1 firmware at the end of 2026, at which point v1.x releases of this package will cease to function. Users should upgrade to 2.0.0.
+
+### Breaking Changes
+
+- **REST transport removed** — `SpanPanelClient`, `SpanRestClient`, the `generated_client/` OpenAPI layer, and all REST-related modules have been deleted
+- **No more polling** — `get_status()`, `get_panel_state()`, `get_circuits()`, `get_storage_soe()` replaced by `get_snapshot()` returning a single `SpanPanelSnapshot`
+- **Protocol-based API** — consumers code against `SpanPanelClientProtocol`, `CircuitControlProtocol`, and `StreamingCapableProtocol` (PEP 544), not concrete classes
+- **Authentication changed** — passphrase-based v2 registration via `register_v2()` replaces v1 token-based auth; factory handles this automatically
+- **paho-mqtt is now required** — moved from optional `[mqtt]` extra to a core dependency
+- **Circuit IDs are UUIDs** — dashless UUID strings replace integer circuit IDs
+- **Shed priority values changed** — v2 uses `NEVER` / `SOC_THRESHOLD` / `OFF_GRID` instead of v1's `MUST_HAVE` / `NICE_TO_HAVE` / `NON_ESSENTIAL`
+- **`SpanPanelRetriableError` removed** — retry logic is no longer in the library (no REST polling)
+- **`set_async_delay_func()` removed** — no retry delay hook needed for MQTT transport
+- **`cache_window` parameter removed** — no caching needed; MQTT delivers state changes in real time
+- **`attrs`, `python-dateutil` dependencies removed**
+
+### Added
+
+- **MQTT/Homie transport** (`span_panel_api.mqtt`):
+  - `SpanMqttClient` — implements all three protocols (panel, circuit control, streaming)
+  - `AsyncMqttBridge` — paho-mqtt v2 wrapper with TLS/WebSocket, event-loop-driven socket I/O (no threads)
+  - `HomieDeviceConsumer` — Homie v5 state machine parsing MQTT topics into snapshots
+  - `MqttClientConfig` — frozen configuration with transport type and TLS settings
+- **Snapshot dataclasses** — immutable `SpanPanelSnapshot`, `SpanCircuitSnapshot`, `SpanBatterySnapshot`, `SpanPVSnapshot` with v2-native fields
+- **v2 auth functions** — `register_v2()`, `download_ca_cert()`, `get_homie_schema()`, `regenerate_passphrase()`
+- **API version detection** — `detect_api_version()` probes `/api/v2/status` and returns `DetectionResult`
+- **Factory function** — `create_span_client()` handles registration and returns a configured `SpanMqttClient`
+- **PV/BESS metadata** — vendor name, product name, nameplate capacity parsed from Homie device tree
+- **Power flows** — `power_flow_pv`, `power_flow_battery`, `power_flow_grid`, `power_flow_site` on panel snapshot
+- **Lugs current** — per-phase upstream/downstream current (A) on panel snapshot
+- **Per-leg voltages** — `l1_voltage`, `l2_voltage` on panel snapshot
+- **Panel metadata** — `dominant_power_source`, `vendor_cloud`, `wifi_ssid`, `panel_size`, `main_breaker_rating_a`
+- **Streaming callbacks** — `register_snapshot_callback()` + `start_streaming()` / `stop_streaming()` for real-time push
+- **Snapshot debounce** — `snapshot_interval` parameter on `SpanMqttClient` (default 1.0s) rate-limits `build_snapshot()` + callback dispatch; set to 0 for immediate (no debounce). Runtime adjustment via `set_snapshot_interval()`
+- **`PanelCapability` flag enum** — runtime feature advertisement (`EBUS_MQTT`, `PUSH_STREAMING`, `CIRCUIT_CONTROL`, `BATTERY_SOE`)
+
+### Changed
 
 - `412 Precondition Failed` now treated as auth error (`AUTH_ERROR_CODES` updated)
-- `paho-mqtt>=2.0.0` added as optional dependency (`[mqtt]` extra)
 - Version bumped from 1.1.14 to 2.0.0
+- Python requirement relaxed to `>=3.10` (from `3.12+`)
 
-### Fixed in v2.0.0
+### Removed
 
-- Extend retry logic to handle `httpx.ReadError`, `httpx.WriteError`, and `httpx.CloseError` in addition to `RemoteProtocolError` — these can occur when parallel requests in `get_all_data()` share a client and one request destroys the client while others
-  are in-flight ([@NickBorgers](https://github.com/NickBorgers))
+- `src/span_panel_api/rest/` — entire REST client directory
+- `src/span_panel_api/client.py` — backward-compat shim
+- `src/span_panel_api/generated_client/` — OpenAPI v1 generated models
+- `generate_client.py` — OpenAPI client generator script
+- `examples/` directory (YAML configs moved to `tests/fixtures/configs/`)
+- `DeprecationInfo`, `CircuitCorrelationProtocol`, `CorrelationUnavailableError`, `SpanPanelRetriableError`
+- `PanelCapability.REST_V1`, `PanelCapability.SIMULATION` flags
+- HTTP/retry constants from `const.py`
+- `openapi.json` specification file
 
 ## [1.1.14] - 12/2025
 
-### Fixed in v1.1.14
+### Fixed
 
-- Recognize panel Keep-Alive at 5 sec, Handle httpx.RemoteProtocolError defensively
+- Recognize panel Keep-Alive at 5 sec, handle `httpx.RemoteProtocolError` defensively
 
 ## [1.1.9] - 9/2025
 
-### Fixed in v1.1.9
+### Fixed
 
 - Simulation mode sign correction for solar and battery power values
 - Fixed battery State of Energy (SOE) calculation to use configured battery behavior instead of hardcoded time-of-day assumptions
 
-### Changed in v1.1.9
+### Changed
 
 - Updated GitHub Actions setup-python from v5 to v6
 - Updated dev dependencies group
 
 ## [1.1.8] - 2024
 
-### Fixed in v1.1.8
+### Fixed
 
 - Fixed sign on power values in simulation mode
 
-### Changed in v1.1.8
+### Changed
 
 - Updated virtualenv from 20.33.0 to 20.34.0
 - Updated GitHub Actions checkout from v4 to v5
 
 ## [1.1.6] - 2024
 
-### Added in v1.1.6
+### Added
 
 - Enhanced simulation API with YAML configuration and dynamic overrides
 - Battery behavior simulation capabilities
@@ -76,157 +105,107 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Power fluctuation patterns for different appliance types
 - Per-circuit and per-branch variation controls
 
-### Fixed in v1.1.6
+### Fixed
 
 - Fixed authentication in simulation mode
 - Fixed locking issues in simulation mode
 - Fixed energy accumulation in simulation
 - Fixed cache for unmapped circuits
-- Fixed code complexity issues
-- Fixed pylint and mypy errors
-- Fixed spelling errors
 
-### Changed in v1.1.6
+### Changed
 
 - Refactored simulation to reduce code complexity
-- Updated multiple dependencies including:
-  - virtualenv from 20.32.0 to 20.33.0
-  - coverage from 7.9.2 to 7.10.2
-  - numpy from 2.3.1 to 2.3.2
-  - docutils from 0.21.2 to 0.22
-  - rich from 14.0.0 to 14.1.0
-  - anyio from 4.9.0 to 4.10.0
-  - certifi from 2025.7.14 to 2025.8.3
-- Updated dependabot configuration
-- Enhanced documentation and linting
 
-### Removed in v1.1.6
+### Removed
 
 - Removed unused client_utils.py
 
 ## [1.1.5] - 2024
 
-### Added in v1.1.5
+### Added
 
 - Simulation mode enhancements
 - Test coverage for simulation edge cases
-- Panel constants and simulation demo improvements
 
-### Fixed in v1.1.5
+### Fixed
 
 - Fixed panel constants and simulation demo
 - Fixed energy accumulation in simulation
-- Fixed demo script
-
-### Changed in v1.1.5
-
-- Updated pytest-asyncio in dev-dependencies
-- Updated certifi from 2025.7.9 to 2025.7.14
-- Adjusted code coverage and excluded test/examples from codefactor
 
 ## [1.1.4] - 2024
 
-### Added in v1.1.4
+### Added
 
 - Formatting and linting scripts
 
-### Removed in v1.1.4
+### Removed
 
 - Removed unused client_utils.py
 
 ## [1.1.3] - 2024
 
-### Fixed in v1.1.3
+### Fixed
 
 - Fixed tests and linting errors
-- Fixed pylint and mypy errors
 - Excluded defensive code from coverage
 
 ## [1.1.2] - 2024
 
-### Added in v1.1.2
+### Added
 
-- **Simulation mode** - Complete simulation system for development and testing without physical SPAN panel
+- **Simulation mode** — complete simulation system for development and testing without physical SPAN panel
 - Dead code checking
 - Test coverage for simulation mode
 
-### Changed in v1.1.2
+### Changed
 
-- Updated multiple dependencies including:
-  - openapi-python-client from 0.25.1 to 0.25.2
-  - typing-extensions to 4.14.1
-  - cryptography from 45.0.4 to 45.0.5
-  - urllib3 from 2.4.0 to 2.5.0
-  - pygments from 2.19.1 to 2.19.2
-  - jaraco-functools from 4.1.0 to 4.2.1
 - Updated ruff configuration
 - Moved uncategorized tests to appropriate files
 
-### Fixed in v1.1.2
-
-- Addressed unused variables
-- Adapted tests to use simulation mode
-- Increased test coverage for simulation mode
-
 ## [1.1.1] - 2024
 
-### Changed in v1.1.1
+### Changed
 
-- Updated openapi-python-client
-- Upgraded pytest-asyncio to 0.21.0
 - Upgraded openapi-python-client to 0.24.0 and regenerated client
 - Loosened ruff dependency constraints
 
-### Fixed in v1.1.1
+### Fixed
 
 - Fixed tests compatibility issues
 
 ## [1.1.0] - 2024
 
-### Added in v1.1.0
+### Added
 
 - Initial release of SPAN Panel API client library
-- Support for Python 3.12 and 3.13
-- Context manager pattern for automatic connection lifecycle management
-- Long-lived pattern for services and integration platforms
-- Manual pattern for custom connection management
+- REST/OpenAPI transport for SPAN Panel v1 firmware
+- Context manager, long-lived, and manual connection patterns
 - Authentication system with token-based API access
 - Panel status and state retrieval
 - Circuit control (relay and priority management)
-- Battery storage information (SOE - State of Energy)
+- Battery storage information (SOE)
 - Virtual circuits for unmapped panel tabs
-- Timeout and retry configuration
+- Timeout and retry configuration with exponential backoff
 - Time-based caching system
 - Error categorization with specific exception types
 - Home Assistant integration compatibility layer
-- SSL configuration support
-- Performance features including caching
-- Development setup with Poetry
-- Testing and coverage tools
-- Pre-commit hooks and code quality tools
-
-### Features in v1.1.0
-
-- **Client Patterns**: Context manager, long-lived, and manual connection patterns
-- **Authentication**: Token-based authentication with automatic token management
-- **Panel Control**: Complete panel status, state, and circuit management
-- **Error Handling**: Categorized exceptions with retry strategies
-- **Performance**: Built-in caching and timeout/retry configuration
-- **Integration**: Home Assistant compatibility layer
-- **Development**: Complete development toolchain with testing and linting
+- Simulation mode for testing without physical hardware
+- Development toolchain with Poetry, pytest, mypy, ruff
 
 ---
 
 ## Version History Summary
 
-- **v1.1.0**: Initial release with core API client functionality
-- **v1.1.1**: Dependency updates and test fixes
-- **v1.1.2**: Major addition of simulation mode for development/testing
-- **v1.1.3**: Code quality improvements and test fixes
-- **v1.1.4**: Formatting and linting enhancements
-- **v1.1.5**: Simulation mode enhancements and edge case testing
-- **v1.1.6**: Major simulation API improvements with YAML configuration
-- **v1.1.8**: Power sign correction in simulation mode
-- **v1.1.9**: Additional simulation sign corrections and dependency updates
-- **v1.1.14**: Keep-Alive and RemoteProtocolError handling
-- **v2.0.0**: Dual-transport architecture (REST + MQTT/Homie), v2 firmware support, protocol-based API
+| Version    | Date    | Transport  | Summary                                                                            |
+| ---------- | ------- | ---------- | ---------------------------------------------------------------------------------- |
+| **2.0.0**  | 02/2026 | MQTT/Homie | Ground-up rewrite: MQTT-only, protocol-based API, real-time push, PV/BESS metadata |
+| **1.1.14** | 12/2025 | REST       | Keep-Alive and RemoteProtocolError handling                                        |
+| **1.1.9**  | 9/2025  | REST       | Simulation sign corrections                                                        |
+| **1.1.8**  | 2024    | REST       | Simulation power sign fix                                                          |
+| **1.1.6**  | 2024    | REST       | YAML simulation API, battery simulation                                            |
+| **1.1.5**  | 2024    | REST       | Simulation edge cases                                                              |
+| **1.1.4**  | 2024    | REST       | Formatting and linting                                                             |
+| **1.1.3**  | 2024    | REST       | Test and lint fixes                                                                |
+| **1.1.2**  | 2024    | REST       | Simulation mode added                                                              |
+| **1.1.1**  | 2024    | REST       | Dependency updates                                                                 |
+| **1.1.0**  | 2024    | REST       | Initial release                                                                    |

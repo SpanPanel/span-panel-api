@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
 from collections.abc import AsyncGenerator
 from unittest.mock import MagicMock, patch
 
@@ -91,7 +92,7 @@ async def mqtt_client_mock() -> AsyncGenerator[MagicMock, None]:
     ):
         # Make tempfile return a mock file object
         mock_tmp = MagicMock()
-        mock_tmp.name = "/tmp/fake_ca.pem"
+        mock_tmp.name = f"{tempfile.gettempdir()}/fake_ca.pem"
         mock_tempfile.NamedTemporaryFile.return_value = mock_tmp
 
         mock_client = cls.return_value

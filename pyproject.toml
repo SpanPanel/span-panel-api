@@ -22,6 +22,9 @@ packages = [
     {include = "span_panel_api", from = "src"},
 ]
 
+[tool.poetry.scripts]
+format-markdown = "scripts.format_markdown:main"
+
 [tool.poetry.group.dev.dependencies]
 pytest = "8.4.2"
 pytest-asyncio = "1.3.0"

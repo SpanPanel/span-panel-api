@@ -32,10 +32,6 @@ class SpanPanelAPIError(SpanPanelError):
         return self.args[0] if self.args else ""
 
 
-class SpanPanelRetriableError(SpanPanelAPIError):
-    """Retriable server error (502, 503, 504)."""
-
-
 class SpanPanelServerError(SpanPanelAPIError):
     """Server error (500)."""
 

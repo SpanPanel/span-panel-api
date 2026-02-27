@@ -5,7 +5,7 @@ in SPAN panel configurations, particularly useful for solar inverter setup
 and 240V appliance validation.
 """
 
-from typing import Any, TypedDict
+from typing import TypedDict
 
 
 class PhaseDistribution(TypedDict):
@@ -17,62 +17,6 @@ class PhaseDistribution(TypedDict):
     L2_tabs: list[int]
     is_balanced: bool
     balance_difference: int
-
-
-def get_valid_tabs_from_panel_data(panel_state: dict[str, Any]) -> list[int]:
-    """Extract valid tab numbers from SPAN panel state data.
-
-    Args:
-        panel_state: Panel state dictionary containing branches data
-
-    Returns:
-        List of valid tab numbers from panel branch data
-
-    Raises:
-        TypeError: If panel_state is invalid or missing branches data
-
-    """
-    if not isinstance(panel_state, dict):
-        raise TypeError("panel_state must be a dictionary")
-
-    branches = panel_state.get("branches", [])
-    if not isinstance(branches, list):
-        raise TypeError("Invalid branches data in panel state")
-
-    valid_tabs = []
-    for branch in branches:
-        if isinstance(branch, dict) and "id" in branch:
-            tab_id = branch["id"]
-            if isinstance(tab_id, int) and tab_id > 0:
-                valid_tabs.append(tab_id)
-
-    return sorted(valid_tabs)
-
-
-def get_valid_tabs_from_branches(branches: list[Any]) -> list[int]:
-    """Extract valid tab numbers from SPAN panel branches list.
-
-    Args:
-        branches: List of Branch objects or dictionaries with id field
-
-    Returns:
-        List of valid tab numbers from branch data
-
-    """
-    valid_tabs = []
-    for branch in branches:
-        # Handle both Branch objects and dictionaries
-        if hasattr(branch, "id"):
-            tab_id = branch.id
-        elif isinstance(branch, dict) and "id" in branch:
-            tab_id = branch["id"]
-        else:
-            continue
-
-        if isinstance(tab_id, int) and tab_id > 0:
-            valid_tabs.append(tab_id)
-
-    return sorted(valid_tabs)
 
 
 def get_tab_phase(tab_number: int, valid_tabs: list[int] | None = None) -> str:

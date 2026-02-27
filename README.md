@@ -1,8 +1,7 @@
-# SPAN Panel OpenAPI Client
+# SPAN Panel API
 
 [![GitHub Release](https://img.shields.io/github/v/release/SpanPanel/span-panel-api?style=flat-square)](https://github.com/SpanPanel/span-panel-api/releases)
-[![PyPI Version](https://img.shields.io/pypi/v/span-panel-api?style=flat-square)](https://pypi.org/project/span-panel-api/)
-[![Python Versions](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue?style=flat-square)](https://pypi.org/project/span-panel-api/)
+[![PyPI Version](https://img.shields.io/pypi/v/span-panel-api?style=flat-square)](https://pypi.org/project/span-panel-api/) [![Python Versions](https://img.shields.io/badge/python-3.10+-blue?style=flat-square)](https://pypi.org/project/span-panel-api/)
 [![License](https://img.shields.io/github/license/SpanPanel/span-panel-api?style=flat-square)](https://github.com/SpanPanel/span-panel-api/blob/main/LICENSE)
 
 [![CI Status](https://img.shields.io/github/actions/workflow/status/SpanPanel/span-panel-api/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/SpanPanel/span-panel-api/actions/workflows/ci.yml)
@@ -11,20 +10,17 @@
 [![Security](https://img.shields.io/snyk/vulnerabilities/github/SpanPanel/span-panel-api?style=flat-square)](https://snyk.io/test/github/SpanPanel/span-panel-api)
 
 [![Pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&style=flat-square)](https://github.com/pre-commit/pre-commit)
-[![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg?style=flat-square)](https://github.com/psf/black)
 [![Linting: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json&style=flat-square)](https://github.com/astral-sh/ruff)
 [![Type Checking: MyPy](https://img.shields.io/badge/type%20checking-mypy-blue?style=flat-square)](https://mypy-lang.org/)
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support%20development-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/cayossarian)
 
-A Python client library for accessing the SPAN Panel OpenAPI endpoint.
+A Python client library for the SPAN Panel v2 API, using MQTT/Homie for real-time push-based panel state.
 
-## Simulation Mode
+## v1.x Sunset Notice
 
-The SPAN Panel API client includes a simulation mode for development and testing without requiring a physical SPAN panel. When enabled, the client uses pre-recorded fixture data and applies dynamic variations provided by the API to simulate various load
-variations. Simulation mode supports time-based energy accumulation, power fluctuation patterns for different appliance types, and per-circuit or per-branch variation controls.
-
-For detailed information and usage examples, see [tests/docs/simulation.md](tests/docs/simulation.md).
+**Package versions prior to 2.0.0 are deprecated.** These versions depend on the SPAN v1 REST API, which will be retired when SPAN sunsets v1 firmware at the end of 2026. Users should upgrade to v2.0.0 or later, which requires v2 firmware
+(`spanos2/r202603/05` or later) and a panel passphrase.
 
 ## Installation
 
@@ -32,410 +28,261 @@ For detailed information and usage examples, see [tests/docs/simulation.md](test
 pip install span-panel-api
 ```
 
-## Usage Patterns
+### Dependencies
 
-The client supports two usage patterns depending on your use case:
+- `httpx` — v2 authentication and detection endpoints
+- `paho-mqtt` — MQTT/Homie transport (real-time push)
+- `pyyaml` — simulation configuration
 
-### Context Manager Pattern (Recommended for Scripts)
+## Architecture
 
-**Best for**: Scripts, one-off operations, short-lived applications
+v2.0.0 is a ground-up rewrite. The package connects to the SPAN Panel's on-device MQTT broker using the [Homie v5](https://homieiot.github.io/) convention. All panel and circuit state is delivered via retained MQTT messages — no polling required.
+
+### Transport
+
+The `SpanMqttClient` connects to the panel's MQTT broker (MQTTS or WebSocket) and subscribes to the Homie device tree. A `HomieDeviceConsumer` state machine parses incoming topic updates into typed `SpanPanelSnapshot` dataclasses. Changes are pushed to
+consumers via callbacks.
+
+### Protocols
+
+The library defines three structural subtyping protocols (PEP 544) that both the MQTT transport and the simulation engine implement:
+
+| Protocol                   | Purpose                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------- |
+| `SpanPanelClientProtocol`  | Core lifecycle: `connect`, `close`, `ping`, `get_snapshot`                            |
+| `CircuitControlProtocol`   | Relay and shed-priority control: `set_circuit_relay`, `set_circuit_priority`          |
+| `StreamingCapableProtocol` | Push-based updates: `register_snapshot_callback`, `start_streaming`, `stop_streaming` |
+
+Integration code programs against these protocols, not transport-specific classes.
+
+### Snapshots
+
+All panel state is represented as immutable, frozen dataclasses:
+
+| Dataclass             | Content                                                                                                                                  |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `SpanPanelSnapshot`   | Complete panel state: power, energy, grid/DSM state, hardware status, per-leg voltages, power flows, lugs current, circuits, battery, PV |
+| `SpanCircuitSnapshot` | Per-circuit: power, energy, relay state, priority, tabs, device type, breaker rating, current                                            |
+| `SpanBatterySnapshot` | BESS: SoC percentage, SoE kWh, vendor/product metadata, nameplate capacity                                                               |
+| `SpanPVSnapshot`      | PV inverter: vendor/product metadata, nameplate capacity                                                                                 |
+
+## Usage
+
+### Factory Pattern (Recommended)
+
+The `create_span_client()` factory handles v2 registration and returns a configured `SpanMqttClient`:
 
 ```python
 import asyncio
-from span_panel_api import SpanPanelClient
+from span_panel_api import create_span_client
 
 async def main():
-    # Context manager automatically handles connection lifecycle
-    async with SpanPanelClient("192.168.1.100") as client:
-        # Authenticate
-        auth = await client.authenticate("my-script", "SPAN Control Script")
-
-        # Get panel status (no auth required)
-        status = await client.get_status()
-        print(f"Panel: {status.system.manufacturer}")
-
-        # Get circuits (requires auth)
-        circuits = await client.get_circuits()
-        for circuit_id, circuit in circuits.circuits.additional_properties.items():
-            print(f"{circuit.name}: {circuit.instant_power_w}W")
-
-        # Control a circuit
-        await client.set_circuit_relay("circuit-1", "OPEN")
-        await client.set_circuit_priority("circuit-1", "MUST_HAVE")
-
-    # Client is automatically closed when exiting context
-
-asyncio.run(main())
-```
-
-### Long-Lived Pattern (Services or Integrations)
-
-**Best for**: Long-running services, persistent connections, integration platforms
-
-> **Note for Home Assistant integrations**: See [Home Assistant Integration](#home-assistant-integration) section for HA-specific compatibility configuration.
-
-```python
-import asyncio
-from span_panel_api import SpanPanelClient
-
-class SpanPanelIntegration:
-    """Example long-running service integration pattern."""
-
-    def __init__(self, host: str):
-        # Create client but don't use context manager
-        self.client = SpanPanelClient(host)
-        self._authenticated = False
-
-    async def setup(self) -> None:
-        """Initialize the integration (called once)."""
-        try:
-            # Authenticate once during setup
-            await self.client.authenticate("my-service", "Panel Integration Service")
-            self._authenticated = True
-        except Exception as e:
-            await self.client.close()  # Clean up on setup failure
-            raise
-
-    async def update_data(self) -> dict:
-        """Update all data (called periodically by coordinator)."""
-        if not self._authenticated:
-            await self.client.authenticate("my-service", "Panel Integration Service")
-            self._authenticated = True
-
-        try:
-            # Get all data in one update cycle
-            status = await self.client.get_status()
-            panel_state = await self.client.get_panel_state()
-            circuits = await self.client.get_circuits()
-            storage = await self.client.get_storage_soe()
-
-            return {
-                "status": status,
-                "panel": panel_state,
-                "circuits": circuits,
-                "storage": storage
-            }
-        except Exception:
-            self._authenticated = False  # Reset auth on error
-            raise
-
-    async def set_circuit_priority(self, circuit_id: str, priority: str) -> None:
-        """Set circuit priority (called by service)."""
-        if not self._authenticated:
-            await self.client.authenticate("my-service", "Panel Integration Service")
-            self._authenticated = True
-
-        await self.client.set_circuit_priority(circuit_id, priority)
-
-    async def cleanup(self) -> None:
-        """Cleanup when integration is unloaded."""
-        await self.client.close()
-
-# Usage in long-running service
-async def main():
-    integration = SpanPanelIntegration("192.168.1.100")
+    client = await create_span_client(
+        host="192.168.1.100",
+        passphrase="your-panel-passphrase",
+    )
 
     try:
-        await integration.setup()
+        await client.connect()
 
-        # Simulate coordinator updates
-        for i in range(10):
-            data = await integration.update_data()
-            print(f"Update {i}: {len(data['circuits'].circuits.additional_properties)} circuits")
-            await asyncio.sleep(30)  # Service typically updates every 30 seconds
+        # Get a point-in-time snapshot
+        snapshot = await client.get_snapshot()
+        print(f"Grid power: {snapshot.instant_grid_power_w}W")
+        print(f"Firmware: {snapshot.firmware_version}")
+        print(f"Circuits: {len(snapshot.circuits)}")
+
+        for cid, circuit in snapshot.circuits.items():
+            print(f"  {circuit.name}: {circuit.instant_power_w}W ({circuit.relay_state})")
 
     finally:
-        await integration.cleanup()
-
-asyncio.run(main())
-```
-
-### Manual Pattern (Advanced Usage)
-
-**Best for**: Custom connection management, special requirements
-
-```python
-import asyncio
-from span_panel_api import SpanPanelClient
-
-async def manual_example():
-    """Manual client lifecycle management."""
-    client = SpanPanelClient("192.168.1.100")
-
-    try:
-        # Manually authenticate
-        await client.authenticate("manual-app", "Manual Application")
-
-        # Do work
-        status = await client.get_status()
-        circuits = await client.get_circuits()
-
-        print(f"Found {len(circuits.circuits.additional_properties)} circuits")
-
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        # IMPORTANT: Always close the client to free resources
         await client.close()
 
-asyncio.run(manual_example())
+asyncio.run(main())
 ```
 
-## When to Use Each Pattern
+### Streaming Pattern
 
-| Pattern             | Use Case                                 | Pros                                                  | Cons                                              |
-| ------------------- | ---------------------------------------- | ----------------------------------------------------- | ------------------------------------------------- |
-| **Context Manager** | Scripts, one-off tasks, testing          | Automatic cleanup • Exception safe • Simple code      | Creates/destroys connection each time             |
-| **Long-Lived**      | Services, daemons, integration platforms | Efficient connection reuse Authentication persistence | Manual lifecycle management • Must handle cleanup |
-| **Manual**          | Custom requirements, debugging           | Full control handling                                 | Must remember to call close() • More error-prone  |
-
-## Error Handling
-
-The client provides error categorization for different retry strategies:
-
-### Exception Types
-
-All exceptions inherit from `SpanPanelError`.
-
-- `SpanPanelAuthError`: Raised for authentication failures (invalid token, login required, etc.)
-- `SpanPanelConnectionError`: Raised for network errors, server errors, or API errors
-- `SpanPanelTimeoutError`: Raised when a request times out
-- `SpanPanelValidationError`: Raised for data validation errors (invalid input, schema mismatch)
-- `SpanPanelAPIError`: General API error (fallback for unexpected API issues)
-- `SpanPanelRetriableError`: Raised for retriable server errors (502, 503, 504)
-- `SpanPanelServerError`: Raised for non-retriable server errors (500)
-- `SimulationConfigurationError`: Raised for invalid or missing simulation configuration (simulation mode only)
+For real-time push updates without polling:
 
 ```python
-from span_panel_api import (
-    SpanPanelError,              # Base exception
-    SpanPanelAuthError,
-    SpanPanelConnectionError,
-    SpanPanelTimeoutError,
-    SpanPanelValidationError,
-    SpanPanelAPIError,
-    SpanPanelRetriableError,
-    SpanPanelServerError,
-    SimulationConfigurationError,
-)
-```
+import asyncio
+from span_panel_api import create_span_client, SpanPanelSnapshot
 
-### HTTP Error Code Mapping
+async def on_snapshot(snapshot: SpanPanelSnapshot) -> None:
+    print(f"Grid: {snapshot.instant_grid_power_w}W, Circuits: {len(snapshot.circuits)}")
 
-| Status Code                  | Exception                      | Retry?               | Description                       | Action                         |
-| ---------------------------- | ------------------------------ | -------------------- | --------------------------------- | ------------------------------ |
-| **Authentication Errors**    | -                              | -                    | -                                 | -                              |
-| 401, 403                     | `SpanPanelAuthError`           | Once (after re-auth) | Authentication required/failed    | Re-authenticate and retry once |
-| **Server/Network Errors**    | -                              | -                    | -                                 | -                              |
-| 500                          | `SpanPanelServerError`         | No                   | Server error (non-retriable)      | Check server, report issue     |
-| 502, 503, 504                | `SpanPanelRetriableError`      | Yes                  | Retriable server/network errors   | Retry with exponential backoff |
-| **Other HTTP Errors**        | -                              | -                    | -                                 | -                              |
-| 404, 400, etc                | `SpanPanelAPIError`            | Case by case         | Client/request errors             | Check request parameters       |
-| **Timeouts**                 | `SpanPanelTimeoutError`        | Yes                  | Request timed out                 | Retry with backoff             |
-| **Validation Errors**        | `SpanPanelValidationError`     | No                   | Data validation failed            | Fix input data                 |
-| **Simulation Config Errors** | `SimulationConfigurationError` | No                   | Invalid/missing simulation config | Fix simulation config          |
+async def main():
+    client = await create_span_client(
+        host="192.168.1.100",
+        passphrase="your-panel-passphrase",
+    )
 
-### Retry Strategy
-
-```python
-async def example_request_with_retry():
-    """Example showing appropriate error handling."""
     try:
-        return await client.get_circuits()
-    except SpanPanelAuthError:
-        # Re-authenticate and retry once
-        await client.authenticate("my-app", "My Application")
-        return await client.get_circuits()
-    except SpanPanelRetriableError as e:
-        # Temporary server or network issues - should retry with backoff
-        logger.warning(f"Retriable error, will retry: {e}")
-        raise  # Let retry logic handle the retry
-    except SpanPanelTimeoutError as e:
-        # Network timeout - should retry
-        logger.warning(f"Timeout, will retry: {e}")
-        raise
-    except SpanPanelValidationError as e:
-        # Data validation error - fix input
-        logger.error(f"Validation error: {e}")
-        raise
-    except SimulationConfigurationError as e:
-        # Simulation config error - fix config
-        logger.error(f"Simulation config error: {e}")
-        raise
-    except SpanPanelAPIError as e:
-        # Other API errors
-        logger.error(f"API error: {e}")
-        raise
+        await client.connect()
+
+        # Register callback and start streaming
+        unsubscribe = client.register_snapshot_callback(on_snapshot)
+        await client.start_streaming()
+
+        # Run until interrupted
+        await asyncio.Event().wait()
+
+    finally:
+        await client.stop_streaming()
+        await client.close()
+
+asyncio.run(main())
 ```
 
-### Exception Handling
+### Pre-Built Config Pattern
 
-The client configures the underlying OpenAPI client with `raise_on_unexpected_status=True`, ensuring that HTTP errors (especially 500 responses) are converted to appropriate exceptions rather than being silently ignored.
-
-## API Reference
-
-### Client Initialization
+If you already have MQTT broker credentials (e.g., stored from a previous registration):
 
 ```python
-client = SpanPanelClient(
-    host="192.168.1.100",    # Required: SPAN Panel IP
-    port=80,                 # Optional: default 80
-    timeout=30.0,            # Optional: request timeout
-    use_ssl=False,           # Optional: HTTPS (usually False for local)
-    cache_window=1.0         # Optional: cache window in seconds (0 to disable)
+from span_panel_api import create_span_client, MqttClientConfig
+
+config = MqttClientConfig(
+    broker_host="192.168.1.100",
+    username="stored-username",
+    password="stored-password",
+    mqtts_port=8883,
+    ws_port=9001,
+    wss_port=443,
 )
-```
 
-### Authentication
-
-```python
-# Register a new API client (one-time setup)
-auth = await client.authenticate(
-    name="my-integration",           # Required: client name
-    description="My Application"  # Optional: description
+client = await create_span_client(
+    host="192.168.1.100",
+    mqtt_config=config,
+    serial_number="nj-2316-XXXX",
 )
-# Token is stored and used for subsequent requests
-```
-
-### Panel Information
-
-```python
-# System status (no authentication required)
-status = await client.get_status()
-print(f"System: {status.system}")
-print(f"Network: {status.network}")
-
-# Detailed panel state (requires authentication)
-panel = await client.get_panel_state()
-print(f"Grid power: {panel.instant_grid_power_w}W")
-print(f"Main relay: {panel.main_relay_state}")
-
-# Battery storage information
-storage = await client.get_storage_soe()
-print(f"Battery SOE: {storage.soe * 100:.1f}%")
-print(f"Max capacity: {storage.max_energy_kwh}kWh")
 ```
 
 ### Circuit Control
 
 ```python
-# Get all circuits
-circuits = await client.get_circuits()
-for circuit_id, circuit in circuits.circuits.additional_properties.items():
-    print(f"Circuit {circuit_id}: {circuit.name}")
-    print(f"  Power: {circuit.instant_power_w}W")
-    print(f"  Relay: {circuit.relay_state}")
-    print(f"  Priority: {circuit.priority}")
+# Set circuit relay (OPEN/CLOSED)
+await client.set_circuit_relay("circuit-uuid", "OPEN")
+await client.set_circuit_relay("circuit-uuid", "CLOSED")
 
-# Control circuit relay (OPEN/CLOSED)
-await client.set_circuit_relay("circuit-1", "OPEN")   # Turn off
-await client.set_circuit_relay("circuit-1", "CLOSED") # Turn on
-
-# Set circuit priority
-await client.set_circuit_priority("circuit-1", "MUST_HAVE")
-await client.set_circuit_priority("circuit-1", "NICE_TO_HAVE")
+# Set circuit shed priority (NEVER / SOC_THRESHOLD / OFF_GRID)
+await client.set_circuit_priority("circuit-uuid", "NEVER")
 ```
 
-### Complete Circuit Data
+### API Version Detection
 
-The `get_circuits()` method includes virtual circuits for unmapped panel tabs, providing complete panel visibility including non-user controlled tabs.
-
-- Virtual circuits have IDs like `unmapped_tab_1`, `unmapped_tab_2`
-- All energy values are correctly mapped from panel branches
-
-**Example Output:**
+Detect whether a panel supports v2 (unauthenticated probe):
 
 ```python
-circuits = await client.get_circuits()
+from span_panel_api import detect_api_version
 
-# Standard configured circuits
-print(circuits.circuits.additional_properties["1"].name)  # "Main Kitchen"
-print(circuits.circuits.additional_properties["1"].instant_power_w)  # 150
-
-# Virtual circuits for unmapped tabs (e.g., solar)
-print(circuits.circuits.additional_properties["unmapped_tab_5"].name)  # "Unmapped Tab 5"
-print(circuits.circuits.additional_properties["unmapped_tab_5"].instant_power_w)  # -2500 (solar production)
+result = await detect_api_version("192.168.1.100")
+print(f"API version: {result.api_version}")  # "v1" or "v2"
+if result.status_info:
+    print(f"Serial: {result.status_info.serial_number}")
+    print(f"Firmware: {result.status_info.firmware_version}")
 ```
 
-## Timeout and Retry Control
+### v2 Authentication Functions
 
-The SPAN Panel API client provides timeout and retry configuration:
-
-- `timeout` (float, default: 30.0): The maximum time (in seconds) to wait for a response from the panel for each attempt.
-- `retries` (int, default: 0): The number of times to retry a failed request due to network or retriable server errors. `retries=0` means no retries (1 total attempt), `retries=1` means 1 retry (2 total attempts), etc.
-- `retry_timeout` (float, default: 0.5): The base wait time (in seconds) between retries, with exponential backoff.
-- `retry_backoff_multiplier` (float, default: 2.0): The multiplier for exponential backoff between retries.
-
-### Example Usage
+Standalone async functions for v2-specific HTTP operations:
 
 ```python
-# No retries (default, fast feedback)
-client = SpanPanelClient("192.168.1.100", timeout=10.0)
+from span_panel_api import register_v2, download_ca_cert, get_homie_schema, regenerate_passphrase
 
-# Add retries for production
-client = SpanPanelClient("192.168.1.100", timeout=10.0, retries=2, retry_timeout=1.0)
+# Register and obtain MQTT broker credentials
+auth = await register_v2("192.168.1.100", "my-app", passphrase="panel-passphrase")
+print(f"Broker: {auth.ebus_broker_host}:{auth.ebus_broker_mqtts_port}")
+print(f"Serial: {auth.serial_number}")
 
-# Full retry configuration
-client = SpanPanelClient(
-    "192.168.1.100",
-    timeout=10.0,
-    retries=3,
-    retry_timeout=0.5,
-    retry_backoff_multiplier=2.0
-)
+# Download the panel's CA certificate (for TLS verification)
+pem = await download_ca_cert("192.168.1.100")
 
-# Change retry settings at runtime
-client.retries = 3
-client.retry_timeout = 2.0
-client.retry_backoff_multiplier = 1.5
+# Fetch the Homie property schema (unauthenticated)
+schema = await get_homie_schema("192.168.1.100")
+print(f"Schema hash: {schema.types_schema_hash}")
+
+# Rotate MQTT broker password (invalidates previous password)
+new_password = await regenerate_passphrase("192.168.1.100", token=auth.access_token)
 ```
 
-### What does 'retries' mean?
+## Error Handling
 
-| retries | Total Attempts | Description          |
-| ------- | -------------- | -------------------- |
-| 0       | 1              | No retries (default) |
-| 1       | 2              | 1 retry              |
-| 2       | 3              | 2 retries            |
+All exceptions inherit from `SpanPanelError`:
 
-Retry and timeout settings can be queried and changed at runtime.
-
-## Performance Features
-
-### Caching
-
-The client includes a time-based cache that prevents redundant API calls within a configurable window. This feature is particularly useful when multiple operations need the same data. The package itself makes multiple calls to create virtual circuits for
-tabs not represented in circuits data so the cache avoids unecessary calls when the user also makes requests the same data.
-
-**Cache Behavior:**
-
-- Each API endpoint (status, panel_state, circuits, storage) has independent cache
-- Cache window starts when successful data is obtained
-- Subsequent calls within the window return cached data
-- After expiration, next call makes fresh network request
-- Failed requests don't affect cache timing
-
-**Example Benefits:**
+| Exception                      | Cause                                                     |
+| ------------------------------ | --------------------------------------------------------- |
+| `SpanPanelAuthError`           | Invalid passphrase, expired token, or missing credentials |
+| `SpanPanelConnectionError`     | Cannot reach the panel (network/DNS)                      |
+| `SpanPanelTimeoutError`        | Request or connection timed out                           |
+| `SpanPanelValidationError`     | Data validation failure                                   |
+| `SpanPanelAPIError`            | Unexpected HTTP response from v2 endpoints                |
+| `SpanPanelServerError`         | Panel returned HTTP 500                                   |
+| `SimulationConfigurationError` | Invalid simulation YAML configuration                     |
 
 ```python
-# These calls demonstrate cache efficiency:
-panel_state = await client.get_panel_state()    # Network call
-circuits = await client.get_circuits()          # Uses cached panel_state data internally
-panel_state2 = await client.get_panel_state()   # Returns cached data (within window)
+from span_panel_api import SpanPanelAuthError, SpanPanelConnectionError
+
+try:
+    client = await create_span_client(host="192.168.1.100", passphrase="wrong")
+except SpanPanelAuthError:
+    print("Invalid passphrase")
+except SpanPanelConnectionError:
+    print("Cannot reach panel")
+```
+
+## Simulation Mode
+
+The library includes a simulation engine for development and testing without a physical SPAN panel. The `DynamicSimulationEngine` implements the same protocols as `SpanMqttClient` and produces `SpanPanelSnapshot` dataclasses from YAML-configured fixture
+data with dynamic power and energy variations.
+
+For detailed information, see [tests/docs/simulation.md](tests/docs/simulation.md).
+
+## Capabilities
+
+The `PanelCapability` flag enum advertises transport features at runtime:
+
+| Flag              | Meaning                               |
+| ----------------- | ------------------------------------- |
+| `EBUS_MQTT`       | Connected via MQTT/Homie transport    |
+| `PUSH_STREAMING`  | Supports real-time push callbacks     |
+| `CIRCUIT_CONTROL` | Can set relay state and shed priority |
+| `BATTERY_SOE`     | Battery state-of-energy available     |
+
+## Project Structure
+
+```text
+src/span_panel_api/
+├── __init__.py          # Public API exports
+├── auth.py              # v2 HTTP provisioning (register, cert, schema, passphrase)
+├── const.py             # Panel state constants (DSM, relay)
+├── detection.py         # detect_api_version() → DetectionResult
+├── exceptions.py        # Exception hierarchy
+├── factory.py           # create_span_client() → SpanMqttClient
+├── models.py            # Snapshot dataclasses (panel, circuit, battery, PV)
+├── phase_validation.py  # Electrical phase utilities
+├── protocol.py          # PEP 544 protocols + PanelCapability flags
+├── simulation.py        # Simulation engine (YAML-driven, snapshot-producing)
+└── mqtt/
+    ├── __init__.py
+    ├── async_client.py  # NullLock + AsyncMQTTClient (HA core pattern)
+    ├── client.py        # SpanMqttClient (all three protocols)
+    ├── connection.py    # AsyncMqttBridge (event-loop-driven, no threads)
+    ├── const.py         # MQTT/Homie constants + UUID helpers
+    ├── homie.py         # HomieDeviceConsumer (Homie v5 state machine)
+    └── models.py        # MqttClientConfig, MqttTransport
 ```
 
 ## Development Setup
 
 ### Prerequisites
 
-- Python 3.12 or 3.13 (SPAN Panel requires Python 3.12+)
+- Python 3.10+ (CI tests 3.12 and 3.13)
 - [Poetry](https://python-poetry.org/) for dependency management
 
 ### Development Installation
 
 ```bash
-# Clone and install
-git clone <repository code URL>
+git clone https://github.com/SpanPanel/span-panel-api.git
 cd span-panel-api
 eval "$(poetry env activate)"
 poetry install
@@ -447,123 +294,26 @@ poetry run pytest
 python scripts/coverage.py
 ```
 
-### Project Structure
+### Testing and Coverage
 
 ```bash
-span_openapi/
-├── src/span_panel_api/           # Main client library
-│   ├── client.py                 # SpanPanelClient (high-level wrapper)
-│   ├── simulation.py             # Simulation engine for dynamic test mode
-│   ├── exceptions.py             # Exception hierarchy
-│   ├── const.py                  # HTTP status constants
-│   └── generated_client/         # Auto-generated OpenAPI client
-├── tests/                        # Test suite
-│   ├── test_core_client.py       # Core client and API error path tests
-│   ├── test_context_manager.py   # Context manager tests
-│   ├── test_cache_functionality.py # Cache and retry tests
-│   ├── test_enhanced_circuits.py # Enhanced/virtual circuits tests
-│   ├── test_simulation_mode.py   # Simulation mode tests
-│   ├── test_factories.py         # Shared test fixtures and factories
-│   ├── conftest.py               # Pytest shared fixtures
-│   └── simulation_fixtures/      # Simulation fixture data (response .txt files)
-├── scripts/coverage.py           # Coverage checking utility
-├── openapi.json                  # SPAN Panel OpenAPI specification
-├── pyproject.toml                # Poetry configuration
-└── README.md                     # Project documentation
-
-```
-
-## Advanced Usage
-
-### Home Assistant Integration
-
-For Home Assistant integrations, the client provides a compatibility layer to handle asyncio timing issues that can occur in HA's event loop:
-
-```python
-from span_panel_api import SpanPanelClient, set_async_delay_func
-import asyncio
-
-# In your Home Assistant integration setup:
-async def ha_compatible_delay(seconds: float) -> None:
-    """Custom delay function that works well with HA's event loop."""
-    # Use HA's async utilities or implement HA-specific delay logic
-    await asyncio.sleep(seconds)
-
-# Configure the client to use HA-compatible delay
-set_async_delay_func(ha_compatible_delay)
-
-# Now create and use clients normally
-async with SpanPanelClient("192.168.1.100") as client:
-    # Client will use your custom delay function for retry logic
-    await client.authenticate("your_token")
-    panel_state = await client.get_panel_state()
-
-# To reset to default behavior (uses asyncio.sleep):
-set_async_delay_func(None)
-```
-
-**Why This Matters:**
-
-- Home Assistant's event loop can be sensitive to blocking operations
-- The default `asyncio.sleep()` used in retry logic may not play well with HA
-- Custom delay functions allow HA integrations to use HA's preferred async patterns
-- This prevents integration timeouts and improves responsiveness
-
-**Note:** This only affects the retry delay behavior. Normal API operations remain unchanged.
-
-### SSL Configuration
-
-```python
-# For panels that support SSL
-# Note: We do not currently observe panels supporting SSL for local access
-client = SpanPanelClient(
-    host="span-panel.local",
-    use_ssl=True,
-    port=443
-)
-```
-
-### Timeout Configuration
-
-```python
-# Custom timeout for slow networks
-client = SpanPanelClient(
-    host="192.168.1.100",
-    timeout=60.0  # 60 second timeout
-)
-```
-
-## Testing and Coverage
-
-```bash
-# Run full test suite
+# Full test suite
 poetry run pytest
 
-# Generate coverage report
-python scripts/coverage.py --full
-
-# Run just context manager tests
-poetry run pytest tests/test_context_manager.py -v
-
-# Check coverage meets threshold
-python scripts/coverage.py --check --threshold 90
-
-# Run with coverage
+# With coverage report
 poetry run pytest --cov=span_panel_api tests/
+
+# Check coverage meets threshold (85%)
+python scripts/coverage.py --check --threshold 85
 ```
 
 ## Contributing
 
-1. Get `openapi.json` SPAN Panel API specs
-
-   (for example via REST Client extension)
-
-   GET <https://span-panel-ip/api/v1/openapi.json>
-
-2. Regenerate client: `poetry run python generate_client.py`
-3. Update wrapper client in `src/span_panel_api/client.py` if needed
-4. Add tests for new functionality
-5. Update this README if adding new features
+1. Fork and clone the repository
+2. Install dev dependencies: `poetry install`
+3. Make changes and add tests
+4. Ensure all checks pass: `poetry run pytest && poetry run mypy src/ && poetry run ruff check src/`
+5. Submit a pull request
 
 ## License
 

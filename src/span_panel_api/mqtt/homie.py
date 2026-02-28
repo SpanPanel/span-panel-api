@@ -328,14 +328,22 @@ class HomieDeviceConsumer:
 
         vn = self._get_prop(bess_node, "vendor-name")
         pn = self._get_prop(bess_node, "product-name")
+        mdl = self._get_prop(bess_node, "model")
+        sn = self._get_prop(bess_node, "serial-number")
+        sw = self._get_prop(bess_node, "software-version")
         nc = self._get_prop(bess_node, "nameplate-capacity")
+        conn = self._get_prop(bess_node, "connected")
 
         return SpanBatterySnapshot(
             soe_percentage=_parse_float(soc_str) if soc_str else None,
             soe_kwh=_parse_float(soe_str) if soe_str else None,
             vendor_name=vn if vn else None,
             product_name=pn if pn else None,
+            model=mdl if mdl else None,
+            serial_number=sn if sn else None,
+            software_version=sw if sw else None,
             nameplate_capacity_kwh=_parse_float(nc) if nc else None,
+            connected=conn.lower() == "true" if conn else None,
         )
 
     def _build_pv(self) -> SpanPVSnapshot:

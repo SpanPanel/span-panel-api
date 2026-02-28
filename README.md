@@ -43,6 +43,29 @@ v2.0.0 is a ground-up rewrite. The package connects to the SPAN Panel's on-devic
 The `SpanMqttClient` connects to the panel's MQTT broker (MQTTS or WebSocket) and subscribes to the Homie device tree. A `HomieDeviceConsumer` state machine parses incoming topic updates into typed `SpanPanelSnapshot` dataclasses. Changes are pushed to
 consumers via callbacks.
 
+### Event-Loop-Driven I/O (Home Assistant Compatible)
+
+The MQTT transport is designed around the Home Assistant core async pattern — all paho-mqtt I/O runs on the asyncio event loop with no background threads:
+
+- **NullLock replacement** — paho-mqtt's seven internal threading locks are replaced with no-op `NullLock` instances at setup time, eliminating lock contention since all access is single-threaded on the event loop.
+- **`add_reader` / `add_writer`** — `AsyncMqttBridge` registers the MQTT socket with the event loop via `loop.add_reader()` and `loop.add_writer()`, calling paho's `loop_read()` / `loop_write()` directly from I/O callbacks rather than from a `loop_start()`
+  background thread.
+- **Periodic misc** — A `loop.call_at()` timer fires every second to call `loop_misc()` for keepalive and timeout housekeeping.
+- **Executor bridge for connect** — The initial TLS handshake and TCP connect are blocking operations, so they run in `loop.run_in_executor()`. Once the executor returns, socket callbacks are immediately switched from sync bridges (`call_soon_threadsafe`)
+  back to the async-only versions.
+
+This means the library can be dropped into any asyncio application — including Home Assistant — without spawning threads or requiring thread-safe wrappers.
+
+### Circuit Name Synchronization
+
+Circuit names arrive as MQTT retained messages that may land after the Homie device transitions to `$state=ready`. The client handles this with a bounded wait during `connect()`:
+
+1. After the device reaches ready state, the client polls `HomieDeviceConsumer.circuit_nodes_missing_names()` every 250ms.
+2. As retained name properties arrive, the consumer stores them. Once all circuit-type nodes have a name, the wait returns immediately.
+3. If names have not all arrived within 10 seconds, the timeout expires (non-fatal) and the client proceeds — circuits without names will use fallback identifiers.
+
+This ensures that the first `get_snapshot()` after connect returns human-readable circuit names in the common case, while never blocking indefinitely on a missing retained message.
+
 ### Protocols
 
 The library defines three structural subtyping protocols (PEP 544) that both the MQTT transport and the simulation engine implement:

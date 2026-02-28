@@ -60,7 +60,11 @@ class SpanBatterySnapshot:
     # BESS metadata
     vendor_name: str | None = None  # bess/vendor-name
     product_name: str | None = None  # bess/product-name
+    model: str | None = None  # bess/model
+    serial_number: str | None = None  # bess/serial-number
+    software_version: str | None = None  # bess/software-version
     nameplate_capacity_kwh: float | None = None  # bess/nameplate-capacity (kWh)
+    connected: bool | None = None  # bess/connected
 
 
 @dataclass(frozen=True, slots=True)

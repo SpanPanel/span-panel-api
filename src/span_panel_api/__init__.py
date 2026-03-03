@@ -17,7 +17,15 @@ from .exceptions import (
     SpanPanelValidationError,
 )
 from .factory import create_span_client
-from .models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanPanelSnapshot, SpanPVSnapshot, V2AuthResponse, V2StatusInfo
+from .models import (
+    SpanBatterySnapshot,
+    SpanCircuitSnapshot,
+    SpanEvseSnapshot,
+    SpanPanelSnapshot,
+    SpanPVSnapshot,
+    V2AuthResponse,
+    V2StatusInfo,
+)
 from .mqtt import MqttClientConfig, SpanMqttClient
 from .phase_validation import (
     PhaseDistribution,
@@ -41,6 +49,7 @@ __all__ = [  # noqa: RUF022
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",
+    "SpanEvseSnapshot",
     "SpanPVSnapshot",
     "SpanPanelSnapshot",
     # Factory

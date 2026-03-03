@@ -13,7 +13,7 @@ import logging
 import time
 from typing import ClassVar
 
-from ..models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanPanelSnapshot, SpanPVSnapshot
+from ..models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanEvseSnapshot, SpanPanelSnapshot, SpanPVSnapshot
 from .const import (
     HOMIE_STATE_READY,
     LUGS_DOWNSTREAM,
@@ -362,6 +362,30 @@ class HomieDeviceConsumer:
             nameplate_capacity_kw=_parse_float(nc) if nc else None,
         )
 
+    def _build_evse_devices(self) -> dict[str, SpanEvseSnapshot]:
+        """Build EVSE snapshots from all EVSE metadata nodes."""
+        result: dict[str, SpanEvseSnapshot] = {}
+        for node_id, node_type in self._node_types.items():
+            if node_type != TYPE_EVSE:
+                continue
+            feed = self._get_prop(node_id, "feed")
+            if not feed:
+                continue
+            adv = self._get_prop(node_id, "advertised-current")
+            result[node_id] = SpanEvseSnapshot(
+                node_id=node_id,
+                feed_circuit_id=normalize_circuit_id(feed),
+                status=self._get_prop(node_id, "status") or "UNKNOWN",
+                lock_state=self._get_prop(node_id, "lock-state") or "UNKNOWN",
+                advertised_current_a=_parse_float(adv) if adv else None,
+                vendor_name=self._get_prop(node_id, "vendor-name") or None,
+                product_name=self._get_prop(node_id, "product-name") or None,
+                part_number=self._get_prop(node_id, "part-number") or None,
+                serial_number=self._get_prop(node_id, "serial-number") or None,
+                software_version=self._get_prop(node_id, "software-version") or None,
+            )
+        return result
+
     def _derive_dsm_grid_state(self, core_node: str | None, grid_power: float) -> str:
         """Derive dsm_grid_state from multiple signals.
 
@@ -578,9 +602,10 @@ class HomieDeviceConsumer:
         unmapped = self._build_unmapped_tabs(circuits)
         circuits.update(unmapped)
 
-        # Battery and PV metadata
+        # Battery, PV, and EVSE metadata
         battery = self._build_battery()
         pv = self._build_pv()
+        evse = self._build_evse_devices()
 
         # BESS grid state for v2-native field
         bess_node = self._find_node_by_type(TYPE_BESS)
@@ -634,4 +659,5 @@ class HomieDeviceConsumer:
             circuits=circuits,
             battery=battery,
             pv=pv,
+            evse=evse,
         )

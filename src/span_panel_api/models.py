@@ -49,6 +49,23 @@ class SpanPVSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class SpanEvseSnapshot:
+    """EV Charger (EVSE) state — populated when EVSE node is commissioned."""
+
+    node_id: str  # Homie node ID (for unique identification)
+    feed_circuit_id: str  # Normalized circuit ID this EVSE is connected to
+    status: str = "UNKNOWN"
+    lock_state: str = "UNKNOWN"  # LOCKED | UNLOCKED | UNKNOWN
+    advertised_current_a: float | None = None  # Amps offered to EV
+    # Device metadata — flows into HA DeviceInfo, not separate entities
+    vendor_name: str | None = None
+    product_name: str | None = None
+    part_number: str | None = None
+    serial_number: str | None = None
+    software_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SpanBatterySnapshot:
     """Battery state — populated only when BESS node is commissioned."""
 
@@ -159,3 +176,4 @@ class SpanPanelSnapshot:
     circuits: dict[str, SpanCircuitSnapshot] = field(default_factory=dict)
     battery: SpanBatterySnapshot = field(default_factory=SpanBatterySnapshot)
     pv: SpanPVSnapshot = field(default_factory=SpanPVSnapshot)
+    evse: dict[str, SpanEvseSnapshot] = field(default_factory=dict)  # keyed by node_id

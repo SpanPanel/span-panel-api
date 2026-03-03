@@ -31,6 +31,7 @@ from span_panel_api.mqtt.const import (
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_CORE,
+    TYPE_EVSE,
     TYPE_LUGS,
     TYPE_LUGS_DOWNSTREAM,
     TYPE_LUGS_UPSTREAM,
@@ -1313,3 +1314,122 @@ class TestUnmappedTabSynthesis:
         assert "unmapped_tab_2" in snapshot.circuits
         assert "unmapped_tab_3" not in snapshot.circuits
         assert "unmapped_tab_4" in snapshot.circuits
+
+
+# ---------------------------------------------------------------------------
+# HomieDeviceConsumer — EVSE metadata
+# ---------------------------------------------------------------------------
+
+
+class TestHomieEVSEMetadata:
+    def test_evse_metadata_parsed(self):
+        """All 9 EVSE properties are extracted into the snapshot."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "CHARGING")
+        consumer.handle_message(f"{PREFIX}/evse-0/lock-state", "LOCKED")
+        consumer.handle_message(f"{PREFIX}/evse-0/advertised-current", "32.0")
+        consumer.handle_message(f"{PREFIX}/evse-0/vendor-name", "SPAN")
+        consumer.handle_message(f"{PREFIX}/evse-0/product-name", "SPAN Drive")
+        consumer.handle_message(f"{PREFIX}/evse-0/part-number", "SPN-DRV-001")
+        consumer.handle_message(f"{PREFIX}/evse-0/serial-number", "SN12345")
+        consumer.handle_message(f"{PREFIX}/evse-0/software-version", "2.1.0")
+
+        snapshot = consumer.build_snapshot()
+        assert "evse-0" in snapshot.evse
+        evse = snapshot.evse["evse-0"]
+        assert evse.node_id == "evse-0"
+        assert evse.feed_circuit_id == "aabbccdd112233445566778899001122"
+        assert evse.status == "CHARGING"
+        assert evse.lock_state == "LOCKED"
+        assert evse.advertised_current_a == 32.0
+        assert evse.vendor_name == "SPAN"
+        assert evse.product_name == "SPAN Drive"
+        assert evse.part_number == "SPN-DRV-001"
+        assert evse.serial_number == "SN12345"
+        assert evse.software_version == "2.1.0"
+
+    def test_evse_multiple_devices(self):
+        """Two EVSE nodes produce two snapshot entries."""
+        circ_a = "aaaaaaaa-1111-2222-3333-444444444444"
+        circ_b = "bbbbbbbb-1111-2222-3333-444444444444"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circ_a: {"type": TYPE_CIRCUIT},
+                circ_b: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+                "evse-1": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circ_a)
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "CHARGING")
+        consumer.handle_message(f"{PREFIX}/evse-1/feed", circ_b)
+        consumer.handle_message(f"{PREFIX}/evse-1/status", "AVAILABLE")
+
+        snapshot = consumer.build_snapshot()
+        assert len(snapshot.evse) == 2
+        assert snapshot.evse["evse-0"].status == "CHARGING"
+        assert snapshot.evse["evse-1"].status == "AVAILABLE"
+
+    def test_evse_no_node(self):
+        """Empty dict when no EVSE commissioned."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
+        snapshot = consumer.build_snapshot()
+        assert snapshot.evse == {}
+
+    def test_evse_partial_metadata(self):
+        """Missing optional fields are None."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "AVAILABLE")
+
+        snapshot = consumer.build_snapshot()
+        evse = snapshot.evse["evse-0"]
+        assert evse.status == "AVAILABLE"
+        assert evse.lock_state == "UNKNOWN"
+        assert evse.advertised_current_a is None
+        assert evse.vendor_name is None
+        assert evse.product_name is None
+        assert evse.part_number is None
+        assert evse.serial_number is None
+        assert evse.software_version is None
+
+    def test_evse_feed_still_annotates_circuit(self):
+        """Existing feed annotation still works alongside new EVSE snapshot."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/evse-0/relative-position", "IN_PANEL")
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "CHARGING")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/name", "EV Charger")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/space", "10")
+
+        snapshot = consumer.build_snapshot()
+        # Circuit should be annotated with device_type=evse
+        circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
+        assert circuit.device_type == "evse"
+        assert circuit.relative_position == "IN_PANEL"
+        # EVSE snapshot should also be populated
+        assert "evse-0" in snapshot.evse
+        assert snapshot.evse["evse-0"].status == "CHARGING"

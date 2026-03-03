@@ -20,7 +20,13 @@ import yaml
 
 from span_panel_api.const import DSM_ON_GRID, MAIN_RELAY_CLOSED, PANEL_ON_GRID
 from span_panel_api.exceptions import SimulationConfigurationError
-from span_panel_api.models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanPanelSnapshot, SpanPVSnapshot
+from span_panel_api.models import (
+    SpanBatterySnapshot,
+    SpanCircuitSnapshot,
+    SpanEvseSnapshot,
+    SpanPanelSnapshot,
+    SpanPVSnapshot,
+)
 
 
 # New YAML configuration types
@@ -1133,6 +1139,22 @@ class DynamicSimulationEngine:
         soe_percentage = float(soe_data["soe"]["percentage"])
         battery_snapshot = SpanBatterySnapshot(soe_percentage=soe_percentage)
 
+        # --- EVSE ---
+        evse_devices: dict[str, SpanEvseSnapshot] = {}
+        for cid, circ in circuit_snapshots.items():
+            if circ.device_type == "evse":
+                evse_devices[f"sim_evse_{cid}"] = SpanEvseSnapshot(
+                    node_id=f"sim_evse_{cid}",
+                    feed_circuit_id=cid,
+                    status="CHARGING" if circ.instant_power_w > 100 else "AVAILABLE",
+                    lock_state="LOCKED" if circ.instant_power_w > 100 else "UNLOCKED",
+                    advertised_current_a=32.0,
+                    vendor_name="SPAN",
+                    product_name="SPAN Drive",
+                    serial_number=f"SIM-EVSE-{cid[:8].upper()}",
+                    software_version="1.0.0-sim",
+                )
+
         # --- Status ---
         status: dict[str, Any] = raw["status"]
         system: dict[str, Any] = status["system"]
@@ -1182,6 +1204,7 @@ class DynamicSimulationEngine:
             circuits=circuit_snapshots,
             battery=battery_snapshot,
             pv=SpanPVSnapshot(),
+            evse=evse_devices,
         )
 
     def set_dynamic_overrides(

@@ -386,14 +386,14 @@ class HomieDeviceConsumer:
             )
         return result
 
-    def _derive_dsm_grid_state(self, core_node: str | None, grid_power: float) -> str:
-        """Derive dsm_grid_state from multiple signals.
+    def _derive_dsm_state(self, core_node: str | None, grid_power: float, power_flow_grid: float | None) -> str:
+        """Derive dsm_state from multiple signals.
 
         Priority:
         1. bess/grid-state — authoritative when BESS is commissioned
         2. dominant-power-source == GRID — grid is the primary source
-        3. grid_power != 0 — grid is exchanging power (even if not dominant)
-        4. grid_power == 0 AND DPS != GRID — islanded (no flow + grid not dominant)
+        3. grid_power or power_flow_grid non-zero — grid exchanging power
+        4. both grid signals zero AND DPS != GRID — islanded
         """
         # 1. BESS grid-state is authoritative when available
         bess_node = self._find_node_by_type(TYPE_BESS)
@@ -404,20 +404,19 @@ class HomieDeviceConsumer:
             if gs == "OFF_GRID":
                 return "DSM_OFF_GRID"
 
-        # 2-4. Fallback heuristic using DPS and grid power
+        # 2-4. Fallback heuristic using DPS and grid power signals
         if core_node is not None:
             dps = self._get_prop(core_node, "dominant-power-source")
             if dps == "GRID":
                 return "DSM_ON_GRID"
 
             if dps in ("BATTERY", "PV", "GENERATOR"):
-                if grid_power != 0.0:
-                    return "DSM_ON_GRID"
-                return "DSM_OFF_GRID"
+                grid_exchanging = grid_power != 0.0 or (power_flow_grid is not None and power_flow_grid != 0.0)
+                return "DSM_ON_GRID" if grid_exchanging else "DSM_OFF_GRID"
 
         return "UNKNOWN"
 
-    def _derive_run_config(self, dsm_grid_state: str, grid_islandable: bool | None, dps: str | None) -> str:
+    def _derive_run_config(self, dsm_state: str, grid_islandable: bool | None, dps: str | None) -> str:
         """Derive current_run_config from grid state, islandability, and power source.
 
         Decision table:
@@ -427,10 +426,10 @@ class HomieDeviceConsumer:
         - DSM_OFF_GRID + islandable + other → UNKNOWN
         - DSM_OFF_GRID + not islandable → UNKNOWN (shouldn't happen)
         """
-        if dsm_grid_state == "DSM_ON_GRID":
+        if dsm_state == "DSM_ON_GRID":
             return "PANEL_ON_GRID"
 
-        if dsm_grid_state == "DSM_OFF_GRID":
+        if dsm_state == "DSM_OFF_GRID":
             if not grid_islandable:
                 return "UNKNOWN"
             if dps == "BATTERY":
@@ -615,8 +614,8 @@ class HomieDeviceConsumer:
             grid_state = gs if gs else None
 
         # Derived state values
-        dsm_grid_state = self._derive_dsm_grid_state(core_node, grid_power)
-        current_run_config = self._derive_run_config(dsm_grid_state, grid_islandable, dominant_power_source)
+        dsm_state = self._derive_dsm_state(core_node, grid_power, power_flow_grid)
+        current_run_config = self._derive_run_config(dsm_state, grid_islandable, dominant_power_source)
 
         # Connection uptime since $state==ready
         uptime = int(time.monotonic() - self._ready_since) if self._ready_since > 0.0 else 0
@@ -631,7 +630,7 @@ class HomieDeviceConsumer:
             main_meter_energy_produced_wh=main_produced,
             feedthrough_energy_consumed_wh=feedthrough_consumed,
             feedthrough_energy_produced_wh=feedthrough_produced,
-            dsm_grid_state=dsm_grid_state,
+            dsm_state=dsm_state,
             current_run_config=current_run_config,
             door_state=door_state,
             proximity_proven=self._state == HOMIE_STATE_READY,

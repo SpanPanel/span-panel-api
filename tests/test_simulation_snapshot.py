@@ -138,7 +138,7 @@ class TestFieldAccuracy:
         engine = await _make_engine()
         snapshot = await engine.get_snapshot()
         assert snapshot.main_relay_state == "CLOSED"
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
         assert snapshot.current_run_config == "PANEL_ON_GRID"
 
     @pytest.mark.asyncio

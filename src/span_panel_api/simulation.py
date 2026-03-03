@@ -1208,7 +1208,7 @@ class DynamicSimulationEngine:
             main_meter_energy_produced_wh=float(panel["mainMeterEnergy"]["producedEnergyWh"]),
             feedthrough_energy_consumed_wh=float(panel["feedthroughEnergy"]["consumedEnergyWh"]),
             feedthrough_energy_produced_wh=float(panel["feedthroughEnergy"]["producedEnergyWh"]),
-            dsm_grid_state=str(panel["dsmGridState"]),
+            dsm_state=str(panel["dsmGridState"]),
             current_run_config=str(panel["currentRunConfig"]),
             door_state=str(system["doorState"]),
             proximity_proven=bool(system["proximityProven"]),

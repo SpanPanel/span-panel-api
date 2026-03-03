@@ -136,7 +136,7 @@ class SpanPanelSnapshot:
     feedthrough_energy_produced_wh: float
 
     # v1 field names preserved — MQTT transport derives these from v2 data
-    dsm_grid_state: str  # v1: direct | v2: multi-signal heuristic
+    dsm_state: str  # v1: direct | v2: multi-signal heuristic
     current_run_config: str  # v1: direct | v2: tri-state from grid_state + islandable + DPS
 
     # Hardware status — v1 field names preserved

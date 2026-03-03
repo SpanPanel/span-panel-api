@@ -112,7 +112,7 @@ def _make_panel_snapshot(**overrides) -> SpanPanelSnapshot:
         "main_meter_energy_produced_wh": 500.0,
         "feedthrough_energy_consumed_wh": 0.0,
         "feedthrough_energy_produced_wh": 0.0,
-        "dsm_grid_state": "DSM_ON_GRID",
+        "dsm_state": "DSM_ON_GRID",
         "current_run_config": "PANEL_ON_GRID",
         "door_state": "CLOSED",
         "proximity_proven": True,

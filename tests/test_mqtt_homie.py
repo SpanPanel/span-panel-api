@@ -380,31 +380,31 @@ class TestHomieCoreNode:
 
 
 class TestHomieDsmDerivation:
-    """Tests for the multi-signal dsm_grid_state and tri-state run_config derivations."""
+    """Tests for the multi-signal dsm_state and tri-state run_config derivations."""
 
-    # -- dsm_grid_state: BESS authoritative --
+    # -- dsm_state: BESS authoritative --
 
     def test_bess_on_grid_authoritative(self):
         consumer = _build_ready_consumer()
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "ON_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
         assert snapshot.grid_state == "ON_GRID"
 
     def test_bess_off_grid_authoritative(self):
         consumer = _build_ready_consumer()
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
 
-    # -- dsm_grid_state: DPS fallback (no BESS) --
+    # -- dsm_state: DPS fallback (no BESS) --
 
     def test_dps_grid_implies_on_grid(self):
         """DPS=GRID → DSM_ON_GRID even without BESS."""
         consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
 
     def test_dps_battery_with_grid_power_on_grid(self):
         """DPS=BATTERY but grid still exchanging power → DSM_ON_GRID."""
@@ -412,15 +412,45 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
         consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "500.0")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
+
+    def test_dps_battery_zero_lugs_nonzero_power_flow_on_grid(self):
+        """DPS=BATTERY, zero lugs but power-flows/grid non-zero → DSM_ON_GRID."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM},
+                "power-flows": {"type": TYPE_POWER_FLOWS},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "0.0")
+        consumer.handle_message(f"{PREFIX}/power-flows/grid", "-5.0")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_state == "DSM_ON_GRID"
+
+    def test_dps_battery_zero_both_grid_signals_off_grid(self):
+        """DPS=BATTERY, both lugs and power-flows/grid zero → DSM_OFF_GRID."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM},
+                "power-flows": {"type": TYPE_POWER_FLOWS},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "0.0")
+        consumer.handle_message(f"{PREFIX}/power-flows/grid", "0.0")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
 
     def test_dps_battery_zero_grid_power_off_grid(self):
-        """DPS=BATTERY and zero grid power → DSM_OFF_GRID."""
+        """DPS=BATTERY and zero grid power (no power-flows node) → DSM_OFF_GRID."""
         consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM}})
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
         consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "0.0")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
 
     def test_dps_pv_with_grid_power_on_grid(self):
         """DPS=PV but grid still exchanging → DSM_ON_GRID."""
@@ -428,20 +458,20 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "PV")
         consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "-200.0")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
 
     def test_dps_none_returns_unknown(self):
         """DPS=NONE → UNKNOWN (not a known power source)."""
         consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "NONE")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "UNKNOWN"
+        assert snapshot.dsm_state == "UNKNOWN"
 
     def test_no_core_returns_unknown(self):
         """No core node at all → UNKNOWN."""
         consumer = _build_ready_consumer({"bess-0": {"type": TYPE_BESS}})
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "UNKNOWN"
+        assert snapshot.dsm_state == "UNKNOWN"
 
     # -- current_run_config: tri-state derivation --
 
@@ -459,7 +489,7 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/grid-islandable", "true")
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
         assert snapshot.current_run_config == "PANEL_BACKUP"
 
     def test_off_grid_pv_islandable_off_grid(self):
@@ -469,7 +499,7 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/grid-islandable", "true")
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
         assert snapshot.current_run_config == "PANEL_OFF_GRID"
 
     def test_off_grid_generator_islandable_off_grid(self):

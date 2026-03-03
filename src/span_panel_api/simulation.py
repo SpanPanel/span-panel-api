@@ -86,12 +86,33 @@ class CircuitTemplate(TypedDict):
     priority: str  # "MUST_HAVE", "NON_ESSENTIAL"
 
 
+class BatteryBehavior(TypedDict, total=False):
+    """Battery behavior configuration."""
+
+    enabled: bool
+    charge_power: float
+    discharge_power: float
+    idle_power: float
+    charge_efficiency: float
+    discharge_efficiency: float
+    charge_hours: list[int]
+    discharge_hours: list[int]
+    max_charge_power: float
+    max_discharge_power: float
+    idle_hours: list[int]
+    idle_power_range: list[float]
+    solar_intensity_profile: dict[int, float]
+    demand_factor_profile: dict[int, float]
+
+
 class CircuitTemplateExtended(CircuitTemplate, total=False):
     """Extended circuit template with optional behaviors."""
 
     cycling_pattern: CyclingPattern
     time_of_day_profile: TimeOfDayProfile
     smart_behavior: SmartBehavior
+    battery_behavior: BatteryBehavior
+    device_type: str  # Explicit override: "circuit", "evse", "pv"
 
 
 class CircuitDefinition(TypedDict):
@@ -300,10 +321,9 @@ class RealisticBehaviorEngine:
         dt = datetime.fromtimestamp(current_time)
         current_hour = dt.hour
 
-        battery_config_raw = template.get("battery_behavior", {})
-        if not isinstance(battery_config_raw, dict):
+        battery_config = template.get("battery_behavior", {})
+        if not isinstance(battery_config, dict):
             return base_power
-        battery_config: dict[str, Any] = battery_config_raw
 
         # Check if battery behavior is enabled
         if not battery_config.get("enabled", True):
@@ -325,21 +345,21 @@ class RealisticBehaviorEngine:
         # Transition hours - gradual change
         return base_power * 0.1
 
-    def _get_charge_power(self, battery_config: dict[str, Any], current_hour: int) -> float:
+    def _get_charge_power(self, battery_config: BatteryBehavior, current_hour: int) -> float:
         """Get charging power for the current hour."""
         max_charge_power: float = battery_config.get("max_charge_power", -3000.0)
         solar_intensity = self._get_solar_intensity_from_config(current_hour, battery_config)
         # Convert negative charge power to positive (charging is positive power consumption)
         return abs(max_charge_power) * solar_intensity
 
-    def _get_discharge_power(self, battery_config: dict[str, Any], current_hour: int) -> float:
+    def _get_discharge_power(self, battery_config: BatteryBehavior, current_hour: int) -> float:
         """Get discharging power for the current hour."""
         max_discharge_power: float = battery_config.get("max_discharge_power", 2500.0)
         demand_factor = self._get_demand_factor_from_config(current_hour, battery_config)
         # Discharging is positive power production
         return abs(max_discharge_power) * demand_factor
 
-    def _get_idle_power(self, battery_config: dict[str, Any]) -> float:
+    def _get_idle_power(self, battery_config: BatteryBehavior) -> float:
         """Get idle power (minimal power flow during low activity hours)."""
         idle_range: list[float] = battery_config.get("idle_power_range", [-100.0, 100.0])
         # Convert idle range to positive values (idle is minimal consumption)
@@ -357,12 +377,12 @@ class RealisticBehaviorEngine:
 
         return random.uniform(min_idle, max_idle)  # nosec B311
 
-    def _get_solar_intensity_from_config(self, hour: int, battery_config: dict[str, Any]) -> float:
+    def _get_solar_intensity_from_config(self, hour: int, battery_config: BatteryBehavior) -> float:
         """Get solar intensity from YAML configuration."""
         solar_profile: dict[int, float] = battery_config.get("solar_intensity_profile", {})
         return solar_profile.get(hour, 0.1)  # Default to minimal intensity
 
-    def _get_demand_factor_from_config(self, hour: int, battery_config: dict[str, Any]) -> float:
+    def _get_demand_factor_from_config(self, hour: int, battery_config: BatteryBehavior) -> float:
         """Get demand factor from YAML configuration."""
         demand_profile: dict[int, float] = battery_config.get("demand_factor_profile", {})
         return demand_profile.get(hour, 0.3)  # Default to low demand
@@ -834,11 +854,22 @@ class DynamicSimulationEngine:
 
     @staticmethod
     def _device_type_from_template(template: CircuitTemplateExtended) -> str:
-        """Derive device_type from the template's energy profile mode."""
+        """Derive device_type from the template.
+
+        Checks for an explicit ``device_type`` field first (e.g. ``"evse"``),
+        then falls back to mode-based detection.  Bidirectional circuits with
+        ``battery_behavior.enabled`` are batteries, not EVSE.
+        """
+        explicit = template.get("device_type")
+        if explicit:
+            return explicit
         mode = template.get("energy_profile", {}).get("mode", "consumer")
         if mode == "producer":
             return "pv"
         if mode == "bidirectional":
+            battery = template.get("battery_behavior", {})
+            if isinstance(battery, dict) and battery.get("enabled", False):
+                return "circuit"
             return "evse"
         return "circuit"
 
@@ -1151,7 +1182,7 @@ class DynamicSimulationEngine:
                     advertised_current_a=32.0,
                     vendor_name="SPAN",
                     product_name="SPAN Drive",
-                    serial_number=f"SIM-EVSE-{cid[:8].upper()}",
+                    serial_number=f"SIM-EVSE-{cid.upper()}",
                     software_version="1.0.0-sim",
                 )
 
@@ -1445,10 +1476,9 @@ class DynamicSimulationEngine:
         Returns:
             Battery state: 'charging', 'discharging', 'idle', or 'unknown'
         """
-        battery_config_raw = template.get("battery_behavior", {})
-        if not isinstance(battery_config_raw, dict):
+        battery_config = template.get("battery_behavior", {})
+        if not isinstance(battery_config, dict):
             return "unknown"
-        battery_config: dict[str, Any] = battery_config_raw
 
         # Check if battery behavior is enabled
         if not battery_config.get("enabled", True):

@@ -35,15 +35,22 @@ from .phase_validation import (
     suggest_balanced_pairing,
     validate_solar_tabs,
 )
-from .protocol import CircuitControlProtocol, PanelCapability, SpanPanelClientProtocol, StreamingCapableProtocol
+from .protocol import (
+    CircuitControlProtocol,
+    PanelCapability,
+    PanelControlProtocol,
+    SpanPanelClientProtocol,
+    StreamingCapableProtocol,
+)
 from .simulation import DynamicSimulationEngine
 
-__version__ = "2.0.0"
+__version__ = "2.2.1"
 # fmt: off
 __all__ = [  # noqa: RUF022
     # Protocols
     "CircuitControlProtocol",
     "PanelCapability",
+    "PanelControlProtocol",
     "SpanPanelClientProtocol",
     "StreamingCapableProtocol",
     # Snapshots

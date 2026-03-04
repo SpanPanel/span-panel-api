@@ -64,6 +64,14 @@ Package versions prior to 2.0.0 depend on the SPAN v1 REST API. SPAN will sunset
 - HTTP/retry constants from `const.py`
 - `openapi.json` specification file
 
+## [2.2.1] - 03/2026
+
+### Added
+
+- **`PanelControlProtocol`** — new protocol interface for panel-level settable properties, separate from `CircuitControlProtocol`
+- **`set_dominant_power_source()`** — publishes a Dominant Power Source override to the panel's core node via MQTT
+- **`find_node_by_type()` made public** — renamed from `_find_node_by_type()` on `HomieDeviceConsumer` to support external callers resolving node IDs by type
+
 ## [2.0.2] - 03/2026
 
 ### Added

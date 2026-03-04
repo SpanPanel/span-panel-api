@@ -927,6 +927,41 @@ class TestSpanMqttClientControl:
             qos=1,
         )
 
+    @pytest.mark.asyncio
+    async def test_set_dominant_power_source_publishes(self):
+        from span_panel_api.mqtt.client import SpanMqttClient
+
+        config = MqttClientConfig(broker_host="h", username="u", password="p")
+        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+
+        # Populate the homie description so core node is known
+        desc = _make_description(_core_description())
+        client._homie.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        client._homie.handle_message(f"{PREFIX}/$description", desc)
+
+        mock_bridge = MagicMock()
+        client._bridge = mock_bridge
+
+        await client.set_dominant_power_source("BATTERY")
+
+        mock_bridge.publish.assert_called_once_with(
+            f"{TOPIC_PREFIX}/{SERIAL}/core/dominant-power-source/set",
+            "BATTERY",
+            qos=1,
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_dominant_power_source_no_core_node_raises(self):
+        from span_panel_api.exceptions import SpanPanelServerError
+        from span_panel_api.mqtt.client import SpanMqttClient
+
+        config = MqttClientConfig(broker_host="h", username="u", password="p")
+        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+
+        # No description loaded — core node not found
+        with pytest.raises(SpanPanelServerError, match="Core node not found"):
+            await client.set_dominant_power_source("GRID")
+
 
 # ---------------------------------------------------------------------------
 # SpanMqttClient — snapshot and ping
@@ -1080,7 +1115,7 @@ class TestPhase3Exports:
     def test_version_beta(self):
         import span_panel_api
 
-        assert span_panel_api.__version__ == "2.0.0"
+        assert span_panel_api.__version__ == "2.2.1"
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.models import MqttClientConfig
 from span_panel_api.protocol import (
     CircuitControlProtocol,
+    PanelControlProtocol,
     SpanPanelClientProtocol,
     StreamingCapableProtocol,
 )
@@ -37,6 +38,10 @@ class TestMqttProtocolConformance:
     def test_satisfies_circuit_control_protocol(self) -> None:
         if not issubclass(SpanMqttClient, CircuitControlProtocol):
             raise TypeError("SpanMqttClient does not satisfy CircuitControlProtocol")
+
+    def test_satisfies_panel_control_protocol(self) -> None:
+        if not issubclass(SpanMqttClient, PanelControlProtocol):
+            raise TypeError("SpanMqttClient does not satisfy PanelControlProtocol")
 
     def test_satisfies_streaming_protocol(self) -> None:
         if not issubclass(SpanMqttClient, StreamingCapableProtocol):

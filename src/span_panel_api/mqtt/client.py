@@ -1,8 +1,8 @@
 """SPAN Panel MQTT client.
 
 Composes AsyncMqttBridge and HomieDeviceConsumer to implement
-SpanPanelClientProtocol, CircuitControlProtocol, and
-StreamingCapableProtocol.
+SpanPanelClientProtocol, CircuitControlProtocol,
+PanelControlProtocol, and StreamingCapableProtocol.
 """
 
 from __future__ import annotations
@@ -11,11 +11,11 @@ import asyncio
 from collections.abc import Awaitable, Callable
 import logging
 
-from ..exceptions import SpanPanelConnectionError
+from ..exceptions import SpanPanelConnectionError, SpanPanelServerError
 from ..models import SpanPanelSnapshot
 from ..protocol import PanelCapability
 from .connection import AsyncMqttBridge
-from .const import MQTT_READY_TIMEOUT_S, PROPERTY_SET_TOPIC_FMT, WILDCARD_TOPIC_FMT
+from .const import MQTT_READY_TIMEOUT_S, PROPERTY_SET_TOPIC_FMT, TYPE_CORE, WILDCARD_TOPIC_FMT
 from .homie import HomieDeviceConsumer
 from .models import MqttClientConfig
 
@@ -179,6 +179,21 @@ class SpanMqttClient:
         topic = PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=circuit_id, prop="shed-priority")
         if self._bridge is not None:
             self._bridge.publish(topic, priority, qos=1)
+
+    # -- PanelControlProtocol ----------------------------------------------
+
+    async def set_dominant_power_source(self, value: str) -> None:
+        """Publish dominant-power-source change to the core node.
+
+        Args:
+            value: DPS enum value (GRID, BATTERY, NONE, GENERATOR, PV)
+        """
+        core_node = self._homie.find_node_by_type(TYPE_CORE)
+        if core_node is None:
+            raise SpanPanelServerError("Core node not found in panel topology")
+        topic = PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=core_node, prop="dominant-power-source")
+        if self._bridge is not None:
+            self._bridge.publish(topic, value, qos=1)
 
     # -- StreamingCapableProtocol ------------------------------------------
 

@@ -54,6 +54,13 @@ class CircuitControlProtocol(Protocol):
 
 
 @runtime_checkable
+class PanelControlProtocol(Protocol):
+    """Control protocol for panel-level settable properties."""
+
+    async def set_dominant_power_source(self, value: str) -> None: ...
+
+
+@runtime_checkable
 class StreamingCapableProtocol(Protocol):
     """Push-based transport that delivers updates via callbacks."""
 

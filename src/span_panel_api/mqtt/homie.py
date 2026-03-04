@@ -188,7 +188,7 @@ class HomieDeviceConsumer:
         """Get a property timestamp."""
         return self._property_timestamps.get(node_id, {}).get(prop_id, 0)
 
-    def _find_node_by_type(self, type_string: str) -> str | None:
+    def find_node_by_type(self, type_string: str) -> str | None:
         """Find the first node ID matching a given type."""
         for node_id, node_type in self._node_types.items():
             if node_type == type_string:
@@ -319,7 +319,7 @@ class HomieDeviceConsumer:
 
     def _build_battery(self) -> SpanBatterySnapshot:
         """Build battery snapshot from BESS node."""
-        bess_node = self._find_node_by_type(TYPE_BESS)
+        bess_node = self.find_node_by_type(TYPE_BESS)
         if bess_node is None:
             return SpanBatterySnapshot()
 
@@ -348,7 +348,7 @@ class HomieDeviceConsumer:
 
     def _build_pv(self) -> SpanPVSnapshot:
         """Build PV snapshot from the first PV metadata node."""
-        pv_node = self._find_node_by_type(TYPE_PV)
+        pv_node = self.find_node_by_type(TYPE_PV)
         if pv_node is None:
             return SpanPVSnapshot()
 
@@ -396,7 +396,7 @@ class HomieDeviceConsumer:
         4. both grid signals zero AND DPS != GRID — islanded
         """
         # 1. BESS grid-state is authoritative when available
-        bess_node = self._find_node_by_type(TYPE_BESS)
+        bess_node = self.find_node_by_type(TYPE_BESS)
         if bess_node is not None:
             gs = self._get_prop(bess_node, "grid-state")
             if gs == "ON_GRID":
@@ -482,7 +482,7 @@ class HomieDeviceConsumer:
 
     def _build_snapshot(self) -> SpanPanelSnapshot:
         """Build full snapshot from accumulated property values."""
-        core_node = self._find_node_by_type(TYPE_CORE)
+        core_node = self.find_node_by_type(TYPE_CORE)
         upstream_lugs = self._find_lugs_node(LUGS_UPSTREAM)
         downstream_lugs = self._find_lugs_node(LUGS_DOWNSTREAM)
 
@@ -569,7 +569,7 @@ class HomieDeviceConsumer:
             downstream_l2_current = _parse_float(dl2_i) if dl2_i else None
 
         # Power flows
-        pf_node = self._find_node_by_type(TYPE_POWER_FLOWS)
+        pf_node = self.find_node_by_type(TYPE_POWER_FLOWS)
         power_flow_pv: float | None = None
         power_flow_battery: float | None = None
         power_flow_grid: float | None = None
@@ -607,7 +607,7 @@ class HomieDeviceConsumer:
         evse = self._build_evse_devices()
 
         # BESS grid state for v2-native field
-        bess_node = self._find_node_by_type(TYPE_BESS)
+        bess_node = self.find_node_by_type(TYPE_BESS)
         grid_state: str | None = None
         if bess_node is not None:
             gs = self._get_prop(bess_node, "grid-state")

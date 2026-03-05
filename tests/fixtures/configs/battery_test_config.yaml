@@ -14,7 +14,7 @@ circuit_templates:
       typical_power: 0.0
       power_variation: 0.1
     relay_behavior: "controllable"
-    priority: "NON_ESSENTIAL"
+    priority: "OFF_GRID"
     battery_behavior:
       enabled: true
       max_charge_power: -5000
@@ -39,7 +39,7 @@ circuit_templates:
       typical_power: 50.0
       power_variation: 0.1
     relay_behavior: "controllable"
-    priority: "NON_ESSENTIAL"
+    priority: "OFF_GRID"
 
 circuits:
   - id: "battery_circuit"

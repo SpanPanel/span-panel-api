@@ -31,6 +31,7 @@ from span_panel_api.mqtt.const import (
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_CORE,
+    TYPE_EVSE,
     TYPE_LUGS,
     TYPE_LUGS_DOWNSTREAM,
     TYPE_LUGS_UPSTREAM,
@@ -379,31 +380,31 @@ class TestHomieCoreNode:
 
 
 class TestHomieDsmDerivation:
-    """Tests for the multi-signal dsm_grid_state and tri-state run_config derivations."""
+    """Tests for the multi-signal dsm_state and tri-state run_config derivations."""
 
-    # -- dsm_grid_state: BESS authoritative --
+    # -- dsm_state: BESS authoritative --
 
     def test_bess_on_grid_authoritative(self):
         consumer = _build_ready_consumer()
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "ON_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
         assert snapshot.grid_state == "ON_GRID"
 
     def test_bess_off_grid_authoritative(self):
         consumer = _build_ready_consumer()
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
 
-    # -- dsm_grid_state: DPS fallback (no BESS) --
+    # -- dsm_state: DPS fallback (no BESS) --
 
     def test_dps_grid_implies_on_grid(self):
         """DPS=GRID → DSM_ON_GRID even without BESS."""
         consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
 
     def test_dps_battery_with_grid_power_on_grid(self):
         """DPS=BATTERY but grid still exchanging power → DSM_ON_GRID."""
@@ -411,15 +412,45 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
         consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "500.0")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
+
+    def test_dps_battery_zero_lugs_nonzero_power_flow_on_grid(self):
+        """DPS=BATTERY, zero lugs but power-flows/grid non-zero → DSM_ON_GRID."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM},
+                "power-flows": {"type": TYPE_POWER_FLOWS},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "0.0")
+        consumer.handle_message(f"{PREFIX}/power-flows/grid", "-5.0")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_state == "DSM_ON_GRID"
+
+    def test_dps_battery_zero_both_grid_signals_off_grid(self):
+        """DPS=BATTERY, both lugs and power-flows/grid zero → DSM_OFF_GRID."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM},
+                "power-flows": {"type": TYPE_POWER_FLOWS},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "0.0")
+        consumer.handle_message(f"{PREFIX}/power-flows/grid", "0.0")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
 
     def test_dps_battery_zero_grid_power_off_grid(self):
-        """DPS=BATTERY and zero grid power → DSM_OFF_GRID."""
+        """DPS=BATTERY and zero grid power (no power-flows node) → DSM_OFF_GRID."""
         consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM}})
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
         consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "0.0")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
 
     def test_dps_pv_with_grid_power_on_grid(self):
         """DPS=PV but grid still exchanging → DSM_ON_GRID."""
@@ -427,20 +458,20 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "PV")
         consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "-200.0")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
 
     def test_dps_none_returns_unknown(self):
         """DPS=NONE → UNKNOWN (not a known power source)."""
         consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "NONE")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "UNKNOWN"
+        assert snapshot.dsm_state == "UNKNOWN"
 
     def test_no_core_returns_unknown(self):
         """No core node at all → UNKNOWN."""
         consumer = _build_ready_consumer({"bess-0": {"type": TYPE_BESS}})
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "UNKNOWN"
+        assert snapshot.dsm_state == "UNKNOWN"
 
     # -- current_run_config: tri-state derivation --
 
@@ -458,7 +489,7 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/grid-islandable", "true")
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
         assert snapshot.current_run_config == "PANEL_BACKUP"
 
     def test_off_grid_pv_islandable_off_grid(self):
@@ -468,7 +499,7 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/grid-islandable", "true")
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
         assert snapshot.current_run_config == "PANEL_OFF_GRID"
 
     def test_off_grid_generator_islandable_off_grid(self):
@@ -896,6 +927,41 @@ class TestSpanMqttClientControl:
             qos=1,
         )
 
+    @pytest.mark.asyncio
+    async def test_set_dominant_power_source_publishes(self):
+        from span_panel_api.mqtt.client import SpanMqttClient
+
+        config = MqttClientConfig(broker_host="h", username="u", password="p")
+        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+
+        # Populate the homie description so core node is known
+        desc = _make_description(_core_description())
+        client._homie.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        client._homie.handle_message(f"{PREFIX}/$description", desc)
+
+        mock_bridge = MagicMock()
+        client._bridge = mock_bridge
+
+        await client.set_dominant_power_source("BATTERY")
+
+        mock_bridge.publish.assert_called_once_with(
+            f"{TOPIC_PREFIX}/{SERIAL}/core/dominant-power-source/set",
+            "BATTERY",
+            qos=1,
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_dominant_power_source_no_core_node_raises(self):
+        from span_panel_api.exceptions import SpanPanelServerError
+        from span_panel_api.mqtt.client import SpanMqttClient
+
+        config = MqttClientConfig(broker_host="h", username="u", password="p")
+        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+
+        # No description loaded — core node not found
+        with pytest.raises(SpanPanelServerError, match="Core node not found"):
+            await client.set_dominant_power_source("GRID")
+
 
 # ---------------------------------------------------------------------------
 # SpanMqttClient — snapshot and ping
@@ -1049,7 +1115,7 @@ class TestPhase3Exports:
     def test_version_beta(self):
         import span_panel_api
 
-        assert span_panel_api.__version__ == "2.0.0"
+        assert span_panel_api.__version__ == "2.2.1"
 
 
 # ---------------------------------------------------------------------------
@@ -1313,3 +1379,122 @@ class TestUnmappedTabSynthesis:
         assert "unmapped_tab_2" in snapshot.circuits
         assert "unmapped_tab_3" not in snapshot.circuits
         assert "unmapped_tab_4" in snapshot.circuits
+
+
+# ---------------------------------------------------------------------------
+# HomieDeviceConsumer — EVSE metadata
+# ---------------------------------------------------------------------------
+
+
+class TestHomieEVSEMetadata:
+    def test_evse_metadata_parsed(self):
+        """All 9 EVSE properties are extracted into the snapshot."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "CHARGING")
+        consumer.handle_message(f"{PREFIX}/evse-0/lock-state", "LOCKED")
+        consumer.handle_message(f"{PREFIX}/evse-0/advertised-current", "32.0")
+        consumer.handle_message(f"{PREFIX}/evse-0/vendor-name", "SPAN")
+        consumer.handle_message(f"{PREFIX}/evse-0/product-name", "SPAN Drive")
+        consumer.handle_message(f"{PREFIX}/evse-0/part-number", "SPN-DRV-001")
+        consumer.handle_message(f"{PREFIX}/evse-0/serial-number", "SN12345")
+        consumer.handle_message(f"{PREFIX}/evse-0/software-version", "2.1.0")
+
+        snapshot = consumer.build_snapshot()
+        assert "evse-0" in snapshot.evse
+        evse = snapshot.evse["evse-0"]
+        assert evse.node_id == "evse-0"
+        assert evse.feed_circuit_id == "aabbccdd112233445566778899001122"
+        assert evse.status == "CHARGING"
+        assert evse.lock_state == "LOCKED"
+        assert evse.advertised_current_a == 32.0
+        assert evse.vendor_name == "SPAN"
+        assert evse.product_name == "SPAN Drive"
+        assert evse.part_number == "SPN-DRV-001"
+        assert evse.serial_number == "SN12345"
+        assert evse.software_version == "2.1.0"
+
+    def test_evse_multiple_devices(self):
+        """Two EVSE nodes produce two snapshot entries."""
+        circ_a = "aaaaaaaa-1111-2222-3333-444444444444"
+        circ_b = "bbbbbbbb-1111-2222-3333-444444444444"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circ_a: {"type": TYPE_CIRCUIT},
+                circ_b: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+                "evse-1": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circ_a)
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "CHARGING")
+        consumer.handle_message(f"{PREFIX}/evse-1/feed", circ_b)
+        consumer.handle_message(f"{PREFIX}/evse-1/status", "AVAILABLE")
+
+        snapshot = consumer.build_snapshot()
+        assert len(snapshot.evse) == 2
+        assert snapshot.evse["evse-0"].status == "CHARGING"
+        assert snapshot.evse["evse-1"].status == "AVAILABLE"
+
+    def test_evse_no_node(self):
+        """Empty dict when no EVSE commissioned."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
+        snapshot = consumer.build_snapshot()
+        assert snapshot.evse == {}
+
+    def test_evse_partial_metadata(self):
+        """Missing optional fields are None."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "AVAILABLE")
+
+        snapshot = consumer.build_snapshot()
+        evse = snapshot.evse["evse-0"]
+        assert evse.status == "AVAILABLE"
+        assert evse.lock_state == "UNKNOWN"
+        assert evse.advertised_current_a is None
+        assert evse.vendor_name is None
+        assert evse.product_name is None
+        assert evse.part_number is None
+        assert evse.serial_number is None
+        assert evse.software_version is None
+
+    def test_evse_feed_still_annotates_circuit(self):
+        """Existing feed annotation still works alongside new EVSE snapshot."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/evse-0/relative-position", "IN_PANEL")
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "CHARGING")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/name", "EV Charger")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/space", "10")
+
+        snapshot = consumer.build_snapshot()
+        # Circuit should be annotated with device_type=evse
+        circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
+        assert circuit.device_type == "evse"
+        assert circuit.relative_position == "IN_PANEL"
+        # EVSE snapshot should also be populated
+        assert "evse-0" in snapshot.evse
+        assert snapshot.evse["evse-0"].status == "CHARGING"

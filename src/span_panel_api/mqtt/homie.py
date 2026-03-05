@@ -13,7 +13,7 @@ import logging
 import time
 from typing import ClassVar
 
-from ..models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanPanelSnapshot, SpanPVSnapshot
+from ..models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanEvseSnapshot, SpanPanelSnapshot, SpanPVSnapshot
 from .const import (
     HOMIE_STATE_READY,
     LUGS_DOWNSTREAM,
@@ -188,7 +188,7 @@ class HomieDeviceConsumer:
         """Get a property timestamp."""
         return self._property_timestamps.get(node_id, {}).get(prop_id, 0)
 
-    def _find_node_by_type(self, type_string: str) -> str | None:
+    def find_node_by_type(self, type_string: str) -> str | None:
         """Find the first node ID matching a given type."""
         for node_id, node_type in self._node_types.items():
             if node_type == type_string:
@@ -319,7 +319,7 @@ class HomieDeviceConsumer:
 
     def _build_battery(self) -> SpanBatterySnapshot:
         """Build battery snapshot from BESS node."""
-        bess_node = self._find_node_by_type(TYPE_BESS)
+        bess_node = self.find_node_by_type(TYPE_BESS)
         if bess_node is None:
             return SpanBatterySnapshot()
 
@@ -348,7 +348,7 @@ class HomieDeviceConsumer:
 
     def _build_pv(self) -> SpanPVSnapshot:
         """Build PV snapshot from the first PV metadata node."""
-        pv_node = self._find_node_by_type(TYPE_PV)
+        pv_node = self.find_node_by_type(TYPE_PV)
         if pv_node is None:
             return SpanPVSnapshot()
 
@@ -362,17 +362,41 @@ class HomieDeviceConsumer:
             nameplate_capacity_kw=_parse_float(nc) if nc else None,
         )
 
-    def _derive_dsm_grid_state(self, core_node: str | None, grid_power: float) -> str:
-        """Derive dsm_grid_state from multiple signals.
+    def _build_evse_devices(self) -> dict[str, SpanEvseSnapshot]:
+        """Build EVSE snapshots from all EVSE metadata nodes."""
+        result: dict[str, SpanEvseSnapshot] = {}
+        for node_id, node_type in self._node_types.items():
+            if node_type != TYPE_EVSE:
+                continue
+            feed = self._get_prop(node_id, "feed")
+            if not feed:
+                continue
+            adv = self._get_prop(node_id, "advertised-current")
+            result[node_id] = SpanEvseSnapshot(
+                node_id=node_id,
+                feed_circuit_id=normalize_circuit_id(feed),
+                status=self._get_prop(node_id, "status") or "UNKNOWN",
+                lock_state=self._get_prop(node_id, "lock-state") or "UNKNOWN",
+                advertised_current_a=_parse_float(adv) if adv else None,
+                vendor_name=self._get_prop(node_id, "vendor-name") or None,
+                product_name=self._get_prop(node_id, "product-name") or None,
+                part_number=self._get_prop(node_id, "part-number") or None,
+                serial_number=self._get_prop(node_id, "serial-number") or None,
+                software_version=self._get_prop(node_id, "software-version") or None,
+            )
+        return result
+
+    def _derive_dsm_state(self, core_node: str | None, grid_power: float, power_flow_grid: float | None) -> str:
+        """Derive dsm_state from multiple signals.
 
         Priority:
         1. bess/grid-state — authoritative when BESS is commissioned
         2. dominant-power-source == GRID — grid is the primary source
-        3. grid_power != 0 — grid is exchanging power (even if not dominant)
-        4. grid_power == 0 AND DPS != GRID — islanded (no flow + grid not dominant)
+        3. grid_power or power_flow_grid non-zero — grid exchanging power
+        4. both grid signals zero AND DPS != GRID — islanded
         """
         # 1. BESS grid-state is authoritative when available
-        bess_node = self._find_node_by_type(TYPE_BESS)
+        bess_node = self.find_node_by_type(TYPE_BESS)
         if bess_node is not None:
             gs = self._get_prop(bess_node, "grid-state")
             if gs == "ON_GRID":
@@ -380,20 +404,19 @@ class HomieDeviceConsumer:
             if gs == "OFF_GRID":
                 return "DSM_OFF_GRID"
 
-        # 2-4. Fallback heuristic using DPS and grid power
+        # 2-4. Fallback heuristic using DPS and grid power signals
         if core_node is not None:
             dps = self._get_prop(core_node, "dominant-power-source")
             if dps == "GRID":
                 return "DSM_ON_GRID"
 
             if dps in ("BATTERY", "PV", "GENERATOR"):
-                if grid_power != 0.0:
-                    return "DSM_ON_GRID"
-                return "DSM_OFF_GRID"
+                grid_exchanging = grid_power != 0.0 or (power_flow_grid is not None and power_flow_grid != 0.0)
+                return "DSM_ON_GRID" if grid_exchanging else "DSM_OFF_GRID"
 
         return "UNKNOWN"
 
-    def _derive_run_config(self, dsm_grid_state: str, grid_islandable: bool | None, dps: str | None) -> str:
+    def _derive_run_config(self, dsm_state: str, grid_islandable: bool | None, dps: str | None) -> str:
         """Derive current_run_config from grid state, islandability, and power source.
 
         Decision table:
@@ -403,10 +426,10 @@ class HomieDeviceConsumer:
         - DSM_OFF_GRID + islandable + other → UNKNOWN
         - DSM_OFF_GRID + not islandable → UNKNOWN (shouldn't happen)
         """
-        if dsm_grid_state == "DSM_ON_GRID":
+        if dsm_state == "DSM_ON_GRID":
             return "PANEL_ON_GRID"
 
-        if dsm_grid_state == "DSM_OFF_GRID":
+        if dsm_state == "DSM_OFF_GRID":
             if not grid_islandable:
                 return "UNKNOWN"
             if dps == "BATTERY":
@@ -459,7 +482,7 @@ class HomieDeviceConsumer:
 
     def _build_snapshot(self) -> SpanPanelSnapshot:
         """Build full snapshot from accumulated property values."""
-        core_node = self._find_node_by_type(TYPE_CORE)
+        core_node = self.find_node_by_type(TYPE_CORE)
         upstream_lugs = self._find_lugs_node(LUGS_UPSTREAM)
         downstream_lugs = self._find_lugs_node(LUGS_DOWNSTREAM)
 
@@ -546,7 +569,7 @@ class HomieDeviceConsumer:
             downstream_l2_current = _parse_float(dl2_i) if dl2_i else None
 
         # Power flows
-        pf_node = self._find_node_by_type(TYPE_POWER_FLOWS)
+        pf_node = self.find_node_by_type(TYPE_POWER_FLOWS)
         power_flow_pv: float | None = None
         power_flow_battery: float | None = None
         power_flow_grid: float | None = None
@@ -578,20 +601,21 @@ class HomieDeviceConsumer:
         unmapped = self._build_unmapped_tabs(circuits)
         circuits.update(unmapped)
 
-        # Battery and PV metadata
+        # Battery, PV, and EVSE metadata
         battery = self._build_battery()
         pv = self._build_pv()
+        evse = self._build_evse_devices()
 
         # BESS grid state for v2-native field
-        bess_node = self._find_node_by_type(TYPE_BESS)
+        bess_node = self.find_node_by_type(TYPE_BESS)
         grid_state: str | None = None
         if bess_node is not None:
             gs = self._get_prop(bess_node, "grid-state")
             grid_state = gs if gs else None
 
         # Derived state values
-        dsm_grid_state = self._derive_dsm_grid_state(core_node, grid_power)
-        current_run_config = self._derive_run_config(dsm_grid_state, grid_islandable, dominant_power_source)
+        dsm_state = self._derive_dsm_state(core_node, grid_power, power_flow_grid)
+        current_run_config = self._derive_run_config(dsm_state, grid_islandable, dominant_power_source)
 
         # Connection uptime since $state==ready
         uptime = int(time.monotonic() - self._ready_since) if self._ready_since > 0.0 else 0
@@ -606,7 +630,7 @@ class HomieDeviceConsumer:
             main_meter_energy_produced_wh=main_produced,
             feedthrough_energy_consumed_wh=feedthrough_consumed,
             feedthrough_energy_produced_wh=feedthrough_produced,
-            dsm_grid_state=dsm_grid_state,
+            dsm_state=dsm_state,
             current_run_config=current_run_config,
             door_state=door_state,
             proximity_proven=self._state == HOMIE_STATE_READY,
@@ -634,4 +658,5 @@ class HomieDeviceConsumer:
             circuits=circuits,
             battery=battery,
             pv=pv,
+            evse=evse,
         )

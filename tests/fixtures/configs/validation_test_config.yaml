@@ -14,7 +14,7 @@ circuit_templates:
       typical_power: 500.0
       power_variation: 0.1
     relay_behavior: "controllable"
-    priority: "NON_ESSENTIAL"
+    priority: "OFF_GRID"
 
   high_power_consumer:
     energy_profile:
@@ -23,7 +23,7 @@ circuit_templates:
       typical_power: 2500.0
       power_variation: 0.2
     relay_behavior: "controllable"
-    priority: "ESSENTIAL"
+    priority: "NEVER"
 
 circuits:
   - id: "test_circuit_1"

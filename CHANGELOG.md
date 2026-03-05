@@ -33,7 +33,7 @@ Package versions prior to 2.0.0 depend on the SPAN v1 REST API. SPAN will sunset
   - `AsyncMqttBridge` — paho-mqtt v2 wrapper with TLS/WebSocket, event-loop-driven socket I/O (no threads)
   - `HomieDeviceConsumer` — Homie v5 state machine parsing MQTT topics into snapshots
   - `MqttClientConfig` — frozen configuration with transport type and TLS settings
-- **Snapshot dataclasses** — immutable `SpanPanelSnapshot`, `SpanCircuitSnapshot`, `SpanBatterySnapshot`, `SpanPVSnapshot` with v2-native fields
+- **Snapshot dataclasses** — immutable `SpanPanelSnapshot`, `SpanCircuitSnapshot`, `SpanBatterySnapshot`, `SpanPVSnapshot`, `SpanEvseSnapshot` with v2-native fields
 - **v2 auth functions** — `register_v2()`, `download_ca_cert()`, `get_homie_schema()`, `regenerate_passphrase()`
 - **API version detection** — `detect_api_version()` probes `/api/v2/status` and returns `DetectionResult`
 - **Factory function** — `create_span_client()` handles registration and returns a configured `SpanMqttClient`
@@ -63,6 +63,35 @@ Package versions prior to 2.0.0 depend on the SPAN v1 REST API. SPAN will sunset
 - `PanelCapability.REST_V1`, `PanelCapability.SIMULATION` flags
 - HTTP/retry constants from `const.py`
 - `openapi.json` specification file
+
+## [2.2.1] - 03/2026
+
+### Added
+
+- **`PanelControlProtocol`** — new protocol interface for panel-level settable properties, separate from `CircuitControlProtocol`
+- **`set_dominant_power_source()`** — publishes a Dominant Power Source override to the panel's core node via MQTT
+- **`find_node_by_type()` made public** — renamed from `_find_node_by_type()` on `HomieDeviceConsumer` to support external callers resolving node IDs by type
+
+## [2.0.2] - 03/2026
+
+### Added
+
+- **EVSE snapshot model** — new `SpanEvseSnapshot` dataclass with status, lock state, advertised current, and device metadata (vendor, product, part number, serial number, software version)
+- **EVSE Homie parsing** — `HomieDeviceConsumer._build_evse_devices()` extracts all 9 EVSE properties from `energy.ebus.device.evse` nodes
+- **Multiple EVSE support** — `SpanPanelSnapshot.evse` dict keyed by node ID supports multiple commissioned chargers
+- **EVSE simulation** — `DynamicSimulationEngine` generates EVSE snapshots for circuits with `device_type == "evse"`
+- **`SpanEvseSnapshot` exported** from package public API
+
+## [2.0.1] - 03/2026
+
+### Added
+
+- **Full BESS metadata parsing** — vendor name, product name, model, serial number, software version, nameplate capacity, and connected state from Homie BESS node
+- **README documentation** — event-loop I/O architecture and circuit name synchronization sections
+
+### Changed
+
+- Bumped nodeenv dev dependency from 1.9.1 to 1.10.0
 
 ## [1.1.14] - 12/2025
 
@@ -198,6 +227,8 @@ Package versions prior to 2.0.0 depend on the SPAN v1 REST API. SPAN will sunset
 
 | Version    | Date    | Transport  | Summary                                                                            |
 | ---------- | ------- | ---------- | ---------------------------------------------------------------------------------- |
+| **2.0.2**  | 03/2026 | MQTT/Homie | EVSE (EV charger) snapshot model, Homie parsing, simulation support                |
+| **2.0.1**  | 03/2026 | MQTT/Homie | Full BESS metadata parsing, README documentation                                   |
 | **2.0.0**  | 02/2026 | MQTT/Homie | Ground-up rewrite: MQTT-only, protocol-based API, real-time push, PV/BESS metadata |
 | **1.1.14** | 12/2025 | REST       | Keep-Alive and RemoteProtocolError handling                                        |
 | **1.1.9**  | 9/2025  | REST       | Simulation sign corrections                                                        |

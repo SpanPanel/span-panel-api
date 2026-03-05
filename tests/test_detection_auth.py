@@ -448,4 +448,4 @@ class TestPhase2Exports:
     def test_version_bumped(self):
         import span_panel_api
 
-        assert span_panel_api.__version__ == "2.0.0"
+        assert span_panel_api.__version__ == "2.2.1"

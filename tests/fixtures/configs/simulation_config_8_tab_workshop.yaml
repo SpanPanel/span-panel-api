@@ -16,7 +16,7 @@ circuit_templates:
       typical_power: 45.0
       power_variation: 0.2
     relay_behavior: "controllable"
-    priority: "MUST_HAVE"
+    priority: "NEVER"
     time_of_day_profile:
       enabled: true
       peak_hours: [7, 8, 17, 18, 19, 20]
@@ -30,7 +30,7 @@ circuit_templates:
       typical_power: 2200.0
       power_variation: 0.4
     relay_behavior: "controllable"
-    priority: "NON_ESSENTIAL"
+    priority: "OFF_GRID"
     cycling_pattern:
       enabled: true
       on_duration_minutes: 15
@@ -44,7 +44,7 @@ circuit_templates:
       typical_power: 400.0
       power_variation: 0.6
     relay_behavior: "controllable"
-    priority: "NON_ESSENTIAL"
+    priority: "OFF_GRID"
     cycling_pattern:
       enabled: true
       on_duration_minutes: 8
@@ -58,7 +58,7 @@ circuit_templates:
       typical_power: 1500.0
       power_variation: 0.3
     relay_behavior: "controllable"
-    priority: "NICE_TO_HAVE"
+    priority: "SOC_THRESHOLD"
     time_of_day_profile:
       enabled: true
       peak_hours: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
@@ -102,7 +102,7 @@ unmapped_tab_templates:
       typical_power: 200.0
       power_variation: 0.3
     relay_behavior: "controllable"
-    priority: "NON_ESSENTIAL"
+    priority: "OFF_GRID"
     cycling_pattern:
       enabled: true
       on_duration_minutes: 10
@@ -116,7 +116,7 @@ unmapped_tab_templates:
       typical_power: 400.0
       power_variation: 0.4
     relay_behavior: "controllable"
-    priority: "NON_ESSENTIAL"
+    priority: "OFF_GRID"
     cycling_pattern:
       enabled: true
       on_duration_minutes: 15
@@ -130,7 +130,7 @@ unmapped_tab_templates:
       typical_power: 150.0
       power_variation: 0.2
     relay_behavior: "controllable"
-    priority: "NON_ESSENTIAL"
+    priority: "OFF_GRID"
     time_of_day_profile:
       enabled: true
       peak_hours: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
@@ -144,7 +144,7 @@ unmapped_tab_templates:
       typical_power: 300.0
       power_variation: 0.3
     relay_behavior: "controllable"
-    priority: "NON_ESSENTIAL"
+    priority: "OFF_GRID"
     cycling_pattern:
       enabled: true
       on_duration_minutes: 12

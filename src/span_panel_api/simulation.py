@@ -1168,7 +1168,18 @@ class DynamicSimulationEngine:
 
         # --- Battery ---
         soe_percentage = float(soe_data["soe"]["percentage"])
-        battery_snapshot = SpanBatterySnapshot(soe_percentage=soe_percentage)
+        nameplate_kwh = 13.5  # Simulated battery capacity
+        soe_kwh = nameplate_kwh * soe_percentage / 100.0
+        battery_snapshot = SpanBatterySnapshot(
+            soe_percentage=soe_percentage,
+            soe_kwh=soe_kwh,
+            vendor_name="Simulated BESS",
+            product_name="Battery Storage",
+            serial_number=f"SIM-BESS-{raw['status']['system']['serial']}",
+            software_version="1.0.0-sim",
+            nameplate_capacity_kwh=nameplate_kwh,
+            connected=True,
+        )
 
         # --- EVSE ---
         evse_devices: dict[str, SpanEvseSnapshot] = {}

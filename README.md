@@ -223,6 +223,7 @@ pem = await download_ca_cert("192.168.1.100")
 
 # Fetch the Homie property schema (unauthenticated)
 schema = await get_homie_schema("192.168.1.100")
+print(f"Panel size: {schema.panel_size} spaces")
 print(f"Schema hash: {schema.types_schema_hash}")
 
 # Rotate MQTT broker password (invalidates previous password)

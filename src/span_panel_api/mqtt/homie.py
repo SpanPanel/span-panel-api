@@ -65,8 +65,9 @@ class HomieDeviceConsumer:
     (guaranteed by AsyncMqttBridge's call_soon_threadsafe dispatch).
     """
 
-    def __init__(self, serial_number: str) -> None:
+    def __init__(self, serial_number: str, panel_size: int) -> None:
         self._serial_number = serial_number
+        self._panel_size = panel_size
         self._topic_prefix = f"{TOPIC_PREFIX}/{serial_number}"
 
         self._state: str = ""
@@ -440,28 +441,21 @@ class HomieDeviceConsumer:
 
         return "UNKNOWN"
 
-    def _build_unmapped_tabs(self, circuits: dict[str, SpanCircuitSnapshot]) -> dict[str, SpanCircuitSnapshot]:
+    def _build_unmapped_tabs(
+        self,
+        circuits: dict[str, SpanCircuitSnapshot],
+    ) -> dict[str, SpanCircuitSnapshot]:
         """Synthesize unmapped tab entries for breaker positions with no circuit.
 
-        Determines panel size from the highest occupied tab, then creates
-        zero-power SpanCircuitSnapshot entries for unoccupied positions.
+        Creates zero-power SpanCircuitSnapshot entries for unoccupied positions
+        up to ``self._panel_size``.
         """
-        # Collect all occupied tabs from commissioned circuits
         occupied_tabs: set[int] = set()
         for circuit in circuits.values():
             occupied_tabs.update(circuit.tabs)
 
-        if not occupied_tabs:
-            return {}
-
-        # Panel size is the highest occupied tab (rounded up to even
-        # to cover both bus bar sides)
-        max_tab = max(occupied_tabs)
-        panel_size = max_tab if max_tab % 2 == 0 else max_tab + 1
-
-        # Synthesize entries for unoccupied positions
         unmapped: dict[str, SpanCircuitSnapshot] = {}
-        for tab in range(1, panel_size + 1):
+        for tab in range(1, self._panel_size + 1):
             if tab not in occupied_tabs:
                 circuit_id = f"unmapped_tab_{tab}"
                 unmapped[circuit_id] = SpanCircuitSnapshot(
@@ -500,7 +494,6 @@ class HomieDeviceConsumer:
         main_breaker: int | None = None
         wifi_ssid: str | None = None
         vendor_cloud: str | None = None
-        panel_size: int | None = None
 
         if core_node is not None:
             firmware = self._get_prop(core_node, "software-version")
@@ -530,9 +523,6 @@ class HomieDeviceConsumer:
 
             ws = self._get_prop(core_node, "wifi-ssid")
             wifi_ssid = ws if ws else None
-
-            ps = self._get_prop(core_node, "panel-size")
-            panel_size = _parse_int(ps) if ps else None
 
         # Upstream lugs → main meter (grid connection)
         # imported-energy = energy imported from the grid = consumed by the house
@@ -638,6 +628,7 @@ class HomieDeviceConsumer:
             eth0_link=eth0,
             wlan_link=wlan,
             wwan_link=wwan_connected,
+            panel_size=self._panel_size,
             dominant_power_source=dominant_power_source,
             grid_state=grid_state,
             grid_islandable=grid_islandable,
@@ -646,7 +637,6 @@ class HomieDeviceConsumer:
             main_breaker_rating_a=main_breaker,
             wifi_ssid=wifi_ssid,
             vendor_cloud=vendor_cloud,
-            panel_size=panel_size,
             power_flow_pv=power_flow_pv,
             power_flow_battery=power_flow_battery,
             power_flow_grid=power_flow_grid,

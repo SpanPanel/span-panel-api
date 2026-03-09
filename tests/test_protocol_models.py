@@ -120,6 +120,7 @@ def _make_panel_snapshot(**overrides) -> SpanPanelSnapshot:
         "eth0_link": True,
         "wlan_link": True,
         "wwan_link": False,
+        "panel_size": 32,
     }
     defaults.update(overrides)
     return SpanPanelSnapshot(**defaults)

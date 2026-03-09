@@ -13,6 +13,7 @@ import pytest
 from paho.mqtt.client import ConnectFlags
 from paho.mqtt.reasoncodes import ReasonCode
 
+from span_panel_api.models import V2HomieSchema
 from span_panel_api.mqtt.const import TOPIC_PREFIX, TYPE_CORE
 
 # ---------------------------------------------------------------------------
@@ -24,6 +25,17 @@ TOPIC_PREFIX_SERIAL = f"{TOPIC_PREFIX}/{SERIAL}"
 
 # Minimal Homie description that makes the device "ready"
 MINIMAL_DESCRIPTION = json.dumps({"nodes": {"core": {"type": TYPE_CORE}}})
+
+# Mock schema for SpanMqttClient.connect() — panel_size=32
+_MOCK_SCHEMA = V2HomieSchema(
+    firmware_version="test",
+    types_schema_hash="sha256:test",
+    types={
+        "energy.ebus.device.circuit": {
+            "space": {"datatype": "integer", "format": "1:32:1"},
+        },
+    },
+)
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +101,7 @@ async def mqtt_client_mock() -> AsyncGenerator[MagicMock, None]:
         patch("span_panel_api.mqtt.connection.AsyncMQTTClient") as cls,
         patch("span_panel_api.mqtt.connection.download_ca_cert", return_value="FAKE-PEM"),
         patch("span_panel_api.mqtt.connection.tempfile") as mock_tempfile,
+        patch("span_panel_api.mqtt.client.get_homie_schema", return_value=_MOCK_SCHEMA),
     ):
         # Make tempfile return a mock file object
         mock_tmp = MagicMock()

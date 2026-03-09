@@ -80,7 +80,7 @@ def _full_description() -> dict:
 
 def _build_ready_consumer(description_nodes: dict | None = None) -> HomieDeviceConsumer:
     """Create a HomieDeviceConsumer in ready state with given description."""
-    consumer = HomieDeviceConsumer(SERIAL)
+    consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
     consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
     nodes = description_nodes or _full_description()
     consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
@@ -126,16 +126,16 @@ class TestMqttClientConfig:
 
 class TestHomieConsumerState:
     def test_not_ready_initially(self):
-        consumer = HomieDeviceConsumer(SERIAL)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
         assert not consumer.is_ready()
 
     def test_not_ready_state_only(self):
-        consumer = HomieDeviceConsumer(SERIAL)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
         consumer.handle_message(f"{PREFIX}/$state", "ready")
         assert not consumer.is_ready()
 
     def test_not_ready_description_only(self):
-        consumer = HomieDeviceConsumer(SERIAL)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
         consumer.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
         assert not consumer.is_ready()
 
@@ -144,7 +144,7 @@ class TestHomieConsumerState:
         assert consumer.is_ready()
 
     def test_ignores_other_serial(self):
-        consumer = HomieDeviceConsumer(SERIAL)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
         consumer.handle_message(f"{TOPIC_PREFIX}/other-serial/$state", "ready")
         assert not consumer.is_ready()
 
@@ -766,16 +766,46 @@ class TestHomieLugsCurrent:
 
 
 class TestHomiePanelSize:
-    def test_panel_size_parsed(self):
-        consumer = _build_ready_consumer()
-        consumer.handle_message(f"{PREFIX}/core/panel-size", "32")
+    def test_panel_size_from_constructor(self):
+        """panel_size in snapshot comes from constructor argument."""
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
         snapshot = consumer.build_snapshot()
         assert snapshot.panel_size == 32
 
-    def test_panel_size_none_when_missing(self):
-        consumer = _build_ready_consumer()
+    def test_panel_size_40(self):
+        """Different panel sizes are propagated correctly."""
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=40)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
         snapshot = consumer.build_snapshot()
-        assert snapshot.panel_size is None
+        assert snapshot.panel_size == 40
+
+    def test_unmapped_tabs_use_panel_size(self):
+        """Unmapped tabs fill up to panel_size, not highest occupied tab."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=8)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
+        # Circuit at space 2 only — tabs 3-8 should be unmapped
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "2")
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
+
+        snapshot = consumer.build_snapshot()
+        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
+        assert unmapped_ids == [
+            "unmapped_tab_1",
+            "unmapped_tab_3",
+            "unmapped_tab_4",
+            "unmapped_tab_5",
+            "unmapped_tab_6",
+            "unmapped_tab_7",
+            "unmapped_tab_8",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -933,6 +963,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client._homie = HomieDeviceConsumer(SERIAL, panel_size=32)
 
         # Populate the homie description so core node is known
         desc = _make_description(_core_description())
@@ -957,6 +988,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client._homie = HomieDeviceConsumer(SERIAL, panel_size=32)
 
         # No description loaded — core node not found
         with pytest.raises(SpanPanelServerError, match="Core node not found"):
@@ -975,6 +1007,7 @@ class TestSpanMqttClientSnapshot:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client._homie = HomieDeviceConsumer(SERIAL, panel_size=32)
 
         # Manually ready the homie consumer
         client._homie.handle_message(f"{PREFIX}/$state", "ready")
@@ -1003,6 +1036,7 @@ class TestSpanMqttClientSnapshot:
         mock_bridge = MagicMock()
         mock_bridge.is_connected.return_value = True
         client._bridge = mock_bridge
+        client._homie = HomieDeviceConsumer(SERIAL, panel_size=32)
 
         client._homie.handle_message(f"{PREFIX}/$state", "ready")
         client._homie.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
@@ -1125,7 +1159,7 @@ class TestPhase3Exports:
 
 class TestHomieEdgeCases:
     def test_invalid_description_json(self):
-        consumer = HomieDeviceConsumer(SERIAL)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
         consumer.handle_message(f"{PREFIX}/$state", "ready")
         consumer.handle_message(f"{PREFIX}/$description", "not-json{{{")
         assert not consumer.is_ready()
@@ -1151,7 +1185,8 @@ class TestHomieEdgeCases:
         consumer.handle_message(f"{PREFIX}/bbbbbbbb-5555-6666-7777-888888888888/name", "Circuit B")
 
         snapshot = consumer.build_snapshot()
-        assert len(snapshot.circuits) == 2
+        real_circuits = {k: v for k, v in snapshot.circuits.items() if not k.startswith("unmapped_tab_")}
+        assert len(real_circuits) == 2
         assert snapshot.circuits["aaaaaaaa11112222333344444444444" + "4"].name == "Circuit A"
         assert snapshot.circuits["bbbbbbbb55556666777788888888888" + "8"].name == "Circuit B"
 
@@ -1169,7 +1204,11 @@ class TestHomieEdgeCases:
 
 
 class TestUnmappedTabSynthesis:
-    """Tests for _build_unmapped_tabs and dipole tab derivation."""
+    """Tests for _build_unmapped_tabs and dipole tab derivation.
+
+    All tests use panel_size=32 (from _build_ready_consumer) unless a
+    smaller panel is constructed explicitly.
+    """
 
     def test_single_pole_tabs(self):
         """Single-pole circuit gets tabs = [space]."""
@@ -1217,13 +1256,16 @@ class TestUnmappedTabSynthesis:
         assert circuit.tabs == [30, 32]
 
     def test_unmapped_tabs_generated(self):
-        """Unmapped positions should produce synthetic circuit entries."""
+        """Unmapped positions fill up to panel_size (not highest tab)."""
         nodes = {
             "core": {"type": TYPE_CORE},
             "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
             "bbbbbbbb-5555-6666-7777-888888888888": {"type": TYPE_CIRCUIT},
         }
-        consumer = _build_ready_consumer(nodes)
+        # Use panel_size=6 so the test is tractable
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=6)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
         # Circuit A at space 1 (single-pole)
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
@@ -1233,8 +1275,7 @@ class TestUnmappedTabSynthesis:
 
         snapshot = consumer.build_snapshot()
 
-        # Highest occupied tab is 5 (odd), panel_size rounds to 6
-        # Occupied: {1, 3, 5}, unmapped: {2, 4, 6}
+        # panel_size=6, occupied: {1, 3, 5}, unmapped: {2, 4, 6}
         assert "unmapped_tab_2" in snapshot.circuits
         assert "unmapped_tab_4" in snapshot.circuits
         assert "unmapped_tab_6" in snapshot.circuits
@@ -1249,7 +1290,9 @@ class TestUnmappedTabSynthesis:
             "core": {"type": TYPE_CORE},
             "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
         }
-        consumer = _build_ready_consumer(nodes)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=4)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
 
@@ -1270,7 +1313,6 @@ class TestUnmappedTabSynthesis:
 
     def test_fully_occupied_panel_no_unmapped(self):
         """When all positions are occupied, no unmapped tabs are generated."""
-        # Create 4 circuits occupying spaces 1, 2, 3, 4
         nodes = {
             "core": {"type": TYPE_CORE},
             "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
@@ -1278,7 +1320,9 @@ class TestUnmappedTabSynthesis:
             "cccccccc-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
             "dddddddd-5555-6666-7777-888888888888": {"type": TYPE_CIRCUIT},
         }
-        consumer = _build_ready_consumer(nodes)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=4)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
         for i, node in enumerate(
             [
                 "aaaaaaaa-1111-2222-3333-444444444444",
@@ -1295,70 +1339,63 @@ class TestUnmappedTabSynthesis:
         unmapped_ids = [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
         assert unmapped_ids == []
 
-    def test_no_circuits_no_unmapped(self):
-        """When no circuits exist, no unmapped tabs are generated."""
+    def test_no_circuits_all_unmapped(self):
+        """When no circuits exist, all positions up to panel_size are unmapped."""
         nodes = {"core": {"type": TYPE_CORE}}
-        consumer = _build_ready_consumer(nodes)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=4)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
         snapshot = consumer.build_snapshot()
-        unmapped_ids = [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
-        assert unmapped_ids == []
-
-    def test_no_space_property_no_unmapped(self):
-        """Circuits without space property don't contribute to tab tracking."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-        }
-        consumer = _build_ready_consumer(nodes)
-        # Don't set space property
-        snapshot = consumer.build_snapshot()
-        unmapped_ids = [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
-        assert unmapped_ids == []
-
-    def test_panel_size_rounds_to_even(self):
-        """Panel size rounds up to even when highest tab is odd."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-        }
-        consumer = _build_ready_consumer(nodes)
-        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "7")
-        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
-
-        snapshot = consumer.build_snapshot()
-        # Highest tab=7 (odd) → panel_size=8
-        # Occupied: {7}, unmapped: {1,2,3,4,5,6,8}
         unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
         assert unmapped_ids == [
             "unmapped_tab_1",
             "unmapped_tab_2",
+            "unmapped_tab_3",
+            "unmapped_tab_4",
+        ]
+
+    def test_no_space_property_all_unmapped(self):
+        """Circuits without space property don't occupy any tabs."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=4)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
+        # Don't set space property — circuit has no tabs
+        snapshot = consumer.build_snapshot()
+        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
+        assert unmapped_ids == [
+            "unmapped_tab_1",
+            "unmapped_tab_2",
+            "unmapped_tab_3",
+            "unmapped_tab_4",
+        ]
+
+    def test_unmapped_fills_to_panel_size(self):
+        """Unmapped tabs fill up to panel_size even if circuit is at low tab."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=8)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "2")
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
+
+        snapshot = consumer.build_snapshot()
+        # Occupied: {2}, unmapped: {1,3,4,5,6,7,8}
+        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
+        assert unmapped_ids == [
+            "unmapped_tab_1",
             "unmapped_tab_3",
             "unmapped_tab_4",
             "unmapped_tab_5",
             "unmapped_tab_6",
+            "unmapped_tab_7",
             "unmapped_tab_8",
-        ]
-
-    def test_panel_size_exact_when_even(self):
-        """Panel size stays as-is when highest tab is even."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-        }
-        consumer = _build_ready_consumer(nodes)
-        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "6")
-        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
-
-        snapshot = consumer.build_snapshot()
-        # Highest tab=6 (even) → panel_size=6
-        # Occupied: {6}, unmapped: {1,2,3,4,5}
-        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
-        assert unmapped_ids == [
-            "unmapped_tab_1",
-            "unmapped_tab_2",
-            "unmapped_tab_3",
-            "unmapped_tab_4",
-            "unmapped_tab_5",
         ]
 
     def test_dipole_occupies_correct_tabs_in_unmapped_calc(self):
@@ -1367,14 +1404,15 @@ class TestUnmappedTabSynthesis:
             "core": {"type": TYPE_CORE},
             "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
         }
-        consumer = _build_ready_consumer(nodes)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=4)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
         # Dipole at space 1 → occupies 1 and 3
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "true")
 
         snapshot = consumer.build_snapshot()
-        # Highest tab = 3 (odd) → panel_size = 4
-        # Occupied: {1, 3}, unmapped: {2, 4}
+        # panel_size=4, occupied: {1, 3}, unmapped: {2, 4}
         assert "unmapped_tab_1" not in snapshot.circuits
         assert "unmapped_tab_2" in snapshot.circuits
         assert "unmapped_tab_3" not in snapshot.circuits

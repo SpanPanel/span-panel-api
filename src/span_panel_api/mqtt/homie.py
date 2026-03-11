@@ -264,7 +264,7 @@ class HomieDeviceConsumer:
 
         # active-power is in watts; negate so positive = consumption
         raw_power_w = _parse_float(self._get_prop(node_id, "active-power"))
-        instant_power_w = -raw_power_w
+        instant_power_w = -raw_power_w or 0.0
 
         # Energy: exported-energy = consumption (panel exports TO circuit)
         consumed_wh = _parse_float(self._get_prop(node_id, "exported-energy"))

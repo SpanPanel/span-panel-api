@@ -24,6 +24,7 @@ from .models import (
     SpanPanelSnapshot,
     SpanPVSnapshot,
     V2AuthResponse,
+    V2HomieSchema,
     V2StatusInfo,
 )
 from .mqtt import MqttClientConfig, SpanMqttClient
@@ -66,6 +67,7 @@ __all__ = [  # noqa: RUF022
     "detect_api_version",
     # v2 auth
     "V2AuthResponse",
+    "V2HomieSchema",
     "V2StatusInfo",
     "download_ca_cert",
     "get_homie_schema",

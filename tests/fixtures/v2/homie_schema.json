@@ -269,7 +269,7 @@
             "nameplate-capacity": {
                 "name": "Nameplate capacity",
                 "datatype": "float",
-                "unit": "kW"
+                "unit": "W"
             },
             "relative-position": {
                 "name": "Relative position of the commissioned PV system WRT the distribution enclosure",

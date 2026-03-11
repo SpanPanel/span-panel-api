@@ -45,7 +45,7 @@ class SpanPVSnapshot:
 
     vendor_name: str | None = None  # pv/vendor-name
     product_name: str | None = None  # pv/product-name
-    nameplate_capacity_kw: float | None = None  # pv/nameplate-capacity (kW)
+    nameplate_capacity_w: float | None = None  # pv/nameplate-capacity (W)
 
 
 @dataclass(frozen=True, slots=True)

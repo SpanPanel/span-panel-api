@@ -658,7 +658,7 @@ class TestHomiePVMetadata:
         snapshot = consumer.build_snapshot()
         assert snapshot.pv.vendor_name == "Enphase"
         assert snapshot.pv.product_name == "IQ8+"
-        assert snapshot.pv.nameplate_capacity_kw == 3960.0
+        assert snapshot.pv.nameplate_capacity_w == 3960.0
 
     def test_no_pv_node(self):
         """Without PV node, pv snapshot has None values."""
@@ -666,7 +666,7 @@ class TestHomiePVMetadata:
         snapshot = consumer.build_snapshot()
         assert snapshot.pv.vendor_name is None
         assert snapshot.pv.product_name is None
-        assert snapshot.pv.nameplate_capacity_kw is None
+        assert snapshot.pv.nameplate_capacity_w is None
 
     def test_pv_metadata_partial(self):
         """PV node with only some properties populated."""
@@ -681,7 +681,7 @@ class TestHomiePVMetadata:
         snapshot = consumer.build_snapshot()
         assert snapshot.pv.vendor_name == "Other"
         assert snapshot.pv.product_name is None
-        assert snapshot.pv.nameplate_capacity_kw is None
+        assert snapshot.pv.nameplate_capacity_w is None
 
 
 # ---------------------------------------------------------------------------

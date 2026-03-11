@@ -360,7 +360,7 @@ class HomieDeviceConsumer:
         return SpanPVSnapshot(
             vendor_name=vn if vn else None,
             product_name=pn if pn else None,
-            nameplate_capacity_kw=_parse_float(nc) if nc else None,
+            nameplate_capacity_w=_parse_float(nc) if nc else None,
         )
 
     def _build_evse_devices(self) -> dict[str, SpanEvseSnapshot]:

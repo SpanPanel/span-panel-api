@@ -110,6 +110,9 @@ class V2StatusInfo:
     firmware_version: str
 
 
+_CIRCUIT_TYPE_KEY = "energy.ebus.device.circuit"
+
+
 @dataclass(frozen=True, slots=True)
 class V2HomieSchema:
     """Response from GET /api/v2/homie/schema."""
@@ -117,6 +120,32 @@ class V2HomieSchema:
     firmware_version: str
     types_schema_hash: str  # SHA-256, first 16 hex chars
     types: dict[str, dict[str, object]]  # {type_name: {prop_name: {attr: value}}}
+
+    @property
+    def panel_size(self) -> int:
+        """Extract panel size from the circuit ``space`` property format.
+
+        The Homie schema defines ``space`` with ``"format": "min:max:step"``
+        (e.g. ``"1:32:1"``). The *max* value is the number of breaker spaces
+        in the panel.
+
+        Raises:
+            ValueError: If the space format is missing or unparseable.
+        """
+        circuit_type = self.types.get(_CIRCUIT_TYPE_KEY, {})
+        space_prop = circuit_type.get("space")
+        if not isinstance(space_prop, dict):
+            raise ValueError(f"Schema missing '{_CIRCUIT_TYPE_KEY}/space' property")
+        fmt = space_prop.get("format")
+        if not isinstance(fmt, str):
+            raise ValueError(f"Schema '{_CIRCUIT_TYPE_KEY}/space' has no format string")
+        parts = fmt.split(":")
+        if len(parts) != 3:
+            raise ValueError(f"Unexpected space format '{fmt}', expected 'min:max:step'")
+        try:
+            return int(parts[1])
+        except ValueError as exc:
+            raise ValueError(f"Cannot parse max from space format '{fmt}'") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +175,7 @@ class SpanPanelSnapshot:
     eth0_link: bool  # v1: direct | v2: core/ethernet
     wlan_link: bool  # v1: direct | v2: core/wifi
     wwan_link: bool  # v1: direct | v2: vendor-cloud == "CONNECTED"
+    panel_size: int  # Total breaker spaces (from Homie schema space format)
 
     # v2-native fields — None for REST transport
     dominant_power_source: str | None = None  # v2: core/dominant-power-source (settable)
@@ -156,7 +186,6 @@ class SpanPanelSnapshot:
     main_breaker_rating_a: int | None = None  # v2: core/breaker-rating (A)
     wifi_ssid: str | None = None  # v2: core/wifi-ssid
     vendor_cloud: str | None = None  # v2: core/vendor-cloud
-    panel_size: int | None = None  # v2: core/panel-size (total breaker spaces)
 
     # Power flows (None when node not present)
     power_flow_pv: float | None = None  # v2: power-flows/pv (W)

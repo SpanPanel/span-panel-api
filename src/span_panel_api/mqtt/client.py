@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 import logging
 
+from ..auth import get_homie_schema
 from ..exceptions import SpanPanelConnectionError, SpanPanelServerError
 from ..models import SpanPanelSnapshot
 from ..protocol import PanelCapability
@@ -43,13 +44,19 @@ class SpanMqttClient:
         self._snapshot_interval = snapshot_interval
 
         self._bridge: AsyncMqttBridge | None = None
-        self._homie = HomieDeviceConsumer(serial_number)
+        self._homie: HomieDeviceConsumer | None = None
         self._streaming = False
         self._snapshot_callbacks: list[Callable[[SpanPanelSnapshot], Awaitable[None]]] = []
         self._ready_event: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._snapshot_timer: asyncio.TimerHandle | None = None
+
+    def _require_homie(self) -> HomieDeviceConsumer:
+        """Return the HomieDeviceConsumer, raising if not yet connected."""
+        if self._homie is None:
+            raise SpanPanelConnectionError("Client not connected — call connect() first")
+        return self._homie
 
     # -- SpanPanelClientProtocol -------------------------------------------
 
@@ -72,10 +79,11 @@ class SpanMqttClient:
         """Connect to MQTT broker and wait for Homie device ready.
 
         Flow:
-        1. Create AsyncMqttBridge with broker credentials
-        2. Connect to MQTT broker
-        3. Subscribe to ebus/5/{serial}/#
-        4. Wait for $state==ready and $description parsed
+        1. Fetch Homie schema to determine panel size
+        2. Create AsyncMqttBridge with broker credentials
+        3. Connect to MQTT broker
+        4. Subscribe to ebus/5/{serial}/#
+        5. Wait for $state==ready and $description parsed
 
         Raises:
             SpanPanelConnectionError: Cannot connect or device not ready
@@ -83,6 +91,10 @@ class SpanMqttClient:
         """
         self._loop = asyncio.get_running_loop()
         self._ready_event = asyncio.Event()
+
+        # Fetch schema to determine panel size before processing any messages
+        schema = await get_homie_schema(self._host)
+        self._homie = HomieDeviceConsumer(self._serial_number, schema.panel_size)
 
         _LOGGER.debug(
             "MQTT: Creating bridge to %s:%s (serial=%s)",
@@ -145,7 +157,7 @@ class SpanMqttClient:
 
     async def ping(self) -> bool:
         """Check if MQTT connection is alive and device is ready."""
-        if self._bridge is None:
+        if self._bridge is None or self._homie is None:
             return False
         return self._bridge.is_connected() and self._homie.is_ready()
 
@@ -154,7 +166,7 @@ class SpanMqttClient:
 
         No network call — snapshot is built from in-memory property values.
         """
-        return self._homie.build_snapshot()
+        return self._require_homie().build_snapshot()
 
     # -- CircuitControlProtocol --------------------------------------------
 
@@ -188,7 +200,7 @@ class SpanMqttClient:
         Args:
             value: DPS enum value (GRID, BATTERY, NONE, GENERATOR, PV)
         """
-        core_node = self._homie.find_node_by_type(TYPE_CORE)
+        core_node = self._require_homie().find_node_by_type(TYPE_CORE)
         if core_node is None:
             raise SpanPanelServerError("Core node not found in panel topology")
         topic = PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=core_node, prop="dominant-power-source")
@@ -228,15 +240,18 @@ class SpanMqttClient:
 
     def _on_message(self, topic: str, payload: str) -> None:
         """Handle incoming MQTT message (called from asyncio loop)."""
-        was_ready = self._homie.is_ready()
-        self._homie.handle_message(topic, payload)
+        homie = self._homie
+        if homie is None:
+            return
+        was_ready = homie.is_ready()
+        homie.handle_message(topic, payload)
 
         # Check if device just became ready
-        if not was_ready and self._homie.is_ready() and self._ready_event is not None:
+        if not was_ready and homie.is_ready() and self._ready_event is not None:
             self._ready_event.set()
 
         # Dispatch snapshot callbacks if streaming
-        if self._streaming and self._homie.is_ready() and self._loop is not None:
+        if self._streaming and homie.is_ready() and self._loop is not None:
             if self._snapshot_interval <= 0:
                 # No debounce — dispatch immediately (backward compat)
                 self._create_dispatch_task()
@@ -263,15 +278,16 @@ class SpanMqttClient:
         returns as soon as all circuit names are populated, or when the
         timeout elapses (non-fatal — entities will use fallback names).
         """
+        homie = self._require_homie()
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
-            missing = self._homie.circuit_nodes_missing_names()
+            missing = homie.circuit_nodes_missing_names()
             if not missing:
                 _LOGGER.debug("All circuit names received")
                 return
             await asyncio.sleep(_CIRCUIT_NAMES_POLL_INTERVAL_S)
 
-        still_missing = self._homie.circuit_nodes_missing_names()
+        still_missing = homie.circuit_nodes_missing_names()
         if still_missing:
             _LOGGER.warning(
                 "Timed out waiting for circuit names (%d still missing): %s",
@@ -313,7 +329,7 @@ class SpanMqttClient:
 
     async def _dispatch_snapshot(self) -> None:
         """Build snapshot and send to all registered callbacks."""
-        snapshot = self._homie.build_snapshot()
+        snapshot = self._require_homie().build_snapshot()
         for cb in list(self._snapshot_callbacks):
             try:
                 await cb(snapshot)

@@ -82,12 +82,13 @@ Integration code programs against these protocols, not transport-specific classe
 
 All panel state is represented as immutable, frozen dataclasses:
 
-| Dataclass             | Content                                                                                                                                  |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `SpanPanelSnapshot`   | Complete panel state: power, energy, grid/DSM state, hardware status, per-leg voltages, power flows, lugs current, circuits, battery, PV |
-| `SpanCircuitSnapshot` | Per-circuit: power, energy, relay state, priority, tabs, device type, breaker rating, current                                            |
-| `SpanBatterySnapshot` | BESS: SoC percentage, SoE kWh, vendor/product metadata, nameplate capacity                                                               |
-| `SpanPVSnapshot`      | PV inverter: vendor/product metadata, nameplate capacity                                                                                 |
+| Dataclass             | Content                                                                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SpanPanelSnapshot`   | Complete panel state: power, energy, grid/DSM state, hardware status, per-leg voltages, power flows, lugs current, circuits, battery, PV, EVSE |
+| `SpanCircuitSnapshot` | Per-circuit: power, energy, relay state, priority, tabs, device type, breaker rating, current                                                  |
+| `SpanBatterySnapshot` | BESS: SoC percentage, SoE kWh, vendor/product metadata, nameplate capacity                                                                     |
+| `SpanPVSnapshot`      | PV inverter: vendor/product metadata, nameplate capacity                                                                                       |
+| `SpanEvseSnapshot`    | EVSE (EV charger): status, lock state, advertised current, vendor/product/serial/version metadata                                              |
 
 ## Usage
 
@@ -222,6 +223,7 @@ pem = await download_ca_cert("192.168.1.100")
 
 # Fetch the Homie property schema (unauthenticated)
 schema = await get_homie_schema("192.168.1.100")
+print(f"Panel size: {schema.panel_size} spaces")
 print(f"Schema hash: {schema.types_schema_hash}")
 
 # Rotate MQTT broker password (invalidates previous password)

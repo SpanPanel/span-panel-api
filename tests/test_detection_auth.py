@@ -305,6 +305,60 @@ class TestGetHomieSchema:
         with pytest.raises(AttributeError):
             result.firmware_version = "changed"  # type: ignore[misc]
 
+    def test_panel_size_from_space_format(self):
+        """panel_size extracts max from circuit space format 'min:max:step'."""
+        types = {
+            "energy.ebus.device.circuit": {
+                "space": {"datatype": "integer", "format": "1:32:1"},
+            },
+        }
+        schema = V2HomieSchema(firmware_version="fw", types_schema_hash="hash", types=types)
+        assert schema.panel_size == 32
+
+    def test_panel_size_different_max(self):
+        types = {
+            "energy.ebus.device.circuit": {
+                "space": {"datatype": "integer", "format": "1:40:1"},
+            },
+        }
+        schema = V2HomieSchema(firmware_version="fw", types_schema_hash="hash", types=types)
+        assert schema.panel_size == 40
+
+    def test_panel_size_missing_circuit_type_raises(self):
+        schema = V2HomieSchema(firmware_version="fw", types_schema_hash="hash", types={})
+        with pytest.raises(ValueError, match="space"):
+            _ = schema.panel_size
+
+    def test_panel_size_missing_space_property_raises(self):
+        types = {"energy.ebus.device.circuit": {"name": {"datatype": "string"}}}
+        schema = V2HomieSchema(firmware_version="fw", types_schema_hash="hash", types=types)
+        with pytest.raises(ValueError, match="space"):
+            _ = schema.panel_size
+
+    def test_panel_size_bad_format_raises(self):
+        types = {
+            "energy.ebus.device.circuit": {
+                "space": {"datatype": "integer", "format": "invalid"},
+            },
+        }
+        schema = V2HomieSchema(firmware_version="fw", types_schema_hash="hash", types=types)
+        with pytest.raises(ValueError, match="format"):
+            _ = schema.panel_size
+
+    def test_panel_size_from_live_fixture(self):
+        """panel_size works with the real panel schema fixture."""
+        import json
+        from pathlib import Path
+
+        fixture = Path(__file__).parent / "fixtures" / "v2" / "homie_schema.json"
+        data = json.loads(fixture.read_text())
+        schema = V2HomieSchema(
+            firmware_version=data["firmwareVersion"],
+            types_schema_hash="sha256:test",
+            types=data["types"],
+        )
+        assert schema.panel_size == 32
+
 
 # ===================================================================
 # regenerate_passphrase
@@ -448,4 +502,4 @@ class TestPhase2Exports:
     def test_version_bumped(self):
         import span_panel_api
 
-        assert span_panel_api.__version__ == "2.0.0"
+        assert span_panel_api.__version__ == "2.2.1"

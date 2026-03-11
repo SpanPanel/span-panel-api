@@ -102,7 +102,7 @@ class TestParseInt:
 
 class TestHomieCallbackUnregister:
     def test_unregister_removes_callback(self) -> None:
-        consumer = HomieDeviceConsumer("test-serial")
+        consumer = HomieDeviceConsumer("test-serial", panel_size=32)
         cb = AsyncMock()
         unregister = consumer.register_property_callback(cb)
         unregister()

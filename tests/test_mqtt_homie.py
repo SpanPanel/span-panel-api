@@ -31,6 +31,7 @@ from span_panel_api.mqtt.const import (
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_CORE,
+    TYPE_EVSE,
     TYPE_LUGS,
     TYPE_LUGS_DOWNSTREAM,
     TYPE_LUGS_UPSTREAM,
@@ -79,7 +80,7 @@ def _full_description() -> dict:
 
 def _build_ready_consumer(description_nodes: dict | None = None) -> HomieDeviceConsumer:
     """Create a HomieDeviceConsumer in ready state with given description."""
-    consumer = HomieDeviceConsumer(SERIAL)
+    consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
     consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
     nodes = description_nodes or _full_description()
     consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
@@ -125,16 +126,16 @@ class TestMqttClientConfig:
 
 class TestHomieConsumerState:
     def test_not_ready_initially(self):
-        consumer = HomieDeviceConsumer(SERIAL)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
         assert not consumer.is_ready()
 
     def test_not_ready_state_only(self):
-        consumer = HomieDeviceConsumer(SERIAL)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
         consumer.handle_message(f"{PREFIX}/$state", "ready")
         assert not consumer.is_ready()
 
     def test_not_ready_description_only(self):
-        consumer = HomieDeviceConsumer(SERIAL)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
         consumer.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
         assert not consumer.is_ready()
 
@@ -143,7 +144,7 @@ class TestHomieConsumerState:
         assert consumer.is_ready()
 
     def test_ignores_other_serial(self):
-        consumer = HomieDeviceConsumer(SERIAL)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
         consumer.handle_message(f"{TOPIC_PREFIX}/other-serial/$state", "ready")
         assert not consumer.is_ready()
 
@@ -379,31 +380,31 @@ class TestHomieCoreNode:
 
 
 class TestHomieDsmDerivation:
-    """Tests for the multi-signal dsm_grid_state and tri-state run_config derivations."""
+    """Tests for the multi-signal dsm_state and tri-state run_config derivations."""
 
-    # -- dsm_grid_state: BESS authoritative --
+    # -- dsm_state: BESS authoritative --
 
     def test_bess_on_grid_authoritative(self):
         consumer = _build_ready_consumer()
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "ON_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
         assert snapshot.grid_state == "ON_GRID"
 
     def test_bess_off_grid_authoritative(self):
         consumer = _build_ready_consumer()
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
 
-    # -- dsm_grid_state: DPS fallback (no BESS) --
+    # -- dsm_state: DPS fallback (no BESS) --
 
     def test_dps_grid_implies_on_grid(self):
         """DPS=GRID → DSM_ON_GRID even without BESS."""
         consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
 
     def test_dps_battery_with_grid_power_on_grid(self):
         """DPS=BATTERY but grid still exchanging power → DSM_ON_GRID."""
@@ -411,15 +412,45 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
         consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "500.0")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
+
+    def test_dps_battery_zero_lugs_nonzero_power_flow_on_grid(self):
+        """DPS=BATTERY, zero lugs but power-flows/grid non-zero → DSM_ON_GRID."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM},
+                "power-flows": {"type": TYPE_POWER_FLOWS},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "0.0")
+        consumer.handle_message(f"{PREFIX}/power-flows/grid", "-5.0")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_state == "DSM_ON_GRID"
+
+    def test_dps_battery_zero_both_grid_signals_off_grid(self):
+        """DPS=BATTERY, both lugs and power-flows/grid zero → DSM_OFF_GRID."""
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM},
+                "power-flows": {"type": TYPE_POWER_FLOWS},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
+        consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "0.0")
+        consumer.handle_message(f"{PREFIX}/power-flows/grid", "0.0")
+        snapshot = consumer.build_snapshot()
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
 
     def test_dps_battery_zero_grid_power_off_grid(self):
-        """DPS=BATTERY and zero grid power → DSM_OFF_GRID."""
+        """DPS=BATTERY and zero grid power (no power-flows node) → DSM_OFF_GRID."""
         consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}, "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM}})
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "BATTERY")
         consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "0.0")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
 
     def test_dps_pv_with_grid_power_on_grid(self):
         """DPS=PV but grid still exchanging → DSM_ON_GRID."""
@@ -427,20 +458,20 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "PV")
         consumer.handle_message(f"{PREFIX}/lugs-upstream/active-power", "-200.0")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_ON_GRID"
+        assert snapshot.dsm_state == "DSM_ON_GRID"
 
     def test_dps_none_returns_unknown(self):
         """DPS=NONE → UNKNOWN (not a known power source)."""
         consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
         consumer.handle_message(f"{PREFIX}/core/dominant-power-source", "NONE")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "UNKNOWN"
+        assert snapshot.dsm_state == "UNKNOWN"
 
     def test_no_core_returns_unknown(self):
         """No core node at all → UNKNOWN."""
         consumer = _build_ready_consumer({"bess-0": {"type": TYPE_BESS}})
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "UNKNOWN"
+        assert snapshot.dsm_state == "UNKNOWN"
 
     # -- current_run_config: tri-state derivation --
 
@@ -458,7 +489,7 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/grid-islandable", "true")
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
         assert snapshot.current_run_config == "PANEL_BACKUP"
 
     def test_off_grid_pv_islandable_off_grid(self):
@@ -468,7 +499,7 @@ class TestHomieDsmDerivation:
         consumer.handle_message(f"{PREFIX}/core/grid-islandable", "true")
         consumer.handle_message(f"{PREFIX}/bess-0/grid-state", "OFF_GRID")
         snapshot = consumer.build_snapshot()
-        assert snapshot.dsm_grid_state == "DSM_OFF_GRID"
+        assert snapshot.dsm_state == "DSM_OFF_GRID"
         assert snapshot.current_run_config == "PANEL_OFF_GRID"
 
     def test_off_grid_generator_islandable_off_grid(self):
@@ -735,16 +766,46 @@ class TestHomieLugsCurrent:
 
 
 class TestHomiePanelSize:
-    def test_panel_size_parsed(self):
-        consumer = _build_ready_consumer()
-        consumer.handle_message(f"{PREFIX}/core/panel-size", "32")
+    def test_panel_size_from_constructor(self):
+        """panel_size in snapshot comes from constructor argument."""
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
         snapshot = consumer.build_snapshot()
         assert snapshot.panel_size == 32
 
-    def test_panel_size_none_when_missing(self):
-        consumer = _build_ready_consumer()
+    def test_panel_size_40(self):
+        """Different panel sizes are propagated correctly."""
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=40)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
         snapshot = consumer.build_snapshot()
-        assert snapshot.panel_size is None
+        assert snapshot.panel_size == 40
+
+    def test_unmapped_tabs_use_panel_size(self):
+        """Unmapped tabs fill up to panel_size, not highest occupied tab."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=8)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
+        # Circuit at space 2 only — tabs 3-8 should be unmapped
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "2")
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
+
+        snapshot = consumer.build_snapshot()
+        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
+        assert unmapped_ids == [
+            "unmapped_tab_1",
+            "unmapped_tab_3",
+            "unmapped_tab_4",
+            "unmapped_tab_5",
+            "unmapped_tab_6",
+            "unmapped_tab_7",
+            "unmapped_tab_8",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -896,6 +957,43 @@ class TestSpanMqttClientControl:
             qos=1,
         )
 
+    @pytest.mark.asyncio
+    async def test_set_dominant_power_source_publishes(self):
+        from span_panel_api.mqtt.client import SpanMqttClient
+
+        config = MqttClientConfig(broker_host="h", username="u", password="p")
+        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client._homie = HomieDeviceConsumer(SERIAL, panel_size=32)
+
+        # Populate the homie description so core node is known
+        desc = _make_description(_core_description())
+        client._homie.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        client._homie.handle_message(f"{PREFIX}/$description", desc)
+
+        mock_bridge = MagicMock()
+        client._bridge = mock_bridge
+
+        await client.set_dominant_power_source("BATTERY")
+
+        mock_bridge.publish.assert_called_once_with(
+            f"{TOPIC_PREFIX}/{SERIAL}/core/dominant-power-source/set",
+            "BATTERY",
+            qos=1,
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_dominant_power_source_no_core_node_raises(self):
+        from span_panel_api.exceptions import SpanPanelServerError
+        from span_panel_api.mqtt.client import SpanMqttClient
+
+        config = MqttClientConfig(broker_host="h", username="u", password="p")
+        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client._homie = HomieDeviceConsumer(SERIAL, panel_size=32)
+
+        # No description loaded — core node not found
+        with pytest.raises(SpanPanelServerError, match="Core node not found"):
+            await client.set_dominant_power_source("GRID")
+
 
 # ---------------------------------------------------------------------------
 # SpanMqttClient — snapshot and ping
@@ -909,6 +1007,7 @@ class TestSpanMqttClientSnapshot:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client._homie = HomieDeviceConsumer(SERIAL, panel_size=32)
 
         # Manually ready the homie consumer
         client._homie.handle_message(f"{PREFIX}/$state", "ready")
@@ -937,6 +1036,7 @@ class TestSpanMqttClientSnapshot:
         mock_bridge = MagicMock()
         mock_bridge.is_connected.return_value = True
         client._bridge = mock_bridge
+        client._homie = HomieDeviceConsumer(SERIAL, panel_size=32)
 
         client._homie.handle_message(f"{PREFIX}/$state", "ready")
         client._homie.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
@@ -1049,7 +1149,7 @@ class TestPhase3Exports:
     def test_version_beta(self):
         import span_panel_api
 
-        assert span_panel_api.__version__ == "2.0.0"
+        assert span_panel_api.__version__ == "2.2.1"
 
 
 # ---------------------------------------------------------------------------
@@ -1059,7 +1159,7 @@ class TestPhase3Exports:
 
 class TestHomieEdgeCases:
     def test_invalid_description_json(self):
-        consumer = HomieDeviceConsumer(SERIAL)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=32)
         consumer.handle_message(f"{PREFIX}/$state", "ready")
         consumer.handle_message(f"{PREFIX}/$description", "not-json{{{")
         assert not consumer.is_ready()
@@ -1085,7 +1185,8 @@ class TestHomieEdgeCases:
         consumer.handle_message(f"{PREFIX}/bbbbbbbb-5555-6666-7777-888888888888/name", "Circuit B")
 
         snapshot = consumer.build_snapshot()
-        assert len(snapshot.circuits) == 2
+        real_circuits = {k: v for k, v in snapshot.circuits.items() if not k.startswith("unmapped_tab_")}
+        assert len(real_circuits) == 2
         assert snapshot.circuits["aaaaaaaa11112222333344444444444" + "4"].name == "Circuit A"
         assert snapshot.circuits["bbbbbbbb55556666777788888888888" + "8"].name == "Circuit B"
 
@@ -1103,7 +1204,11 @@ class TestHomieEdgeCases:
 
 
 class TestUnmappedTabSynthesis:
-    """Tests for _build_unmapped_tabs and dipole tab derivation."""
+    """Tests for _build_unmapped_tabs and dipole tab derivation.
+
+    All tests use panel_size=32 (from _build_ready_consumer) unless a
+    smaller panel is constructed explicitly.
+    """
 
     def test_single_pole_tabs(self):
         """Single-pole circuit gets tabs = [space]."""
@@ -1151,13 +1256,16 @@ class TestUnmappedTabSynthesis:
         assert circuit.tabs == [30, 32]
 
     def test_unmapped_tabs_generated(self):
-        """Unmapped positions should produce synthetic circuit entries."""
+        """Unmapped positions fill up to panel_size (not highest tab)."""
         nodes = {
             "core": {"type": TYPE_CORE},
             "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
             "bbbbbbbb-5555-6666-7777-888888888888": {"type": TYPE_CIRCUIT},
         }
-        consumer = _build_ready_consumer(nodes)
+        # Use panel_size=6 so the test is tractable
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=6)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
         # Circuit A at space 1 (single-pole)
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
@@ -1167,8 +1275,7 @@ class TestUnmappedTabSynthesis:
 
         snapshot = consumer.build_snapshot()
 
-        # Highest occupied tab is 5 (odd), panel_size rounds to 6
-        # Occupied: {1, 3, 5}, unmapped: {2, 4, 6}
+        # panel_size=6, occupied: {1, 3, 5}, unmapped: {2, 4, 6}
         assert "unmapped_tab_2" in snapshot.circuits
         assert "unmapped_tab_4" in snapshot.circuits
         assert "unmapped_tab_6" in snapshot.circuits
@@ -1183,7 +1290,9 @@ class TestUnmappedTabSynthesis:
             "core": {"type": TYPE_CORE},
             "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
         }
-        consumer = _build_ready_consumer(nodes)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=4)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
 
@@ -1204,7 +1313,6 @@ class TestUnmappedTabSynthesis:
 
     def test_fully_occupied_panel_no_unmapped(self):
         """When all positions are occupied, no unmapped tabs are generated."""
-        # Create 4 circuits occupying spaces 1, 2, 3, 4
         nodes = {
             "core": {"type": TYPE_CORE},
             "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
@@ -1212,7 +1320,9 @@ class TestUnmappedTabSynthesis:
             "cccccccc-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
             "dddddddd-5555-6666-7777-888888888888": {"type": TYPE_CIRCUIT},
         }
-        consumer = _build_ready_consumer(nodes)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=4)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
         for i, node in enumerate(
             [
                 "aaaaaaaa-1111-2222-3333-444444444444",
@@ -1229,70 +1339,63 @@ class TestUnmappedTabSynthesis:
         unmapped_ids = [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
         assert unmapped_ids == []
 
-    def test_no_circuits_no_unmapped(self):
-        """When no circuits exist, no unmapped tabs are generated."""
+    def test_no_circuits_all_unmapped(self):
+        """When no circuits exist, all positions up to panel_size are unmapped."""
         nodes = {"core": {"type": TYPE_CORE}}
-        consumer = _build_ready_consumer(nodes)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=4)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
         snapshot = consumer.build_snapshot()
-        unmapped_ids = [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
-        assert unmapped_ids == []
-
-    def test_no_space_property_no_unmapped(self):
-        """Circuits without space property don't contribute to tab tracking."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-        }
-        consumer = _build_ready_consumer(nodes)
-        # Don't set space property
-        snapshot = consumer.build_snapshot()
-        unmapped_ids = [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
-        assert unmapped_ids == []
-
-    def test_panel_size_rounds_to_even(self):
-        """Panel size rounds up to even when highest tab is odd."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-        }
-        consumer = _build_ready_consumer(nodes)
-        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "7")
-        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
-
-        snapshot = consumer.build_snapshot()
-        # Highest tab=7 (odd) → panel_size=8
-        # Occupied: {7}, unmapped: {1,2,3,4,5,6,8}
         unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
         assert unmapped_ids == [
             "unmapped_tab_1",
             "unmapped_tab_2",
+            "unmapped_tab_3",
+            "unmapped_tab_4",
+        ]
+
+    def test_no_space_property_all_unmapped(self):
+        """Circuits without space property don't occupy any tabs."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=4)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
+        # Don't set space property — circuit has no tabs
+        snapshot = consumer.build_snapshot()
+        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
+        assert unmapped_ids == [
+            "unmapped_tab_1",
+            "unmapped_tab_2",
+            "unmapped_tab_3",
+            "unmapped_tab_4",
+        ]
+
+    def test_unmapped_fills_to_panel_size(self):
+        """Unmapped tabs fill up to panel_size even if circuit is at low tab."""
+        nodes = {
+            "core": {"type": TYPE_CORE},
+            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
+        }
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=8)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "2")
+        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
+
+        snapshot = consumer.build_snapshot()
+        # Occupied: {2}, unmapped: {1,3,4,5,6,7,8}
+        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
+        assert unmapped_ids == [
+            "unmapped_tab_1",
             "unmapped_tab_3",
             "unmapped_tab_4",
             "unmapped_tab_5",
             "unmapped_tab_6",
+            "unmapped_tab_7",
             "unmapped_tab_8",
-        ]
-
-    def test_panel_size_exact_when_even(self):
-        """Panel size stays as-is when highest tab is even."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-        }
-        consumer = _build_ready_consumer(nodes)
-        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "6")
-        consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
-
-        snapshot = consumer.build_snapshot()
-        # Highest tab=6 (even) → panel_size=6
-        # Occupied: {6}, unmapped: {1,2,3,4,5}
-        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
-        assert unmapped_ids == [
-            "unmapped_tab_1",
-            "unmapped_tab_2",
-            "unmapped_tab_3",
-            "unmapped_tab_4",
-            "unmapped_tab_5",
         ]
 
     def test_dipole_occupies_correct_tabs_in_unmapped_calc(self):
@@ -1301,15 +1404,135 @@ class TestUnmappedTabSynthesis:
             "core": {"type": TYPE_CORE},
             "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
         }
-        consumer = _build_ready_consumer(nodes)
+        consumer = HomieDeviceConsumer(SERIAL, panel_size=4)
+        consumer.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        consumer.handle_message(f"{PREFIX}/$description", _make_description(nodes))
         # Dipole at space 1 → occupies 1 and 3
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
         consumer.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "true")
 
         snapshot = consumer.build_snapshot()
-        # Highest tab = 3 (odd) → panel_size = 4
-        # Occupied: {1, 3}, unmapped: {2, 4}
+        # panel_size=4, occupied: {1, 3}, unmapped: {2, 4}
         assert "unmapped_tab_1" not in snapshot.circuits
         assert "unmapped_tab_2" in snapshot.circuits
         assert "unmapped_tab_3" not in snapshot.circuits
         assert "unmapped_tab_4" in snapshot.circuits
+
+
+# ---------------------------------------------------------------------------
+# HomieDeviceConsumer — EVSE metadata
+# ---------------------------------------------------------------------------
+
+
+class TestHomieEVSEMetadata:
+    def test_evse_metadata_parsed(self):
+        """All 9 EVSE properties are extracted into the snapshot."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "CHARGING")
+        consumer.handle_message(f"{PREFIX}/evse-0/lock-state", "LOCKED")
+        consumer.handle_message(f"{PREFIX}/evse-0/advertised-current", "32.0")
+        consumer.handle_message(f"{PREFIX}/evse-0/vendor-name", "SPAN")
+        consumer.handle_message(f"{PREFIX}/evse-0/product-name", "SPAN Drive")
+        consumer.handle_message(f"{PREFIX}/evse-0/part-number", "SPN-DRV-001")
+        consumer.handle_message(f"{PREFIX}/evse-0/serial-number", "SN12345")
+        consumer.handle_message(f"{PREFIX}/evse-0/software-version", "2.1.0")
+
+        snapshot = consumer.build_snapshot()
+        assert "evse-0" in snapshot.evse
+        evse = snapshot.evse["evse-0"]
+        assert evse.node_id == "evse-0"
+        assert evse.feed_circuit_id == "aabbccdd112233445566778899001122"
+        assert evse.status == "CHARGING"
+        assert evse.lock_state == "LOCKED"
+        assert evse.advertised_current_a == 32.0
+        assert evse.vendor_name == "SPAN"
+        assert evse.product_name == "SPAN Drive"
+        assert evse.part_number == "SPN-DRV-001"
+        assert evse.serial_number == "SN12345"
+        assert evse.software_version == "2.1.0"
+
+    def test_evse_multiple_devices(self):
+        """Two EVSE nodes produce two snapshot entries."""
+        circ_a = "aaaaaaaa-1111-2222-3333-444444444444"
+        circ_b = "bbbbbbbb-1111-2222-3333-444444444444"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circ_a: {"type": TYPE_CIRCUIT},
+                circ_b: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+                "evse-1": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circ_a)
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "CHARGING")
+        consumer.handle_message(f"{PREFIX}/evse-1/feed", circ_b)
+        consumer.handle_message(f"{PREFIX}/evse-1/status", "AVAILABLE")
+
+        snapshot = consumer.build_snapshot()
+        assert len(snapshot.evse) == 2
+        assert snapshot.evse["evse-0"].status == "CHARGING"
+        assert snapshot.evse["evse-1"].status == "AVAILABLE"
+
+    def test_evse_no_node(self):
+        """Empty dict when no EVSE commissioned."""
+        consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
+        snapshot = consumer.build_snapshot()
+        assert snapshot.evse == {}
+
+    def test_evse_partial_metadata(self):
+        """Missing optional fields are None."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "AVAILABLE")
+
+        snapshot = consumer.build_snapshot()
+        evse = snapshot.evse["evse-0"]
+        assert evse.status == "AVAILABLE"
+        assert evse.lock_state == "UNKNOWN"
+        assert evse.advertised_current_a is None
+        assert evse.vendor_name is None
+        assert evse.product_name is None
+        assert evse.part_number is None
+        assert evse.serial_number is None
+        assert evse.software_version is None
+
+    def test_evse_feed_still_annotates_circuit(self):
+        """Existing feed annotation still works alongside new EVSE snapshot."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+            }
+        )
+        consumer.handle_message(f"{PREFIX}/evse-0/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/evse-0/relative-position", "IN_PANEL")
+        consumer.handle_message(f"{PREFIX}/evse-0/status", "CHARGING")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/name", "EV Charger")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/space", "10")
+
+        snapshot = consumer.build_snapshot()
+        # Circuit should be annotated with device_type=evse
+        circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
+        assert circuit.device_type == "evse"
+        assert circuit.relative_position == "IN_PANEL"
+        # EVSE snapshot should also be populated
+        assert "evse-0" in snapshot.evse
+        assert snapshot.evse["evse-0"].status == "CHARGING"

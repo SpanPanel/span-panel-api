@@ -85,6 +85,19 @@ class SpanBatterySnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class FieldMetadata:
+    """Schema-derived metadata for a single snapshot field.
+
+    Exposed by the client in a dict keyed by snapshot field path
+    (e.g. ``"panel.instant_grid_power_w"``). The integration compares
+    these values against its sensor definitions for unit validation.
+    """
+
+    unit: str | None  # "W", "A", "V", "%", "kWh", None
+    datatype: str  # "float", "integer", "enum", "string", "boolean"
+
+
+@dataclass(frozen=True, slots=True)
 class V2AuthResponse:
     """Response from POST /api/v2/auth/register."""
 

@@ -5,6 +5,7 @@ import dataclasses
 import pytest
 
 from span_panel_api.models import (
+    FieldMetadata,
     SpanBatterySnapshot,
     SpanCircuitSnapshot,
     SpanPanelSnapshot,
@@ -32,6 +33,10 @@ class _MinimalClient:
     @property
     def serial_number(self) -> str:
         return "test-serial"
+
+    @property
+    def field_metadata(self) -> dict[str, FieldMetadata] | None:
+        return None
 
     async def connect(self) -> None:
         pass

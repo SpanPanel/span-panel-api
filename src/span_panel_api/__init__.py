@@ -18,6 +18,7 @@ from .exceptions import (
 )
 from .factory import create_span_client
 from .models import (
+    FieldMetadata,
     SpanBatterySnapshot,
     SpanCircuitSnapshot,
     SpanEvseSnapshot,
@@ -54,6 +55,8 @@ __all__ = [  # noqa: RUF022
     "PanelControlProtocol",
     "SpanPanelClientProtocol",
     "StreamingCapableProtocol",
+    # Metadata
+    "FieldMetadata",
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",

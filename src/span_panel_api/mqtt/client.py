@@ -13,10 +13,11 @@ import logging
 
 from ..auth import get_homie_schema
 from ..exceptions import SpanPanelConnectionError, SpanPanelServerError
-from ..models import SpanPanelSnapshot
+from ..models import FieldMetadata, SpanPanelSnapshot
 from ..protocol import PanelCapability
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S, PROPERTY_SET_TOPIC_FMT, TYPE_CORE, WILDCARD_TOPIC_FMT
+from .field_metadata import build_field_metadata, log_schema_drift
 from .homie import HomieDeviceConsumer
 from .models import MqttClientConfig
 
@@ -51,6 +52,9 @@ class SpanMqttClient:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._snapshot_timer: asyncio.TimerHandle | None = None
+        self._field_metadata: dict[str, FieldMetadata] | None = None
+        self._schema_hash: str | None = None
+        self._previous_schema_types: dict[str, dict[str, object]] | None = None
 
     def _require_homie(self) -> HomieDeviceConsumer:
         """Return the HomieDeviceConsumer, raising if not yet connected."""
@@ -75,6 +79,15 @@ class SpanMqttClient:
         """Return the panel serial number."""
         return self._serial_number
 
+    @property
+    def field_metadata(self) -> dict[str, FieldMetadata] | None:
+        """Schema-derived metadata for snapshot fields, or None before connect().
+
+        Keyed by snapshot field path (e.g. ``"panel.instant_grid_power_w"``).
+        Built once during ``connect()`` from the Homie schema.
+        """
+        return self._field_metadata
+
     async def connect(self) -> None:
         """Connect to MQTT broker and wait for Homie device ready.
 
@@ -92,9 +105,25 @@ class SpanMqttClient:
         self._loop = asyncio.get_running_loop()
         self._ready_event = asyncio.Event()
 
-        # Fetch schema to determine panel size before processing any messages
+        # Fetch schema to determine panel size and build field metadata
         schema = await get_homie_schema(self._host)
         self._homie = HomieDeviceConsumer(self._serial_number, schema.panel_size)
+
+        # Detect schema drift from previous connection
+        new_hash = schema.types_schema_hash
+        if self._schema_hash is not None and new_hash != self._schema_hash:
+            _LOGGER.debug(
+                "Homie schema hash changed: %s → %s (firmware update may have modified the property schema)",
+                self._schema_hash,
+                new_hash,
+            )
+            if self._previous_schema_types is not None:
+                log_schema_drift(self._previous_schema_types, schema.types)
+        self._schema_hash = new_hash
+        self._previous_schema_types = schema.types
+
+        # Build transport-agnostic field metadata from schema
+        self._field_metadata = build_field_metadata(schema.types)
 
         _LOGGER.debug(
             "MQTT: Creating bridge to %s:%s (serial=%s)",

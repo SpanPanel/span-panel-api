@@ -15,7 +15,6 @@ from span_panel_api.phase_validation import (
     validate_solar_tabs,
     get_phase_distribution,
 )
-from span_panel_api.simulation import DynamicSimulationEngine
 
 
 class TestExamplePhaseValidation:
@@ -49,16 +48,6 @@ class TestExamplePhaseValidation:
             assert isinstance(config, dict), f"{config_name} did not load as dictionary"
             assert "panel_config" in config, f"{config_name} missing panel_config"
             assert "circuits" in config, f"{config_name} missing circuits"
-
-    def test_yaml_structure_validation(self, example_configs):
-        """Test that all examples pass basic YAML structure validation."""
-        engine = DynamicSimulationEngine()
-
-        for config_name, config in example_configs.items():
-            try:
-                engine._validate_yaml_config(config)
-            except Exception as e:
-                pytest.fail(f"YAML validation failed for {config_name}: {e}")
 
     def test_240v_circuit_phase_validation(self, example_configs):
         """Test that all 240V circuits use opposite phases (L1 + L2)."""

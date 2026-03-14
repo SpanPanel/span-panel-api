@@ -14,6 +14,13 @@ import httpx
 from .models import V2StatusInfo
 
 
+def _build_url(host: str, port: int, path: str) -> str:
+    """Build an HTTP URL, omitting the port when it is the default (80)."""
+    if port == 80:
+        return f"http://{host}{path}"
+    return f"http://{host}:{port}{path}"
+
+
 @dataclass(frozen=True, slots=True)
 class DetectionResult:
     """Result of probing a SPAN Panel for API version support."""
@@ -22,7 +29,7 @@ class DetectionResult:
     status_info: V2StatusInfo | None = None  # populated when v2 detected
 
 
-async def detect_api_version(host: str, timeout: float = 5.0) -> DetectionResult:
+async def detect_api_version(host: str, timeout: float = 5.0, port: int = 80) -> DetectionResult:
     """Detect SPAN Panel API version.
 
     Probes GET /api/v2/status (unauthenticated).
@@ -32,11 +39,12 @@ async def detect_api_version(host: str, timeout: float = 5.0) -> DetectionResult
     Args:
         host: IP address or hostname of the SPAN Panel
         timeout: Request timeout in seconds
+        port: HTTP port of the panel bootstrap API
 
     Returns:
         DetectionResult indicating which API version is available
     """
-    url = f"http://{host}/api/v2/status"
+    url = _build_url(host, port, "/api/v2/status")
     try:
         async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
             response = await client.get(url)

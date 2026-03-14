@@ -18,6 +18,13 @@ from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelConnecti
 from .models import V2AuthResponse, V2HomieSchema, V2StatusInfo
 
 
+def _build_url(host: str, port: int, path: str) -> str:
+    """Build an HTTP URL, omitting the port when it is the default (80)."""
+    if port == 80:
+        return f"http://{host}{path}"
+    return f"http://{host}:{port}{path}"
+
+
 def _str(val: object) -> str:
     """Extract a string from a JSON-decoded value."""
     return str(val) if val is not None else ""
@@ -37,6 +44,7 @@ async def register_v2(
     name: str,
     passphrase: str | None = None,
     timeout: float = 10.0,
+    port: int = 80,
 ) -> V2AuthResponse:
     """Register with the SPAN Panel v2 API and obtain access + MQTT credentials.
 
@@ -49,6 +57,7 @@ async def register_v2(
         name: Client display name base (e.g., "home-assistant"); a UUID suffix is appended
         passphrase: Panel passphrase (printed on label or set by owner). None for door bypass.
         timeout: Request timeout in seconds
+        port: HTTP port of the panel bootstrap API
 
     Returns:
         V2AuthResponse with access token and MQTT broker credentials
@@ -59,7 +68,7 @@ async def register_v2(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = f"http://{host}/api/v2/auth/register"
+    url = _build_url(host, port, "/api/v2/auth/register")
     # The panel requires unique client names — append a random suffix.
     # The passphrase field must be "hopPassphrase" per the SPAN v2 API spec.
     suffix = uuid.uuid4().hex[:8]
@@ -99,12 +108,13 @@ async def register_v2(
     )
 
 
-async def download_ca_cert(host: str, timeout: float = 10.0) -> str:
+async def download_ca_cert(host: str, timeout: float = 10.0, port: int = 80) -> str:
     """Download the PEM CA certificate from the SPAN Panel.
 
     Args:
         host: IP address or hostname of the SPAN Panel
         timeout: Request timeout in seconds
+        port: HTTP port of the panel bootstrap API
 
     Returns:
         PEM-encoded CA certificate as a string
@@ -114,7 +124,7 @@ async def download_ca_cert(host: str, timeout: float = 10.0) -> str:
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response or invalid PEM
     """
-    url = f"http://{host}/api/v2/certificate/ca"
+    url = _build_url(host, port, "/api/v2/certificate/ca")
 
     try:
         async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
@@ -134,7 +144,7 @@ async def download_ca_cert(host: str, timeout: float = 10.0) -> str:
     return pem
 
 
-async def get_homie_schema(host: str, timeout: float = 10.0) -> V2HomieSchema:
+async def get_homie_schema(host: str, timeout: float = 10.0, port: int = 80) -> V2HomieSchema:
     """Fetch the Homie property schema from the SPAN Panel.
 
     This endpoint is unauthenticated.
@@ -142,6 +152,7 @@ async def get_homie_schema(host: str, timeout: float = 10.0) -> V2HomieSchema:
     Args:
         host: IP address or hostname of the SPAN Panel
         timeout: Request timeout in seconds
+        port: HTTP port of the panel bootstrap API
 
     Returns:
         V2HomieSchema with firmware version, schema hash, and type definitions
@@ -151,7 +162,7 @@ async def get_homie_schema(host: str, timeout: float = 10.0) -> V2HomieSchema:
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = f"http://{host}/api/v2/homie/schema"
+    url = _build_url(host, port, "/api/v2/homie/schema")
 
     try:
         async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
@@ -187,7 +198,7 @@ async def get_homie_schema(host: str, timeout: float = 10.0) -> V2HomieSchema:
     )
 
 
-async def regenerate_passphrase(host: str, token: str, timeout: float = 10.0) -> str:
+async def regenerate_passphrase(host: str, token: str, timeout: float = 10.0, port: int = 80) -> str:
     """Rotate the MQTT broker password on the SPAN Panel.
 
     After this call, the previous broker password is invalidated.
@@ -198,6 +209,7 @@ async def regenerate_passphrase(host: str, token: str, timeout: float = 10.0) ->
         host: IP address or hostname of the SPAN Panel
         token: Valid JWT access token
         timeout: Request timeout in seconds
+        port: HTTP port of the panel bootstrap API
 
     Returns:
         New MQTT broker password
@@ -208,7 +220,7 @@ async def regenerate_passphrase(host: str, token: str, timeout: float = 10.0) ->
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = f"http://{host}/api/v2/auth/passphrase"
+    url = _build_url(host, port, "/api/v2/auth/passphrase")
     headers = {"Authorization": f"Bearer {token}"}
 
     try:
@@ -229,12 +241,13 @@ async def regenerate_passphrase(host: str, token: str, timeout: float = 10.0) ->
     return _str(data["ebusBrokerPassword"])
 
 
-async def get_v2_status(host: str, timeout: float = 5.0) -> V2StatusInfo:
+async def get_v2_status(host: str, timeout: float = 5.0, port: int = 80) -> V2StatusInfo:
     """Lightweight v2 status probe (unauthenticated).
 
     Args:
         host: IP address or hostname of the SPAN Panel
         timeout: Request timeout in seconds
+        port: HTTP port of the panel bootstrap API
 
     Returns:
         V2StatusInfo with serial number and firmware version
@@ -244,7 +257,7 @@ async def get_v2_status(host: str, timeout: float = 5.0) -> V2StatusInfo:
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response or non-v2 panel
     """
-    url = f"http://{host}/api/v2/status"
+    url = _build_url(host, port, "/api/v2/status")
 
     try:
         async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501

@@ -38,11 +38,13 @@ class SpanMqttClient:
         serial_number: str,
         broker_config: MqttClientConfig,
         snapshot_interval: float = 1.0,
+        panel_http_port: int = 80,
     ) -> None:
         self._host = host
         self._serial_number = serial_number
         self._broker_config = broker_config
         self._snapshot_interval = snapshot_interval
+        self._panel_http_port = panel_http_port
 
         self._bridge: AsyncMqttBridge | None = None
         self._homie: HomieDeviceConsumer | None = None
@@ -106,7 +108,7 @@ class SpanMqttClient:
         self._ready_event = asyncio.Event()
 
         # Fetch schema to determine panel size and build field metadata
-        schema = await get_homie_schema(self._host)
+        schema = await get_homie_schema(self._host, port=self._panel_http_port)
         self._homie = HomieDeviceConsumer(self._serial_number, schema.panel_size)
 
         # Detect schema drift from previous connection
@@ -142,6 +144,7 @@ class SpanMqttClient:
             transport=self._broker_config.transport,
             use_tls=self._broker_config.use_tls,
             loop=self._loop,
+            panel_http_port=self._panel_http_port,
         )
 
         # Wire message handler

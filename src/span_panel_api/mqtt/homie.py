@@ -356,11 +356,15 @@ class HomieDeviceConsumer:
         vn = self._get_prop(pv_node, "vendor-name")
         pn = self._get_prop(pv_node, "product-name")
         nc = self._get_prop(pv_node, "nameplate-capacity")
+        feed = self._get_prop(pv_node, "feed")
+        rel_pos = self._get_prop(pv_node, "relative-position")
 
         return SpanPVSnapshot(
             vendor_name=vn if vn else None,
             product_name=pn if pn else None,
-            nameplate_capacity_kw=_parse_float(nc) if nc else None,
+            nameplate_capacity_w=_parse_float(nc) if nc else None,
+            feed_circuit_id=normalize_circuit_id(feed) if feed else None,
+            relative_position=rel_pos.upper() if rel_pos else None,
         )
 
     def _build_evse_devices(self) -> dict[str, SpanEvseSnapshot]:

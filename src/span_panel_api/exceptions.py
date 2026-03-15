@@ -34,7 +34,3 @@ class SpanPanelAPIError(SpanPanelError):
 
 class SpanPanelServerError(SpanPanelAPIError):
     """Server error (500)."""
-
-
-class SimulationConfigurationError(SpanPanelError):
-    """Simulation configuration is invalid or missing required data."""

@@ -45,7 +45,9 @@ class SpanPVSnapshot:
 
     vendor_name: str | None = None  # pv/vendor-name
     product_name: str | None = None  # pv/product-name
-    nameplate_capacity_kw: float | None = None  # pv/nameplate-capacity (kW)
+    nameplate_capacity_w: float | None = None  # pv/nameplate-capacity (W)
+    feed_circuit_id: str | None = None  # pv/feed (normalized circuit ID)
+    relative_position: str | None = None  # pv/relative-position (IN_PANEL | UPSTREAM | DOWNSTREAM)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +84,19 @@ class SpanBatterySnapshot:
     software_version: str | None = None  # bess/software-version
     nameplate_capacity_kwh: float | None = None  # bess/nameplate-capacity (kWh)
     connected: bool | None = None  # bess/connected
+
+
+@dataclass(frozen=True, slots=True)
+class FieldMetadata:
+    """Schema-derived metadata for a single snapshot field.
+
+    Exposed by the client in a dict keyed by snapshot field path
+    (e.g. ``"panel.instant_grid_power_w"``). The integration compares
+    these values against its sensor definitions for unit validation.
+    """
+
+    unit: str | None  # "W", "A", "V", "%", "kWh", None
+    datatype: str  # "float", "integer", "enum", "string", "boolean"
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,7 +7,6 @@ supporting MQTT/Homie (v2) transport.
 from .auth import download_ca_cert, get_homie_schema, regenerate_passphrase, register_v2
 from .detection import DetectionResult, detect_api_version
 from .exceptions import (
-    SimulationConfigurationError,
     SpanPanelAPIError,
     SpanPanelAuthError,
     SpanPanelConnectionError,
@@ -18,6 +17,7 @@ from .exceptions import (
 )
 from .factory import create_span_client
 from .models import (
+    FieldMetadata,
     SpanBatterySnapshot,
     SpanCircuitSnapshot,
     SpanEvseSnapshot,
@@ -43,9 +43,8 @@ from .protocol import (
     SpanPanelClientProtocol,
     StreamingCapableProtocol,
 )
-from .simulation import DynamicSimulationEngine
 
-__version__ = "2.2.1"
+__version__ = "2.3.0"
 # fmt: off
 __all__ = [  # noqa: RUF022
     # Protocols
@@ -54,6 +53,8 @@ __all__ = [  # noqa: RUF022
     "PanelControlProtocol",
     "SpanPanelClientProtocol",
     "StreamingCapableProtocol",
+    # Metadata
+    "FieldMetadata",
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",
@@ -84,7 +85,6 @@ __all__ = [  # noqa: RUF022
     "suggest_balanced_pairing",
     "validate_solar_tabs",
     # Exceptions
-    "SimulationConfigurationError",
     "SpanPanelAPIError",
     "SpanPanelAuthError",
     "SpanPanelConnectionError",
@@ -92,7 +92,5 @@ __all__ = [  # noqa: RUF022
     "SpanPanelServerError",
     "SpanPanelTimeoutError",
     "SpanPanelValidationError",
-    # Simulation
-    "DynamicSimulationEngine",
 ]
 # fmt: on

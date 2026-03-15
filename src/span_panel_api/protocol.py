@@ -12,7 +12,7 @@ from enum import Flag, auto
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from .models import SpanPanelSnapshot
+    from .models import FieldMetadata, SpanPanelSnapshot
 
 
 class PanelCapability(Flag):
@@ -34,6 +34,9 @@ class SpanPanelClientProtocol(Protocol):
 
     @property
     def serial_number(self) -> str: ...
+
+    @property
+    def field_metadata(self) -> dict[str, FieldMetadata] | None: ...
 
     async def connect(self) -> None: ...
 

@@ -61,6 +61,7 @@ class AsyncMqttBridge:
         transport: MqttTransport = "tcp",
         use_tls: bool = True,
         loop: asyncio.AbstractEventLoop | None = None,
+        panel_http_port: int = 80,
     ) -> None:
         self._host = host
         self._port = port
@@ -71,6 +72,7 @@ class AsyncMqttBridge:
         self._transport: MqttTransport = transport
         self._use_tls = use_tls
         self._loop = loop
+        self._panel_http_port = panel_http_port
 
         self._connected = False
         self._client: AsyncMQTTClient | None = None
@@ -118,7 +120,7 @@ class AsyncMqttBridge:
         ca_cert_path: Path | None = None
         if self._use_tls:
             try:
-                pem = await download_ca_cert(self._panel_host)
+                pem = await download_ca_cert(self._panel_host, port=self._panel_http_port)
             except Exception as exc:
                 raise SpanPanelConnectionError(f"Failed to fetch CA certificate from {self._panel_host}") from exc
 

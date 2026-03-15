@@ -644,21 +644,29 @@ class TestHomieBattery:
 class TestHomiePVMetadata:
     def test_pv_metadata_parsed(self):
         """PV metadata properties are parsed into the pv snapshot."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
         consumer = _build_ready_consumer(
             {
                 "core": {"type": TYPE_CORE},
                 "bess-0": {"type": TYPE_BESS},
                 "pv-0": {"type": TYPE_PV},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
             }
         )
         consumer.handle_message(f"{PREFIX}/pv-0/vendor-name", "Enphase")
         consumer.handle_message(f"{PREFIX}/pv-0/product-name", "IQ8+")
         consumer.handle_message(f"{PREFIX}/pv-0/nameplate-capacity", "3960")
+        consumer.handle_message(f"{PREFIX}/pv-0/feed", circuit_uuid)
+        consumer.handle_message(f"{PREFIX}/pv-0/relative-position", "IN_PANEL")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/name", "Solar")
+        consumer.handle_message(f"{PREFIX}/{circuit_uuid}/space", "30")
 
         snapshot = consumer.build_snapshot()
         assert snapshot.pv.vendor_name == "Enphase"
         assert snapshot.pv.product_name == "IQ8+"
         assert snapshot.pv.nameplate_capacity_w == 3960.0
+        assert snapshot.pv.feed_circuit_id == "aabbccdd112233445566778899001122"
+        assert snapshot.pv.relative_position == "IN_PANEL"
 
     def test_no_pv_node(self):
         """Without PV node, pv snapshot has None values."""
@@ -667,6 +675,8 @@ class TestHomiePVMetadata:
         assert snapshot.pv.vendor_name is None
         assert snapshot.pv.product_name is None
         assert snapshot.pv.nameplate_capacity_w is None
+        assert snapshot.pv.feed_circuit_id is None
+        assert snapshot.pv.relative_position is None
 
     def test_pv_metadata_partial(self):
         """PV node with only some properties populated."""
@@ -682,6 +692,8 @@ class TestHomiePVMetadata:
         assert snapshot.pv.vendor_name == "Other"
         assert snapshot.pv.product_name is None
         assert snapshot.pv.nameplate_capacity_w is None
+        assert snapshot.pv.feed_circuit_id is None
+        assert snapshot.pv.relative_position is None
 
 
 # ---------------------------------------------------------------------------

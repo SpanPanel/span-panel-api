@@ -91,13 +91,13 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
     (TYPE_BESS, "software-version", "battery.software_version"),
     (TYPE_BESS, "nameplate-capacity", "battery.nameplate_capacity_kwh"),
     (TYPE_BESS, "connected", "battery.connected"),
-    (TYPE_BESS, "grid-state", "battery.grid_state"),
+    (TYPE_BESS, "grid-state", "panel.grid_state"),
     # --- PV → pv.* -----------------------------------------------------------
     (TYPE_PV, "vendor-name", "pv.vendor_name"),
     (TYPE_PV, "product-name", "pv.product_name"),
     (TYPE_PV, "nameplate-capacity", "pv.nameplate_capacity_w"),
-    (TYPE_PV, "feed", "pv.feed"),
-    (TYPE_PV, "relative-position", "pv.relative_position"),
+    (TYPE_PV, "feed", "pv.feed_circuit_id"),
+    (TYPE_PV, "relative-position", "pv.relative_position"),  # IN_PANEL | UPSTREAM | DOWNSTREAM
     # --- EVSE → evse.* -------------------------------------------------------
     (TYPE_EVSE, "status", "evse.status"),
     (TYPE_EVSE, "lock-state", "evse.lock_state"),

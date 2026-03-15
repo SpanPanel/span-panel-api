@@ -46,6 +46,8 @@ class SpanPVSnapshot:
     vendor_name: str | None = None  # pv/vendor-name
     product_name: str | None = None  # pv/product-name
     nameplate_capacity_w: float | None = None  # pv/nameplate-capacity (W)
+    feed_circuit_id: str | None = None  # pv/feed (normalized circuit ID)
+    relative_position: str | None = None  # pv/relative-position (IN_PANEL | UPSTREAM | DOWNSTREAM)
 
 
 @dataclass(frozen=True, slots=True)

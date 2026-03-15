@@ -135,11 +135,15 @@ class TestBuildFieldMetadata:
         assert result["battery.soe_percentage"] == FieldMetadata(unit="%", datatype="float")
         assert result["battery.nameplate_capacity_kwh"] == FieldMetadata(unit="kWh", datatype="float")
         assert result["battery.soe_kwh"] == FieldMetadata(unit="kWh", datatype="float")
+        # grid-state comes from BESS node but is stored on panel snapshot
+        assert result["panel.grid_state"] == FieldMetadata(unit=None, datatype="enum")
 
     def test_pv_fields(self) -> None:
-        """PV nameplate capacity should have unit W."""
+        """PV fields should have correct units and datatypes."""
         result = build_field_metadata(_make_schema_types())
         assert result["pv.nameplate_capacity_w"] == FieldMetadata(unit="W", datatype="float")
+        assert result["pv.feed_circuit_id"] == FieldMetadata(unit=None, datatype="string")
+        assert result["pv.relative_position"] == FieldMetadata(unit=None, datatype="enum")
 
     def test_evse_fields(self) -> None:
         """EVSE fields should be present."""

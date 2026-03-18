@@ -175,7 +175,12 @@ class AsyncMqttBridge:
                 self._client.on_socket_open = self._on_socket_open_sync
                 self._client.on_socket_register_write = self._on_socket_register_write_sync
                 _LOGGER.debug("BRIDGE: Running TLS+connect in executor to %s:%s", self._host, self._port)
-                await self._loop.run_in_executor(None, _blocking_tls_and_connect)
+                try:
+                    await self._loop.run_in_executor(None, _blocking_tls_and_connect)
+                except OSError as exc:
+                    raise SpanPanelConnectionError(
+                        f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}"
+                    ) from exc
                 _LOGGER.debug("BRIDGE: Executor connect returned, waiting for CONNACK...")
             finally:
                 # Switch to async-only socket callbacks now that we are

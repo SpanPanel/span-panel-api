@@ -18,10 +18,13 @@ from span_panel_api.models import (
     V2StatusInfo,
 )
 from span_panel_api.auth import (
+    delete_fqdn,
     download_ca_cert,
+    get_fqdn,
     get_homie_schema,
     get_v2_status,
     regenerate_passphrase,
+    register_fqdn,
     register_v2,
 )
 
@@ -408,6 +411,282 @@ class TestRegeneratePassphrase:
 
 
 # ===================================================================
+# register_fqdn
+# ===================================================================
+
+
+class TestRegisterFqdn:
+    @pytest.mark.asyncio
+    async def test_register_fqdn_success(self):
+        mock_response = _mock_response(200)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await register_fqdn("192.168.65.70", "jwt-token", "panel.example.com")
+
+        mock_client.post.assert_called_once()
+        call_kwargs = mock_client.post.call_args
+        assert call_kwargs.kwargs["json"] == {"ebusTlsFqdn": "panel.example.com"}
+
+    @pytest.mark.asyncio
+    async def test_register_fqdn_accepts_201(self):
+        mock_response = _mock_response(201)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await register_fqdn("192.168.65.70", "jwt-token", "panel.example.com")
+
+    @pytest.mark.asyncio
+    async def test_register_fqdn_accepts_204(self):
+        mock_response = _mock_response(204)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await register_fqdn("192.168.65.70", "jwt-token", "panel.example.com")
+
+    @pytest.mark.asyncio
+    async def test_register_fqdn_auth_error(self):
+        mock_response = _mock_response(401)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelAuthError, match="401"):
+                await register_fqdn("192.168.65.70", "bad-token", "panel.example.com")
+
+    @pytest.mark.asyncio
+    async def test_register_fqdn_403(self):
+        mock_response = _mock_response(403)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelAuthError, match="403"):
+                await register_fqdn("192.168.65.70", "bad-token", "panel.example.com")
+
+    @pytest.mark.asyncio
+    async def test_register_fqdn_api_error(self):
+        mock_response = _mock_response(500)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelAPIError, match="500"):
+                await register_fqdn("192.168.65.70", "jwt-token", "panel.example.com")
+
+    @pytest.mark.asyncio
+    async def test_register_fqdn_connection_error(self):
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = httpx.ConnectError("Connection refused")
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelConnectionError):
+                await register_fqdn("192.168.65.70", "jwt-token", "panel.example.com")
+
+    @pytest.mark.asyncio
+    async def test_register_fqdn_timeout(self):
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.side_effect = httpx.TimeoutException("Timed out")
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelTimeoutError):
+                await register_fqdn("192.168.65.70", "jwt-token", "panel.example.com")
+
+
+# ===================================================================
+# get_fqdn
+# ===================================================================
+
+
+class TestGetFqdn:
+    @pytest.mark.asyncio
+    async def test_get_fqdn_success(self):
+        mock_response = _mock_response(200, {"ebusTlsFqdn": "panel.example.com"})
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await get_fqdn("192.168.65.70", "jwt-token")
+
+        assert result == "panel.example.com"
+
+    @pytest.mark.asyncio
+    async def test_get_fqdn_not_configured_returns_empty(self):
+        mock_response = _mock_response(404)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await get_fqdn("192.168.65.70", "jwt-token")
+
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_get_fqdn_auth_error(self):
+        mock_response = _mock_response(401)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelAuthError, match="401"):
+                await get_fqdn("192.168.65.70", "bad-token")
+
+    @pytest.mark.asyncio
+    async def test_get_fqdn_api_error(self):
+        mock_response = _mock_response(500)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelAPIError, match="500"):
+                await get_fqdn("192.168.65.70", "jwt-token")
+
+    @pytest.mark.asyncio
+    async def test_get_fqdn_connection_error(self):
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.side_effect = httpx.ConnectError("Connection refused")
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelConnectionError):
+                await get_fqdn("192.168.65.70", "jwt-token")
+
+    @pytest.mark.asyncio
+    async def test_get_fqdn_timeout(self):
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.side_effect = httpx.TimeoutException("Timed out")
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelTimeoutError):
+                await get_fqdn("192.168.65.70", "jwt-token")
+
+
+# ===================================================================
+# delete_fqdn
+# ===================================================================
+
+
+class TestDeleteFqdn:
+    @pytest.mark.asyncio
+    async def test_delete_fqdn_success_200(self):
+        mock_response = _mock_response(200)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.delete.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await delete_fqdn("192.168.65.70", "jwt-token")
+
+    @pytest.mark.asyncio
+    async def test_delete_fqdn_success_204(self):
+        mock_response = _mock_response(204)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.delete.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await delete_fqdn("192.168.65.70", "jwt-token")
+
+    @pytest.mark.asyncio
+    async def test_delete_fqdn_auth_error(self):
+        mock_response = _mock_response(403)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.delete.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelAuthError, match="403"):
+                await delete_fqdn("192.168.65.70", "bad-token")
+
+    @pytest.mark.asyncio
+    async def test_delete_fqdn_api_error(self):
+        mock_response = _mock_response(500)
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.delete.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelAPIError, match="500"):
+                await delete_fqdn("192.168.65.70", "jwt-token")
+
+    @pytest.mark.asyncio
+    async def test_delete_fqdn_connection_error(self):
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.delete.side_effect = httpx.ConnectError("Connection refused")
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelConnectionError):
+                await delete_fqdn("192.168.65.70", "jwt-token")
+
+    @pytest.mark.asyncio
+    async def test_delete_fqdn_timeout(self):
+        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.delete.side_effect = httpx.TimeoutException("Timed out")
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelTimeoutError):
+                await delete_fqdn("192.168.65.70", "jwt-token")
+
+
+# ===================================================================
 # get_v2_status
 # ===================================================================
 
@@ -499,7 +778,14 @@ class TestPhase2Exports:
         assert hasattr(span_panel_api, "get_homie_schema")
         assert hasattr(span_panel_api, "regenerate_passphrase")
 
+    def test_fqdn_function_exports(self):
+        import span_panel_api
+
+        assert hasattr(span_panel_api, "register_fqdn")
+        assert hasattr(span_panel_api, "get_fqdn")
+        assert hasattr(span_panel_api, "delete_fqdn")
+
     def test_version_bumped(self):
         import span_panel_api
 
-        assert span_panel_api.__version__ == "2.3.0"
+        assert span_panel_api.__version__ == "2.3.2"

@@ -52,7 +52,7 @@ from .protocol import (
     StreamingCapableProtocol,
 )
 
-__version__ = "2.3.0"
+__version__ = "2.3.2"
 # fmt: off
 __all__ = [  # noqa: RUF022
     # Protocols

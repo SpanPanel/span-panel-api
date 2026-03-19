@@ -241,6 +241,123 @@ async def regenerate_passphrase(host: str, token: str, timeout: float = 10.0, po
     return _str(data["ebusBrokerPassword"])
 
 
+async def register_fqdn(host: str, token: str, fqdn: str, timeout: float = 10.0, port: int = 80) -> None:
+    """Register an FQDN with the SPAN Panel for TLS certificate SAN inclusion.
+
+    The panel regenerates its TLS server certificate to include the
+    provided FQDN in the Subject Alternative Names, allowing MQTTS
+    clients connecting via the FQDN to pass hostname verification.
+
+    Args:
+        host: IP address or hostname of the SPAN Panel
+        token: Valid JWT access token from register_v2
+        fqdn: Fully qualified domain name to register
+        timeout: Request timeout in seconds
+        port: HTTP port of the panel bootstrap API
+
+    Raises:
+        SpanPanelAuthError: Token invalid or expired
+        SpanPanelConnectionError: Cannot reach panel
+        SpanPanelTimeoutError: Request timed out
+        SpanPanelAPIError: Unexpected response (including 404 if unsupported)
+    """
+    url = _build_url(host, port, "/api/v2/dns/fqdn")
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {"ebusTlsFqdn": fqdn}
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+            response = await client.post(url, json=payload, headers=headers)
+    except httpx.ConnectError as exc:
+        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
+    except httpx.TimeoutException as exc:
+        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+
+    if response.status_code in (401, 403):
+        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
+
+    if response.status_code not in (200, 201, 204):
+        raise SpanPanelAPIError(f"Failed to register FQDN: HTTP {response.status_code}")
+
+
+async def get_fqdn(host: str, token: str, timeout: float = 10.0, port: int = 80) -> str:
+    """Retrieve the currently registered FQDN from the SPAN Panel.
+
+    Args:
+        host: IP address or hostname of the SPAN Panel
+        token: Valid JWT access token from register_v2
+        timeout: Request timeout in seconds
+        port: HTTP port of the panel bootstrap API
+
+    Returns:
+        The registered FQDN, or empty string if none is configured
+
+    Raises:
+        SpanPanelAuthError: Token invalid or expired
+        SpanPanelConnectionError: Cannot reach panel
+        SpanPanelTimeoutError: Request timed out
+        SpanPanelAPIError: Unexpected response
+    """
+    url = _build_url(host, port, "/api/v2/dns/fqdn")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+            response = await client.get(url, headers=headers)
+    except httpx.ConnectError as exc:
+        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
+    except httpx.TimeoutException as exc:
+        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+
+    if response.status_code in (401, 403):
+        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
+
+    if response.status_code == 404:
+        return ""
+
+    if response.status_code != 200:
+        raise SpanPanelAPIError(f"Failed to get FQDN: HTTP {response.status_code}")
+
+    data: dict[str, object] = response.json()
+    return _str(data.get("ebusTlsFqdn"))
+
+
+async def delete_fqdn(host: str, token: str, timeout: float = 10.0, port: int = 80) -> None:
+    """Remove the registered FQDN from the SPAN Panel.
+
+    The panel regenerates its TLS certificate without the FQDN in
+    the SAN list.
+
+    Args:
+        host: IP address or hostname of the SPAN Panel
+        token: Valid JWT access token from register_v2
+        timeout: Request timeout in seconds
+        port: HTTP port of the panel bootstrap API
+
+    Raises:
+        SpanPanelAuthError: Token invalid or expired
+        SpanPanelConnectionError: Cannot reach panel
+        SpanPanelTimeoutError: Request timed out
+        SpanPanelAPIError: Unexpected response
+    """
+    url = _build_url(host, port, "/api/v2/dns/fqdn")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+            response = await client.delete(url, headers=headers)
+    except httpx.ConnectError as exc:
+        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
+    except httpx.TimeoutException as exc:
+        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+
+    if response.status_code in (401, 403):
+        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
+
+    if response.status_code not in (200, 204):
+        raise SpanPanelAPIError(f"Failed to delete FQDN: HTTP {response.status_code}")
+
+
 async def get_v2_status(host: str, timeout: float = 5.0, port: int = 80) -> V2StatusInfo:
     """Lightweight v2 status probe (unauthenticated).
 

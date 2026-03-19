@@ -4,7 +4,15 @@ A modern, type-safe Python client library for the SPAN Panel API,
 supporting MQTT/Homie (v2) transport.
 """
 
-from .auth import download_ca_cert, get_homie_schema, regenerate_passphrase, register_v2
+from .auth import (
+    delete_fqdn,
+    download_ca_cert,
+    get_fqdn,
+    get_homie_schema,
+    regenerate_passphrase,
+    register_fqdn,
+    register_v2,
+)
 from .detection import DetectionResult, detect_api_version
 from .exceptions import (
     SpanPanelAPIError,
@@ -70,8 +78,11 @@ __all__ = [  # noqa: RUF022
     "V2AuthResponse",
     "V2HomieSchema",
     "V2StatusInfo",
+    "delete_fqdn",
     "download_ca_cert",
+    "get_fqdn",
     "get_homie_schema",
+    "register_fqdn",
     "regenerate_passphrase",
     "register_v2",
     # Transport

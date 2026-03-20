@@ -20,7 +20,7 @@ def run_coverage(full_report: bool = False, check_only: bool = False, threshold:
     if check_only:
         # Just run tests and get coverage percentage
         cmd = [
-            "poetry",
+            "uv",
             "run",
             "pytest",
             "tests/",
@@ -32,7 +32,7 @@ def run_coverage(full_report: bool = False, check_only: bool = False, threshold:
     elif full_report:
         # Full verbose report
         cmd = [
-            "poetry",
+            "uv",
             "run",
             "pytest",
             "tests/",
@@ -44,7 +44,7 @@ def run_coverage(full_report: bool = False, check_only: bool = False, threshold:
     else:
         # Quick summary
         cmd = [
-            "poetry",
+            "uv",
             "run",
             "pytest",
             "tests/",

@@ -255,13 +255,6 @@ except SpanPanelConnectionError:
     print("Cannot reach panel")
 ```
 
-## Simulation Mode
-
-The library includes a simulation engine for development and testing without a physical SPAN panel. The `DynamicSimulationEngine` implements the same protocols as `SpanMqttClient` and produces `SpanPanelSnapshot` dataclasses from YAML-configured fixture
-data with dynamic power and energy variations.
-
-For detailed information, see [tests/docs/simulation.md](tests/docs/simulation.md).
-
 ## Capabilities
 
 The `PanelCapability` flag enum advertises transport features at runtime:

@@ -7,7 +7,7 @@ if [[ "$1" == "--update" ]]; then
 fi
 
 # Ensure dependencies are installed first
-if [[ ! -f ".deps-installed" ]] || [[ "pyproject.toml" -nt ".deps-installed" ]] || [[ "$FORCE_UPDATE" == "true" ]]; then
+if [[ ! -f ".deps-installed" ]] || [[ "pyproject.toml" -nt ".deps-installed" ]] || [[ "uv.lock" -nt ".deps-installed" ]] || [[ "$FORCE_UPDATE" == "true" ]]; then
     echo "Installing/updating dependencies..."
 
     if [[ "$FORCE_UPDATE" == "true" ]]; then

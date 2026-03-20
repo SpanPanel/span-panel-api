@@ -20,42 +20,11 @@
             "problemMatcher": []
         },
         {
-            "label": "Generate OpenAPI Client",
-            "type": "shell",
-            "command": "poetry",
-            "args": [
-                "run",
-                "python",
-                "generate_client.py"
-            ],
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            },
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared",
-                "showReuseMessage": true,
-                "clear": false
-            },
-            "problemMatcher": [],
-            "detail": "Generate SPAN Panel OpenAPI client from openapi.json specification",
-            "icon": {
-                "id": "gear",
-                "color": "terminal.ansiBlue"
-            },
-            "runOptions": {
-                "runOn": "default"
-            }
-        },
-        {
             "label": "Install Dependencies",
             "type": "shell",
-            "command": "poetry",
+            "command": "uv",
             "args": [
-                "install"
+                "sync"
             ],
             "group": "build",
             "presentation": {
@@ -65,12 +34,12 @@
                 "panel": "shared"
             },
             "problemMatcher": [],
-            "detail": "Install project dependencies using Poetry"
+            "detail": "Install project dependencies using uv"
         },
         {
             "label": "Run Tests",
             "type": "shell",
-            "command": "poetry",
+            "command": "uv",
             "args": [
                 "run",
                 "pytest"
@@ -112,7 +81,7 @@
             "command": "bash",
             "args": [
                 "-c",
-                "poetry run format-markdown && npx markdownlint-cli2 --config .markdownlint-cli2.jsonc **/*.md"
+                "uv run format-markdown && npx markdownlint-cli2 --config .markdownlint-cli2.jsonc **/*.md"
             ],
             "group": "build",
             "presentation": {
@@ -141,7 +110,7 @@
         {
             "label": "Run Pre-commit",
             "type": "shell",
-            "command": "poetry",
+            "command": "uv",
             "args": [
                 "run",
                 "pre-commit",

@@ -290,48 +290,9 @@ src/span_panel_api/
     └── models.py        # MqttClientConfig, MqttTransport
 ```
 
-## Development Setup
+## Development
 
-### Prerequisites
-
-- Python 3.10+ (CI tests 3.12 and 3.13)
-- [Poetry](https://python-poetry.org/) for dependency management
-
-### Development Installation
-
-```bash
-git clone https://github.com/SpanPanel/span-panel-api.git
-cd span-panel-api
-eval "$(poetry env activate)"
-poetry install
-
-# Run tests
-poetry run pytest
-
-# Check coverage
-python scripts/coverage.py
-```
-
-### Testing and Coverage
-
-```bash
-# Full test suite
-poetry run pytest
-
-# With coverage report
-poetry run pytest --cov=span_panel_api tests/
-
-# Check coverage meets threshold (85%)
-python scripts/coverage.py --check --threshold 85
-```
-
-## Contributing
-
-1. Fork and clone the repository
-2. Install dev dependencies: `poetry install`
-3. Make changes and add tests
-4. Ensure all checks pass: `poetry run pytest && poetry run mypy src/ && poetry run ruff check src/`
-5. Submit a pull request
+See [DEVELOPMENT.md](DEVELOPMENT.md) for setup, testing, and contribution guidelines.
 
 ## License
 

@@ -12,9 +12,10 @@ if [[ ! -f ".deps-installed" ]] || [[ "pyproject.toml" -nt ".deps-installed" ]] 
 
     if [[ "$FORCE_UPDATE" == "true" ]]; then
         echo "Forcing update to latest versions..."
-        poetry update
+        uv lock --upgrade
+        uv sync
     else
-        poetry install --with dev
+        uv sync
     fi
 
     if [[ $? -ne 0 ]]; then
@@ -25,6 +26,6 @@ if [[ ! -f ".deps-installed" ]] || [[ "pyproject.toml" -nt ".deps-installed" ]] 
 fi
 
 # Install pre-commit hooks
-poetry run pre-commit install
+uv run pre-commit install
 
 echo "Git hooks installed successfully!"

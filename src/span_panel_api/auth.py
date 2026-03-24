@@ -14,15 +14,9 @@ import uuid
 
 import httpx
 
+from ._http import _build_url, _get_client
 from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelConnectionError, SpanPanelTimeoutError
 from .models import V2AuthResponse, V2HomieSchema, V2StatusInfo
-
-
-def _build_url(host: str, port: int, path: str) -> str:
-    """Build an HTTP URL, omitting the port when it is the default (80)."""
-    if port == 80:
-        return f"http://{host}{path}"
-    return f"http://{host}:{port}{path}"
 
 
 def _str(val: object) -> str:
@@ -45,6 +39,7 @@ async def register_v2(
     passphrase: str | None = None,
     timeout: float = 10.0,
     port: int = 80,
+    httpx_client: httpx.AsyncClient | None = None,
 ) -> V2AuthResponse:
     """Register with the SPAN Panel v2 API and obtain access + MQTT credentials.
 
@@ -56,8 +51,10 @@ async def register_v2(
         host: IP address or hostname of the SPAN Panel
         name: Client display name base (e.g., "home-assistant"); a UUID suffix is appended
         passphrase: Panel passphrase (printed on label or set by owner). None for door bypass.
-        timeout: Request timeout in seconds
+        timeout: Request timeout in seconds for the internally created client when
+            ``httpx_client`` is None; ignored when a client is injected (caller configures timeouts).
         port: HTTP port of the panel bootstrap API
+        httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
 
     Returns:
         V2AuthResponse with access token and MQTT broker credentials
@@ -78,7 +75,7 @@ async def register_v2(
         payload["hopPassphrase"] = passphrase
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+        async with _get_client(httpx_client, timeout) as client:
             response = await client.post(url, json=payload)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -108,13 +105,19 @@ async def register_v2(
     )
 
 
-async def download_ca_cert(host: str, timeout: float = 10.0, port: int = 80) -> str:
+async def download_ca_cert(
+    host: str,
+    timeout: float = 10.0,
+    port: int = 80,
+    httpx_client: httpx.AsyncClient | None = None,
+) -> str:
     """Download the PEM CA certificate from the SPAN Panel.
 
     Args:
         host: IP address or hostname of the SPAN Panel
-        timeout: Request timeout in seconds
+        timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
         port: HTTP port of the panel bootstrap API
+        httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
 
     Returns:
         PEM-encoded CA certificate as a string
@@ -127,7 +130,7 @@ async def download_ca_cert(host: str, timeout: float = 10.0, port: int = 80) -> 
     url = _build_url(host, port, "/api/v2/certificate/ca")
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+        async with _get_client(httpx_client, timeout) as client:
             response = await client.get(url)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -144,15 +147,21 @@ async def download_ca_cert(host: str, timeout: float = 10.0, port: int = 80) -> 
     return pem
 
 
-async def get_homie_schema(host: str, timeout: float = 10.0, port: int = 80) -> V2HomieSchema:
+async def get_homie_schema(
+    host: str,
+    timeout: float = 10.0,
+    port: int = 80,
+    httpx_client: httpx.AsyncClient | None = None,
+) -> V2HomieSchema:
     """Fetch the Homie property schema from the SPAN Panel.
 
     This endpoint is unauthenticated.
 
     Args:
         host: IP address or hostname of the SPAN Panel
-        timeout: Request timeout in seconds
+        timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
         port: HTTP port of the panel bootstrap API
+        httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
 
     Returns:
         V2HomieSchema with firmware version, schema hash, and type definitions
@@ -165,7 +174,7 @@ async def get_homie_schema(host: str, timeout: float = 10.0, port: int = 80) -> 
     url = _build_url(host, port, "/api/v2/homie/schema")
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+        async with _get_client(httpx_client, timeout) as client:
             response = await client.get(url)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -198,7 +207,13 @@ async def get_homie_schema(host: str, timeout: float = 10.0, port: int = 80) -> 
     )
 
 
-async def regenerate_passphrase(host: str, token: str, timeout: float = 10.0, port: int = 80) -> str:
+async def regenerate_passphrase(
+    host: str,
+    token: str,
+    timeout: float = 10.0,
+    port: int = 80,
+    httpx_client: httpx.AsyncClient | None = None,
+) -> str:
     """Rotate the MQTT broker password on the SPAN Panel.
 
     After this call, the previous broker password is invalidated.
@@ -208,8 +223,9 @@ async def regenerate_passphrase(host: str, token: str, timeout: float = 10.0, po
     Args:
         host: IP address or hostname of the SPAN Panel
         token: Valid JWT access token
-        timeout: Request timeout in seconds
+        timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
         port: HTTP port of the panel bootstrap API
+        httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
 
     Returns:
         New MQTT broker password
@@ -224,7 +240,7 @@ async def regenerate_passphrase(host: str, token: str, timeout: float = 10.0, po
     headers = {"Authorization": f"Bearer {token}"}
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+        async with _get_client(httpx_client, timeout) as client:
             response = await client.put(url, headers=headers)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -241,7 +257,14 @@ async def regenerate_passphrase(host: str, token: str, timeout: float = 10.0, po
     return _str(data["ebusBrokerPassword"])
 
 
-async def register_fqdn(host: str, token: str, fqdn: str, timeout: float = 10.0, port: int = 80) -> None:
+async def register_fqdn(
+    host: str,
+    token: str,
+    fqdn: str,
+    timeout: float = 10.0,
+    port: int = 80,
+    httpx_client: httpx.AsyncClient | None = None,
+) -> None:
     """Register an FQDN with the SPAN Panel for TLS certificate SAN inclusion.
 
     The panel regenerates its TLS server certificate to include the
@@ -252,8 +275,9 @@ async def register_fqdn(host: str, token: str, fqdn: str, timeout: float = 10.0,
         host: IP address or hostname of the SPAN Panel
         token: Valid JWT access token from register_v2
         fqdn: Fully qualified domain name to register
-        timeout: Request timeout in seconds
+        timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
         port: HTTP port of the panel bootstrap API
+        httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
 
     Raises:
         SpanPanelAuthError: Token invalid or expired
@@ -266,7 +290,7 @@ async def register_fqdn(host: str, token: str, fqdn: str, timeout: float = 10.0,
     payload = {"ebusTlsFqdn": fqdn}
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+        async with _get_client(httpx_client, timeout) as client:
             response = await client.post(url, json=payload, headers=headers)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -280,14 +304,21 @@ async def register_fqdn(host: str, token: str, fqdn: str, timeout: float = 10.0,
         raise SpanPanelAPIError(f"Failed to register FQDN: HTTP {response.status_code}")
 
 
-async def get_fqdn(host: str, token: str, timeout: float = 10.0, port: int = 80) -> str:
+async def get_fqdn(
+    host: str,
+    token: str,
+    timeout: float = 10.0,
+    port: int = 80,
+    httpx_client: httpx.AsyncClient | None = None,
+) -> str:
     """Retrieve the currently registered FQDN from the SPAN Panel.
 
     Args:
         host: IP address or hostname of the SPAN Panel
         token: Valid JWT access token from register_v2
-        timeout: Request timeout in seconds
+        timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
         port: HTTP port of the panel bootstrap API
+        httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
 
     Returns:
         The registered FQDN, or empty string if none is configured
@@ -302,7 +333,7 @@ async def get_fqdn(host: str, token: str, timeout: float = 10.0, port: int = 80)
     headers = {"Authorization": f"Bearer {token}"}
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+        async with _get_client(httpx_client, timeout) as client:
             response = await client.get(url, headers=headers)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -322,7 +353,13 @@ async def get_fqdn(host: str, token: str, timeout: float = 10.0, port: int = 80)
     return _str(data.get("ebusTlsFqdn"))
 
 
-async def delete_fqdn(host: str, token: str, timeout: float = 10.0, port: int = 80) -> None:
+async def delete_fqdn(
+    host: str,
+    token: str,
+    timeout: float = 10.0,
+    port: int = 80,
+    httpx_client: httpx.AsyncClient | None = None,
+) -> None:
     """Remove the registered FQDN from the SPAN Panel.
 
     The panel regenerates its TLS certificate without the FQDN in
@@ -331,8 +368,9 @@ async def delete_fqdn(host: str, token: str, timeout: float = 10.0, port: int = 
     Args:
         host: IP address or hostname of the SPAN Panel
         token: Valid JWT access token from register_v2
-        timeout: Request timeout in seconds
+        timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
         port: HTTP port of the panel bootstrap API
+        httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
 
     Raises:
         SpanPanelAuthError: Token invalid or expired
@@ -344,7 +382,7 @@ async def delete_fqdn(host: str, token: str, timeout: float = 10.0, port: int = 
     headers = {"Authorization": f"Bearer {token}"}
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+        async with _get_client(httpx_client, timeout) as client:
             response = await client.delete(url, headers=headers)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -358,13 +396,19 @@ async def delete_fqdn(host: str, token: str, timeout: float = 10.0, port: int = 
         raise SpanPanelAPIError(f"Failed to delete FQDN: HTTP {response.status_code}")
 
 
-async def get_v2_status(host: str, timeout: float = 5.0, port: int = 80) -> V2StatusInfo:
+async def get_v2_status(
+    host: str,
+    timeout: float = 5.0,
+    port: int = 80,
+    httpx_client: httpx.AsyncClient | None = None,
+) -> V2StatusInfo:
     """Lightweight v2 status probe (unauthenticated).
 
     Args:
         host: IP address or hostname of the SPAN Panel
-        timeout: Request timeout in seconds
+        timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
         port: HTTP port of the panel bootstrap API
+        httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
 
     Returns:
         V2StatusInfo with serial number and firmware version
@@ -377,7 +421,7 @@ async def get_v2_status(host: str, timeout: float = 5.0, port: int = 80) -> V2St
     url = _build_url(host, port, "/api/v2/status")
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+        async with _get_client(httpx_client, timeout) as client:
             response = await client.get(url)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc

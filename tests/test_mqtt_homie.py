@@ -1161,7 +1161,7 @@ class TestPhase3Exports:
     def test_version_beta(self):
         import span_panel_api
 
-        assert span_panel_api.__version__ == "2.3.2"
+        assert span_panel_api.__version__ == "2.4.0"
 
 
 # ---------------------------------------------------------------------------

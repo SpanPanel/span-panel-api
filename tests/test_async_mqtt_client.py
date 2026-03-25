@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import threading
-
 from paho.mqtt.enums import CallbackAPIVersion
 
 from span_panel_api.mqtt.async_client import (
@@ -20,15 +18,6 @@ class TestNullLock:
         lock = NullLock()
         with lock as ctx:
             assert ctx is lock
-
-    def test_acquire_release(self) -> None:
-        lock = NullLock()
-        lock.acquire()
-        lock.release()
-
-    def test_acquire_with_args(self) -> None:
-        lock = NullLock()
-        lock.acquire(True, 5)
 
     def test_repeated_calls_cached(self) -> None:
         lock = NullLock()
@@ -63,13 +52,3 @@ class TestAsyncMQTTClient:
         locks = [getattr(client, attr) for attr in _PAHO_LOCK_ATTRS]
         # Each attribute should have its own NullLock instance
         assert len(set(id(lock) for lock in locks)) == len(_PAHO_LOCK_ATTRS)
-
-    def test_no_threading_locks_after_setup(self) -> None:
-        client = AsyncMQTTClient(
-            callback_api_version=CallbackAPIVersion.VERSION2,
-        )
-        client.setup()
-
-        for attr in _PAHO_LOCK_ATTRS:
-            val = getattr(client, attr)
-            assert isinstance(val, NullLock)

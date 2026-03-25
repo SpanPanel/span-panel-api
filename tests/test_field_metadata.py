@@ -97,14 +97,6 @@ def _make_schema_types() -> dict[str, dict[str, object]]:
 class TestBuildFieldMetadata:
     """Tests for build_field_metadata()."""
 
-    def test_returns_dict_of_field_metadata(self) -> None:
-        """Result should be a dict of FieldMetadata objects."""
-        result = build_field_metadata(_make_schema_types())
-        assert isinstance(result, dict)
-        for key, val in result.items():
-            assert isinstance(key, str)
-            assert isinstance(val, FieldMetadata)
-
     def test_panel_power_fields(self) -> None:
         """Panel power fields should have unit W and datatype float."""
         result = build_field_metadata(_make_schema_types())

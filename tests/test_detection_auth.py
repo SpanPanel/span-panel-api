@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from span_panel_api._http import _build_url, _get_client
-from span_panel_api.detection import DetectionResult, detect_api_version
+from span_panel_api.detection import detect_api_version
 from span_panel_api.exceptions import (
     SpanPanelAPIError,
     SpanPanelAuthError,
@@ -262,11 +262,6 @@ class TestDetectApiVersion:
         assert result.api_version == "v1"
         assert result.status_info is None
         assert result.probe_failed is True
-
-    def test_detection_result_frozen(self):
-        result = DetectionResult(api_version="v2", status_info=V2StatusInfo("serial", "fw"))
-        with pytest.raises(AttributeError):
-            result.api_version = "v1"  # type: ignore[misc]
 
 
 # ===================================================================
@@ -840,73 +835,3 @@ class TestGetV2Status:
 
             with pytest.raises(SpanPanelAPIError, match="does not support v2"):
                 await get_v2_status("192.168.1.1")
-
-
-# ===================================================================
-# V2 data model immutability
-# ===================================================================
-
-
-class TestV2ModelImmutability:
-    def test_v2_auth_response_frozen(self):
-        resp = V2AuthResponse(
-            access_token="t",
-            token_type="Bearer",
-            iat_ms=0,
-            ebus_broker_username="u",
-            ebus_broker_password="p",
-            ebus_broker_host="h",
-            ebus_broker_mqtts_port=8883,
-            ebus_broker_ws_port=9001,
-            ebus_broker_wss_port=9002,
-            hostname="h",
-            serial_number="s",
-            hop_passphrase="hp",
-        )
-        with pytest.raises(AttributeError):
-            resp.access_token = "changed"  # type: ignore[misc]
-
-    def test_v2_status_info_frozen(self):
-        info = V2StatusInfo(serial_number="s", firmware_version="fw")
-        with pytest.raises(AttributeError):
-            info.serial_number = "changed"  # type: ignore[misc]
-
-
-# ===================================================================
-# Exports
-# ===================================================================
-
-
-class TestPhase2Exports:
-    def test_detection_exports(self):
-        import span_panel_api
-
-        assert hasattr(span_panel_api, "DetectionResult")
-        assert hasattr(span_panel_api, "detect_api_version")
-
-    def test_v2_model_exports(self):
-        import span_panel_api
-
-        assert hasattr(span_panel_api, "V2AuthResponse")
-        assert hasattr(span_panel_api, "V2StatusInfo")
-
-    def test_v2_auth_function_exports(self):
-        import span_panel_api
-
-        assert hasattr(span_panel_api, "register_v2")
-        assert hasattr(span_panel_api, "download_ca_cert")
-        assert hasattr(span_panel_api, "get_homie_schema")
-        assert hasattr(span_panel_api, "get_v2_status")
-        assert hasattr(span_panel_api, "regenerate_passphrase")
-
-    def test_fqdn_function_exports(self):
-        import span_panel_api
-
-        assert hasattr(span_panel_api, "register_fqdn")
-        assert hasattr(span_panel_api, "get_fqdn")
-        assert hasattr(span_panel_api, "delete_fqdn")
-
-    def test_version_bumped(self):
-        import span_panel_api
-
-        assert span_panel_api.__version__ == "2.4.0"

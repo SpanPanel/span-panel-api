@@ -123,6 +123,7 @@ class V2StatusInfo:
 
     serial_number: str
     firmware_version: str
+    proximity_proven: bool | None = None  # Added in firmware 202609; None on older panels
 
 
 _CIRCUIT_TYPE_KEY = "energy.ebus.device.circuit"

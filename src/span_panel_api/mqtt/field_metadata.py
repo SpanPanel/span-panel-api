@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from ..models import FieldMetadata
+from ..models import FieldMetadata, HomieSchemaTypes
 from .const import (
     TYPE_BESS,
     TYPE_CIRCUIT,
@@ -124,7 +124,7 @@ _LUGS_FALLBACK: dict[str, str] = {
 
 
 def _lookup_property(
-    schema_types: dict[str, dict[str, object]],
+    schema_types: HomieSchemaTypes,
     node_type: str,
     property_id: str,
 ) -> dict[str, object] | None:
@@ -148,7 +148,7 @@ def _lookup_property(
 
 
 def build_field_metadata(
-    schema_types: dict[str, dict[str, object]],
+    schema_types: HomieSchemaTypes,
 ) -> dict[str, FieldMetadata]:
     """Build field metadata from the Homie schema.
 
@@ -180,8 +180,8 @@ def build_field_metadata(
 
 
 def log_schema_drift(
-    previous: dict[str, dict[str, object]],
-    current: dict[str, dict[str, object]],
+    previous: HomieSchemaTypes,
+    current: HomieSchemaTypes,
 ) -> None:
     """Log property-level differences between two schema versions.
 

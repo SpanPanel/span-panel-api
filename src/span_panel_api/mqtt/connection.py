@@ -117,20 +117,13 @@ class AsyncMqttBridge:
 
         # Fetch CA cert from panel for TLS
         _LOGGER.debug("BRIDGE: Fetching CA cert from %s (use_tls=%s)", self._panel_host, self._use_tls)
+        ca_pem: str | None = None
         ca_cert_path: Path | None = None
         if self._use_tls:
             try:
-                pem = await download_ca_cert(self._panel_host, port=self._panel_http_port)
-            except Exception as exc:
+                ca_pem = await download_ca_cert(self._panel_host, port=self._panel_http_port)
+            except (OSError, SpanPanelConnectionError, SpanPanelTimeoutError) as exc:
                 raise SpanPanelConnectionError(f"Failed to fetch CA certificate from {self._panel_host}") from exc
-
-            # Write PEM to temp file for paho's tls_set()
-            tmp = tempfile.NamedTemporaryFile(  # pylint: disable=consider-using-with  # noqa: SIM115
-                mode="w", suffix=".pem", delete=False
-            )
-            tmp.write(pem)
-            tmp.close()
-            ca_cert_path = Path(tmp.name)
 
         try:
             self._client = AsyncMQTTClient(
@@ -151,15 +144,22 @@ class AsyncMqttBridge:
             self._client.on_disconnect = self._on_disconnect
             self._client.on_message = self._on_message
 
-            # TLS setup + connect in executor (blocking file I/O for
+            # TLS setup + connect in executor (blocking: temp file write,
             # load_verify_locations, DNS, TCP, and TLS handshake).
             # During executor connect, socket callbacks bridge to the event
             # loop via call_soon_threadsafe.
             def _blocking_tls_and_connect() -> None:
-                """Run TLS configuration and connect in executor thread."""
+                """Write CA cert to temp file, configure TLS, and connect."""
+                nonlocal ca_cert_path
                 if self._client is None:
                     raise RuntimeError("MQTT client not initialised before connect")
-                if self._use_tls and ca_cert_path is not None:
+                if self._use_tls and ca_pem is not None:
+                    tmp = tempfile.NamedTemporaryFile(  # pylint: disable=consider-using-with  # noqa: SIM115
+                        mode="w", suffix=".pem", delete=False
+                    )
+                    tmp.write(ca_pem)
+                    tmp.close()
+                    ca_cert_path = Path(tmp.name)
                     self._client.tls_set(
                         ca_certs=str(ca_cert_path),
                         cert_reqs=ssl.CERT_REQUIRED,
@@ -205,10 +205,7 @@ class AsyncMqttBridge:
         except Exception:
             # Clean up temp CA cert file on failure only
             if ca_cert_path is not None:
-                try:
-                    ca_cert_path.unlink()
-                except OSError:
-                    _LOGGER.debug("Failed to remove temp CA cert file: %s", ca_cert_path)
+                self._remove_cert_file(ca_cert_path)
             raise
 
     async def disconnect(self) -> None:
@@ -232,17 +229,24 @@ class AsyncMqttBridge:
         self._client = None
         self._initial_connect_done = False
 
-        if self._ca_cert_path is not None:
-            try:
-                self._ca_cert_path.unlink()
-            except OSError:
-                _LOGGER.debug("Failed to remove temp CA cert file: %s", self._ca_cert_path)
-            self._ca_cert_path = None
+        cert_path = self._ca_cert_path
+        self._ca_cert_path = None
+        if cert_path is not None:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, partial(self._remove_cert_file, cert_path))
 
     def subscribe(self, topic: str, qos: int = 0) -> None:
         """Subscribe to a topic. Must be called after connect()."""
         if self._client is not None:
             self._client.subscribe(topic, qos=qos)
+
+    @staticmethod
+    def _remove_cert_file(path: Path) -> None:
+        """Remove a temporary CA certificate file (safe to call from any thread)."""
+        try:
+            path.unlink()
+        except OSError:
+            _LOGGER.debug("Failed to remove temp CA cert file: %s", path)
 
     def publish(self, topic: str, payload: str, qos: int = 1) -> None:
         """Publish a message. Must be called after connect()."""

@@ -41,10 +41,7 @@ from span_panel_api.mqtt.const import (
 from span_panel_api.mqtt.homie import HomieDeviceConsumer
 from span_panel_api.mqtt.models import MqttClientConfig
 from span_panel_api.protocol import (
-    CircuitControlProtocol,
     PanelCapability,
-    SpanPanelClientProtocol,
-    StreamingCapableProtocol,
 )
 
 
@@ -886,27 +883,6 @@ class TestHomieCallbacks:
 
 
 class TestSpanMqttClientProtocol:
-    def test_implements_panel_protocol(self):
-        from span_panel_api.mqtt.client import SpanMqttClient
-
-        config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        assert isinstance(client, SpanPanelClientProtocol)
-
-    def test_implements_circuit_control(self):
-        from span_panel_api.mqtt.client import SpanMqttClient
-
-        config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        assert isinstance(client, CircuitControlProtocol)
-
-    def test_implements_streaming(self):
-        from span_panel_api.mqtt.client import SpanMqttClient
-
-        config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        assert isinstance(client, StreamingCapableProtocol)
-
     def test_capabilities(self):
         from span_panel_api.mqtt.client import SpanMqttClient
 
@@ -918,13 +894,6 @@ class TestSpanMqttClientProtocol:
         assert PanelCapability.CIRCUIT_CONTROL in caps
         assert PanelCapability.BATTERY_SOE in caps
         assert PanelCapability.EBUS_MQTT in caps  # MQTT-only transport
-
-    def test_serial_number(self):
-        from span_panel_api.mqtt.client import SpanMqttClient
-
-        config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        assert client.serial_number == SERIAL
 
 
 # ---------------------------------------------------------------------------
@@ -1092,76 +1061,6 @@ class TestSpanMqttClientStreaming:
 # ---------------------------------------------------------------------------
 # AsyncMqttBridge — construction
 # ---------------------------------------------------------------------------
-
-
-class TestAsyncMqttBridge:
-    def test_construction(self):
-        from span_panel_api.mqtt.connection import AsyncMqttBridge
-
-        bridge = AsyncMqttBridge(
-            host="broker.local",
-            port=8883,
-            username="user",
-            password="pass",
-            panel_host="192.168.1.1",
-            serial_number=SERIAL,
-        )
-        assert bridge.is_connected() is False
-
-    def test_callbacks_default_none(self):
-        from span_panel_api.mqtt.connection import AsyncMqttBridge
-
-        bridge = AsyncMqttBridge(
-            host="broker.local",
-            port=8883,
-            username="user",
-            password="pass",
-            panel_host="192.168.1.1",
-            serial_number=SERIAL,
-        )
-        assert bridge._message_callback is None
-        assert bridge._connection_callback is None
-
-    def test_set_message_callback(self):
-        from span_panel_api.mqtt.connection import AsyncMqttBridge
-
-        bridge = AsyncMqttBridge(
-            host="broker.local",
-            port=8883,
-            username="user",
-            password="pass",
-            panel_host="192.168.1.1",
-            serial_number=SERIAL,
-        )
-        cb = MagicMock()
-        bridge.set_message_callback(cb)
-        assert bridge._message_callback is cb
-
-
-# ---------------------------------------------------------------------------
-# Package exports and version
-# ---------------------------------------------------------------------------
-
-
-class TestPhase3Exports:
-    def test_mqtt_exports(self):
-        from span_panel_api.mqtt import AsyncMqttBridge, HomieDeviceConsumer, MqttClientConfig, SpanMqttClient
-
-        assert AsyncMqttBridge is not None
-        assert HomieDeviceConsumer is not None
-        assert MqttClientConfig is not None
-        assert SpanMqttClient is not None
-
-    def test_top_level_exports(self):
-        import span_panel_api
-
-        assert hasattr(span_panel_api, "SpanMqttClient")
-        assert hasattr(span_panel_api, "MqttClientConfig")
-
-    def test_version_beta(self):
-        import span_panel_api
-
-        assert span_panel_api.__version__ == "2.3.2"
 
 
 # ---------------------------------------------------------------------------

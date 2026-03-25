@@ -1310,7 +1310,7 @@ wheels = [
 
 [[package]]
 name = "span-panel-api"
-version = "2.3.2"
+version = "2.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -1338,7 +1338,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx", specifier = ">=0.28.1,<0.29.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "paho-mqtt", specifier = ">=2.0.0,<3.0.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
 ]

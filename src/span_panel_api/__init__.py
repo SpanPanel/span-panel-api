@@ -9,6 +9,7 @@ from .auth import (
     download_ca_cert,
     get_fqdn,
     get_homie_schema,
+    get_v2_status,
     regenerate_passphrase,
     register_fqdn,
     register_v2,
@@ -26,6 +27,7 @@ from .exceptions import (
 from .factory import create_span_client
 from .models import (
     FieldMetadata,
+    HomieSchemaTypes,
     SpanBatterySnapshot,
     SpanCircuitSnapshot,
     SpanEvseSnapshot,
@@ -52,7 +54,7 @@ from .protocol import (
     StreamingCapableProtocol,
 )
 
-__version__ = "2.3.2"
+__version__ = "2.4.0"
 # fmt: off
 __all__ = [  # noqa: RUF022
     # Protocols
@@ -63,6 +65,7 @@ __all__ = [  # noqa: RUF022
     "StreamingCapableProtocol",
     # Metadata
     "FieldMetadata",
+    "HomieSchemaTypes",
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",
@@ -82,6 +85,7 @@ __all__ = [  # noqa: RUF022
     "download_ca_cert",
     "get_fqdn",
     "get_homie_schema",
+    "get_v2_status",
     "register_fqdn",
     "regenerate_passphrase",
     "register_v2",

@@ -16,7 +16,7 @@ import httpx
 
 from ._http import _build_url, _get_client
 from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelConnectionError, SpanPanelTimeoutError
-from .models import V2AuthResponse, V2HomieSchema, V2StatusInfo
+from .models import HomieSchemaTypes, V2AuthResponse, V2HomieSchema, V2StatusInfo
 
 
 def _str(val: object) -> str:
@@ -188,7 +188,7 @@ async def get_homie_schema(
 
     # Extract types — each value is a dict of property definitions
     raw_types = data.get("types", {})
-    types: dict[str, dict[str, object]] = {}
+    types: HomieSchemaTypes = {}
     if isinstance(raw_types, dict):
         for type_name, props in raw_types.items():
             if isinstance(props, dict):

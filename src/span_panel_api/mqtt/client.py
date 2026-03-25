@@ -13,7 +13,7 @@ import logging
 
 from ..auth import get_homie_schema
 from ..exceptions import SpanPanelConnectionError, SpanPanelServerError
-from ..models import FieldMetadata, SpanPanelSnapshot
+from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
 from ..protocol import PanelCapability
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S, PROPERTY_SET_TOPIC_FMT, TYPE_CORE, WILDCARD_TOPIC_FMT
@@ -56,7 +56,7 @@ class SpanMqttClient:
         self._snapshot_timer: asyncio.TimerHandle | None = None
         self._field_metadata: dict[str, FieldMetadata] | None = None
         self._schema_hash: str | None = None
-        self._previous_schema_types: dict[str, dict[str, object]] | None = None
+        self._previous_schema_types: HomieSchemaTypes | None = None
 
     def _require_homie(self) -> HomieDeviceConsumer:
         """Return the HomieDeviceConsumer, raising if not yet connected."""

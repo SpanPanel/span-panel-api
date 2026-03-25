@@ -61,7 +61,9 @@ class TestHttpHelpers:
             async with _get_client(None, timeout=12.5) as client:
                 assert client is mock_instance
 
-            mock_cls.assert_called_once_with(timeout=12.5, verify=False)
+            mock_cls.assert_called_once_with(
+                timeout=12.5,
+            )
             mock_instance.__aenter__.assert_awaited_once()
             mock_instance.__aexit__.assert_awaited_once()
 
@@ -142,7 +144,9 @@ class TestHttpxClientInjection:
 
             await register_v2("192.168.65.70", "HA", "p", timeout=42.5)
 
-        mock_client_cls.assert_called_once_with(timeout=42.5, verify=False)
+        mock_client_cls.assert_called_once_with(
+            timeout=42.5,
+        )
 
     @pytest.mark.asyncio
     async def test_get_v2_status_injected_skips_async_client_constructor(self) -> None:
@@ -184,7 +188,9 @@ class TestHttpxClientInjection:
 
             await detect_api_version("192.168.65.70", timeout=3.25)
 
-        mock_client_cls.assert_called_once_with(timeout=3.25, verify=False)
+        mock_client_cls.assert_called_once_with(
+            timeout=3.25,
+        )
 
 
 # ===================================================================

@@ -23,5 +23,5 @@ async def _get_client(
     if httpx_client is not None:
         yield httpx_client
         return
-    async with httpx.AsyncClient(timeout=timeout, verify=False) as client:  # nosec B501
+    async with httpx.AsyncClient(timeout=timeout) as client:
         yield client

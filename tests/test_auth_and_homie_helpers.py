@@ -154,7 +154,7 @@ class TestHttpxClientInjectionAuthHelpers:
 
             await download_ca_cert("192.168.1.1", timeout=88.5)
 
-        cls.assert_called_once_with(timeout=88.5, verify=False)
+        cls.assert_called_once_with(timeout=88.5)
 
     @pytest.mark.asyncio
     async def test_get_homie_schema_injected_skips_constructor(self) -> None:

@@ -10,6 +10,11 @@ All snapshots are immutable (frozen) and memory-efficient (slots).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TypeAlias
+
+# Homie schema type: {type_name: {property_name: {attribute: value}}}
+# Values are heterogeneous JSON (str, int, bool, nested dicts).
+HomieSchemaTypes: TypeAlias = dict[str, dict[str, object]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +140,7 @@ class V2HomieSchema:
 
     firmware_version: str
     types_schema_hash: str  # SHA-256, first 16 hex chars
-    types: dict[str, dict[str, object]]  # {type_name: {prop_name: {attr: value}}}
+    types: HomieSchemaTypes
 
     @property
     def panel_size(self) -> int:

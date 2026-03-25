@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from span_panel_api.detection import DetectionResult, detect_api_version
+from span_panel_api._http import _build_url, _get_client
+from span_panel_api.detection import detect_api_version
 from span_panel_api.exceptions import (
     SpanPanelAPIError,
     SpanPanelAuthError,
@@ -32,6 +33,39 @@ from span_panel_api.auth import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+class TestHttpHelpers:
+    def test_build_url_omits_default_port(self) -> None:
+        assert _build_url("panel.local", 80, "/api/v2/status") == "http://panel.local/api/v2/status"
+        assert _build_url("panel.local", 8080, "/api/v2/status") == "http://panel.local:8080/api/v2/status"
+
+    @pytest.mark.asyncio
+    async def test_get_client_yields_injected_client_without_closing(self) -> None:
+        injected = AsyncMock(spec=httpx.AsyncClient)
+        injected.aclose = AsyncMock()
+
+        async with _get_client(injected, timeout=7.5) as client:
+            assert client is injected
+
+        injected.aclose.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_client_creates_and_closes_fallback_client(self) -> None:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_cls:
+            mock_instance = AsyncMock()
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_cls.return_value = mock_instance
+
+            async with _get_client(None, timeout=12.5) as client:
+                assert client is mock_instance
+
+            mock_cls.assert_called_once_with(
+                timeout=12.5,
+            )
+            mock_instance.__aenter__.assert_awaited_once()
+            mock_instance.__aexit__.assert_awaited_once()
 
 
 def _mock_response(status_code: int = 200, json_data: dict | None = None, text: str = "") -> httpx.Response:
@@ -78,6 +112,88 @@ BnRlc3RjYTBcMA0GCSqGSIb3DQEBAQUAA0sAMEgCQQC7o96VJ4GL0xNPHOVQ+Knx
 
 
 # ===================================================================
+# httpx_client injection (shared client, timeout contract)
+# ===================================================================
+
+
+class TestHttpxClientInjection:
+    @pytest.mark.asyncio
+    async def test_register_v2_uses_injected_client_and_does_not_close(self) -> None:
+        mock_response = _mock_response(200, V2_AUTH_JSON)
+        injected = AsyncMock(spec=httpx.AsyncClient)
+        injected.post = AsyncMock(return_value=mock_response)
+        injected.aclose = AsyncMock()
+
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_cls:
+            result = await register_v2("192.168.65.70", "HA", "my-passphrase", httpx_client=injected)
+
+        assert isinstance(result, V2AuthResponse)
+        mock_cls.assert_not_called()
+        injected.post.assert_awaited_once()
+        injected.aclose.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fallback_client_uses_register_v2_timeout(self) -> None:
+        mock_response = _mock_response(200, V2_AUTH_JSON)
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await register_v2("192.168.65.70", "HA", "p", timeout=42.5)
+
+        mock_client_cls.assert_called_once_with(
+            timeout=42.5,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_v2_status_injected_skips_async_client_constructor(self) -> None:
+        mock_response = _mock_response(200, V2_STATUS_JSON)
+        injected = AsyncMock(spec=httpx.AsyncClient)
+        injected.get = AsyncMock(return_value=mock_response)
+        injected.aclose = AsyncMock()
+
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_cls:
+            await get_v2_status("192.168.65.70", timeout=999.0, httpx_client=injected)
+
+        mock_cls.assert_not_called()
+        injected.aclose.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_detect_api_version_uses_injected_client(self) -> None:
+        mock_response = _mock_response(200, V2_STATUS_JSON)
+        injected = AsyncMock(spec=httpx.AsyncClient)
+        injected.get = AsyncMock(return_value=mock_response)
+        injected.aclose = AsyncMock()
+
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_cls:
+            result = await detect_api_version("192.168.65.70", httpx_client=injected)
+
+        assert result.api_version == "v2"
+        mock_cls.assert_not_called()
+        injected.get.assert_awaited_once()
+        injected.aclose.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_detect_api_version_fallback_uses_timeout(self) -> None:
+        mock_response = _mock_response(200, V2_STATUS_JSON)
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await detect_api_version("192.168.65.70", timeout=3.25)
+
+        mock_client_cls.assert_called_once_with(
+            timeout=3.25,
+        )
+
+
+# ===================================================================
 # detect_api_version
 # ===================================================================
 
@@ -86,7 +202,7 @@ class TestDetectApiVersion:
     @pytest.mark.asyncio
     async def test_detect_v2_panel(self):
         mock_response = _mock_response(200, V2_STATUS_JSON)
-        with patch("span_panel_api.detection.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -99,11 +215,12 @@ class TestDetectApiVersion:
         assert result.status_info is not None
         assert result.status_info.serial_number == "nj-2316-XXXX"
         assert result.status_info.firmware_version == "spanos2/r202603/05"
+        assert result.probe_failed is False
 
     @pytest.mark.asyncio
     async def test_detect_v1_panel_404(self):
         mock_response = _mock_response(404)
-        with patch("span_panel_api.detection.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -114,10 +231,11 @@ class TestDetectApiVersion:
 
         assert result.api_version == "v1"
         assert result.status_info is None
+        assert result.probe_failed is False
 
     @pytest.mark.asyncio
     async def test_detect_v1_connection_error(self):
-        with patch("span_panel_api.detection.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.side_effect = httpx.ConnectError("Connection refused")
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -128,10 +246,11 @@ class TestDetectApiVersion:
 
         assert result.api_version == "v1"
         assert result.status_info is None
+        assert result.probe_failed is True
 
     @pytest.mark.asyncio
     async def test_detect_v1_timeout(self):
-        with patch("span_panel_api.detection.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.side_effect = httpx.TimeoutException("Timed out")
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -142,11 +261,7 @@ class TestDetectApiVersion:
 
         assert result.api_version == "v1"
         assert result.status_info is None
-
-    def test_detection_result_frozen(self):
-        result = DetectionResult(api_version="v2", status_info=V2StatusInfo("serial", "fw"))
-        with pytest.raises(AttributeError):
-            result.api_version = "v1"  # type: ignore[misc]
+        assert result.probe_failed is True
 
 
 # ===================================================================
@@ -158,7 +273,7 @@ class TestRegisterV2:
     @pytest.mark.asyncio
     async def test_register_success(self):
         mock_response = _mock_response(200, V2_AUTH_JSON)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -184,7 +299,7 @@ class TestRegisterV2:
     @pytest.mark.asyncio
     async def test_register_invalid_passphrase(self):
         mock_response = _mock_response(422, text="Invalid passphrase")
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -196,7 +311,7 @@ class TestRegisterV2:
 
     @pytest.mark.asyncio
     async def test_register_connection_error(self):
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.side_effect = httpx.ConnectError("Connection refused")
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -208,7 +323,7 @@ class TestRegisterV2:
 
     @pytest.mark.asyncio
     async def test_register_timeout(self):
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.side_effect = httpx.TimeoutException("Timed out")
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -228,7 +343,7 @@ class TestDownloadCaCert:
     @pytest.mark.asyncio
     async def test_download_success(self):
         mock_response = _mock_response(200, text=PEM_CERT)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -242,7 +357,7 @@ class TestDownloadCaCert:
     @pytest.mark.asyncio
     async def test_download_invalid_pem(self):
         mock_response = _mock_response(200, text="not-a-pem")
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -255,7 +370,7 @@ class TestDownloadCaCert:
     @pytest.mark.asyncio
     async def test_download_http_error(self):
         mock_response = _mock_response(500)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -285,7 +400,7 @@ class TestGetHomieSchema:
             },
         }
         mock_response = _mock_response(200, schema_json)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -372,7 +487,7 @@ class TestRegeneratePassphrase:
     @pytest.mark.asyncio
     async def test_regenerate_success(self):
         mock_response = _mock_response(200, {"ebusBrokerPassword": "new-password-123"})
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.put.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -386,7 +501,7 @@ class TestRegeneratePassphrase:
     @pytest.mark.asyncio
     async def test_regenerate_auth_error(self):
         mock_response = _mock_response(401)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.put.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -399,7 +514,7 @@ class TestRegeneratePassphrase:
     @pytest.mark.asyncio
     async def test_regenerate_412_precondition_failed(self):
         mock_response = _mock_response(412)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.put.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -419,7 +534,7 @@ class TestRegisterFqdn:
     @pytest.mark.asyncio
     async def test_register_fqdn_success(self):
         mock_response = _mock_response(200)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -435,7 +550,7 @@ class TestRegisterFqdn:
     @pytest.mark.asyncio
     async def test_register_fqdn_accepts_201(self):
         mock_response = _mock_response(201)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -447,7 +562,7 @@ class TestRegisterFqdn:
     @pytest.mark.asyncio
     async def test_register_fqdn_accepts_204(self):
         mock_response = _mock_response(204)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -459,7 +574,7 @@ class TestRegisterFqdn:
     @pytest.mark.asyncio
     async def test_register_fqdn_auth_error(self):
         mock_response = _mock_response(401)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -472,7 +587,7 @@ class TestRegisterFqdn:
     @pytest.mark.asyncio
     async def test_register_fqdn_403(self):
         mock_response = _mock_response(403)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -485,7 +600,7 @@ class TestRegisterFqdn:
     @pytest.mark.asyncio
     async def test_register_fqdn_api_error(self):
         mock_response = _mock_response(500)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -497,7 +612,7 @@ class TestRegisterFqdn:
 
     @pytest.mark.asyncio
     async def test_register_fqdn_connection_error(self):
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.side_effect = httpx.ConnectError("Connection refused")
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -509,7 +624,7 @@ class TestRegisterFqdn:
 
     @pytest.mark.asyncio
     async def test_register_fqdn_timeout(self):
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.side_effect = httpx.TimeoutException("Timed out")
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -529,7 +644,7 @@ class TestGetFqdn:
     @pytest.mark.asyncio
     async def test_get_fqdn_success(self):
         mock_response = _mock_response(200, {"ebusTlsFqdn": "panel.example.com"})
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -543,7 +658,7 @@ class TestGetFqdn:
     @pytest.mark.asyncio
     async def test_get_fqdn_not_configured_returns_empty(self):
         mock_response = _mock_response(404)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -557,7 +672,7 @@ class TestGetFqdn:
     @pytest.mark.asyncio
     async def test_get_fqdn_auth_error(self):
         mock_response = _mock_response(401)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -570,7 +685,7 @@ class TestGetFqdn:
     @pytest.mark.asyncio
     async def test_get_fqdn_api_error(self):
         mock_response = _mock_response(500)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -582,7 +697,7 @@ class TestGetFqdn:
 
     @pytest.mark.asyncio
     async def test_get_fqdn_connection_error(self):
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.side_effect = httpx.ConnectError("Connection refused")
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -594,7 +709,7 @@ class TestGetFqdn:
 
     @pytest.mark.asyncio
     async def test_get_fqdn_timeout(self):
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.side_effect = httpx.TimeoutException("Timed out")
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -614,7 +729,7 @@ class TestDeleteFqdn:
     @pytest.mark.asyncio
     async def test_delete_fqdn_success_200(self):
         mock_response = _mock_response(200)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.delete.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -626,7 +741,7 @@ class TestDeleteFqdn:
     @pytest.mark.asyncio
     async def test_delete_fqdn_success_204(self):
         mock_response = _mock_response(204)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.delete.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -638,7 +753,7 @@ class TestDeleteFqdn:
     @pytest.mark.asyncio
     async def test_delete_fqdn_auth_error(self):
         mock_response = _mock_response(403)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.delete.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -651,7 +766,7 @@ class TestDeleteFqdn:
     @pytest.mark.asyncio
     async def test_delete_fqdn_api_error(self):
         mock_response = _mock_response(500)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.delete.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -663,7 +778,7 @@ class TestDeleteFqdn:
 
     @pytest.mark.asyncio
     async def test_delete_fqdn_connection_error(self):
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.delete.side_effect = httpx.ConnectError("Connection refused")
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -675,7 +790,7 @@ class TestDeleteFqdn:
 
     @pytest.mark.asyncio
     async def test_delete_fqdn_timeout(self):
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.delete.side_effect = httpx.TimeoutException("Timed out")
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -695,7 +810,7 @@ class TestGetV2Status:
     @pytest.mark.asyncio
     async def test_get_status_success(self):
         mock_response = _mock_response(200, V2_STATUS_JSON)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -711,7 +826,7 @@ class TestGetV2Status:
     @pytest.mark.asyncio
     async def test_get_status_not_v2(self):
         mock_response = _mock_response(404)
-        with patch("span_panel_api.auth.httpx.AsyncClient") as mock_client_cls:
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -720,72 +835,3 @@ class TestGetV2Status:
 
             with pytest.raises(SpanPanelAPIError, match="does not support v2"):
                 await get_v2_status("192.168.1.1")
-
-
-# ===================================================================
-# V2 data model immutability
-# ===================================================================
-
-
-class TestV2ModelImmutability:
-    def test_v2_auth_response_frozen(self):
-        resp = V2AuthResponse(
-            access_token="t",
-            token_type="Bearer",
-            iat_ms=0,
-            ebus_broker_username="u",
-            ebus_broker_password="p",
-            ebus_broker_host="h",
-            ebus_broker_mqtts_port=8883,
-            ebus_broker_ws_port=9001,
-            ebus_broker_wss_port=9002,
-            hostname="h",
-            serial_number="s",
-            hop_passphrase="hp",
-        )
-        with pytest.raises(AttributeError):
-            resp.access_token = "changed"  # type: ignore[misc]
-
-    def test_v2_status_info_frozen(self):
-        info = V2StatusInfo(serial_number="s", firmware_version="fw")
-        with pytest.raises(AttributeError):
-            info.serial_number = "changed"  # type: ignore[misc]
-
-
-# ===================================================================
-# Exports
-# ===================================================================
-
-
-class TestPhase2Exports:
-    def test_detection_exports(self):
-        import span_panel_api
-
-        assert hasattr(span_panel_api, "DetectionResult")
-        assert hasattr(span_panel_api, "detect_api_version")
-
-    def test_v2_model_exports(self):
-        import span_panel_api
-
-        assert hasattr(span_panel_api, "V2AuthResponse")
-        assert hasattr(span_panel_api, "V2StatusInfo")
-
-    def test_v2_auth_function_exports(self):
-        import span_panel_api
-
-        assert hasattr(span_panel_api, "register_v2")
-        assert hasattr(span_panel_api, "download_ca_cert")
-        assert hasattr(span_panel_api, "get_homie_schema")
-        assert hasattr(span_panel_api, "regenerate_passphrase")
-
-    def test_fqdn_function_exports(self):
-        import span_panel_api
-
-        assert hasattr(span_panel_api, "register_fqdn")
-        assert hasattr(span_panel_api, "get_fqdn")
-        assert hasattr(span_panel_api, "delete_fqdn")
-
-    def test_version_bumped(self):
-        import span_panel_api
-
-        assert span_panel_api.__version__ == "2.3.2"

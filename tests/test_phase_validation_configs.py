@@ -7,11 +7,9 @@ electrical phase relationships for 240V circuits and tab synchronizations.
 import pytest
 import yaml
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
 from span_panel_api.phase_validation import (
-    get_tab_phase,
-    are_tabs_opposite_phase,
     validate_solar_tabs,
     get_phase_distribution,
 )
@@ -273,68 +271,3 @@ class TestExamplePhaseValidation:
                             f"Invalid high-power appliance configuration in {config_name}: "
                             f"{circuit_name} ({max_power}W, tabs {tabs}): {message}"
                         )
-
-    def test_comprehensive_phase_report(self, example_configs):
-        """Generate comprehensive phase validation report for all examples."""
-        print("\n" + "=" * 80)
-        print("COMPREHENSIVE ELECTRICAL PHASE VALIDATION REPORT")
-        print("=" * 80)
-
-        for config_name, config in example_configs.items():
-            print(f"\n📋 {config_name}")
-            print("-" * 60)
-
-            total_tabs = config["panel_config"]["total_tabs"]
-            valid_tabs = list(range(1, total_tabs + 1))
-
-            # Circuit analysis
-            print("🔌 Circuit Analysis:")
-            for circuit in config.get("circuits", []):
-                tabs = circuit.get("tabs", [])
-                name = circuit.get("name", circuit.get("id"))
-                template = circuit.get("template", "")
-
-                if len(tabs) == 1:
-                    phase = get_tab_phase(tabs[0], valid_tabs)
-                    print(f"  • {name}: Tab {tabs[0]} ({phase}) - 120V")
-                elif len(tabs) == 2:
-                    phase1 = get_tab_phase(tabs[0], valid_tabs)
-                    phase2 = get_tab_phase(tabs[1], valid_tabs)
-                    valid = phase1 != phase2
-                    status = "✓" if valid else "❌"
-                    print(f"  • {name}: Tabs {tabs[0]}({phase1}) + {tabs[1]}({phase2}) - 240V {status}")
-
-            # Synchronization analysis
-            tab_syncs = config.get("tab_synchronizations", [])
-            if tab_syncs:
-                print("\n🔄 Tab Synchronizations:")
-                for sync in tab_syncs:
-                    tabs = sync.get("tabs", [])
-                    behavior = sync.get("behavior", "")
-                    template = sync.get("template", "")
-
-                    if len(tabs) == 2:
-                        phase1 = get_tab_phase(tabs[0], valid_tabs)
-                        phase2 = get_tab_phase(tabs[1], valid_tabs)
-                        valid = phase1 != phase2
-                        status = "✓" if valid else "❌"
-                        print(f"  • {template}: Tabs {tabs[0]}({phase1}) + {tabs[1]}({phase2}) - {behavior} {status}")
-
-            # Phase distribution
-            all_tabs = []
-            for circuit in config.get("circuits", []):
-                all_tabs.extend(circuit.get("tabs", []))
-            for sync in config.get("tab_synchronizations", []):
-                all_tabs.extend(sync.get("tabs", []))
-            all_tabs.extend(config.get("unmapped_tabs", []))
-
-            if all_tabs:
-                distribution = get_phase_distribution(all_tabs, valid_tabs)
-                balance_status = (
-                    "✓ Balanced" if distribution["is_balanced"] else f"⚠️ Imbalanced (±{distribution['balance_difference']})"
-                )
-                print(
-                    f"\n⚖️ Phase Distribution: L1={distribution['L1_count']} tabs, L2={distribution['L2_count']} tabs ({balance_status})"
-                )
-
-        print("\n" + "=" * 80)

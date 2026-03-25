@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
 from span_panel_api.models import FieldMetadata
-from span_panel_api.mqtt.field_metadata import build_field_metadata
+from span_panel_api.mqtt.field_metadata import build_field_metadata, log_schema_drift
 
 
 def _make_schema_types() -> dict[str, dict[str, object]]:
@@ -94,14 +96,6 @@ def _make_schema_types() -> dict[str, dict[str, object]]:
 
 class TestBuildFieldMetadata:
     """Tests for build_field_metadata()."""
-
-    def test_returns_dict_of_field_metadata(self) -> None:
-        """Result should be a dict of FieldMetadata objects."""
-        result = build_field_metadata(_make_schema_types())
-        assert isinstance(result, dict)
-        for key, val in result.items():
-            assert isinstance(key, str)
-            assert isinstance(val, FieldMetadata)
 
     def test_panel_power_fields(self) -> None:
         """Panel power fields should have unit W and datatype float."""
@@ -218,3 +212,69 @@ class TestLugsFallback:
         }
         result = build_field_metadata(schema)
         assert result["panel.instant_grid_power_w"].unit == "W"
+
+
+class TestLogSchemaDrift:
+    """Tests for log_schema_drift diagnostic logging."""
+
+    def test_new_node_type(self, caplog: logging.LogCaptureFixture) -> None:
+        """New node types should be logged."""
+        previous: dict[str, dict[str, object]] = {}
+        current: dict[str, dict[str, object]] = {"energy.new.type": {"prop": {}}}
+        with caplog.at_level(logging.DEBUG):
+            log_schema_drift(previous, current)
+        assert "new node type 'energy.new.type'" in caplog.text
+
+    def test_removed_node_type(self, caplog: logging.LogCaptureFixture) -> None:
+        """Removed node types should be logged."""
+        previous: dict[str, dict[str, object]] = {"energy.old.type": {"prop": {}}}
+        current: dict[str, dict[str, object]] = {}
+        with caplog.at_level(logging.DEBUG):
+            log_schema_drift(previous, current)
+        assert "removed node type 'energy.old.type'" in caplog.text
+
+    def test_new_property(self, caplog: logging.LogCaptureFixture) -> None:
+        """New properties within an existing node type should be logged."""
+        previous: dict[str, dict[str, object]] = {"core": {"door": {}}}
+        current: dict[str, dict[str, object]] = {"core": {"door": {}, "wifi": {}}}
+        with caplog.at_level(logging.DEBUG):
+            log_schema_drift(previous, current)
+        assert "new property 'core/wifi'" in caplog.text
+
+    def test_removed_property(self, caplog: logging.LogCaptureFixture) -> None:
+        """Removed properties within an existing node type should be logged."""
+        previous: dict[str, dict[str, object]] = {"core": {"door": {}, "wifi": {}}}
+        current: dict[str, dict[str, object]] = {"core": {"door": {}}}
+        with caplog.at_level(logging.DEBUG):
+            log_schema_drift(previous, current)
+        assert "removed property 'core/wifi'" in caplog.text
+
+    def test_changed_attribute(self, caplog: logging.LogCaptureFixture) -> None:
+        """Changed property attributes should be logged."""
+        previous: dict[str, dict[str, object]] = {
+            "core": {"voltage": {"datatype": "float", "unit": "V"}},
+        }
+        current: dict[str, dict[str, object]] = {
+            "core": {"voltage": {"datatype": "float", "unit": "kV"}},
+        }
+        with caplog.at_level(logging.DEBUG):
+            log_schema_drift(previous, current)
+        assert "unit changed: 'V'" in caplog.text
+        assert "'kV'" in caplog.text
+
+    def test_no_drift(self, caplog: logging.LogCaptureFixture) -> None:
+        """Identical schemas should produce no log output."""
+        schema: dict[str, dict[str, object]] = {
+            "core": {"door": {"datatype": "enum"}},
+        }
+        with caplog.at_level(logging.DEBUG):
+            log_schema_drift(schema, schema)
+        assert "Schema drift" not in caplog.text
+
+    def test_non_dict_props_skipped(self, caplog: logging.LogCaptureFixture) -> None:
+        """Non-dict property values should be silently skipped."""
+        previous: dict[str, dict[str, object]] = {"core": {"door": "not_a_dict"}}
+        current: dict[str, dict[str, object]] = {"core": {"door": "not_a_dict"}}
+        with caplog.at_level(logging.DEBUG):
+            log_schema_drift(previous, current)
+        assert "Schema drift" not in caplog.text

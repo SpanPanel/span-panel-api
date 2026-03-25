@@ -6,6 +6,8 @@ authors = [
     {name = "SpanPanel"}
 ]
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10,<4.0"
 dependencies = [
     "httpx>=0.28.1,<0.29.0",

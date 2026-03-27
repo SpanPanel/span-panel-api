@@ -36,8 +36,6 @@ pip install span-panel-api
 
 ## Architecture
 
-v2.0.0 is a ground-up rewrite. The package connects to the SPAN Panel's on-device MQTT broker using the [Homie v5](https://homieiot.github.io/) convention. All panel and circuit state is delivered via retained MQTT messages — no polling required.
-
 ### Transport
 
 The `SpanMqttClient` connects to the panel's MQTT broker (MQTTS or WebSocket) and subscribes to the Homie device tree. A `HomieDeviceConsumer` state machine parses incoming topic updates into typed `SpanPanelSnapshot` dataclasses. Changes are pushed to

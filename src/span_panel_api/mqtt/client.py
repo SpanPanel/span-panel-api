@@ -15,6 +15,7 @@ from ..auth import get_homie_schema
 from ..exceptions import SpanPanelConnectionError, SpanPanelServerError
 from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
 from ..protocol import PanelCapability
+from .accumulator import HomiePropertyAccumulator
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S, PROPERTY_SET_TOPIC_FMT, TYPE_CORE, WILDCARD_TOPIC_FMT
 from .field_metadata import build_field_metadata, log_schema_drift
@@ -47,6 +48,7 @@ class SpanMqttClient:
         self._panel_http_port = panel_http_port
 
         self._bridge: AsyncMqttBridge | None = None
+        self._accumulator: HomiePropertyAccumulator | None = None
         self._homie: HomieDeviceConsumer | None = None
         self._streaming = False
         self._snapshot_callbacks: list[Callable[[SpanPanelSnapshot], Awaitable[None]]] = []
@@ -109,7 +111,8 @@ class SpanMqttClient:
 
         # Fetch schema to determine panel size and build field metadata
         schema = await get_homie_schema(self._host, port=self._panel_http_port)
-        self._homie = HomieDeviceConsumer(self._serial_number, schema.panel_size)
+        self._accumulator = HomiePropertyAccumulator(self._serial_number)
+        self._homie = HomieDeviceConsumer(self._accumulator, schema.panel_size)
 
         # Detect schema drift from previous connection
         new_hash = schema.types_schema_hash
@@ -186,6 +189,7 @@ class SpanMqttClient:
         if self._bridge is not None:
             await self._bridge.disconnect()
             self._bridge = None
+        self._accumulator = None
 
     async def ping(self) -> bool:
         """Check if MQTT connection is alive and device is ready."""

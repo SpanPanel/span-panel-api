@@ -145,7 +145,10 @@ class TestHttpxClientInjectionAuthHelpers:
             headers={"content-type": "text/plain"},
             request=httpx.Request("GET", "http://test"),
         )
-        with patch("span_panel_api._http.httpx.AsyncClient") as cls:
+        with (
+            patch("span_panel_api._http.httpx.AsyncClient") as cls,
+            patch("span_panel_api._http._create_ssl_context", new_callable=AsyncMock) as mock_ctx,
+        ):
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -154,7 +157,7 @@ class TestHttpxClientInjectionAuthHelpers:
 
             await download_ca_cert("192.168.1.1", timeout=88.5)
 
-        cls.assert_called_once_with(timeout=88.5)
+        cls.assert_called_once_with(timeout=88.5, verify=mock_ctx.return_value)
 
     @pytest.mark.asyncio
     async def test_get_homie_schema_injected_skips_constructor(self) -> None:

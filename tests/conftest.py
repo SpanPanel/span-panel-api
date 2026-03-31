@@ -13,8 +13,17 @@ import pytest
 from paho.mqtt.client import ConnectFlags
 from paho.mqtt.reasoncodes import ReasonCode
 
+import span_panel_api._http as _http_mod
 from span_panel_api.models import V2HomieSchema
 from span_panel_api.mqtt.const import TOPIC_PREFIX, TYPE_CORE
+
+
+@pytest.fixture(autouse=True)
+def _reset_ssl_cache() -> None:
+    """Ensure the module-level SSL context cache doesn't leak between tests."""
+    _http_mod._ssl_cache.context = None
+    _http_mod._ssl_cache.lock = None
+
 
 # ---------------------------------------------------------------------------
 # Constants shared across MQTT tests

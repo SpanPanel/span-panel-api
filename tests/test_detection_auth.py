@@ -52,7 +52,10 @@ class TestHttpHelpers:
 
     @pytest.mark.asyncio
     async def test_get_client_creates_and_closes_fallback_client(self) -> None:
-        with patch("span_panel_api._http.httpx.AsyncClient") as mock_cls:
+        with (
+            patch("span_panel_api._http.httpx.AsyncClient") as mock_cls,
+            patch("span_panel_api._http._create_ssl_context", new_callable=AsyncMock) as mock_ctx,
+        ):
             mock_instance = AsyncMock()
             mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
             mock_instance.__aexit__ = AsyncMock(return_value=False)
@@ -63,6 +66,7 @@ class TestHttpHelpers:
 
             mock_cls.assert_called_once_with(
                 timeout=12.5,
+                verify=mock_ctx.return_value,
             )
             mock_instance.__aenter__.assert_awaited_once()
             mock_instance.__aexit__.assert_awaited_once()
@@ -135,7 +139,10 @@ class TestHttpxClientInjection:
     @pytest.mark.asyncio
     async def test_fallback_client_uses_register_v2_timeout(self) -> None:
         mock_response = _mock_response(200, V2_AUTH_JSON)
-        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
+        with (
+            patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls,
+            patch("span_panel_api._http._create_ssl_context", new_callable=AsyncMock) as mock_ctx,
+        ):
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -146,6 +153,7 @@ class TestHttpxClientInjection:
 
         mock_client_cls.assert_called_once_with(
             timeout=42.5,
+            verify=mock_ctx.return_value,
         )
 
     @pytest.mark.asyncio
@@ -179,7 +187,10 @@ class TestHttpxClientInjection:
     @pytest.mark.asyncio
     async def test_detect_api_version_fallback_uses_timeout(self) -> None:
         mock_response = _mock_response(200, V2_STATUS_JSON)
-        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
+        with (
+            patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls,
+            patch("span_panel_api._http._create_ssl_context", new_callable=AsyncMock) as mock_ctx,
+        ):
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -190,6 +201,7 @@ class TestHttpxClientInjection:
 
         mock_client_cls.assert_called_once_with(
             timeout=3.25,
+            verify=mock_ctx.return_value,
         )
 
 

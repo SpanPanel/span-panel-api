@@ -265,4 +265,4 @@ class HomiePropertyAccumulator:
             try:
                 cb(node_id, prop_id, value, old_value)
             except Exception:  # pylint: disable=broad-exception-caught
-                _LOGGER.debug("Property callback error for %s/%s", node_id, prop_id)
+                _LOGGER.debug("Property callback error for %s/%s", node_id, prop_id, exc_info=True)

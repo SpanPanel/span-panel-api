@@ -844,6 +844,69 @@ class TestHomieSnapshot:
 
 
 # ---------------------------------------------------------------------------
+# HomieDeviceConsumer — snapshot caching
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotCaching:
+    def test_cached_snapshot_returned_when_clean(self):
+        acc, consumer = _build_ready_consumer()
+        node = "aabbccdd-1122-3344-5566-778899001122"
+        acc.handle_message(f"{PREFIX}/{node}/active-power", "-100.0")
+        snap1 = consumer.build_snapshot()
+        snap2 = consumer.build_snapshot()
+        assert snap1 is snap2  # exact same object
+
+    def test_dirty_circuit_triggers_partial_rebuild(self):
+        acc, consumer = _build_ready_consumer()
+        node = "aabbccdd-1122-3344-5566-778899001122"
+        acc.handle_message(f"{PREFIX}/{node}/active-power", "-100.0")
+        snap1 = consumer.build_snapshot()
+
+        acc.handle_message(f"{PREFIX}/{node}/active-power", "-200.0")
+        snap2 = consumer.build_snapshot()
+
+        assert snap2 is not snap1
+        circuit = snap2.circuits["aabbccdd112233445566778899001122"]
+        assert circuit.instant_power_w == 200.0
+        assert snap2.firmware_version == snap1.firmware_version
+
+    def test_dirty_core_triggers_full_rebuild(self):
+        acc, consumer = _build_ready_consumer()
+        acc.handle_message(f"{PREFIX}/core/software-version", "v1")
+        snap1 = consumer.build_snapshot()
+
+        acc.handle_message(f"{PREFIX}/core/software-version", "v2")
+        snap2 = consumer.build_snapshot()
+
+        assert snap2 is not snap1
+        assert snap2.firmware_version == "v2"
+
+    def test_target_change_marks_dirty(self):
+        acc, consumer = _build_ready_consumer()
+        node = "aabbccdd-1122-3344-5566-778899001122"
+        acc.handle_message(f"{PREFIX}/{node}/relay", "CLOSED")
+        snap1 = consumer.build_snapshot()
+
+        acc.handle_message(f"{PREFIX}/{node}/relay/$target", "OPEN")
+        snap2 = consumer.build_snapshot()
+
+        assert snap2 is not snap1
+        circuit = snap2.circuits["aabbccdd112233445566778899001122"]
+        assert circuit.relay_state == "CLOSED"
+        assert circuit.relay_state_target == "OPEN"
+
+    def test_description_change_triggers_full_rebuild(self):
+        acc, consumer = _build_ready_consumer()
+        snap1 = consumer.build_snapshot()
+
+        # Re-sending description marks all dirty
+        acc.handle_message(f"{PREFIX}/$description", _make_description(_full_description()))
+        snap2 = consumer.build_snapshot()
+        assert snap2 is not snap1
+
+
+# ---------------------------------------------------------------------------
 # HomieDeviceConsumer — property callbacks
 # ---------------------------------------------------------------------------
 

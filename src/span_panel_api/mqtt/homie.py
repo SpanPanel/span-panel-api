@@ -7,6 +7,7 @@ Homie property state stored in a HomiePropertyAccumulator.
 from __future__ import annotations
 
 from collections.abc import Callable
+import dataclasses
 import logging
 import time
 from typing import ClassVar
@@ -97,12 +98,58 @@ class HomieDeviceConsumer:
                 missing.append(node_id)
         return missing
 
+    # Node types that affect panel-level snapshot fields.
+    # Any dirty node of these types triggers a full rebuild.
+    _PANEL_LEVEL_TYPES: ClassVar[frozenset[str]] = frozenset(
+        {
+            TYPE_CORE,
+            TYPE_LUGS,
+            TYPE_LUGS_UPSTREAM,
+            TYPE_LUGS_DOWNSTREAM,
+            TYPE_BESS,
+            TYPE_PV,
+            TYPE_EVSE,
+            TYPE_POWER_FLOWS,
+        }
+    )
+
     def build_snapshot(self) -> SpanPanelSnapshot:
-        """Build a point-in-time snapshot from current property values.
+        """Build a point-in-time snapshot, using cache when possible.
 
         Must be called after accumulator is_ready() returns True.
         """
-        return self._build_snapshot()
+        dirty = self._acc.dirty_node_ids()
+
+        if not dirty and self._cached_snapshot is not None:
+            self._acc.mark_clean()
+            return self._cached_snapshot
+
+        node_types = self._acc.all_node_types()
+        needs_full = self._cached_snapshot is None or any(
+            node_types.get(nid, "") in self._PANEL_LEVEL_TYPES or nid not in node_types for nid in dirty
+        )
+
+        snapshot = self._build_snapshot() if needs_full else self._rebuild_dirty_circuits(dirty)
+        self._cached_snapshot = snapshot
+        self._acc.mark_clean()
+        return snapshot
+
+    def _rebuild_dirty_circuits(self, dirty: frozenset[str]) -> SpanPanelSnapshot:
+        """Partial rebuild — only rebuild circuits whose nodes are dirty."""
+        assert self._cached_snapshot is not None
+        cached = self._cached_snapshot
+
+        feed_metadata = self._build_feed_metadata()
+        updated_circuits = dict(cached.circuits)
+        for node_id in dirty:
+            if self._is_circuit_node(node_id):
+                meta = feed_metadata.get(node_id, {})
+                device_type = meta.get("device_type", "circuit")
+                relative_position = meta.get("relative_position", "")
+                circuit = self._build_circuit(node_id, device_type, relative_position)
+                updated_circuits[circuit.circuit_id] = circuit
+
+        return dataclasses.replace(cached, circuits=updated_circuits)
 
     def _find_lugs_node(self, direction: str) -> str | None:
         """Find the lugs node with a specific direction.

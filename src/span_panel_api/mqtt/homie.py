@@ -136,7 +136,8 @@ class HomieDeviceConsumer:
 
     def _rebuild_dirty_circuits(self, dirty: frozenset[str]) -> SpanPanelSnapshot:
         """Partial rebuild — only rebuild circuits whose nodes are dirty."""
-        assert self._cached_snapshot is not None
+        if self._cached_snapshot is None:
+            raise RuntimeError("_rebuild_dirty_circuits called without a cached snapshot")
         cached = self._cached_snapshot
 
         feed_metadata = self._build_feed_metadata()

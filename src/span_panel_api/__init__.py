@@ -4,6 +4,8 @@ A modern, type-safe Python client library for the SPAN Panel API,
 supporting MQTT/Homie (v2) transport.
 """
 
+from importlib.metadata import version as _pkg_version
+
 from .auth import (
     delete_fqdn,
     download_ca_cert,
@@ -54,7 +56,7 @@ from .protocol import (
     StreamingCapableProtocol,
 )
 
-__version__ = "2.5.0"
+__version__ = _pkg_version("span-panel-api")
 # fmt: off
 __all__ = [  # noqa: RUF022
     # Protocols

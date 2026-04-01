@@ -31,5 +31,6 @@ dmypy.json
 
 /coverage.xml
 /.coverage
+coverage_output.log
 **/.DS_Store
 .local_coverage_data

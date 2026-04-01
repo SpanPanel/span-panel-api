@@ -31,6 +31,7 @@ pip install span-panel-api
 
 - `httpx` — v2 authentication and detection endpoints
 - `paho-mqtt` — MQTT/Homie transport (real-time push)
+- `pyyaml` — YAML parsing for configuration and API payloads
 
 ## Architecture
 

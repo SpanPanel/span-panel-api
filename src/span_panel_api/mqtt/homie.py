@@ -140,7 +140,12 @@ class HomieDeviceConsumer:
         cached = self._cached_snapshot
 
         feed_metadata = self._build_feed_metadata()
-        updated_circuits = dict(cached.circuits)
+        updated_circuits: dict[str, SpanCircuitSnapshot] = {}
+        # Keep only non-unmapped circuits from cache, rebuild dirty ones
+        for cid, circ in cached.circuits.items():
+            if cid.startswith("unmapped_tab_"):
+                continue  # drop old unmapped entries; will recompute below
+            updated_circuits[cid] = circ
         for node_id in dirty:
             if self._is_circuit_node(node_id):
                 meta = feed_metadata.get(node_id, {})
@@ -148,6 +153,10 @@ class HomieDeviceConsumer:
                 relative_position = meta.get("relative_position", "")
                 circuit = self._build_circuit(node_id, device_type, relative_position)
                 updated_circuits[circuit.circuit_id] = circuit
+
+        # Recompute unmapped tabs based on current circuit set
+        unmapped = self._build_unmapped_tabs(updated_circuits)
+        updated_circuits.update(unmapped)
 
         return dataclasses.replace(cached, circuits=updated_circuits)
 
@@ -194,7 +203,7 @@ class HomieDeviceConsumer:
 
     def _is_circuit_node(self, node_id: str) -> bool:
         """Check if node is a circuit device."""
-        return self._acc.all_node_types().get(node_id, "") in self._CIRCUIT_LIKE_TYPES
+        return self._acc.get_node_type(node_id) in self._CIRCUIT_LIKE_TYPES
 
     def _build_feed_metadata(self) -> dict[str, dict[str, str]]:
         """Build mapping of circuit node_id → metadata from PV/EVSE feed references.

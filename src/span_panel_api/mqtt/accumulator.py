@@ -87,10 +87,11 @@ class HomiePropertyAccumulator:
 
     def handle_message(self, topic: str, payload: str) -> None:
         """Route an MQTT message to the appropriate handler."""
-        if not topic.startswith(self._topic_prefix):
+        prefix_with_sep = f"{self._topic_prefix}/"
+        if not topic.startswith(prefix_with_sep):
             return
 
-        suffix = topic[len(self._topic_prefix) + 1 :]  # strip prefix + "/"
+        suffix = topic[len(prefix_with_sep) :]
 
         if suffix == "$state":
             self._handle_state(payload)
@@ -138,6 +139,10 @@ class HomiePropertyAccumulator:
     def nodes_by_type(self, type_str: str) -> list[str]:
         """Return all node IDs matching a given type string."""
         return [nid for nid, ntype in self._node_types.items() if ntype == type_str]
+
+    def get_node_type(self, node_id: str) -> str:
+        """Get the type string for a node, or empty string if unknown."""
+        return self._node_types.get(node_id, "")
 
     def all_node_types(self) -> dict[str, str]:
         """Return a copy of the node_id → type mapping."""
@@ -232,12 +237,12 @@ class HomiePropertyAccumulator:
             self._property_timestamps[node_id] = {}
 
         old_value = self._property_values[node_id].get(prop_id)
-        self._property_timestamps[node_id][prop_id] = now_s
 
         if old_value == value:
-            return  # no change — no dirty, no callbacks
+            return  # no change — no dirty, no callbacks, no timestamp bump
 
         self._property_values[node_id][prop_id] = value
+        self._property_timestamps[node_id][prop_id] = now_s
         self._dirty_nodes.add(node_id)
 
         self._fire_callbacks(node_id, prop_id, value, old_value)

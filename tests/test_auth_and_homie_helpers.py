@@ -10,6 +10,7 @@ import pytest
 
 from span_panel_api.auth import _int, download_ca_cert, get_homie_schema
 from span_panel_api.exceptions import SpanPanelConnectionError, SpanPanelTimeoutError
+from span_panel_api.mqtt.accumulator import HomiePropertyAccumulator
 from span_panel_api.mqtt.homie import HomieDeviceConsumer, _parse_int
 
 
@@ -102,7 +103,8 @@ class TestParseInt:
 
 class TestHomieCallbackUnregister:
     def test_unregister_removes_callback(self) -> None:
-        consumer = HomieDeviceConsumer("test-serial", panel_size=32)
+        acc = HomiePropertyAccumulator("test-serial")
+        consumer = HomieDeviceConsumer(acc, panel_size=32)
         cb = AsyncMock()
         unregister = consumer.register_property_callback(cb)
         unregister()

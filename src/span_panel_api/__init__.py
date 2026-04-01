@@ -37,7 +37,7 @@ from .models import (
     V2HomieSchema,
     V2StatusInfo,
 )
-from .mqtt import MqttClientConfig, SpanMqttClient
+from .mqtt import HomieLifecycle, HomiePropertyAccumulator, MqttClientConfig, SpanMqttClient
 from .phase_validation import (
     PhaseDistribution,
     are_tabs_opposite_phase,
@@ -54,7 +54,7 @@ from .protocol import (
     StreamingCapableProtocol,
 )
 
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 # fmt: off
 __all__ = [  # noqa: RUF022
     # Protocols
@@ -90,6 +90,8 @@ __all__ = [  # noqa: RUF022
     "regenerate_passphrase",
     "register_v2",
     # Transport
+    "HomieLifecycle",
+    "HomiePropertyAccumulator",
     "MqttClientConfig",
     "SpanMqttClient",
     # Phase validation

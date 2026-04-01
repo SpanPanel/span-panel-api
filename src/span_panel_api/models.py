@@ -42,6 +42,8 @@ class SpanCircuitSnapshot:
     relay_requester: str = "UNKNOWN"  # v2 new: circuit/relay-requester
     energy_accum_update_time_s: int = 0  # v1: poll timestamp | v2: MQTT arrival time
     instant_power_update_time_s: int = 0  # v1: poll timestamp | v2: MQTT arrival time
+    relay_state_target: str | None = None  # v2: $target for relay (desired state)
+    priority_target: str | None = None  # v2: $target for shed-priority (desired state)
 
 
 @dataclass(frozen=True, slots=True)

@@ -31,14 +31,18 @@ pip install span-panel-api
 
 - `httpx` — v2 authentication and detection endpoints
 - `paho-mqtt` — MQTT/Homie transport (real-time push)
-- `pyyaml` — simulation configuration
+- `pyyaml` — YAML parsing for configuration and API payloads
 
 ## Architecture
 
 ### Transport
 
-The `SpanMqttClient` connects to the panel's MQTT broker (MQTTS or WebSocket) and subscribes to the Homie device tree. A `HomieDeviceConsumer` state machine parses incoming topic updates into typed `SpanPanelSnapshot` dataclasses. Changes are pushed to
-consumers via callbacks.
+The `SpanMqttClient` connects to the panel's MQTT broker (MQTTS or WebSocket) and subscribes to the Homie device tree. A two-layer architecture separates generic Homie v5 protocol handling from SPAN-specific interpretation:
+
+- **`HomiePropertyAccumulator`** — handles message routing, property and `$target` storage, dirty-node tracking, and an explicit lifecycle state machine (`HomieLifecycle`). Protocol-only; no SPAN domain knowledge.
+- **`HomieDeviceConsumer`** — reads from the accumulator via a query API and builds typed `SpanPanelSnapshot` dataclasses. Handles power sign normalization, DSM derivation, unmapped tab synthesis, and dirty-node-aware snapshot caching.
+
+Changes are pushed to consumers via callbacks. Dirty-node tracking allows the snapshot builder to skip unchanged nodes, reducing per-scan CPU cost on constrained hardware.
 
 ### Event-Loop-Driven I/O (Home Assistant Compatible)
 
@@ -71,6 +75,7 @@ The library defines three structural subtyping protocols (PEP 544) that both the
 | -------------------------- | ------------------------------------------------------------------------------------- |
 | `SpanPanelClientProtocol`  | Core lifecycle: `connect`, `close`, `ping`, `get_snapshot`                            |
 | `CircuitControlProtocol`   | Relay and shed-priority control: `set_circuit_relay`, `set_circuit_priority`          |
+| `PanelControlProtocol`     | Panel-level control: `set_dominant_power_source`                                      |
 | `StreamingCapableProtocol` | Push-based updates: `register_snapshot_callback`, `start_streaming`, `stop_streaming` |
 
 Integration code programs against these protocols, not transport-specific classes.
@@ -82,7 +87,7 @@ All panel state is represented as immutable, frozen dataclasses:
 | Dataclass             | Content                                                                                                                                        |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SpanPanelSnapshot`   | Complete panel state: power, energy, grid/DSM state, hardware status, per-leg voltages, power flows, lugs current, circuits, battery, PV, EVSE |
-| `SpanCircuitSnapshot` | Per-circuit: power, energy, relay state, priority, tabs, device type, breaker rating, current                                                  |
+| `SpanCircuitSnapshot` | Per-circuit: power, energy, relay state, priority, tabs, device type, breaker rating, current, `$target` pending state                         |
 | `SpanBatterySnapshot` | BESS: SoC percentage, SoE kWh, vendor/product metadata, nameplate capacity                                                                     |
 | `SpanPVSnapshot`      | PV inverter: vendor/product metadata, nameplate capacity                                                                                       |
 | `SpanEvseSnapshot`    | EVSE (EV charger): status, lock state, advertised current, vendor/product/serial/version metadata                                              |
@@ -178,6 +183,40 @@ client = await create_span_client(
 )
 ```
 
+### Direct Client Construction
+
+Consumers that manage their own registration and broker configuration can instantiate `SpanMqttClient` directly:
+
+```python
+from span_panel_api import SpanMqttClient, MqttClientConfig
+
+config = MqttClientConfig(
+    broker_host="192.168.1.100",
+    username="stored-username",
+    password="stored-password",
+    mqtts_port=8883,
+    ws_port=9001,
+    wss_port=443,
+)
+
+client = SpanMqttClient(
+    host="192.168.1.100",
+    serial_number="nj-2316-XXXX",
+    broker_config=config,
+    snapshot_interval=1.0,
+)
+await client.connect()
+```
+
+### Scan Frequency
+
+`set_snapshot_interval()` controls how often push-mode snapshot callbacks fire. Lower values mean lower latency; higher values reduce CPU usage on constrained hardware. Dirty-node caching (v2.5.0) further reduces per-scan cost by skipping unchanged nodes.
+
+```python
+# Reduce snapshot frequency to every 2 seconds
+client.set_snapshot_interval(2.0)
+```
+
 ### Circuit Control
 
 ```python
@@ -187,6 +226,18 @@ await client.set_circuit_relay("circuit-uuid", "CLOSED")
 
 # Set circuit shed priority (NEVER / SOC_THRESHOLD / OFF_GRID)
 await client.set_circuit_priority("circuit-uuid", "NEVER")
+```
+
+### Pending-State Detection
+
+When the panel publishes Homie `$target` properties, `SpanCircuitSnapshot` exposes the desired state alongside the actual state:
+
+```python
+for cid, circuit in snapshot.circuits.items():
+    if circuit.relay_state_target and circuit.relay_state_target != circuit.relay_state:
+        print(f"  {circuit.name}: relay transitioning {circuit.relay_state} → {circuit.relay_state_target}")
+    if circuit.priority_target and circuit.priority_target != circuit.priority:
+        print(f"  {circuit.name}: priority pending {circuit.priority} → {circuit.priority_target}")
 ```
 
 ### API Version Detection
@@ -208,7 +259,11 @@ if result.status_info:
 Standalone async functions for v2-specific HTTP operations:
 
 ```python
-from span_panel_api import register_v2, download_ca_cert, get_homie_schema, regenerate_passphrase
+from span_panel_api import (
+    register_v2, download_ca_cert, get_homie_schema,
+    regenerate_passphrase, get_v2_status,
+    register_fqdn, get_fqdn, delete_fqdn,
+)
 
 # Register and obtain MQTT broker credentials
 auth = await register_v2("192.168.1.100", "my-app", passphrase="panel-passphrase")
@@ -225,21 +280,29 @@ print(f"Schema hash: {schema.types_schema_hash}")
 
 # Rotate MQTT broker password (invalidates previous password)
 new_password = await regenerate_passphrase("192.168.1.100", token=auth.access_token)
+
+# Get panel status (unauthenticated)
+status = await get_v2_status("192.168.1.100")
+print(f"Serial: {status.serial_number}, Firmware: {status.firmware_version}")
+
+# FQDN management (for panel TLS certificate SAN)
+await register_fqdn("192.168.1.100", "panel.local", token=auth.access_token)
+fqdn = await get_fqdn("192.168.1.100", token=auth.access_token)
+await delete_fqdn("192.168.1.100", token=auth.access_token)
 ```
 
 ## Error Handling
 
 All exceptions inherit from `SpanPanelError`:
 
-| Exception                      | Cause                                                     |
-| ------------------------------ | --------------------------------------------------------- |
-| `SpanPanelAuthError`           | Invalid passphrase, expired token, or missing credentials |
-| `SpanPanelConnectionError`     | Cannot reach the panel (network/DNS)                      |
-| `SpanPanelTimeoutError`        | Request or connection timed out                           |
-| `SpanPanelValidationError`     | Data validation failure                                   |
-| `SpanPanelAPIError`            | Unexpected HTTP response from v2 endpoints                |
-| `SpanPanelServerError`         | Panel returned HTTP 500                                   |
-| `SimulationConfigurationError` | Invalid simulation YAML configuration                     |
+| Exception                  | Cause                                                     |
+| -------------------------- | --------------------------------------------------------- |
+| `SpanPanelAuthError`       | Invalid passphrase, expired token, or missing credentials |
+| `SpanPanelConnectionError` | Cannot reach the panel (network/DNS)                      |
+| `SpanPanelTimeoutError`    | Request or connection timed out                           |
+| `SpanPanelValidationError` | Data validation failure                                   |
+| `SpanPanelAPIError`        | Unexpected HTTP response from v2 endpoints                |
+| `SpanPanelServerError`     | Panel returned HTTP 500                                   |
 
 ```python
 from span_panel_api import SpanPanelAuthError, SpanPanelConnectionError
@@ -276,14 +339,14 @@ src/span_panel_api/
 ├── models.py            # Snapshot dataclasses (panel, circuit, battery, PV)
 ├── phase_validation.py  # Electrical phase utilities
 ├── protocol.py          # PEP 544 protocols + PanelCapability flags
-├── simulation.py        # Simulation engine (YAML-driven, snapshot-producing)
 └── mqtt/
     ├── __init__.py
+    ├── accumulator.py   # HomiePropertyAccumulator (Homie v5 protocol layer)
     ├── async_client.py  # NullLock + AsyncMQTTClient (HA core pattern)
     ├── client.py        # SpanMqttClient (all three protocols)
     ├── connection.py    # AsyncMqttBridge (event-loop-driven, no threads)
     ├── const.py         # MQTT/Homie constants + UUID helpers
-    ├── homie.py         # HomieDeviceConsumer (Homie v5 state machine)
+    ├── homie.py         # HomieDeviceConsumer (SPAN snapshot builder)
     └── models.py        # MqttClientConfig, MqttTransport
 ```
 

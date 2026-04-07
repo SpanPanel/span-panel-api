@@ -85,7 +85,7 @@ class HomiePropertyAccumulator:
 
     @property
     def generation(self) -> int:
-        """Counter incremented on each $description (panel reboot)."""
+        """Counter incremented on the initial $description and after lifecycle resets."""
         return self._generation
 
     def is_ready(self) -> bool:
@@ -201,12 +201,14 @@ class HomiePropertyAccumulator:
             self._received_description = False
         else:
             # init, sleeping, alert, etc. — connected but not ready.
+            # Always move out of READY/DESCRIPTION_RECEIVED into a
+            # non-ready connected lifecycle state.
+            #
             # Reset _received_description so that the upcoming $description
             # triggers a property clear.  This covers fast reboots where
             # the broker's LWT ($state=disconnected) may not reach us
             # before the panel publishes $state=init.
-            if self._lifecycle == HomieLifecycle.DISCONNECTED:
-                self._lifecycle = HomieLifecycle.CONNECTED
+            self._lifecycle = HomieLifecycle.CONNECTED
             self._received_state_ready = False
             self._received_description = False
 
@@ -220,13 +222,13 @@ class HomiePropertyAccumulator:
             _LOGGER.warning("Invalid $description JSON")
             return
 
-        # Clear stale property values when this is a fresh lifecycle — i.e.,
-        # $state=disconnected/lost already reset _received_description to False.
+        # _handle_state() already reset _received_description to False due to
+        # a state change that starts a new panel lifecycle, including
+        # $state=disconnected/lost and other non-ready states such as init.
         # This means the panel rebooted while we were connected.  On a pure
-        # MQTT reconnect (no panel reboot) the broker re-delivers the retained
-        # $description, but _received_description is still True from the
-        # previous session so we skip the clear — the retained property
-        # messages will carry the correct (unchanged) values.
+        # MQTT reconnect (no panel reboot), _received_description is still
+        # True from the previous session so we skip the clear — the retained
+        # property messages will carry the correct (unchanged) values.
         if not self._received_description:
             self._property_values.clear()
             self._property_timestamps.clear()

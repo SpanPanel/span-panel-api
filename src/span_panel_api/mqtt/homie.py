@@ -64,6 +64,7 @@ class HomieDeviceConsumer:
         self._acc = accumulator
         self._panel_size = panel_size
         self._cached_snapshot: SpanPanelSnapshot | None = None
+        self._cache_generation: int = 0
 
     # -- Delegation to accumulator -------------------------------------------
     # These thin wrappers allow SpanMqttClient (and legacy test code) to
@@ -118,6 +119,12 @@ class HomieDeviceConsumer:
 
         Must be called after accumulator is_ready() returns True.
         """
+        # Invalidate cache when the accumulator generation advances
+        # (panel reboot cleared all property values).
+        if self._acc.generation != self._cache_generation:
+            self._cached_snapshot = None
+            self._cache_generation = self._acc.generation
+
         dirty = self._acc.dirty_node_ids()
 
         if not dirty and self._cached_snapshot is not None:

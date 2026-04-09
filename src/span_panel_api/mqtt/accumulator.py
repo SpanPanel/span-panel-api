@@ -56,8 +56,9 @@ class HomiePropertyAccumulator:
         # Node type mapping from $description
         self._node_types: dict[str, str] = {}
 
-        # Generation counter — incremented when $description clears property
-        # values so consumers can invalidate caches built from stale data.
+        # Generation counter — incremented whenever a new lifecycle's
+        # $description is accepted (including initial boot) so consumers
+        # can invalidate snapshot caches built from prior-lifecycle data.
         self._generation: int = 0
 
         # Dirty tracking
@@ -85,7 +86,7 @@ class HomiePropertyAccumulator:
 
     @property
     def generation(self) -> int:
-        """Counter incremented on the initial $description and after lifecycle resets."""
+        """Counter incremented on each new lifecycle's ``$description`` to invalidate consumer caches."""
         return self._generation
 
     def is_ready(self) -> bool:
@@ -225,16 +226,21 @@ class HomiePropertyAccumulator:
         # _handle_state() already reset _received_description to False due to
         # a state change that starts a new panel lifecycle, including
         # $state=disconnected/lost and other non-ready states such as init.
-        # This means the panel rebooted while we were connected.  On a pure
-        # MQTT reconnect (no panel reboot), _received_description is still
-        # True from the previous session so we skip the clear — the retained
-        # property messages will carry the correct (unchanged) values.
+        # Increment the generation counter to invalidate consumer snapshot
+        # caches, but preserve property values — pre-reboot readings serve
+        # as safe placeholders until the panel re-publishes.  Clearing values
+        # would emit 0.0 for energy counters via _parse_float(""), triggering
+        # false dip-compensation offsets in the integration.
+        #
+        # On a pure MQTT reconnect (no panel reboot), _received_description
+        # is still True from the previous session so we skip this block —
+        # the retained property messages carry the correct (unchanged) values.
         if not self._received_description:
-            self._property_values.clear()
-            self._property_timestamps.clear()
-            self._target_values.clear()
             self._generation += 1
-            _LOGGER.debug("Cleared stale property values (generation %d)", self._generation)
+            _LOGGER.debug(
+                "Panel reboot detected (generation %d); preserving property values as placeholders",
+                self._generation,
+            )
 
         self._received_description = True
         self._node_types.clear()

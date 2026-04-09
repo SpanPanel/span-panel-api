@@ -906,7 +906,7 @@ class TestSnapshotCaching:
         assert snap2 is not snap1
 
     def test_description_invalidates_cache_via_generation(self):
-        """Panel reboot ($description) must clear cached snapshot so stale data is not reused."""
+        """Panel reboot ($description) must invalidate cached snapshot but preserve values."""
         acc, consumer = _build_ready_consumer()
         node = "aabbccdd-1122-3344-5566-778899001122"
 
@@ -916,16 +916,21 @@ class TestSnapshotCaching:
         circuit_id = "aabbccdd112233445566778899001122"
         assert snap_pre.circuits[circuit_id].consumed_energy_wh == 1000.0
 
-        # Panel reboots — $state=disconnected resets lifecycle, $description clears values
+        # Panel reboots — $state=disconnected resets lifecycle, $description preserves values
         acc.handle_message(f"{PREFIX}/$state", "disconnected")
         acc.handle_message(f"{PREFIX}/$description", _make_description(_full_description()))
         acc.handle_message(f"{PREFIX}/$state", "ready")
 
-        # Post-reboot: circuit publishes reset energy = 50
+        # Before new property messages: snapshot uses preserved pre-reboot value
+        snap_preserved = consumer.build_snapshot()
+        assert snap_preserved.circuits[circuit_id].consumed_energy_wh == 1000.0
+        assert snap_preserved is not snap_pre  # cache was invalidated
+
+        # Post-reboot: circuit publishes new value
         acc.handle_message(f"{PREFIX}/{node}/exported-energy", "50")
         snap_post = consumer.build_snapshot()
 
-        # Must reflect post-reboot value, not stale pre-reboot cache
+        # Must reflect post-reboot value
         assert snap_post.circuits[circuit_id].consumed_energy_wh == 50.0
 
 

@@ -164,17 +164,21 @@ class TestLifecycleDisconnection:
 
 
 # ---------------------------------------------------------------------------
-# Panel reboot: $description clears stale property values
+# Panel reboot: $description preserves property values as placeholders
 # ---------------------------------------------------------------------------
 
 
-class TestDescriptionClearsProperties:
-    """Verify that a panel reboot (disconnected -> $description) clears stale data.
+class TestDescriptionOnReboot:
+    """Verify that a panel reboot preserves property values as placeholders.
 
-    The clear only happens when _received_description is False, which requires
-    a $state=disconnected (or lost) to have reset the lifecycle first. A
-    re-delivered retained $description on a pure network reconnect does NOT
-    clear, because _received_description is still True from the previous session.
+    On lifecycle reset ($state=disconnected/lost or non-ready states like init),
+    _received_description is set to False. The subsequent $description increments
+    the generation counter (invalidating consumer snapshot caches) but does NOT
+    clear property values — pre-reboot values serve as safe placeholders until
+    the panel re-publishes fresh data.
+
+    A re-delivered retained $description on a pure network reconnect does NOT
+    increment generation, because _received_description is still True.
     """
 
     def _simulate_reboot(self, acc: HomiePropertyAccumulator) -> None:
@@ -183,36 +187,37 @@ class TestDescriptionClearsProperties:
         acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
         acc.handle_message(f"{PREFIX}/$state", "ready")
 
-    def test_description_clears_property_values_on_reboot(self):
-        """A panel reboot must clear property values from the previous lifecycle."""
+    def test_reboot_preserves_property_values(self):
+        """A panel reboot must preserve property values as placeholders."""
         acc = HomiePropertyAccumulator(SERIAL)
         _make_ready(acc)
         acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "1000")
         assert acc.get_prop("circuit-1", "exported-energy") == "1000"
 
-        # Panel reboots — $state=disconnected resets lifecycle, then $description clears
+        # Panel reboots — $state=disconnected resets lifecycle, then $description preserves
         self._simulate_reboot(acc)
-        assert acc.get_prop("circuit-1", "exported-energy") == ""
+        assert acc.get_prop("circuit-1", "exported-energy") == "1000"
 
-    def test_description_clears_timestamps_on_reboot(self):
-        """Timestamps must also be cleared so stale timing data doesn't persist."""
+    def test_reboot_preserves_timestamps(self):
+        """Timestamps must be preserved on reboot so callers can detect stale data if needed."""
         acc = HomiePropertyAccumulator(SERIAL)
         _make_ready(acc)
         acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "1000")
-        assert acc.get_timestamp("circuit-1", "exported-energy") > 0
+        ts_before = acc.get_timestamp("circuit-1", "exported-energy")
+        assert ts_before > 0
 
         self._simulate_reboot(acc)
-        assert acc.get_timestamp("circuit-1", "exported-energy") == 0
+        assert acc.get_timestamp("circuit-1", "exported-energy") == ts_before
 
-    def test_description_clears_target_values_on_reboot(self):
-        """Target values must also be cleared on panel reboot."""
+    def test_reboot_preserves_target_values(self):
+        """Target values must also be preserved on panel reboot."""
         acc = HomiePropertyAccumulator(SERIAL)
         _make_ready(acc)
         acc.handle_message(f"{PREFIX}/circuit-1/relay/$target", "OPEN")
         assert acc.get_target("circuit-1", "relay") == "OPEN"
 
         self._simulate_reboot(acc)
-        assert acc.get_target("circuit-1", "relay") is None
+        assert acc.get_target("circuit-1", "relay") == "OPEN"
 
     def test_reboot_increments_generation(self):
         """Each panel reboot must advance the generation counter."""
@@ -228,8 +233,8 @@ class TestDescriptionClearsProperties:
         acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
         assert acc.generation == 2
 
-    def test_retained_redescription_does_not_clear(self):
-        """A re-delivered retained $description without a disconnect must NOT clear."""
+    def test_retained_redescription_preserves_values_without_generation_bump(self):
+        """A re-delivered retained $description without a disconnect must NOT bump generation."""
         acc = HomiePropertyAccumulator(SERIAL)
         _make_ready(acc)
         acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "1000")
@@ -237,24 +242,24 @@ class TestDescriptionClearsProperties:
         # Simulate network reconnect — $description re-delivered without $state=disconnected
         acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
 
-        # Property values should be preserved
+        # Property values should be preserved and generation must not increment
         assert acc.get_prop("circuit-1", "exported-energy") == "1000"
         assert acc.generation == 1  # still 1 from initial boot, no increment on re-delivery
 
-    def test_fresh_properties_available_after_reboot(self):
-        """Post-reboot properties should be stored normally after clear."""
+    def test_fresh_properties_overwrite_preserved_after_reboot(self):
+        """Post-reboot properties should overwrite the preserved placeholder values."""
         acc = HomiePropertyAccumulator(SERIAL)
         _make_ready(acc)
         acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "1000")
 
         self._simulate_reboot(acc)
 
-        # Fresh post-reboot value
+        # Fresh post-reboot value overwrites preserved placeholder
         acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "50")
         assert acc.get_prop("circuit-1", "exported-energy") == "50"
 
-    def test_fresh_target_values_available_after_reboot(self):
-        """Post-reboot target values should be stored normally after clear."""
+    def test_fresh_target_values_overwrite_preserved_after_reboot(self):
+        """Post-reboot target values should overwrite the preserved placeholder values."""
         acc = HomiePropertyAccumulator(SERIAL)
         _make_ready(acc)
         acc.handle_message(f"{PREFIX}/circuit-1/relay/$target", "OPEN")
@@ -262,16 +267,17 @@ class TestDescriptionClearsProperties:
 
         self._simulate_reboot(acc)
 
-        # Fresh post-reboot target value
+        # Fresh post-reboot target value overwrites preserved placeholder
         acc.handle_message(f"{PREFIX}/circuit-1/relay/$target", "CLOSED")
         assert acc.get_target("circuit-1", "relay") == "CLOSED"
 
-    def test_fast_reboot_without_lwt_still_clears(self):
+    def test_fast_reboot_without_lwt_preserves_values(self):
         """Panel reboots so fast that $state=disconnected (LWT) is skipped.
 
         The panel goes directly from ready -> init -> description -> ready.
         $state=init must reset _received_description so the subsequent
-        $description triggers the property clear.
+        $description increments the generation counter but does NOT clear
+        property values — pre-reboot values serve as safe placeholders.
         """
         acc = HomiePropertyAccumulator(SERIAL)
         _make_ready(acc)
@@ -283,8 +289,8 @@ class TestDescriptionClearsProperties:
         acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
         acc.handle_message(f"{PREFIX}/$state", "ready")
 
-        # Property values should be cleared
-        assert acc.get_prop("circuit-1", "exported-energy") == ""
+        # Property values should be preserved
+        assert acc.get_prop("circuit-1", "exported-energy") == "1000"
         assert acc.generation == gen_before + 1
 
 

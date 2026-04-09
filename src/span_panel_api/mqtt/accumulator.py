@@ -56,8 +56,9 @@ class HomiePropertyAccumulator:
         # Node type mapping from $description
         self._node_types: dict[str, str] = {}
 
-        # Generation counter — incremented on lifecycle resets so consumers
-        # can invalidate snapshot caches built from pre-reboot data.
+        # Generation counter — incremented whenever a new lifecycle's
+        # $description is accepted (including initial boot) so consumers
+        # can invalidate snapshot caches built from prior-lifecycle data.
         self._generation: int = 0
 
         # Dirty tracking
@@ -85,7 +86,7 @@ class HomiePropertyAccumulator:
 
     @property
     def generation(self) -> int:
-        """Counter incremented on lifecycle resets to invalidate consumer caches."""
+        """Counter incremented on each new lifecycle's ``$description`` to invalidate consumer caches."""
         return self._generation
 
     def is_ready(self) -> bool:

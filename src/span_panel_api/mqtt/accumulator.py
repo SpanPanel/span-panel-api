@@ -56,11 +56,6 @@ class HomiePropertyAccumulator:
         # Node type mapping from $description
         self._node_types: dict[str, str] = {}
 
-        # Generation counter — incremented whenever a new lifecycle's
-        # $description is accepted (including initial boot) so consumers
-        # can invalidate snapshot caches built from prior-lifecycle data.
-        self._generation: int = 0
-
         # Dirty tracking
         self._dirty_nodes: set[str] = set()
 
@@ -83,11 +78,6 @@ class HomiePropertyAccumulator:
     def ready_since(self) -> float:
         """Monotonic timestamp of the last READY transition, 0.0 if never ready."""
         return self._ready_since
-
-    @property
-    def generation(self) -> int:
-        """Counter incremented on each new lifecycle's ``$description`` to invalidate consumer caches."""
-        return self._generation
 
     def is_ready(self) -> bool:
         """True when lifecycle is READY."""
@@ -201,17 +191,10 @@ class HomiePropertyAccumulator:
             self._received_state_ready = False
             self._received_description = False
         else:
-            # init, sleeping, alert, etc. — connected but not ready.
-            # Always move out of READY/DESCRIPTION_RECEIVED into a
-            # non-ready connected lifecycle state.
-            #
-            # Reset _received_description so that the upcoming $description
-            # triggers a property clear.  This covers fast reboots where
-            # the broker's LWT ($state=disconnected) may not reach us
-            # before the panel publishes $state=init.
-            self._lifecycle = HomieLifecycle.CONNECTED
+            # init, sleeping, alert, etc. — connected but not ready
+            if self._lifecycle == HomieLifecycle.DISCONNECTED:
+                self._lifecycle = HomieLifecycle.CONNECTED
             self._received_state_ready = False
-            self._received_description = False
 
         _LOGGER.debug("Homie $state: %s → lifecycle=%s", payload, self._lifecycle.value)
 
@@ -222,25 +205,6 @@ class HomiePropertyAccumulator:
         except json.JSONDecodeError:
             _LOGGER.warning("Invalid $description JSON")
             return
-
-        # _handle_state() already reset _received_description to False due to
-        # a state change that starts a new panel lifecycle, including
-        # $state=disconnected/lost and other non-ready states such as init.
-        # Increment the generation counter to invalidate consumer snapshot
-        # caches, but preserve property values — pre-reboot readings serve
-        # as safe placeholders until the panel re-publishes.  Clearing values
-        # would emit 0.0 for energy counters via _parse_float(""), triggering
-        # false dip-compensation offsets in the integration.
-        #
-        # On a pure MQTT reconnect (no panel reboot), _received_description
-        # is still True from the previous session so we skip this block —
-        # the retained property messages carry the correct (unchanged) values.
-        if not self._received_description:
-            self._generation += 1
-            _LOGGER.debug(
-                "Panel reboot detected (generation %d); preserving property values as placeholders",
-                self._generation,
-            )
 
         self._received_description = True
         self._node_types.clear()
@@ -256,11 +220,7 @@ class HomiePropertyAccumulator:
         # Mark all known nodes dirty
         self._dirty_nodes.update(self._node_types.keys())
 
-        _LOGGER.debug(
-            "Parsed $description with %d nodes (generation %d)",
-            len(self._node_types),
-            self._generation,
-        )
+        _LOGGER.debug("Parsed $description with %d nodes", len(self._node_types))
 
         # Lifecycle transition
         if self._received_state_ready:

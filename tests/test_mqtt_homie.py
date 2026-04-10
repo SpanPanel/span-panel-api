@@ -905,6 +905,34 @@ class TestSnapshotCaching:
         snap2 = consumer.build_snapshot()
         assert snap2 is not snap1
 
+    def test_reboot_dirty_nodes_invalidate_cache(self):
+        """Post-reboot $description marks all nodes dirty → full rebuild, not cached."""
+        acc, consumer = _build_ready_consumer()
+        node = "aabbccdd-1122-3344-5566-778899001122"
+        acc.handle_message(f"{PREFIX}/{node}/active-power", "-100.0")
+        snap1 = consumer.build_snapshot()
+
+        # Reboot sequence
+        acc.handle_message(f"{PREFIX}/$state", "disconnected")
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        acc.handle_message(f"{PREFIX}/$description", _make_description(_full_description()))
+        acc.handle_message(f"{PREFIX}/$state", "ready")
+
+        snap2 = consumer.build_snapshot()
+        assert snap2 is not snap1  # cache invalidated by dirty nodes
+
+    def test_init_while_ready_does_not_invalidate_cache(self):
+        """$state=init while READY must not disrupt snapshot caching."""
+        acc, consumer = _build_ready_consumer()
+        node = "aabbccdd-1122-3344-5566-778899001122"
+        acc.handle_message(f"{PREFIX}/{node}/active-power", "-100.0")
+        snap1 = consumer.build_snapshot()
+
+        acc.handle_message(f"{PREFIX}/$state", "init")
+
+        snap2 = consumer.build_snapshot()
+        assert snap2 is snap1  # same cached object — no disruption
+
 
 # ---------------------------------------------------------------------------
 # HomieDeviceConsumer — property callbacks

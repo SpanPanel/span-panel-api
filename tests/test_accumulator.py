@@ -164,6 +164,119 @@ class TestLifecycleDisconnection:
 
 
 # ---------------------------------------------------------------------------
+# Lifecycle: READY resilience (core 2.5.4 revert invariant)
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleReadyResilience:
+    """Transient $state values must NOT disrupt READY lifecycle.
+
+    This is the core behavioral invariant of the 2.5.1→2.5.4 revert:
+    only $state=disconnected/$state=lost should knock the device out
+    of READY.  Transient states like init (e.g. from fast panel reboots
+    where the LWT may not arrive) must be ignored when already READY.
+    """
+
+    def test_init_state_when_ready_does_not_disrupt(self):
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        assert acc.lifecycle == HomieLifecycle.READY
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        assert acc.lifecycle == HomieLifecycle.READY
+        assert acc.is_ready()
+
+    def test_sleeping_state_when_ready_does_not_disrupt(self):
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.handle_message(f"{PREFIX}/$state", "sleeping")
+        assert acc.lifecycle == HomieLifecycle.READY
+
+    def test_alert_state_when_ready_does_not_disrupt(self):
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.handle_message(f"{PREFIX}/$state", "alert")
+        assert acc.lifecycle == HomieLifecycle.READY
+
+    def test_init_from_connected_stays_connected(self):
+        """$state=init while CONNECTED should not regress lifecycle."""
+        acc = HomiePropertyAccumulator(SERIAL)
+        acc.handle_message(f"{PREFIX}/$state", "ready")  # → CONNECTED (no desc yet)
+        assert acc.lifecycle == HomieLifecycle.CONNECTED
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        assert acc.lifecycle == HomieLifecycle.CONNECTED
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: reboot sequence (value preservation + dirty tracking)
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleReboot:
+    """Reboot handling relies on dirty-node tracking, not property clearing."""
+
+    def test_reboot_preserves_property_values(self):
+        """Properties stored before disconnect survive the full reboot cycle."""
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.handle_message(f"{PREFIX}/core/power", "100")
+        acc.mark_clean()
+
+        # Full reboot sequence: disconnect → init → description → ready
+        acc.handle_message(f"{PREFIX}/$state", "disconnected")
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
+        acc.handle_message(f"{PREFIX}/$state", "ready")
+
+        assert acc.get_prop("core", "power") == "100"
+        assert acc.lifecycle == HomieLifecycle.READY
+
+    def test_reboot_description_marks_all_nodes_dirty(self):
+        """$description after reboot marks all nodes dirty for cache invalidation."""
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.mark_clean()
+        assert len(acc.dirty_node_ids()) == 0
+
+        acc.handle_message(f"{PREFIX}/$state", "disconnected")
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
+
+        dirty = acc.dirty_node_ids()
+        assert "core" in dirty
+        assert "circuit-1" in dirty
+        assert "circuit-2" in dirty
+        assert "bess-0" in dirty
+
+    def test_reboot_timestamps_preserved(self):
+        """Timestamps are not cleared during reboot — only updated on new values."""
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.handle_message(f"{PREFIX}/core/power", "100")
+        ts_before = acc.get_timestamp("core", "power")
+        assert ts_before > 0
+
+        acc.handle_message(f"{PREFIX}/$state", "disconnected")
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
+        acc.handle_message(f"{PREFIX}/$state", "ready")
+
+        assert acc.get_timestamp("core", "power") == ts_before
+
+    def test_reboot_target_values_preserved(self):
+        """Target values survive the reboot cycle."""
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.handle_message(f"{PREFIX}/core/relay/$target", "OPEN")
+
+        acc.handle_message(f"{PREFIX}/$state", "disconnected")
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
+        acc.handle_message(f"{PREFIX}/$state", "ready")
+
+        assert acc.get_target("core", "relay") == "OPEN"
+
+
+# ---------------------------------------------------------------------------
 # Lifecycle: invalid JSON description
 # ---------------------------------------------------------------------------
 

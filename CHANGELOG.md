@@ -4,17 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.5.3] - 04/2026
+## [2.5.4] - 04/2026
+
+### Reverted
+
+- **Revert accumulator to 2.5.1 behavior** — the 2.5.2 lifecycle changes (property clearing, unconditional lifecycle transition on `$state=init`, generation counter) caused false energy dip spikes on panel reboots and network interruptions. The 2.5.3
+  partial fix (removing the clearing) was insufficient — the unconditional lifecycle disruption on transient `$state=init` events still triggered snapshot pipeline resets that produced 0.0 energy readings. Reverted `accumulator.py` and `homie.py` to their
+  stable 2.5.1 state. The existing dirty-node tracking handles reboot transitions correctly without special-case lifecycle management.
+
+## [2.5.3] - 04/2026 (retired)
+
+> **Retired:** Partial fix for 2.5.2 — removed property clearing but kept the lifecycle disruption that still caused false dips. Superseded by 2.5.4.
 
 ### Fixed
 
-- **Preserve property values on lifecycle reset** — the 2.5.2 property clear caused `_parse_float('')` to return `0.0` for energy counters during panel reboots or network interruptions, triggering false dip-compensation offsets in the integration that
-  permanently inflated energy sensor values. Removed the property/timestamp/target clearing from `_handle_description()`. Pre-reboot values now serve as safe placeholders until the panel re-publishes fresh data.
-- **Snapshot cache invalidated on reboot** — the generation counter still increments on lifecycle resets, forcing consumers to discard cached snapshots and rebuild from current accumulator state.
+- **Preserve property values on lifecycle reset** — removed the property/timestamp/target clearing from `_handle_description()`.
 
 ## [2.5.2] - 04/2026 (retired)
 
-> **Retired:** The property-clearing behavior introduced in this release caused false energy dip spikes. Superseded by 2.5.3.
+> **Retired:** Lifecycle changes caused false energy dip spikes. Superseded by 2.5.4.
 
 ### Fixed
 
@@ -344,30 +352,31 @@ Package versions prior to 2.0.0 depend on the SPAN v1 REST API. SPAN will sunset
 
 ## Version History Summary
 
-| Version    | Date    | Transport  | Summary                                                                                   |
-| ---------- | ------- | ---------- | ----------------------------------------------------------------------------------------- |
-| **2.5.3**  | 04/2026 | MQTT/Homie | Preserve property values on lifecycle reset; fix false energy dip spikes from 2.5.2 clear |
-| **2.5.2**  | 04/2026 | MQTT/Homie | _(retired)_ Clear stale property values on panel reboot; caused false energy dip spikes   |
-| **2.5.1**  | 04/2026 | MQTT/Homie | Replace assert with RuntimeError; fix bandit pre-commit hook                              |
-| **2.5.0**  | 03/2026 | MQTT/Homie | Homie accumulator layer, $target support, dirty-node snapshot caching                     |
-| **2.4.2**  | 03/2026 | MQTT/Homie | SSL context creation moved to executor                                                    |
-| **2.4.1**  | 03/2026 | MQTT/Homie | License metadata, loosened httpx constraint                                               |
-| **2.4.0**  | 03/2026 | MQTT/Homie | proximityProven, injected HTTP client, executor file I/O, type alias, test cleanup        |
-| **2.3.2**  | 03/2026 | MQTT/Homie | FQDN management endpoints                                                                 |
-| **2.3.1**  | 03/2026 | MQTT/Homie | MQTT connection errors wrapped as SpanPanelConnectionError                                |
-| **2.3.0**  | 03/2026 | MQTT/Homie | Simulation engine removed                                                                 |
-| **2.2.4**  | 03/2026 | MQTT/Homie | Negative zero fix on idle circuits                                                        |
-| **2.2.3**  | 03/2026 | MQTT/Homie | Panel size from Homie schema; `panel_size` always populated on snapshot                   |
-| **2.0.2**  | 03/2026 | MQTT/Homie | EVSE (EV charger) snapshot model, Homie parsing, simulation support                       |
-| **2.0.1**  | 03/2026 | MQTT/Homie | Full BESS metadata parsing, README documentation                                          |
-| **2.0.0**  | 02/2026 | MQTT/Homie | Ground-up rewrite: MQTT-only, protocol-based API, real-time push, PV/BESS metadata        |
-| **1.1.14** | 12/2025 | REST       | Keep-Alive and RemoteProtocolError handling                                               |
-| **1.1.9**  | 9/2025  | REST       | Simulation sign corrections                                                               |
-| **1.1.8**  | 2024    | REST       | Simulation power sign fix                                                                 |
-| **1.1.6**  | 2024    | REST       | YAML simulation API, battery simulation                                                   |
-| **1.1.5**  | 2024    | REST       | Simulation edge cases                                                                     |
-| **1.1.4**  | 2024    | REST       | Formatting and linting                                                                    |
-| **1.1.3**  | 2024    | REST       | Test and lint fixes                                                                       |
-| **1.1.2**  | 2024    | REST       | Simulation mode added                                                                     |
-| **1.1.1**  | 2024    | REST       | Dependency updates                                                                        |
-| **1.1.0**  | 2024    | REST       | Initial release                                                                           |
+| Version    | Date    | Transport  | Summary                                                                            |
+| ---------- | ------- | ---------- | ---------------------------------------------------------------------------------- |
+| **2.5.4**  | 04/2026 | MQTT/Homie | Revert accumulator to stable 2.5.1 behavior; fixes false energy dip spikes         |
+| **2.5.3**  | 04/2026 | MQTT/Homie | _(retired)_ Partial fix — still caused false dips from lifecycle disruption        |
+| **2.5.2**  | 04/2026 | MQTT/Homie | _(retired)_ Lifecycle changes caused false energy dip spikes                       |
+| **2.5.1**  | 04/2026 | MQTT/Homie | Replace assert with RuntimeError; fix bandit pre-commit hook                       |
+| **2.5.0**  | 03/2026 | MQTT/Homie | Homie accumulator layer, $target support, dirty-node snapshot caching              |
+| **2.4.2**  | 03/2026 | MQTT/Homie | SSL context creation moved to executor                                             |
+| **2.4.1**  | 03/2026 | MQTT/Homie | License metadata, loosened httpx constraint                                        |
+| **2.4.0**  | 03/2026 | MQTT/Homie | proximityProven, injected HTTP client, executor file I/O, type alias, test cleanup |
+| **2.3.2**  | 03/2026 | MQTT/Homie | FQDN management endpoints                                                          |
+| **2.3.1**  | 03/2026 | MQTT/Homie | MQTT connection errors wrapped as SpanPanelConnectionError                         |
+| **2.3.0**  | 03/2026 | MQTT/Homie | Simulation engine removed                                                          |
+| **2.2.4**  | 03/2026 | MQTT/Homie | Negative zero fix on idle circuits                                                 |
+| **2.2.3**  | 03/2026 | MQTT/Homie | Panel size from Homie schema; `panel_size` always populated on snapshot            |
+| **2.0.2**  | 03/2026 | MQTT/Homie | EVSE (EV charger) snapshot model, Homie parsing, simulation support                |
+| **2.0.1**  | 03/2026 | MQTT/Homie | Full BESS metadata parsing, README documentation                                   |
+| **2.0.0**  | 02/2026 | MQTT/Homie | Ground-up rewrite: MQTT-only, protocol-based API, real-time push, PV/BESS metadata |
+| **1.1.14** | 12/2025 | REST       | Keep-Alive and RemoteProtocolError handling                                        |
+| **1.1.9**  | 9/2025  | REST       | Simulation sign corrections                                                        |
+| **1.1.8**  | 2024    | REST       | Simulation power sign fix                                                          |
+| **1.1.6**  | 2024    | REST       | YAML simulation API, battery simulation                                            |
+| **1.1.5**  | 2024    | REST       | Simulation edge cases                                                              |
+| **1.1.4**  | 2024    | REST       | Formatting and linting                                                             |
+| **1.1.3**  | 2024    | REST       | Test and lint fixes                                                                |
+| **1.1.2**  | 2024    | REST       | Simulation mode added                                                              |
+| **1.1.1**  | 2024    | REST       | Dependency updates                                                                 |
+| **1.1.0**  | 2024    | REST       | Initial release                                                                    |

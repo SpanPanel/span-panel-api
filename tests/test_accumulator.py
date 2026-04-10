@@ -164,134 +164,116 @@ class TestLifecycleDisconnection:
 
 
 # ---------------------------------------------------------------------------
-# Panel reboot: $description preserves property values as placeholders
+# Lifecycle: READY resilience (core 2.5.4 revert invariant)
 # ---------------------------------------------------------------------------
 
 
-class TestDescriptionOnReboot:
-    """Verify that a panel reboot preserves property values as placeholders.
+class TestLifecycleReadyResilience:
+    """Transient $state values must NOT disrupt READY lifecycle.
 
-    On lifecycle reset ($state=disconnected/lost or non-ready states like init),
-    _received_description is set to False. The subsequent $description increments
-    the generation counter (invalidating consumer snapshot caches) but does NOT
-    clear property values — pre-reboot values serve as safe placeholders until
-    the panel re-publishes fresh data.
-
-    A re-delivered retained $description on a pure network reconnect does NOT
-    increment generation, because _received_description is still True.
+    This is the core behavioral invariant of the 2.5.1→2.5.4 revert:
+    only $state=disconnected/$state=lost should knock the device out
+    of READY.  Transient states like init (e.g. from fast panel reboots
+    where the LWT may not arrive) must be ignored when already READY.
     """
 
-    def _simulate_reboot(self, acc: HomiePropertyAccumulator) -> None:
-        """Simulate the panel reboot lifecycle transition."""
-        acc.handle_message(f"{PREFIX}/$state", "disconnected")
-        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
-        acc.handle_message(f"{PREFIX}/$state", "ready")
+    def test_init_state_when_ready_does_not_disrupt(self):
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        assert acc.lifecycle == HomieLifecycle.READY
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        assert acc.lifecycle == HomieLifecycle.READY
+        assert acc.is_ready()
+
+    def test_sleeping_state_when_ready_does_not_disrupt(self):
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.handle_message(f"{PREFIX}/$state", "sleeping")
+        assert acc.lifecycle == HomieLifecycle.READY
+
+    def test_alert_state_when_ready_does_not_disrupt(self):
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.handle_message(f"{PREFIX}/$state", "alert")
+        assert acc.lifecycle == HomieLifecycle.READY
+
+    def test_init_from_connected_stays_connected(self):
+        """$state=init while CONNECTED should not regress lifecycle."""
+        acc = HomiePropertyAccumulator(SERIAL)
+        acc.handle_message(f"{PREFIX}/$state", "ready")  # → CONNECTED (no desc yet)
+        assert acc.lifecycle == HomieLifecycle.CONNECTED
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        assert acc.lifecycle == HomieLifecycle.CONNECTED
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle: reboot sequence (value preservation + dirty tracking)
+# ---------------------------------------------------------------------------
+
+
+class TestLifecycleReboot:
+    """Reboot handling relies on dirty-node tracking, not property clearing."""
 
     def test_reboot_preserves_property_values(self):
-        """A panel reboot must preserve property values as placeholders."""
+        """Properties stored before disconnect survive the full reboot cycle."""
         acc = HomiePropertyAccumulator(SERIAL)
         _make_ready(acc)
-        acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "1000")
-        assert acc.get_prop("circuit-1", "exported-energy") == "1000"
+        acc.handle_message(f"{PREFIX}/core/power", "100")
+        acc.mark_clean()
 
-        # Panel reboots — $state=disconnected resets lifecycle, then $description preserves
-        self._simulate_reboot(acc)
-        assert acc.get_prop("circuit-1", "exported-energy") == "1000"
-
-    def test_reboot_preserves_timestamps(self):
-        """Timestamps must be preserved on reboot so callers can detect stale data if needed."""
-        acc = HomiePropertyAccumulator(SERIAL)
-        _make_ready(acc)
-        acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "1000")
-        ts_before = acc.get_timestamp("circuit-1", "exported-energy")
-        assert ts_before > 0
-
-        self._simulate_reboot(acc)
-        assert acc.get_timestamp("circuit-1", "exported-energy") == ts_before
-
-    def test_reboot_preserves_target_values(self):
-        """Target values must also be preserved on panel reboot."""
-        acc = HomiePropertyAccumulator(SERIAL)
-        _make_ready(acc)
-        acc.handle_message(f"{PREFIX}/circuit-1/relay/$target", "OPEN")
-        assert acc.get_target("circuit-1", "relay") == "OPEN"
-
-        self._simulate_reboot(acc)
-        assert acc.get_target("circuit-1", "relay") == "OPEN"
-
-    def test_reboot_increments_generation(self):
-        """Each panel reboot must advance the generation counter."""
-        acc = HomiePropertyAccumulator(SERIAL)
-        assert acc.generation == 0
-
-        # First boot
-        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
-        assert acc.generation == 1
-
-        # Reboot
+        # Full reboot sequence: disconnect → init → description → ready
         acc.handle_message(f"{PREFIX}/$state", "disconnected")
-        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
-        assert acc.generation == 2
-
-    def test_retained_redescription_preserves_values_without_generation_bump(self):
-        """A re-delivered retained $description without a disconnect must NOT bump generation."""
-        acc = HomiePropertyAccumulator(SERIAL)
-        _make_ready(acc)
-        acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "1000")
-
-        # Simulate network reconnect — $description re-delivered without $state=disconnected
-        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
-
-        # Property values should be preserved and generation must not increment
-        assert acc.get_prop("circuit-1", "exported-energy") == "1000"
-        assert acc.generation == 1  # still 1 from initial boot, no increment on re-delivery
-
-    def test_fresh_properties_overwrite_preserved_after_reboot(self):
-        """Post-reboot properties should overwrite the preserved placeholder values."""
-        acc = HomiePropertyAccumulator(SERIAL)
-        _make_ready(acc)
-        acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "1000")
-
-        self._simulate_reboot(acc)
-
-        # Fresh post-reboot value overwrites preserved placeholder
-        acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "50")
-        assert acc.get_prop("circuit-1", "exported-energy") == "50"
-
-    def test_fresh_target_values_overwrite_preserved_after_reboot(self):
-        """Post-reboot target values should overwrite the preserved placeholder values."""
-        acc = HomiePropertyAccumulator(SERIAL)
-        _make_ready(acc)
-        acc.handle_message(f"{PREFIX}/circuit-1/relay/$target", "OPEN")
-        assert acc.get_target("circuit-1", "relay") == "OPEN"
-
-        self._simulate_reboot(acc)
-
-        # Fresh post-reboot target value overwrites preserved placeholder
-        acc.handle_message(f"{PREFIX}/circuit-1/relay/$target", "CLOSED")
-        assert acc.get_target("circuit-1", "relay") == "CLOSED"
-
-    def test_fast_reboot_without_lwt_preserves_values(self):
-        """Panel reboots so fast that $state=disconnected (LWT) is skipped.
-
-        The panel goes directly from ready -> init -> description -> ready.
-        $state=init must reset _received_description so the subsequent
-        $description increments the generation counter but does NOT clear
-        property values — pre-reboot values serve as safe placeholders.
-        """
-        acc = HomiePropertyAccumulator(SERIAL)
-        _make_ready(acc)
-        acc.handle_message(f"{PREFIX}/circuit-1/exported-energy", "1000")
-        gen_before = acc.generation
-
-        # Fast reboot: no $state=disconnected, straight to init
         acc.handle_message(f"{PREFIX}/$state", "init")
         acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
         acc.handle_message(f"{PREFIX}/$state", "ready")
 
-        # Property values should be preserved
-        assert acc.get_prop("circuit-1", "exported-energy") == "1000"
-        assert acc.generation == gen_before + 1
+        assert acc.get_prop("core", "power") == "100"
+        assert acc.lifecycle == HomieLifecycle.READY
+
+    def test_reboot_description_marks_all_nodes_dirty(self):
+        """$description after reboot marks all nodes dirty for cache invalidation."""
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.mark_clean()
+        assert len(acc.dirty_node_ids()) == 0
+
+        acc.handle_message(f"{PREFIX}/$state", "disconnected")
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
+
+        dirty = acc.dirty_node_ids()
+        assert "core" in dirty
+        assert "circuit-1" in dirty
+        assert "circuit-2" in dirty
+        assert "bess-0" in dirty
+
+    def test_reboot_timestamps_preserved(self):
+        """Timestamps are not cleared during reboot — only updated on new values."""
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.handle_message(f"{PREFIX}/core/power", "100")
+        ts_before = acc.get_timestamp("core", "power")
+        assert ts_before > 0
+
+        acc.handle_message(f"{PREFIX}/$state", "disconnected")
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
+        acc.handle_message(f"{PREFIX}/$state", "ready")
+
+        assert acc.get_timestamp("core", "power") == ts_before
+
+    def test_reboot_target_values_preserved(self):
+        """Target values survive the reboot cycle."""
+        acc = HomiePropertyAccumulator(SERIAL)
+        _make_ready(acc)
+        acc.handle_message(f"{PREFIX}/core/relay/$target", "OPEN")
+
+        acc.handle_message(f"{PREFIX}/$state", "disconnected")
+        acc.handle_message(f"{PREFIX}/$state", "init")
+        acc.handle_message(f"{PREFIX}/$description", SIMPLE_DESC)
+        acc.handle_message(f"{PREFIX}/$state", "ready")
+
+        assert acc.get_target("core", "relay") == "OPEN"
 
 
 # ---------------------------------------------------------------------------

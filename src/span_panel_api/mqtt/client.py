@@ -13,7 +13,7 @@ import contextlib
 import logging
 
 from ..auth import get_homie_schema
-from ..exceptions import SpanPanelConnectionError, SpanPanelServerError
+from ..exceptions import SpanPanelConnectionError, SpanPanelServerError, SpanPanelStaleDataError
 from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
 from ..protocol import PanelCapability
 from .accumulator import HomiePropertyAccumulator
@@ -222,9 +222,21 @@ class SpanMqttClient:
     async def get_snapshot(self) -> SpanPanelSnapshot:
         """Return current snapshot from accumulated MQTT state.
 
-        No network call — snapshot is built from in-memory property values.
+        Raises SpanPanelStaleDataError if the client is not fully live.
+        "Live" means: the bridge is connected AND the Homie accumulator
+        has reached ready state. Callers can treat SpanPanelStaleDataError
+        as the canonical "panel currently unreachable" signal.
+
+        No network call — snapshot is built from in-memory property values
+        when the liveness checks pass.
         """
-        return self._require_homie().build_snapshot()
+        if self._bridge is None or self._homie is None:
+            raise SpanPanelStaleDataError("Client not connected — call connect() first")
+        if not self._bridge.is_connected():
+            raise SpanPanelStaleDataError("MQTT broker disconnected")
+        if not self._homie.is_ready():
+            raise SpanPanelStaleDataError("Homie device not ready")
+        return self._homie.build_snapshot()
 
     # -- CircuitControlProtocol --------------------------------------------
 

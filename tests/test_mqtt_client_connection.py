@@ -240,3 +240,84 @@ class TestConnectionEventDispatch:
         # Re-subscribe fires (side effect preserved) but no callback edge
         assert len(bridge.subscribed_topics) == 1
         assert calls == []
+
+
+def _make_sentinel_snapshot() -> SpanPanelSnapshot:
+    """Build a minimal SpanPanelSnapshot for identity-assertion tests."""
+    return SpanPanelSnapshot(
+        serial_number="test-serial",
+        firmware_version="0.0.0",
+        main_relay_state="CLOSED",
+        instant_grid_power_w=0.0,
+        feedthrough_power_w=0.0,
+        main_meter_energy_consumed_wh=0.0,
+        main_meter_energy_produced_wh=0.0,
+        feedthrough_energy_consumed_wh=0.0,
+        feedthrough_energy_produced_wh=0.0,
+        dsm_state="DSM_GRID_OK",
+        current_run_config="PANEL_ON_GRID",
+        door_state="CLOSED",
+        proximity_proven=True,
+        uptime_s=0,
+        eth0_link=False,
+        wlan_link=False,
+        wwan_link=False,
+        panel_size=32,
+    )
+
+
+class TestGetSnapshotLiveness:
+    """get_snapshot() must raise SpanPanelStaleDataError when not live."""
+
+    async def test_raises_stale_when_bridge_none(self) -> None:
+        client = _make_client()
+        client._bridge = None
+        client._homie = _FakeHomie(ready=True)
+
+        with pytest.raises(SpanPanelStaleDataError) as exc_info:
+            await client.get_snapshot()
+        assert "not connected" in str(exc_info.value).lower()
+
+    async def test_raises_stale_when_homie_none(self) -> None:
+        client = _make_client()
+        client._bridge = _FakeBridge(connected=True)
+        client._homie = None
+
+        with pytest.raises(SpanPanelStaleDataError) as exc_info:
+            await client.get_snapshot()
+        assert "not connected" in str(exc_info.value).lower()
+
+    async def test_raises_stale_when_broker_disconnected(self) -> None:
+        client = _make_client()
+        client._bridge = _FakeBridge(connected=False)
+        client._homie = _FakeHomie(ready=True)
+
+        with pytest.raises(SpanPanelStaleDataError) as exc_info:
+            await client.get_snapshot()
+        assert "broker" in str(exc_info.value).lower()
+
+    async def test_raises_stale_when_homie_not_ready(self) -> None:
+        client = _make_client()
+        client._bridge = _FakeBridge(connected=True)
+        client._homie = _FakeHomie(ready=False)
+
+        with pytest.raises(SpanPanelStaleDataError) as exc_info:
+            await client.get_snapshot()
+        assert "not ready" in str(exc_info.value).lower()
+
+    async def test_returns_snapshot_when_fully_live(self) -> None:
+        sentinel = _make_sentinel_snapshot()
+        client = _make_client()
+        client._bridge = _FakeBridge(connected=True)
+        client._homie = _FakeHomie(ready=True, snapshot=sentinel)
+
+        snapshot = await client.get_snapshot()
+        assert snapshot is sentinel
+
+    async def test_raised_exception_is_span_panel_error(self) -> None:
+        client = _make_client()
+        client._bridge = None
+        client._homie = None
+
+        with pytest.raises(SpanPanelError):
+            await client.get_snapshot()

@@ -243,7 +243,13 @@ class TestConnectionEventDispatch:
 
 
 def _make_sentinel_snapshot() -> SpanPanelSnapshot:
-    """Build a minimal SpanPanelSnapshot for identity-assertion tests."""
+    """Build a minimal SpanPanelSnapshot for identity-assertion tests.
+
+    Field values are arbitrary — tests only assert object identity
+    (`snapshot is sentinel`), not content. If SpanPanelSnapshot grows
+    a new required field, add it here with a zero/empty default; no
+    test assertion needs to change.
+    """
     return SpanPanelSnapshot(
         serial_number="test-serial",
         firmware_version="0.0.0",

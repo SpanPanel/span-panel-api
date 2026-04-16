@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.1] - 04/2026
+
+### Changed
+
+- **`snapshot_interval` minimum enforced at 1.0s** — `SpanMqttClient(snapshot_interval=...)` and `set_snapshot_interval()` now raise `ValueError` for values below 1.0 (including 0 and negatives). Previously, sub-second or zero values switched the client
+  into a per-message dispatch mode with no back-pressure, which could overwhelm subscribers on a busy broker. The `<= 0` "immediate dispatch" code path has been removed.
+- **`get_fqdn()` returns `str | None`** — `None` now distinguishes "no FQDN configured" (HTTP 404 or missing field) from an explicit empty string. Callers that treated `""` as "not registered" must update to check for `None`.
+- **Connection callback errors logged at WARNING** — `SpanMqttClient._on_connection_change` now logs callback exceptions via `_LOGGER.warning(..., exc_info=True)` instead of `_LOGGER.exception(...)`, consistent with `_dispatch_snapshot`.
+- **Reconnect loop catches all exceptions** — `AsyncMqttBridge._reconnect_loop` no longer silently drops on non-`OSError` failures (e.g. `WebsocketConnectionError`, `ssl.SSLError`). All exceptions are logged at WARNING and the loop keeps backing off.
+- **Abnormal MQTT disconnects logged at WARNING** — disconnects where `reason_code.is_failure` is true now log at WARNING; clean disconnects continue to log at DEBUG.
+
+### Fixed
+
+- **CA certificate no longer written to disk** — `AsyncMqttBridge.connect()` builds the `ssl.SSLContext` from the fetched PEM via `cadata`, eliminating the temp-file lifecycle (and the small leak window on unexpected process exit) that the prior
+  `tls_set(ca_certs=path)` path required.
+- **Deprecated `asyncio.get_event_loop()` removed** — `_wait_for_circuit_names` now uses `time.monotonic()`. The previous code emitted a `DeprecationWarning` on Python 3.12+.
+- **Negative-zero on circuit `instant_power_w`** — explicit guard replaces a cryptic `-raw or 0.0` idiom in `HomieDeviceConsumer._build_circuit`.
+- **DSM grid-exchanging heuristic uses epsilon** — replaces `!= 0.0` float comparison with `abs(x) > 1.0 W`, so the `DSM_OFF_GRID` branch is actually reachable when no BESS is commissioned and lugs readings hover near zero.
+- **`SpanPanelAPIError.__str__` override removed** — the override silently hid exception args beyond the first; default `Exception.__str__` is now used.
+- **Paho lock-layout check at import** — `span_panel_api.mqtt.async_client` verifies on import that the `_PAHO_LOCK_ATTRS` list exactly matches paho's `*_mutex` attributes. Raises `RuntimeError` (not `assert`, so `python -O` does not bypass it) on drift.
+
+### Documentation
+
+- **`register_v2()`** — docstring now warns that each call creates a new client entry on the panel; callers should persist and reuse the returned `V2AuthResponse` rather than re-registering on every restart.
+- **Stale simulation transport references removed** from `protocol.py` and `models.py` module docstrings.
+
 ## [2.6.0] - 04/2026
 
 ### Added

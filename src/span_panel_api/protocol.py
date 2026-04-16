@@ -1,8 +1,8 @@
 """Protocol interfaces for SPAN Panel API transports.
 
-Defines structural subtyping contracts (PEP 544) that both MQTT and
-simulation transports implement. The integration codes against these
-protocols — never against transport-specific classes.
+Defines structural subtyping contracts (PEP 544) that the MQTT transport
+implements. The integration codes against these protocols — never against
+transport-specific classes.
 """
 
 from __future__ import annotations

@@ -318,15 +318,32 @@ class SpanMqttClient:
                 self._snapshot_timer = self._loop.call_later(self._snapshot_interval, self._fire_snapshot)
 
     def _on_connection_change(self, connected: bool) -> None:
-        """Handle MQTT connection state change (called from asyncio loop)."""
+        """Handle MQTT connection state change (called from asyncio loop).
+
+        Re-subscribes to the wildcard topic on reconnect (pre-existing
+        behavior), then fans out an edge-only notification to registered
+        connection callbacks. Duplicate state transitions are suppressed
+        so subscribers only see real edges.
+        """
         if connected:
             _LOGGER.debug("MQTT connection established")
-            # Re-subscribe on reconnect
             if self._bridge is not None:
                 wildcard = WILDCARD_TOPIC_FMT.format(serial=self._serial_number)
                 self._bridge.subscribe(wildcard, qos=0)
         else:
             _LOGGER.debug("MQTT connection lost")
+
+        # Edge-only dispatch
+        if connected == self._live:
+            return
+        self._live = connected
+
+        # Iterate a copy — subscribers may unregister during their callback
+        for cb in list(self._connection_callbacks):
+            try:
+                cb(connected)
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.exception("Connection callback raised")
 
     async def _wait_for_circuit_names(self, timeout: float) -> None:
         """Wait for all circuit-like nodes to have a ``name`` property.

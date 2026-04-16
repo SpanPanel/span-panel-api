@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
 from span_panel_api.exceptions import SpanPanelError, SpanPanelStaleDataError
+from span_panel_api.models import SpanPanelSnapshot
 from span_panel_api.mqtt.client import SpanMqttClient
+from span_panel_api.mqtt.connection import AsyncMqttBridge
+from span_panel_api.mqtt.homie import HomieDeviceConsumer
 from span_panel_api.mqtt.models import MqttClientConfig
 
 
@@ -23,10 +24,15 @@ def _make_client() -> SpanMqttClient:
     return SpanMqttClient("127.0.0.1", "test-serial", config)
 
 
-class _FakeBridge:
-    """Minimal bridge stub for get_snapshot() and fan-out tests."""
+class _FakeBridge(AsyncMqttBridge):
+    """Minimal bridge stub for get_snapshot() and fan-out tests.
+
+    Bypasses AsyncMqttBridge.__init__ (which does TLS/CA/network setup) —
+    only is_connected() and subscribe() are invoked on this stub.
+    """
 
     def __init__(self, connected: bool = True) -> None:
+        # Intentionally do not call super().__init__ — avoids I/O setup.
         self._connected = connected
         self.subscribed_topics: list[tuple[str, int]] = []
 
@@ -37,17 +43,24 @@ class _FakeBridge:
         self.subscribed_topics.append((topic, qos))
 
 
-class _FakeHomie:
-    """Minimal Homie stub for get_snapshot() tests."""
+class _FakeHomie(HomieDeviceConsumer):
+    """Minimal Homie stub for get_snapshot() tests.
 
-    def __init__(self, ready: bool = True, snapshot: Any = None) -> None:
-        self._ready = ready
-        self._snapshot = snapshot if snapshot is not None else SimpleNamespace()
+    Bypasses HomieDeviceConsumer.__init__ — only is_ready() and
+    build_snapshot() are invoked on this stub.
+    """
+
+    def __init__(self, ready: bool = True, snapshot: SpanPanelSnapshot | None = None) -> None:
+        # Intentionally do not call super().__init__ — avoids accumulator setup.
+        self._ready_flag = ready
+        self._snapshot = snapshot
 
     def is_ready(self) -> bool:
-        return self._ready
+        return self._ready_flag
 
-    def build_snapshot(self) -> Any:
+    def build_snapshot(self) -> SpanPanelSnapshot:
+        if self._snapshot is None:
+            raise RuntimeError("_FakeHomie: no snapshot configured")
         return self._snapshot
 
 

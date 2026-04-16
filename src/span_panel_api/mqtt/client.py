@@ -54,7 +54,7 @@ class SpanMqttClient:
         self._streaming = False
         self._snapshot_callbacks: list[Callable[[SpanPanelSnapshot], Awaitable[None]]] = []
         self._connection_callbacks: list[Callable[[bool], None]] = []
-        self._live: bool = False
+        self._live = False
         self._ready_event: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
@@ -204,6 +204,10 @@ class SpanMqttClient:
         """Subscribe to broker connection state transitions.
 
         Callback fires with False on broker disconnect and True on reconnect.
+        No synthetic call is made at registration time — callbacks only fire
+        on real state edges. To check current connection state on registration,
+        call ping().
+
         Returns an unregister function that removes the callback from the
         dispatch list. Calling unregister twice is safe.
         """

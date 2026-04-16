@@ -235,9 +235,14 @@ await client.connect()
 
 `set_snapshot_interval()` controls how often push-mode snapshot callbacks fire. Lower values mean lower latency; higher values reduce CPU usage on constrained hardware. Dirty-node caching (v2.5.0) further reduces per-scan cost by skipping unchanged nodes.
 
+Passing `0` (or any non-positive value) disables debounce and dispatches a snapshot for every incoming property message — real-time mode, intended for fast consumers.
+
 ```python
 # Reduce snapshot frequency to every 2 seconds
 client.set_snapshot_interval(2.0)
+
+# Real-time dispatch — every property update triggers a callback
+client.set_snapshot_interval(0)
 ```
 
 ### Circuit Control

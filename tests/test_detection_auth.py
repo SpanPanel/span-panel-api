@@ -668,8 +668,36 @@ class TestGetFqdn:
         assert result == "panel.example.com"
 
     @pytest.mark.asyncio
-    async def test_get_fqdn_not_configured_returns_empty(self):
+    async def test_get_fqdn_not_configured_returns_none(self):
         mock_response = _mock_response(404)
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await get_fqdn("192.168.65.70", "jwt-token")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_fqdn_missing_field_returns_none(self):
+        mock_response = _mock_response(200, {})
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await get_fqdn("192.168.65.70", "jwt-token")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_fqdn_empty_string_preserved(self):
+        mock_response = _mock_response(200, {"ebusTlsFqdn": ""})
         with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.get.return_value = mock_response

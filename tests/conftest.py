@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
 from collections.abc import AsyncGenerator
 from unittest.mock import MagicMock, patch
 
@@ -109,14 +108,9 @@ async def mqtt_client_mock() -> AsyncGenerator[MagicMock, None]:
     with (
         patch("span_panel_api.mqtt.connection.AsyncMQTTClient") as cls,
         patch("span_panel_api.mqtt.connection.download_ca_cert", return_value="FAKE-PEM"),
-        patch("span_panel_api.mqtt.connection.tempfile") as mock_tempfile,
+        patch("span_panel_api.mqtt.connection._build_ssl_context", return_value=MagicMock()),
         patch("span_panel_api.mqtt.client.get_homie_schema", return_value=_MOCK_SCHEMA),
     ):
-        # Make tempfile return a mock file object
-        mock_tmp = MagicMock()
-        mock_tmp.name = f"{tempfile.gettempdir()}/fake_ca.pem"
-        mock_tempfile.NamedTemporaryFile.return_value = mock_tmp
-
         mock_client = cls.return_value
         mock_client.connect.side_effect = _connect
         mock_client.reconnect.side_effect = _reconnect

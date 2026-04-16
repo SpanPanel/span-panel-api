@@ -28,9 +28,6 @@ class SpanPanelAPIError(SpanPanelError):
         super().__init__(message)
         self.status_code = status_code
 
-    def __str__(self) -> str:
-        return self.args[0] if self.args else ""
-
 
 class SpanPanelServerError(SpanPanelAPIError):
     """Server error (500)."""

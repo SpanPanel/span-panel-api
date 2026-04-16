@@ -11,6 +11,7 @@ from __future__ import annotations
 from types import TracebackType
 
 from paho.mqtt.client import Client as MQTTClient
+from paho.mqtt.enums import CallbackAPIVersion
 
 _PAHO_LOCK_ATTRS = (
     "_in_callback_mutex",
@@ -21,6 +22,29 @@ _PAHO_LOCK_ATTRS = (
     "_reconnect_delay_mutex",
     "_mid_generate_mutex",
 )
+
+
+def _verify_paho_lock_attrs() -> None:
+    """Verify paho-mqtt's lock layout matches the list we monkey-patch.
+
+    Runs once at import. Raises ``RuntimeError`` if any expected attribute
+    is missing (paho renamed/removed one) or if paho grew a new lock we
+    don't yet patch. Running ``python -O`` does not bypass this check.
+    """
+    probe = MQTTClient(callback_api_version=CallbackAPIVersion.VERSION2)
+    expected = set(_PAHO_LOCK_ATTRS)
+    found = {name for name in vars(probe) if name.endswith("_mutex")}
+    missing = expected - found
+    extra = found - expected
+    if missing or extra:
+        raise RuntimeError(
+            "paho-mqtt lock attributes changed — NullLock monkey-patch is out of date. "
+            f"missing={sorted(missing)}, extra={sorted(extra)}. "
+            "Update _PAHO_LOCK_ATTRS in span_panel_api.mqtt.async_client."
+        )
+
+
+_verify_paho_lock_attrs()
 
 
 class NullLock:

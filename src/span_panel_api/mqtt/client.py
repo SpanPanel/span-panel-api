@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
 import logging
+import time
 
 from ..auth import get_homie_schema
 from ..exceptions import SpanPanelConnectionError, SpanPanelServerError, SpanPanelStaleDataError
@@ -324,7 +325,7 @@ class SpanMqttClient:
         # Dispatch snapshot callbacks if streaming
         if self._streaming and homie.is_ready() and self._loop is not None:
             if self._snapshot_interval <= 0:
-                # No debounce — dispatch immediately (backward compat)
+                # Real-time mode — dispatch immediately, no debounce.
                 self._create_dispatch_task()
             elif self._snapshot_timer is None:
                 # Schedule debounced dispatch
@@ -366,7 +367,7 @@ class SpanMqttClient:
             try:
                 cb(connected)
             except Exception:  # pylint: disable=broad-exception-caught
-                _LOGGER.exception("Connection callback raised")
+                _LOGGER.warning("Connection callback raised", exc_info=True)
 
     async def _wait_for_circuit_names(self, timeout: float) -> None:
         """Wait for all circuit-like nodes to have a ``name`` property.
@@ -377,8 +378,8 @@ class SpanMqttClient:
         timeout elapses (non-fatal — entities will use fallback names).
         """
         homie = self._require_homie()
-        deadline = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < deadline:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             missing = homie.circuit_nodes_missing_names()
             if not missing:
                 _LOGGER.debug("All circuit names received")
@@ -419,7 +420,10 @@ class SpanMqttClient:
         """Update the snapshot debounce interval at runtime.
 
         Args:
-            interval: Seconds between snapshot dispatches. 0 = no debounce.
+            interval: Seconds between snapshot dispatches. ``0`` (or any
+                non-positive value) disables debounce and dispatches a
+                snapshot for every incoming property message — real-time
+                mode, intended for fast consumers.
         """
         self._snapshot_interval = interval
         # Cancel any pending timer so the new interval takes effect on next message

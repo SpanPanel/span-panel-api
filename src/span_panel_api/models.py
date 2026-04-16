@@ -1,8 +1,8 @@
 """Transport-agnostic snapshot models for SPAN Panel state.
 
-These dataclasses represent panel state regardless of how it was obtained
-(REST polling or MQTT push). Energy and power sign conventions are
-normalized at the transport boundary — consumers see a consistent view.
+These dataclasses represent panel state as produced by the MQTT/Homie
+transport. Energy and power sign conventions are normalized at the
+transport boundary — consumers see a consistent view.
 
 All snapshots are immutable (frozen) and memory-efficient (slots).
 """

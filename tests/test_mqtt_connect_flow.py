@@ -7,12 +7,14 @@ SpanMqttClient full connect-to-snapshot flow.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+import ssl
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from paho.mqtt.client import ConnectFlags, DisconnectFlags, MQTTMessage
 from paho.mqtt.reasoncodes import ReasonCode
 
+from span_panel_api.exceptions import SpanPanelConnectionError
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.const import MQTT_RECONNECT_MIN_DELAY_S
@@ -68,7 +70,8 @@ class TestBridgeConnect:
         bridge = _make_bridge()
         await bridge.connect()
 
-        mqtt_client_mock.tls_set.assert_called_once()
+        mqtt_client_mock.tls_set_context.assert_called_once()
+        mqtt_client_mock.tls_set.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_connect_does_not_set_lwt(self, mqtt_client_mock: MagicMock) -> None:
@@ -93,6 +96,30 @@ class TestBridgeConnect:
 
         assert bridge.is_connected() is True
         mqtt_client_mock.tls_set.assert_not_called()
+        mqtt_client_mock.tls_set_context.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_malformed_ca_pem_raises_connection_error(self, mqtt_client_mock: MagicMock) -> None:
+        """Malformed CA PEM must surface as SpanPanelConnectionError, not ssl.SSLError."""
+        bridge = _make_bridge()
+        with patch(
+            "span_panel_api.mqtt.connection._build_ssl_context",
+            side_effect=ssl.SSLError("malformed PEM"),
+        ):
+            with pytest.raises(SpanPanelConnectionError, match="Failed to build SSL context"):
+                await bridge.connect()
+
+    @pytest.mark.asyncio
+    async def test_non_oserror_connect_failure_wrapped(self, mqtt_client_mock: MagicMock) -> None:
+        """Non-OSError from paho.connect() (e.g. WebsocketConnectionError) wraps cleanly."""
+        bridge = _make_bridge()
+
+        class _FakeWebsocketError(Exception):
+            pass
+
+        mqtt_client_mock.connect.side_effect = _FakeWebsocketError("ws handshake failed")
+        with pytest.raises(SpanPanelConnectionError, match="Cannot connect to MQTT broker"):
+            await bridge.connect()
 
     @pytest.mark.asyncio
     async def test_disconnect_after_connect(self, mqtt_client_mock: MagicMock) -> None:
@@ -257,7 +284,7 @@ class TestBridgeReconnect:
 # ---------------------------------------------------------------------------
 
 
-def _make_span_client(snapshot_interval: float = 0) -> SpanMqttClient:
+def _make_span_client(snapshot_interval: float = 1.0) -> SpanMqttClient:
     config = MqttClientConfig(
         broker_host="broker.local",
         username="user",
@@ -355,9 +382,14 @@ class TestSpanMqttClientConnect:
         unregister = client.register_snapshot_callback(callback)
         await client.start_streaming()
 
-        # Trigger a property message while streaming
+        # Trigger a property message while streaming — timer scheduled
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/core/some-prop", "42")
-        await asyncio.sleep(0.05)
+        assert client._snapshot_timer is not None
+
+        # Fire the debounce directly (default 1.0s interval would slow the test)
+        client._fire_snapshot()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
         assert len(snapshots) > 0
         callback.assert_called()

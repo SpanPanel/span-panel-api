@@ -207,7 +207,7 @@ class SpanMqttClient:
         Callback fires with False on broker disconnect and True on reconnect.
         No synthetic call is made at registration time — callbacks only fire
         on real state edges. To check current connection state on registration,
-        call ping().
+        await ping().
 
         Returns an unregister function that removes the callback from the
         dispatch list. Calling unregister twice is safe.

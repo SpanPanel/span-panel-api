@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+import contextlib
 import logging
 
 from ..auth import get_homie_schema
@@ -52,6 +53,8 @@ class SpanMqttClient:
         self._homie: HomieDeviceConsumer | None = None
         self._streaming = False
         self._snapshot_callbacks: list[Callable[[SpanPanelSnapshot], Awaitable[None]]] = []
+        self._connection_callbacks: list[Callable[[bool], None]] = []
+        self._live: bool = False
         self._ready_event: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
@@ -196,6 +199,21 @@ class SpanMqttClient:
         if self._bridge is None or self._homie is None:
             return False
         return self._bridge.is_connected() and self._homie.is_ready()
+
+    def register_connection_callback(self, callback: Callable[[bool], None]) -> Callable[[], None]:
+        """Subscribe to broker connection state transitions.
+
+        Callback fires with False on broker disconnect and True on reconnect.
+        Returns an unregister function that removes the callback from the
+        dispatch list. Calling unregister twice is safe.
+        """
+        self._connection_callbacks.append(callback)
+
+        def unregister() -> None:
+            with contextlib.suppress(ValueError):
+                self._connection_callbacks.remove(callback)
+
+        return unregister
 
     async def get_snapshot(self) -> SpanPanelSnapshot:
         """Return current snapshot from accumulated MQTT state.

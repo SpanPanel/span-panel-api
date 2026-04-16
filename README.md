@@ -71,12 +71,12 @@ This ensures that the first `get_snapshot()` after connect returns human-readabl
 
 The library defines three structural subtyping protocols (PEP 544) that both the MQTT transport and the simulation engine implement:
 
-| Protocol                   | Purpose                                                                               |
-| -------------------------- | ------------------------------------------------------------------------------------- |
-| `SpanPanelClientProtocol`  | Core lifecycle: `connect`, `close`, `ping`, `get_snapshot`                            |
-| `CircuitControlProtocol`   | Relay and shed-priority control: `set_circuit_relay`, `set_circuit_priority`          |
-| `PanelControlProtocol`     | Panel-level control: `set_dominant_power_source`                                      |
-| `StreamingCapableProtocol` | Push-based updates: `register_snapshot_callback`, `start_streaming`, `stop_streaming` |
+| Protocol                   | Purpose                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------ |
+| `SpanPanelClientProtocol`  | Core lifecycle: `connect`, `close`, `ping`, `get_snapshot`, `register_connection_callback` |
+| `CircuitControlProtocol`   | Relay and shed-priority control: `set_circuit_relay`, `set_circuit_priority`               |
+| `PanelControlProtocol`     | Panel-level control: `set_dominant_power_source`                                           |
+| `StreamingCapableProtocol` | Push-based updates: `register_snapshot_callback`, `start_streaming`, `stop_streaming`      |
 
 Integration code programs against these protocols, not transport-specific classes.
 
@@ -159,6 +159,29 @@ async def main():
 
 asyncio.run(main())
 ```
+
+### Connection State Monitoring
+
+Push consumers that need to react to broker disconnect/reconnect events — for example, to mark downstream entities offline within a second of a dropped connection rather than waiting on a fallback poll — can register a connection callback. The callback
+fires `False` on disconnect and `True` on reconnect, edge-only (no synthetic call at registration time):
+
+```python
+def on_connection_change(connected: bool) -> None:
+    if connected:
+        print("Broker connection restored")
+    else:
+        print("Broker connection lost")
+
+unsubscribe_connection = client.register_connection_callback(on_connection_change)
+
+# Later, during teardown:
+unsubscribe_connection()
+```
+
+To check the current connection state on demand (for example, just after registering), call `await client.ping()`.
+
+When the client is not fully live (broker disconnected, or Homie device not yet ready), `await client.get_snapshot()` raises `SpanPanelStaleDataError` instead of returning cached data. Treat that exception as the canonical "panel currently unreachable"
+signal — see [Error Handling](#error-handling) below.
 
 ### Pre-Built Config Pattern
 
@@ -295,17 +318,25 @@ await delete_fqdn("192.168.1.100", token=auth.access_token)
 
 All exceptions inherit from `SpanPanelError`:
 
-| Exception                  | Cause                                                     |
-| -------------------------- | --------------------------------------------------------- |
-| `SpanPanelAuthError`       | Invalid passphrase, expired token, or missing credentials |
-| `SpanPanelConnectionError` | Cannot reach the panel (network/DNS)                      |
-| `SpanPanelTimeoutError`    | Request or connection timed out                           |
-| `SpanPanelValidationError` | Data validation failure                                   |
-| `SpanPanelAPIError`        | Unexpected HTTP response from v2 endpoints                |
-| `SpanPanelServerError`     | Panel returned HTTP 500                                   |
+| Exception                  | Cause                                                                                              |
+| -------------------------- | -------------------------------------------------------------------------------------------------- |
+| `SpanPanelAuthError`       | Invalid passphrase, expired token, or missing credentials                                          |
+| `SpanPanelConnectionError` | Cannot reach the panel (network/DNS) during initial connect                                        |
+| `SpanPanelStaleDataError`  | `get_snapshot()` called while the broker is disconnected or the Homie device has not reached ready |
+| `SpanPanelTimeoutError`    | Request or connection timed out                                                                    |
+| `SpanPanelValidationError` | Data validation failure                                                                            |
+| `SpanPanelAPIError`        | Unexpected HTTP response from v2 endpoints                                                         |
+| `SpanPanelServerError`     | Panel returned HTTP 500                                                                            |
+
+`SpanPanelStaleDataError` is distinct from `SpanPanelConnectionError`: the former means the client is running but data cannot be trusted right now (transient disconnect, or panel-declared not-ready); the latter means the initial connect failed and the
+client cannot be used at all.
 
 ```python
-from span_panel_api import SpanPanelAuthError, SpanPanelConnectionError
+from span_panel_api import (
+    SpanPanelAuthError,
+    SpanPanelConnectionError,
+    SpanPanelStaleDataError,
+)
 
 try:
     client = await create_span_client(host="192.168.1.100", passphrase="wrong")
@@ -313,6 +344,14 @@ except SpanPanelAuthError:
     print("Invalid passphrase")
 except SpanPanelConnectionError:
     print("Cannot reach panel")
+
+# Later, during normal operation:
+try:
+    snapshot = await client.get_snapshot()
+except SpanPanelStaleDataError as err:
+    # Broker dropped or panel declared not-ready — fall back to last-known
+    # data, a grace-period value, or mark downstream state unavailable.
+    print(f"Snapshot unavailable: {err}")
 ```
 
 ## Capabilities

@@ -135,7 +135,12 @@ class AsyncMqttBridge:
             except (OSError, SpanPanelConnectionError, SpanPanelTimeoutError) as exc:
                 raise SpanPanelConnectionError(f"Failed to fetch CA certificate from {self._panel_host}") from exc
             # Build the SSLContext from PEM data in memory — no temp file.
-            ssl_context = _build_ssl_context(ca_pem)
+            # A malformed PEM raises ssl.SSLError or ValueError; wrap both
+            # so callers only see the documented SpanPanelConnectionError.
+            try:
+                ssl_context = _build_ssl_context(ca_pem)
+            except (ssl.SSLError, ValueError) as exc:
+                raise SpanPanelConnectionError(f"Failed to build SSL context for {self._panel_host}") from exc
 
         self._client = AsyncMQTTClient(
             callback_api_version=CallbackAPIVersion.VERSION2,
@@ -176,7 +181,11 @@ class AsyncMqttBridge:
             _LOGGER.debug("BRIDGE: Running connect in executor to %s:%s", self._host, self._port)
             try:
                 await self._loop.run_in_executor(None, _blocking_connect)
-            except OSError as exc:
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                # paho raises OSError for TCP failures and transport-specific
+                # errors (e.g. WebsocketConnectionError) that do not inherit
+                # from OSError. Wrap all of them uniformly so callers only
+                # see the documented SpanPanelConnectionError.
                 raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
             _LOGGER.debug("BRIDGE: Executor connect returned, waiting for CONNACK...")
         finally:

@@ -34,3 +34,12 @@ class SpanPanelAPIError(SpanPanelError):
 
 class SpanPanelServerError(SpanPanelAPIError):
     """Server error (500)."""
+
+
+class SpanPanelStaleDataError(SpanPanelError):
+    """Raised when get_snapshot() is called while the client isn't live.
+
+    Distinct from SpanPanelConnectionError: this means the client is running
+    but data cannot be trusted right now (broker disconnected, or the Homie
+    device has declared $state=disconnected/lost).
+    """

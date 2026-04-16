@@ -23,6 +23,7 @@ from .exceptions import (
     SpanPanelConnectionError,
     SpanPanelError,
     SpanPanelServerError,
+    SpanPanelStaleDataError,
     SpanPanelTimeoutError,
     SpanPanelValidationError,
 )
@@ -109,6 +110,7 @@ __all__ = [  # noqa: RUF022
     "SpanPanelConnectionError",
     "SpanPanelError",
     "SpanPanelServerError",
+    "SpanPanelStaleDataError",
     "SpanPanelTimeoutError",
     "SpanPanelValidationError",
 ]

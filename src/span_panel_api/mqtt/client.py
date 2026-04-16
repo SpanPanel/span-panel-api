@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+import contextlib
 import logging
 
 from ..auth import get_homie_schema
-from ..exceptions import SpanPanelConnectionError, SpanPanelServerError
+from ..exceptions import SpanPanelConnectionError, SpanPanelServerError, SpanPanelStaleDataError
 from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
 from ..protocol import PanelCapability
 from .accumulator import HomiePropertyAccumulator
@@ -52,6 +53,8 @@ class SpanMqttClient:
         self._homie: HomieDeviceConsumer | None = None
         self._streaming = False
         self._snapshot_callbacks: list[Callable[[SpanPanelSnapshot], Awaitable[None]]] = []
+        self._connection_callbacks: list[Callable[[bool], None]] = []
+        self._live = False
         self._ready_event: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
@@ -190,6 +193,7 @@ class SpanMqttClient:
             await self._bridge.disconnect()
             self._bridge = None
         self._accumulator = None
+        self._live = False
 
     async def ping(self) -> bool:
         """Check if MQTT connection is alive and device is ready."""
@@ -197,12 +201,43 @@ class SpanMqttClient:
             return False
         return self._bridge.is_connected() and self._homie.is_ready()
 
+    def register_connection_callback(self, callback: Callable[[bool], None]) -> Callable[[], None]:
+        """Subscribe to broker connection state transitions.
+
+        Callback fires with False on broker disconnect and True on reconnect.
+        No synthetic call is made at registration time — callbacks only fire
+        on real state edges. To check current connection state on registration,
+        await ping().
+
+        Returns an unregister function that removes the callback from the
+        dispatch list. Calling unregister twice is safe.
+        """
+        self._connection_callbacks.append(callback)
+
+        def unregister() -> None:
+            with contextlib.suppress(ValueError):
+                self._connection_callbacks.remove(callback)
+
+        return unregister
+
     async def get_snapshot(self) -> SpanPanelSnapshot:
         """Return current snapshot from accumulated MQTT state.
 
-        No network call — snapshot is built from in-memory property values.
+        Raises SpanPanelStaleDataError if the client is not fully live.
+        "Live" means: the bridge is connected AND the Homie accumulator
+        has reached ready state. Callers can treat SpanPanelStaleDataError
+        as the canonical "panel currently unreachable" signal.
+
+        No network call — snapshot is built from in-memory property values
+        when the liveness checks pass.
         """
-        return self._require_homie().build_snapshot()
+        if self._bridge is None or self._homie is None:
+            raise SpanPanelStaleDataError("Client not connected — call connect() first")
+        if not self._bridge.is_connected():
+            raise SpanPanelStaleDataError("MQTT broker disconnected")
+        if not self._homie.is_ready():
+            raise SpanPanelStaleDataError("Homie device not ready")
+        return self._homie.build_snapshot()
 
     # -- CircuitControlProtocol --------------------------------------------
 
@@ -296,15 +331,42 @@ class SpanMqttClient:
                 self._snapshot_timer = self._loop.call_later(self._snapshot_interval, self._fire_snapshot)
 
     def _on_connection_change(self, connected: bool) -> None:
-        """Handle MQTT connection state change (called from asyncio loop)."""
+        """Handle MQTT connection state change (called from asyncio loop).
+
+        Re-subscribes to the wildcard topic on reconnect (pre-existing
+        behavior), then fans out an edge-only notification to registered
+        connection callbacks. Duplicate state transitions are suppressed
+        so subscribers only see real edges.
+
+        On disconnect, any pending snapshot-debounce timer is cancelled
+        so a stale timer cannot dispatch a post-disconnect snapshot.
+        """
+        # Re-subscribe runs on every connected=True, including duplicates —
+        # paho may re-emit connected events after session restoration, and
+        # re-subscribing is broker-benign. Callback fan-out below is
+        # edge-only (see the guard after this block).
         if connected:
             _LOGGER.debug("MQTT connection established")
-            # Re-subscribe on reconnect
             if self._bridge is not None:
                 wildcard = WILDCARD_TOPIC_FMT.format(serial=self._serial_number)
                 self._bridge.subscribe(wildcard, qos=0)
         else:
             _LOGGER.debug("MQTT connection lost")
+            # Cancel any pending snapshot-debounce timer so it cannot
+            # fire post-disconnect with a stale snapshot.
+            self._cancel_snapshot_timer()
+
+        # Edge-only dispatch
+        if connected == self._live:
+            return
+        self._live = connected
+
+        # Iterate a copy — subscribers may unregister during their callback
+        for cb in list(self._connection_callbacks):
+            try:
+                cb(connected)
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.exception("Connection callback raised")
 
     async def _wait_for_circuit_names(self, timeout: float) -> None:
         """Wait for all circuit-like nodes to have a ``name`` property.
@@ -364,8 +426,24 @@ class SpanMqttClient:
         self._cancel_snapshot_timer()
 
     async def _dispatch_snapshot(self) -> None:
-        """Build snapshot and send to all registered callbacks."""
-        snapshot = self._require_homie().build_snapshot()
+        """Build snapshot and send to all registered callbacks.
+
+        Guarded by the same liveness predicate as get_snapshot() — if the
+        bridge has disconnected or the Homie device is not ready, no
+        dispatch occurs. This prevents a pending debounce timer that was
+        scheduled just before a disconnect from delivering a stale
+        snapshot to subscribers after the fact.
+        """
+        bridge = self._bridge
+        homie = self._homie
+        if bridge is None or not bridge.is_connected() or homie is None or not homie.is_ready():
+            _LOGGER.debug(
+                "Skipping stale snapshot dispatch (bridge_connected=%s, homie_ready=%s)",
+                bridge is not None and bridge.is_connected(),
+                homie is not None and homie.is_ready(),
+            )
+            return
+        snapshot = homie.build_snapshot()
         for cb in list(self._snapshot_callbacks):
             try:
                 await cb(snapshot)

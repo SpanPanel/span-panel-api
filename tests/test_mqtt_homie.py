@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -39,11 +39,23 @@ from span_panel_api.mqtt.const import (
     TYPE_PV,
 )
 from span_panel_api.mqtt.accumulator import HomiePropertyAccumulator
+from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.homie import HomieDeviceConsumer
 from span_panel_api.mqtt.models import MqttClientConfig
 from span_panel_api.protocol import (
     PanelCapability,
 )
+
+
+class _ConnectedBridge(AsyncMqttBridge):
+    """Minimal bridge stub: always reports connected. No I/O setup."""
+
+    def __init__(self) -> None:  # noqa: D107
+        # Bypass AsyncMqttBridge.__init__ — avoids TLS/network setup.
+        pass
+
+    def is_connected(self) -> bool:  # noqa: D102
+        return True
 
 
 SERIAL = "nj-2316-XXXX"
@@ -1091,6 +1103,7 @@ class TestSpanMqttClientSnapshot:
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
         client._accumulator = HomiePropertyAccumulator(SERIAL)
         client._homie = HomieDeviceConsumer(client._accumulator, panel_size=32)
+        client._bridge = _ConnectedBridge()
 
         # Manually ready the homie consumer
         client._homie.handle_message(f"{PREFIX}/$state", "ready")

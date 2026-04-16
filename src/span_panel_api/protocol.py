@@ -46,6 +46,8 @@ class SpanPanelClientProtocol(Protocol):
 
     async def get_snapshot(self) -> SpanPanelSnapshot: ...
 
+    def register_connection_callback(self, callback: Callable[[bool], None]) -> Callable[[], None]: ...
+
 
 @runtime_checkable
 class CircuitControlProtocol(Protocol):

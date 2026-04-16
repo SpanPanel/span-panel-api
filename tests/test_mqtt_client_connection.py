@@ -10,6 +10,7 @@ from span_panel_api.exceptions import SpanPanelError, SpanPanelStaleDataError
 from span_panel_api.models import SpanPanelSnapshot
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
+from span_panel_api.mqtt.const import WILDCARD_TOPIC_FMT
 from span_panel_api.mqtt.homie import HomieDeviceConsumer
 from span_panel_api.mqtt.models import MqttClientConfig
 
@@ -215,6 +216,27 @@ class TestConnectionEventDispatch:
 
         client._on_connection_change(True)
 
+        expected_topic = WILDCARD_TOPIC_FMT.format(serial="test-serial")
         assert len(bridge.subscribed_topics) == 1
-        assert bridge.subscribed_topics[0][0].endswith("/#") or "+" in bridge.subscribed_topics[0][0]
+        assert bridge.subscribed_topics[0] == (expected_topic, 0)
         assert calls == [True]
+
+    def test_resubscribe_fires_even_on_duplicate_true(self) -> None:
+        """Duplicate connected=True still triggers re-subscribe (intentional).
+
+        Paho may re-emit connected events; re-subscribing is broker-benign
+        and ensures subscriptions survive session restoration. Callback
+        fan-out is separately edge-only.
+        """
+        client = _make_client()
+        bridge = _FakeBridge(connected=True)
+        client._bridge = bridge
+        client._live = True  # already online
+        calls: list[bool] = []
+        client.register_connection_callback(calls.append)
+
+        client._on_connection_change(True)
+
+        # Re-subscribe fires (side effect preserved) but no callback edge
+        assert len(bridge.subscribed_topics) == 1
+        assert calls == []

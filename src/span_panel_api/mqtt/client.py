@@ -325,6 +325,10 @@ class SpanMqttClient:
         connection callbacks. Duplicate state transitions are suppressed
         so subscribers only see real edges.
         """
+        # Re-subscribe runs on every connected=True, including duplicates —
+        # paho may re-emit connected events after session restoration, and
+        # re-subscribing is broker-benign. Callback fan-out below is
+        # edge-only (see the guard after this block).
         if connected:
             _LOGGER.debug("MQTT connection established")
             if self._bridge is not None:

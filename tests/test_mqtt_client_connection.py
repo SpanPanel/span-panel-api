@@ -176,7 +176,7 @@ class TestConnectionEventDispatch:
         client.register_connection_callback(bad)
         client.register_connection_callback(good_calls.append)
 
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.WARNING):
             client._on_connection_change(True)
 
         assert good_calls == [True]

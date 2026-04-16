@@ -31,6 +31,11 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Threshold below which grid power is considered "not exchanging" when no
+# authoritative bess/grid-state is available. Real lugs readings never land
+# exactly on 0.0; 1 W is well below sensor noise.
+_GRID_POWER_EPSILON_W = 1.0
+
 
 def _parse_bool(value: str) -> bool:
     """Parse a Homie boolean string."""
@@ -230,9 +235,10 @@ class HomieDeviceConsumer:
         """Build a circuit snapshot from accumulated properties."""
         circuit_id = normalize_circuit_id(node_id)
 
-        # active-power is in watts; negate so positive = consumption
+        # active-power is in watts; negate so positive = consumption.
+        # Guard against -0.0 creeping in when raw_power_w is 0.0.
         raw_power_w = _parse_float(self._acc.get_prop(node_id, "active-power"))
-        instant_power_w = -raw_power_w or 0.0
+        instant_power_w = 0.0 if raw_power_w == 0.0 else -raw_power_w
 
         # Energy: exported-energy = consumption (panel exports TO circuit)
         consumed_wh = _parse_float(self._acc.get_prop(node_id, "exported-energy"))
@@ -387,7 +393,9 @@ class HomieDeviceConsumer:
                 return "DSM_ON_GRID"
 
             if dps in ("BATTERY", "PV", "GENERATOR"):
-                grid_exchanging = grid_power != 0.0 or (power_flow_grid is not None and power_flow_grid != 0.0)
+                grid_exchanging = abs(grid_power) > _GRID_POWER_EPSILON_W or (
+                    power_flow_grid is not None and abs(power_flow_grid) > _GRID_POWER_EPSILON_W
+                )
                 return "DSM_ON_GRID" if grid_exchanging else "DSM_OFF_GRID"
 
         return "UNKNOWN"

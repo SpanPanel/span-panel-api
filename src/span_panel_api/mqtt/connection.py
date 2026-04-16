@@ -13,9 +13,7 @@ import asyncio
 from collections.abc import Callable
 from functools import partial
 import logging
-from pathlib import Path
 import ssl
-import tempfile
 from typing import TYPE_CHECKING
 
 import paho.mqtt.client as paho
@@ -40,6 +38,20 @@ if TYPE_CHECKING:
     from paho.mqtt.client import SocketLike
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _build_ssl_context(ca_pem: str) -> ssl.SSLContext:
+    """Build an SSLContext that trusts only the provided panel CA.
+
+    The panel issues a private CA and a server cert signed by it. We do
+    not want to trust system CAs for this connection, so the context is
+    built fresh rather than via ``ssl.create_default_context()``.
+    """
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    ctx.check_hostname = True
+    ctx.load_verify_locations(cadata=ca_pem)
+    return ctx
 
 
 class AsyncMqttBridge:
@@ -77,7 +89,6 @@ class AsyncMqttBridge:
         self._connected = False
         self._client: AsyncMQTTClient | None = None
         self._connect_event: asyncio.Event | None = None
-        self._ca_cert_path: Path | None = None
 
         self._misc_timer: asyncio.TimerHandle | None = None
         self._should_reconnect = False
@@ -117,96 +128,74 @@ class AsyncMqttBridge:
 
         # Fetch CA cert from panel for TLS
         _LOGGER.debug("BRIDGE: Fetching CA cert from %s (use_tls=%s)", self._panel_host, self._use_tls)
-        ca_pem: str | None = None
-        ca_cert_path: Path | None = None
+        ssl_context: ssl.SSLContext | None = None
         if self._use_tls:
             try:
                 ca_pem = await download_ca_cert(self._panel_host, port=self._panel_http_port)
             except (OSError, SpanPanelConnectionError, SpanPanelTimeoutError) as exc:
                 raise SpanPanelConnectionError(f"Failed to fetch CA certificate from {self._panel_host}") from exc
+            # Build the SSLContext from PEM data in memory — no temp file.
+            ssl_context = _build_ssl_context(ca_pem)
+
+        self._client = AsyncMQTTClient(
+            callback_api_version=CallbackAPIVersion.VERSION2,
+            transport=self._transport,
+            reconnect_on_failure=False,
+        )
+        self._client.setup()
+
+        self._client.username_pw_set(self._username, self._password)
+
+        # Wire socket callbacks (async versions by default)
+        self._client.on_socket_close = self._async_on_socket_close
+        self._client.on_socket_unregister_write = self._async_on_socket_unregister_write
+
+        # Wire MQTT callbacks (run directly on event loop — no thread dispatch)
+        self._client.on_connect = self._on_connect
+        self._client.on_disconnect = self._on_disconnect
+        self._client.on_message = self._on_message
+
+        if ssl_context is not None:
+            self._client.tls_set_context(ssl_context)
+
+        # Connect in executor (blocking: DNS, TCP, TLS handshake).
+        # During executor connect, socket callbacks bridge to the event
+        # loop via call_soon_threadsafe.
+        def _blocking_connect() -> None:
+            if self._client is None:
+                raise RuntimeError("MQTT client not initialised before connect")
+            self._client.connect(
+                host=self._host,
+                port=self._port,
+                keepalive=MQTT_KEEPALIVE_S,
+            )
 
         try:
-            self._client = AsyncMQTTClient(
-                callback_api_version=CallbackAPIVersion.VERSION2,
-                transport=self._transport,
-                reconnect_on_failure=False,
-            )
-            self._client.setup()
-
-            self._client.username_pw_set(self._username, self._password)
-
-            # Wire socket callbacks (async versions by default)
-            self._client.on_socket_close = self._async_on_socket_close
-            self._client.on_socket_unregister_write = self._async_on_socket_unregister_write
-
-            # Wire MQTT callbacks (run directly on event loop — no thread dispatch)
-            self._client.on_connect = self._on_connect
-            self._client.on_disconnect = self._on_disconnect
-            self._client.on_message = self._on_message
-
-            # TLS setup + connect in executor (blocking: temp file write,
-            # load_verify_locations, DNS, TCP, and TLS handshake).
-            # During executor connect, socket callbacks bridge to the event
-            # loop via call_soon_threadsafe.
-            def _blocking_tls_and_connect() -> None:
-                """Write CA cert to temp file, configure TLS, and connect."""
-                nonlocal ca_cert_path
-                if self._client is None:
-                    raise RuntimeError("MQTT client not initialised before connect")
-                if self._use_tls and ca_pem is not None:
-                    tmp = tempfile.NamedTemporaryFile(  # pylint: disable=consider-using-with  # noqa: SIM115
-                        mode="w", suffix=".pem", delete=False
-                    )
-                    tmp.write(ca_pem)
-                    tmp.close()
-                    ca_cert_path = Path(tmp.name)
-                    self._client.tls_set(
-                        ca_certs=str(ca_cert_path),
-                        cert_reqs=ssl.CERT_REQUIRED,
-                        tls_version=ssl.PROTOCOL_TLS_CLIENT,
-                    )
-                self._client.connect(
-                    host=self._host,
-                    port=self._port,
-                    keepalive=MQTT_KEEPALIVE_S,
-                )
-
+            self._client.on_socket_open = self._on_socket_open_sync
+            self._client.on_socket_register_write = self._on_socket_register_write_sync
+            _LOGGER.debug("BRIDGE: Running connect in executor to %s:%s", self._host, self._port)
             try:
-                self._client.on_socket_open = self._on_socket_open_sync
-                self._client.on_socket_register_write = self._on_socket_register_write_sync
-                _LOGGER.debug("BRIDGE: Running TLS+connect in executor to %s:%s", self._host, self._port)
-                try:
-                    await self._loop.run_in_executor(None, _blocking_tls_and_connect)
-                except OSError as exc:
-                    raise SpanPanelConnectionError(
-                        f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}"
-                    ) from exc
-                _LOGGER.debug("BRIDGE: Executor connect returned, waiting for CONNACK...")
-            finally:
-                # Switch to async-only socket callbacks now that we are
-                # back on the event loop thread.
-                self._client.on_socket_open = self._async_on_socket_open
-                self._client.on_socket_register_write = self._async_on_socket_register_write
+                await self._loop.run_in_executor(None, _blocking_connect)
+            except OSError as exc:
+                raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
+            _LOGGER.debug("BRIDGE: Executor connect returned, waiting for CONNACK...")
+        finally:
+            # Switch to async-only socket callbacks now that we are
+            # back on the event loop thread.
+            self._client.on_socket_open = self._async_on_socket_open
+            self._client.on_socket_register_write = self._async_on_socket_register_write
 
-            # Wait for CONNACK
-            try:
-                await asyncio.wait_for(self._connect_event.wait(), timeout=MQTT_CONNECT_TIMEOUT_S)
-            except asyncio.TimeoutError as exc:
-                await self.disconnect()
-                raise SpanPanelTimeoutError(f"Timed out connecting to MQTT broker at {self._host}:{self._port}") from exc
+        # Wait for CONNACK
+        try:
+            await asyncio.wait_for(self._connect_event.wait(), timeout=MQTT_CONNECT_TIMEOUT_S)
+        except asyncio.TimeoutError as exc:
+            await self.disconnect()
+            raise SpanPanelTimeoutError(f"Timed out connecting to MQTT broker at {self._host}:{self._port}") from exc
 
-            if not self._connected:
-                raise SpanPanelConnectionError(f"MQTT connection failed to {self._host}:{self._port}")
+        if not self._connected:
+            raise SpanPanelConnectionError(f"MQTT connection failed to {self._host}:{self._port}")
 
-            self._initial_connect_done = True
-            # Keep cert alive until disconnect — paho may reference it
-            self._ca_cert_path = ca_cert_path
-
-        except Exception:
-            # Clean up temp CA cert file on failure only
-            if ca_cert_path is not None:
-                self._remove_cert_file(ca_cert_path)
-            raise
+        self._initial_connect_done = True
 
     async def disconnect(self) -> None:
         """Disconnect from the MQTT broker."""
@@ -229,24 +218,10 @@ class AsyncMqttBridge:
         self._client = None
         self._initial_connect_done = False
 
-        cert_path = self._ca_cert_path
-        self._ca_cert_path = None
-        if cert_path is not None:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, partial(self._remove_cert_file, cert_path))
-
     def subscribe(self, topic: str, qos: int = 0) -> None:
         """Subscribe to a topic. Must be called after connect()."""
         if self._client is not None:
             self._client.subscribe(topic, qos=qos)
-
-    @staticmethod
-    def _remove_cert_file(path: Path) -> None:
-        """Remove a temporary CA certificate file (safe to call from any thread)."""
-        try:
-            path.unlink()
-        except OSError:
-            _LOGGER.debug("Failed to remove temp CA cert file: %s", path)
 
     def publish(self, topic: str, payload: str, qos: int = 1) -> None:
         """Publish a message. Must be called after connect()."""
@@ -379,7 +354,10 @@ class AsyncMqttBridge:
     ) -> None:
         """Handle disconnect from broker."""
         self._connected = False
-        _LOGGER.debug("MQTT disconnected: %s", reason_code)
+        if reason_code.is_failure:
+            _LOGGER.warning("MQTT disconnected abnormally: %s", reason_code)
+        else:
+            _LOGGER.debug("MQTT disconnected: %s", reason_code)
 
         # Signal connect event if still waiting (socket closed before CONNACK)
         if self._connect_event is not None and not self._connect_event.is_set():
@@ -420,8 +398,11 @@ class AsyncMqttBridge:
                     self._client.on_socket_open = self._on_socket_open_sync
                     self._client.on_socket_register_write = self._on_socket_register_write_sync
                     await self._loop.run_in_executor(None, self._client.reconnect)
-                except OSError:
-                    _LOGGER.debug("Reconnect failed, retrying in %ss", delay)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    # paho can raise OSError, socket.gaierror, WebsocketConnectionError,
+                    # ssl.SSLError, and others depending on transport. Never let the
+                    # reconnect loop die — just log and keep backing off.
+                    _LOGGER.warning("Reconnect failed, retrying in %ss", delay, exc_info=True)
                 finally:
                     if self._client is not None:
                         self._client.on_socket_open = self._async_on_socket_open

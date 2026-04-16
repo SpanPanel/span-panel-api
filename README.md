@@ -235,6 +235,8 @@ await client.connect()
 
 `set_snapshot_interval()` controls how often push-mode snapshot callbacks fire. Lower values mean lower latency; higher values reduce CPU usage on constrained hardware. Dirty-node caching (v2.5.0) further reduces per-scan cost by skipping unchanged nodes.
 
+The minimum is **1.0 seconds**; passing a smaller value (including 0) raises `ValueError`. This protects subscribers from unbounded dispatch on a busy broker.
+
 ```python
 # Reduce snapshot frequency to every 2 seconds
 client.set_snapshot_interval(2.0)

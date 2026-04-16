@@ -47,6 +47,12 @@ async def register_v2(
     If ``passphrase`` is provided, it is sent as ``hopPassphrase``; omitting
     it enables door-bypass registration.
 
+    .. note::
+        Every call creates a new registered client entry on the panel. Callers
+        should persist and reuse the returned ``V2AuthResponse`` rather than
+        re-registering on every restart — otherwise stale entries will
+        accumulate over the panel's lifetime.
+
     Args:
         host: IP address or hostname of the SPAN Panel
         name: Client display name base (e.g., "home-assistant"); a UUID suffix is appended
@@ -310,7 +316,7 @@ async def get_fqdn(
     timeout: float = 10.0,
     port: int = 80,
     httpx_client: httpx.AsyncClient | None = None,
-) -> str:
+) -> str | None:
     """Retrieve the currently registered FQDN from the SPAN Panel.
 
     Args:
@@ -321,7 +327,9 @@ async def get_fqdn(
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
 
     Returns:
-        The registered FQDN, or empty string if none is configured
+        The registered FQDN string, or ``None`` when no FQDN is configured
+        (HTTP 404 or missing ``ebusTlsFqdn`` field). An empty string is only
+        returned when the panel reports an explicit empty FQDN value.
 
     Raises:
         SpanPanelAuthError: Token invalid or expired
@@ -344,13 +352,16 @@ async def get_fqdn(
         raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
 
     if response.status_code == 404:
-        return ""
+        return None
 
     if response.status_code != 200:
         raise SpanPanelAPIError(f"Failed to get FQDN: HTTP {response.status_code}")
 
     data: dict[str, object] = response.json()
-    return _str(data.get("ebusTlsFqdn"))
+    raw = data.get("ebusTlsFqdn")
+    if raw is None:
+        return None
+    return str(raw)
 
 
 async def delete_fqdn(

@@ -339,3 +339,93 @@ class TestCloseBehavior:
         await client.close()
 
         assert client._live is False
+
+
+class TestStaleSnapshotDispatchGuard:
+    """Post-disconnect stale-snapshot dispatch must not reach subscribers.
+
+    The library's debounced snapshot dispatch schedules a timer on every
+    incoming message. A timer scheduled just before a bridge disconnect
+    will still fire afterwards unless cancelled. Subscribers must never
+    receive a snapshot built after disconnect — see connection.py.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dispatch_snapshot_bails_when_bridge_disconnected(self, caplog: pytest.LogCaptureFixture) -> None:
+        snapshot_sentinel = _make_sentinel_snapshot()
+        client = _make_client()
+        client._bridge = _FakeBridge(connected=False)
+        client._homie = _FakeHomie(ready=True, snapshot=snapshot_sentinel)
+
+        calls: list[SpanPanelSnapshot] = []
+
+        async def record(snapshot: SpanPanelSnapshot) -> None:
+            calls.append(snapshot)
+
+        client._snapshot_callbacks.append(record)
+
+        with caplog.at_level(logging.DEBUG, logger="span_panel_api.mqtt.client"):
+            await client._dispatch_snapshot()
+
+        assert calls == []
+        assert any("Skipping stale snapshot dispatch" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_dispatch_snapshot_bails_when_homie_not_ready(self) -> None:
+        snapshot_sentinel = _make_sentinel_snapshot()
+        client = _make_client()
+        client._bridge = _FakeBridge(connected=True)
+        client._homie = _FakeHomie(ready=False, snapshot=snapshot_sentinel)
+
+        calls: list[SpanPanelSnapshot] = []
+
+        async def record(snapshot: SpanPanelSnapshot) -> None:
+            calls.append(snapshot)
+
+        client._snapshot_callbacks.append(record)
+
+        await client._dispatch_snapshot()
+
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_dispatch_snapshot_delivers_when_live(self) -> None:
+        snapshot_sentinel = _make_sentinel_snapshot()
+        client = _make_client()
+        client._bridge = _FakeBridge(connected=True)
+        client._homie = _FakeHomie(ready=True, snapshot=snapshot_sentinel)
+
+        calls: list[SpanPanelSnapshot] = []
+
+        async def record(snapshot: SpanPanelSnapshot) -> None:
+            calls.append(snapshot)
+
+        client._snapshot_callbacks.append(record)
+
+        await client._dispatch_snapshot()
+
+        assert calls == [snapshot_sentinel]
+
+    def test_on_connection_change_false_cancels_snapshot_timer(self) -> None:
+        """Disconnect must cancel any pending debounce timer."""
+        client = _make_client()
+        client._bridge = _FakeBridge(connected=True)
+        client._live = True  # previously connected
+
+        # Simulate a scheduled debounce timer
+        fired: list[None] = []
+
+        class _FakeHandle:
+            cancelled = False
+
+            def cancel(self) -> None:
+                self.cancelled = True
+                fired.append(None)
+
+        handle = _FakeHandle()
+        client._snapshot_timer = handle  # type: ignore[assignment]
+
+        client._on_connection_change(False)
+
+        assert handle.cancelled is True
+        assert client._snapshot_timer is None

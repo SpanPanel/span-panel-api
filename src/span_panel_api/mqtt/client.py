@@ -337,6 +337,9 @@ class SpanMqttClient:
         behavior), then fans out an edge-only notification to registered
         connection callbacks. Duplicate state transitions are suppressed
         so subscribers only see real edges.
+
+        On disconnect, any pending snapshot-debounce timer is cancelled
+        so a stale timer cannot dispatch a post-disconnect snapshot.
         """
         # Re-subscribe runs on every connected=True, including duplicates —
         # paho may re-emit connected events after session restoration, and
@@ -349,6 +352,9 @@ class SpanMqttClient:
                 self._bridge.subscribe(wildcard, qos=0)
         else:
             _LOGGER.debug("MQTT connection lost")
+            # Cancel any pending snapshot-debounce timer so it cannot
+            # fire post-disconnect with a stale snapshot.
+            self._cancel_snapshot_timer()
 
         # Edge-only dispatch
         if connected == self._live:
@@ -420,8 +426,24 @@ class SpanMqttClient:
         self._cancel_snapshot_timer()
 
     async def _dispatch_snapshot(self) -> None:
-        """Build snapshot and send to all registered callbacks."""
-        snapshot = self._require_homie().build_snapshot()
+        """Build snapshot and send to all registered callbacks.
+
+        Guarded by the same liveness predicate as get_snapshot() — if the
+        bridge has disconnected or the Homie device is not ready, no
+        dispatch occurs. This prevents a pending debounce timer that was
+        scheduled just before a disconnect from delivering a stale
+        snapshot to subscribers after the fact.
+        """
+        bridge = self._bridge
+        homie = self._homie
+        if bridge is None or not bridge.is_connected() or homie is None or not homie.is_ready():
+            _LOGGER.debug(
+                "Skipping stale snapshot dispatch (bridge_connected=%s, homie_ready=%s)",
+                bridge is not None and bridge.is_connected(),
+                homie is not None and homie.is_ready(),
+            )
+            return
+        snapshot = homie.build_snapshot()
         for cb in list(self._snapshot_callbacks):
             try:
                 await cb(snapshot)

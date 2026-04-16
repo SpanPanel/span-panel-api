@@ -8,8 +8,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Changed
 
-- **`snapshot_interval` minimum enforced at 1.0s** — `SpanMqttClient(snapshot_interval=...)` and `set_snapshot_interval()` now raise `ValueError` for values below 1.0 (including 0 and negatives). Previously, sub-second or zero values switched the client
-  into a per-message dispatch mode with no back-pressure, which could overwhelm subscribers on a busy broker. The `<= 0` "immediate dispatch" code path has been removed.
 - **`get_fqdn()` returns `str | None`** — `None` now distinguishes "no FQDN configured" (HTTP 404 or missing field) from an explicit empty string. Callers that treated `""` as "not registered" must update to check for `None`.
 - **Connection callback errors logged at WARNING** — `SpanMqttClient._on_connection_change` now logs callback exceptions via `_LOGGER.warning(..., exc_info=True)` instead of `_LOGGER.exception(...)`, consistent with `_dispatch_snapshot`.
 - **Reconnect loop catches all exceptions** — `AsyncMqttBridge._reconnect_loop` no longer silently drops on non-`OSError` failures (e.g. `WebsocketConnectionError`, `ssl.SSLError`). All exceptions are logged at WARNING and the loop keeps backing off.

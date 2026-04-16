@@ -4,7 +4,7 @@ Exercises the snapshot_interval parameter and debounce logic:
 - Multiple rapid messages → single dispatch
 - Snapshot fires after configured interval
 - close() cancels pending timer
-- interval < 1.0s raises ValueError
+- interval <= 0 dispatches immediately (real-time mode)
 - set_snapshot_interval() runtime changes
 """
 
@@ -187,23 +187,54 @@ class TestSnapshotDebounce:
         await client.close()
 
 
-class TestSnapshotIntervalValidation:
-    """Test that sub-minimum intervals are rejected."""
+class TestSnapshotRealtimeMode:
+    """interval <= 0 disables debounce for real-time dispatch."""
 
-    def test_zero_interval_rejected_in_init(self) -> None:
-        """interval=0 must raise ValueError at construction."""
-        with pytest.raises(ValueError, match="snapshot_interval must be >="):
-            _make_client(snapshot_interval=0)
+    @pytest.mark.asyncio
+    async def test_zero_interval_dispatches_immediately(self, mqtt_client_mock: MagicMock) -> None:
+        """interval=0 should dispatch a snapshot for every message."""
+        client = _make_client(snapshot_interval=0)
+        await _connect_client(client, mqtt_client_mock)
 
-    def test_negative_interval_rejected_in_init(self) -> None:
-        """Negative interval must raise ValueError at construction."""
-        with pytest.raises(ValueError, match="snapshot_interval must be >="):
-            _make_client(snapshot_interval=-1.0)
+        snapshots: list[object] = []
+        callback = AsyncMock(side_effect=lambda s: snapshots.append(s))
+        client.register_snapshot_callback(callback)
+        await client.start_streaming()
 
-    def test_sub_minimum_interval_rejected_in_init(self) -> None:
-        """Interval below 1.0s must raise ValueError at construction."""
-        with pytest.raises(ValueError, match="snapshot_interval must be >="):
-            _make_client(snapshot_interval=0.5)
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/core/power", "100")
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/core/power", "200")
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/core/power", "300")
+
+        # Let dispatch tasks complete
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert len(snapshots) == 3
+        assert client._snapshot_timer is None
+
+        await client.stop_streaming()
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_negative_interval_dispatches_immediately(self, mqtt_client_mock: MagicMock) -> None:
+        """Negative interval should behave like 0 (no debounce)."""
+        client = _make_client(snapshot_interval=-1.0)
+        await _connect_client(client, mqtt_client_mock)
+
+        snapshots: list[object] = []
+        callback = AsyncMock(side_effect=lambda s: snapshots.append(s))
+        client.register_snapshot_callback(callback)
+        await client.start_streaming()
+
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/core/power", "100")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert len(snapshots) == 1
+        assert client._snapshot_timer is None
+
+        await client.stop_streaming()
+        await client.close()
 
 
 class TestSetSnapshotInterval:
@@ -230,20 +261,23 @@ class TestSetSnapshotInterval:
         await client.close()
 
     @pytest.mark.asyncio
-    async def test_set_interval_rejects_sub_minimum(self, mqtt_client_mock: MagicMock) -> None:
-        """set_snapshot_interval() must reject values below 1.0s."""
+    async def test_set_interval_to_zero_switches_to_immediate(self, mqtt_client_mock: MagicMock) -> None:
+        """set_snapshot_interval(0) switches to real-time dispatch."""
         client = _make_client(snapshot_interval=2.0)
         await _connect_client(client, mqtt_client_mock)
 
-        with pytest.raises(ValueError, match="snapshot_interval must be >="):
-            client.set_snapshot_interval(0)
-        with pytest.raises(ValueError, match="snapshot_interval must be >="):
-            client.set_snapshot_interval(-1.0)
-        with pytest.raises(ValueError, match="snapshot_interval must be >="):
-            client.set_snapshot_interval(0.5)
+        snapshots: list[object] = []
+        callback = AsyncMock(side_effect=lambda s: snapshots.append(s))
+        client.register_snapshot_callback(callback)
+        await client.start_streaming()
 
-        # Interval remains unchanged
-        assert client._snapshot_interval == 2.0
+        client.set_snapshot_interval(0)
+
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/core/power", "100")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert len(snapshots) == 1
 
         await client.stop_streaming()
         await client.close()

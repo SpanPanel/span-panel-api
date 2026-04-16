@@ -31,10 +31,6 @@ _LOGGER = logging.getLogger(__name__)
 _CIRCUIT_NAMES_TIMEOUT_S = 10.0
 _CIRCUIT_NAMES_POLL_INTERVAL_S = 0.25
 
-# Minimum debounce interval. Prevents unbounded per-message dispatch tasks
-# that could overwhelm subscribers on a busy broker.
-_MIN_SNAPSHOT_INTERVAL_S = 1.0
-
 
 class SpanMqttClient:
     """MQTT transport — implements all span-panel-api protocols."""
@@ -47,8 +43,6 @@ class SpanMqttClient:
         snapshot_interval: float = 1.0,
         panel_http_port: int = 80,
     ) -> None:
-        if snapshot_interval < _MIN_SNAPSHOT_INTERVAL_S:
-            raise ValueError(f"snapshot_interval must be >= {_MIN_SNAPSHOT_INTERVAL_S}s, got {snapshot_interval}")
         self._host = host
         self._serial_number = serial_number
         self._broker_config = broker_config
@@ -329,8 +323,13 @@ class SpanMqttClient:
             self._ready_event.set()
 
         # Dispatch snapshot callbacks if streaming
-        if self._streaming and homie.is_ready() and self._loop is not None and self._snapshot_timer is None:
-            self._snapshot_timer = self._loop.call_later(self._snapshot_interval, self._fire_snapshot)
+        if self._streaming and homie.is_ready() and self._loop is not None:
+            if self._snapshot_interval <= 0:
+                # Real-time mode — dispatch immediately, no debounce.
+                self._create_dispatch_task()
+            elif self._snapshot_timer is None:
+                # Schedule debounced dispatch
+                self._snapshot_timer = self._loop.call_later(self._snapshot_interval, self._fire_snapshot)
 
     def _on_connection_change(self, connected: bool) -> None:
         """Handle MQTT connection state change (called from asyncio loop).
@@ -421,14 +420,11 @@ class SpanMqttClient:
         """Update the snapshot debounce interval at runtime.
 
         Args:
-            interval: Seconds between snapshot dispatches. Minimum 1.0s to
-                prevent per-message dispatch tasks from overwhelming subscribers.
-
-        Raises:
-            ValueError: If ``interval`` is below the minimum.
+            interval: Seconds between snapshot dispatches. ``0`` (or any
+                non-positive value) disables debounce and dispatches a
+                snapshot for every incoming property message — real-time
+                mode, intended for fast consumers.
         """
-        if interval < _MIN_SNAPSHOT_INTERVAL_S:
-            raise ValueError(f"snapshot_interval must be >= {_MIN_SNAPSHOT_INTERVAL_S}s, got {interval}")
         self._snapshot_interval = interval
         # Cancel any pending timer so the new interval takes effect on next message
         self._cancel_snapshot_timer()

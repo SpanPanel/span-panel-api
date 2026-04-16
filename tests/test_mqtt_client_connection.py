@@ -327,3 +327,15 @@ class TestGetSnapshotLiveness:
 
         with pytest.raises(SpanPanelError):
             await client.get_snapshot()
+
+
+class TestCloseBehavior:
+    """close() must reset internal state for safe re-use."""
+
+    async def test_close_resets_live_flag(self) -> None:
+        client = _make_client()
+        client._live = True  # simulate a prior connection
+
+        await client.close()
+
+        assert client._live is False

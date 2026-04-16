@@ -193,6 +193,7 @@ class SpanMqttClient:
             await self._bridge.disconnect()
             self._bridge = None
         self._accumulator = None
+        self._live = False
 
     async def ping(self) -> bool:
         """Check if MQTT connection is alive and device is ready."""

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.2] - 04/2026
+
+### Changed
+
+- **Reconnect loop log noise reduced** — `SpanMqttClient._reconnect_loop` now splits the catch-all exception handler in two: expected transient failures (`OSError` family — refused connection, DNS miss, socket timeout, `ssl.SSLError`) log a one-line
+  WARNING with the exception repr, while unexpected exceptions retain the full traceback via `exc_info=True`. The common "panel offline" case no longer buries logs in paho/stdlib stack frames that add no diagnostic signal; genuinely unknown failures still
+  surface full tracebacks for support-ticket triage.
+
 ## [2.6.1] - 04/2026
 
 ### Changed

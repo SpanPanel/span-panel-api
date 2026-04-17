@@ -407,10 +407,17 @@ class AsyncMqttBridge:
                     self._client.on_socket_open = self._on_socket_open_sync
                     self._client.on_socket_register_write = self._on_socket_register_write_sync
                     await self._loop.run_in_executor(None, self._client.reconnect)
+                except (OSError, TimeoutError) as exc:
+                    # Expected transient failures — panel offline, DNS miss, socket
+                    # timeout, refused connection. The exception type and errno are
+                    # the full diagnostic; paho/stdlib stack frames add no signal.
+                    # ssl.SSLError is an OSError subclass and falls in here too;
+                    # SSL misconfiguration would have failed at setup, so a
+                    # reconnect-time SSL error is handled as a transient failure.
+                    _LOGGER.warning("Reconnect failed (%s), retrying in %ss", exc, delay)
                 except Exception:  # pylint: disable=broad-exception-caught
-                    # paho can raise OSError, socket.gaierror, WebsocketConnectionError,
-                    # ssl.SSLError, and others depending on transport. Never let the
-                    # reconnect loop die — just log and keep backing off.
+                    # Unknown territory — keep the traceback so support tickets
+                    # are actionable. Never let the reconnect loop die.
                     _LOGGER.warning("Reconnect failed, retrying in %ss", delay, exc_info=True)
                 finally:
                     if self._client is not None:

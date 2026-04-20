@@ -58,6 +58,39 @@ def _parse_int(value: str, default: int = 0) -> int:
         return default
 
 
+def _derive_feedthrough(
+    circuits: dict[str, SpanCircuitSnapshot],
+    grid_power: float,
+    main_consumed: float,
+    main_produced: float,
+) -> tuple[float, float, float]:
+    """Derive feedthrough power/energy via Kirchhoff at the main bus.
+
+    The panel's native downstream-lugs readings are unreliable on MQTT:
+    active-power carries a systematic ~400-550 W offset and imported-energy
+    can emit non-monotonic / negative cumulative values. Main meter and
+    per-branch readings are accurate, so the energy-balance identity
+
+        P_main = P_feedthrough + Σ(branches, load-perspective)
+
+    yields a physically-consistent feedthrough value. Branches must be in
+    load-perspective (positive = consumption) — which is the library's
+    canonical sign convention, enforced by ``_build_circuit``. The
+    synthesized PV virtual circuit is already included with the correct sign,
+    and unmapped tab entries are zero-power, so both participate safely.
+
+    Returns ``(power_w, consumed_wh, produced_wh)``.
+    """
+    sigma_power = sum(c.instant_power_w for c in circuits.values())
+    sigma_consumed = sum(c.consumed_energy_wh for c in circuits.values())
+    sigma_produced = sum(c.produced_energy_wh for c in circuits.values())
+    return (
+        grid_power - sigma_power,
+        main_consumed - sigma_consumed,
+        main_produced - sigma_produced,
+    )
+
+
 class HomieDeviceConsumer:
     """Build SPAN-specific snapshots from accumulated Homie property state.
 
@@ -164,7 +197,23 @@ class HomieDeviceConsumer:
         unmapped = self._build_unmapped_tabs(updated_circuits)
         updated_circuits.update(unmapped)
 
-        return dataclasses.replace(cached, circuits=updated_circuits)
+        # Re-derive feedthrough using current Σcircuits against the cached
+        # main meter values. If upstream-lugs had been dirty the full-rebuild
+        # path would run instead, so the cached main values are still fresh.
+        feed_power, feed_consumed, feed_produced = _derive_feedthrough(
+            updated_circuits,
+            cached.instant_grid_power_w,
+            cached.main_meter_energy_consumed_wh,
+            cached.main_meter_energy_produced_wh,
+        )
+
+        return dataclasses.replace(
+            cached,
+            circuits=updated_circuits,
+            feedthrough_power_w=feed_power,
+            feedthrough_energy_consumed_wh=feed_consumed,
+            feedthrough_energy_produced_wh=feed_produced,
+        )
 
     def _find_lugs_node(self, direction: str) -> str | None:
         """Find the lugs node with a specific direction.
@@ -525,17 +574,13 @@ class HomieDeviceConsumer:
             l2_i = self._acc.get_prop(upstream_lugs, "l2-current")
             upstream_l2_current = _parse_float(l2_i) if l2_i else None
 
-        # Downstream lugs → feedthrough
-        feedthrough_power = 0.0
-        feedthrough_consumed = 0.0
-        feedthrough_produced = 0.0
+        # Downstream lugs → per-phase currents only.
+        # Feedthrough power/energy are derived from Kirchhoff further below;
+        # the panel's native active-power / imported-energy / exported-energy
+        # on downstream-lugs are unreliable (see comment at derivation site).
         downstream_l1_current: float | None = None
         downstream_l2_current: float | None = None
         if downstream_lugs is not None:
-            feedthrough_power = _parse_float(self._acc.get_prop(downstream_lugs, "active-power"))
-            feedthrough_consumed = _parse_float(self._acc.get_prop(downstream_lugs, "imported-energy"))
-            feedthrough_produced = _parse_float(self._acc.get_prop(downstream_lugs, "exported-energy"))
-
             dl1_i = self._acc.get_prop(downstream_lugs, "l1-current")
             downstream_l1_current = _parse_float(dl1_i) if dl1_i else None
             dl2_i = self._acc.get_prop(downstream_lugs, "l2-current")
@@ -573,6 +618,10 @@ class HomieDeviceConsumer:
         # Synthesize unmapped tab entries
         unmapped = self._build_unmapped_tabs(circuits)
         circuits.update(unmapped)
+
+        feedthrough_power, feedthrough_consumed, feedthrough_produced = _derive_feedthrough(
+            circuits, grid_power, main_consumed, main_produced
+        )
 
         # Battery, PV, and EVSE metadata
         battery = self._build_battery()

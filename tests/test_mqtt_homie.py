@@ -564,8 +564,11 @@ class TestHomieLugs:
         assert snapshot.main_meter_energy_produced_wh == 5000.0
 
     def test_feedthrough_derived_from_main_minus_circuits(self):
-        """Feedthrough is derived via Kirchhoff from main meter − Σcircuits.
+        """Feedthrough power/energy are derived via Kirchhoff.
 
+        Power: ``P_main − Σ(branches)``.
+        Energy: the *net* identity ``(main.consumed − main.produced) −
+        Σ(branch.net)``, then split into non-negative consumed/produced.
         The panel's native downstream-lugs active-power / imported-energy /
         exported-energy are ignored because they are unreliable on MQTT.
         """
@@ -591,10 +594,53 @@ class TestHomieLugs:
         snapshot = consumer.build_snapshot()
         # feedthrough_power = 5000 − 1500 = 3500
         assert snapshot.feedthrough_power_w == 3500.0
-        # feedthrough_consumed = 100000 − 3000 = 97000
-        assert snapshot.feedthrough_energy_consumed_wh == 97000.0
-        # feedthrough_produced = 8000 − 200 = 7800
-        assert snapshot.feedthrough_energy_produced_wh == 7800.0
+        # main_net = 100000 − 8000 = 92000; Σ(branch.net) = 3000 − 200 = 2800;
+        # feedthrough_net = 92000 − 2800 = 89200 (positive → consumed).
+        assert snapshot.feedthrough_energy_consumed_wh == 89200.0
+        assert snapshot.feedthrough_energy_produced_wh == 0.0
+
+    def test_feedthrough_energy_derivation_handles_pv_self_consumption(self):
+        """Per-direction Σ(circuit) can exceed main-meter per-direction totals
+        when circuits flow bidirectionally (the classic case: PV producing on
+        one branch while loads consume on another on the same main panel).
+        A naive per-direction subtraction would emit negative cumulative
+        feedthrough counters; the net-based derivation stays non-negative.
+
+        Scenario:
+          - Main meter: panel net-exported 500 Wh over its lifetime
+            (main.consumed = 0, main.produced = 500).
+          - PV circuit: produced 1000 Wh, consumed 0.
+          - Load circuit: consumed 500 Wh, produced 0.
+          - Σ(branch.consumed) = 500 > main.consumed; Σ(branch.produced) =
+            1000 > main.produced. Per-direction subtraction would yield
+            consumed = −500 and produced = −500 — both impossible.
+          - Net derivation: main_net = −500, Σ(branch.net) = −500,
+            feedthrough_net = 0 → consumed = 0, produced = 0.
+        """
+        pv_id = "aaaaaaaa-0000-0000-0000-000000000001"
+        load_id = "bbbbbbbb-0000-0000-0000-000000000002"
+        acc, consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                "lugs-upstream": {"type": TYPE_LUGS_UPSTREAM},
+                "lugs-downstream": {"type": TYPE_LUGS_DOWNSTREAM},
+                pv_id: {"type": TYPE_CIRCUIT},
+                load_id: {"type": TYPE_CIRCUIT},
+                "bess-0": {"type": TYPE_BESS},
+            }
+        )
+        acc.handle_message(f"{PREFIX}/lugs-upstream/imported-energy", "0.0")
+        acc.handle_message(f"{PREFIX}/lugs-upstream/exported-energy", "500.0")
+        # PV: produced 1000 Wh → imported-energy on the Homie wire.
+        acc.handle_message(f"{PREFIX}/{pv_id}/imported-energy", "1000.0")
+        acc.handle_message(f"{PREFIX}/{pv_id}/exported-energy", "0.0")
+        # Load: consumed 500 Wh → exported-energy on the Homie wire.
+        acc.handle_message(f"{PREFIX}/{load_id}/imported-energy", "0.0")
+        acc.handle_message(f"{PREFIX}/{load_id}/exported-energy", "500.0")
+
+        snapshot = consumer.build_snapshot()
+        assert snapshot.feedthrough_energy_consumed_wh == 0.0
+        assert snapshot.feedthrough_energy_produced_wh == 0.0
 
     def test_generic_lugs_with_direction_property(self):
         """Test fallback: generic TYPE_LUGS + direction property.
@@ -625,10 +671,11 @@ class TestHomieLugs:
         assert snapshot.instant_grid_power_w == 800.0
         assert snapshot.main_meter_energy_consumed_wh == 90000.0
         assert snapshot.main_meter_energy_produced_wh == 3000.0
-        # No circuits set up → Σ=0 → feedthrough = main directly.
+        # No circuits set up → Σ=0 → feedthrough_power = main directly;
+        # feedthrough net energy = 90000 − 3000 = 87000 (positive → consumed).
         assert snapshot.feedthrough_power_w == 800.0
-        assert snapshot.feedthrough_energy_consumed_wh == 90000.0
-        assert snapshot.feedthrough_energy_produced_wh == 3000.0
+        assert snapshot.feedthrough_energy_consumed_wh == 87000.0
+        assert snapshot.feedthrough_energy_produced_wh == 0.0
         # Downstream-lugs detection proven via per-phase currents.
         assert snapshot.downstream_l1_current_a == 7.5
         assert snapshot.downstream_l2_current_a == 6.2

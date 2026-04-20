@@ -69,25 +69,38 @@ def _derive_feedthrough(
     The panel's native downstream-lugs readings are unreliable on MQTT:
     active-power carries a systematic ~400-550 W offset and imported-energy
     can emit non-monotonic / negative cumulative values. Main meter and
-    per-branch readings are accurate, so the energy-balance identity
+    per-branch readings are accurate, so the energy-balance identities
 
-        P_main = P_feedthrough + Σ(branches, load-perspective)
+        P_main       = P_feedthrough       + Σ(branches, load-perspective)
+        E_main,net   = E_feedthrough,net   + Σ(branches, net)
 
-    yields a physically-consistent feedthrough value. Branches must be in
+    yield physically-consistent feedthrough values. Branches must be in
     load-perspective (positive = consumption) — which is the library's
     canonical sign convention, enforced by ``_build_circuit``. The
     synthesized PV virtual circuit is already included with the correct sign,
     and unmapped tab entries are zero-power, so both participate safely.
 
+    Cumulative feedthrough energy must be derived from the *net* identity
+    (imported - exported), not by subtracting per-direction counters
+    independently. A circuit can both consume and produce over time —
+    the classic case is PV self-consumption on the main panel, where
+    Σ(consumed) exceeds main.consumed and Σ(produced) exceeds main.produced
+    even when the net balance is correct. Per-direction subtraction would
+    emit negative cumulative counters in that regime. Instead we derive the
+    net feedthrough energy and split it into non-negative consumed/produced
+    components (only one direction is non-zero at any given snapshot, which
+    is the best a stateless derivation can produce).
+
     Returns ``(power_w, consumed_wh, produced_wh)``.
     """
     sigma_power = sum(c.instant_power_w for c in circuits.values())
-    sigma_consumed = sum(c.consumed_energy_wh for c in circuits.values())
-    sigma_produced = sum(c.produced_energy_wh for c in circuits.values())
+    sigma_net_energy = sum(c.consumed_energy_wh - c.produced_energy_wh for c in circuits.values())
+    main_net_energy = main_consumed - main_produced
+    feedthrough_net_energy = main_net_energy - sigma_net_energy
     return (
         grid_power - sigma_power,
-        main_consumed - sigma_consumed,
-        main_produced - sigma_produced,
+        max(feedthrough_net_energy, 0.0),
+        max(-feedthrough_net_energy, 0.0),
     )
 
 

@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.3] - 04/2026
+
+### Fixed
+
+- **Feedthrough values now derived via Kirchhoff instead of read from `downstream-lugs`** — `SpanPanelSnapshot.feedthrough_power_w`, `feedthrough_energy_consumed_wh`, and `feedthrough_energy_produced_wh` are computed as `main − Σ(branches)` inside
+  `HomieDeviceConsumer._build_snapshot` (and mirrored in the dirty-circuit rebuild path) rather than sourced from the native `energy.ebus.device.lugs.downstream` `active-power` / `imported-energy` / `exported-energy` properties. The native MQTT readings
+  exhibit a systematic ~400–550 W offset on `active-power` and can emit non-monotonic (including negative) cumulative values on `imported-energy`, making them unusable for either instantaneous power or lifetime energy accounting. Main-meter and per-branch
+  readings remain accurate, so Kirchhoff at the main bus produces a physically-consistent result: `P_main = P_feedthrough + Σ(branches, load-perspective)` for instantaneous power, and the same identity applied to _net_ energy
+  (`main.consumed − main.produced − Σ(branch.net)`) split into non-negative consumed / produced counters. Net-based energy handling is required because a per-direction subtraction would emit negative cumulative counters whenever circuits flow
+  bidirectionally (the classic case is PV self-consumption: `Σ(branch.consumed)` can exceed `main.consumed` even when the net balance is valid). The synthesized PV virtual circuit participates with the correct load-perspective sign, and unmapped tab
+  entries are zero-power, so both contribute safely to the sum. No public interface change — field names and types are unchanged; only the source of the values shifts. `downstream_l1_current_a` / `downstream_l2_current_a` continue to be read directly from
+  the downstream-lugs node — those per-phase readings are orthogonal to the defect. The underlying firmware defect is tracked upstream at [spanio/SPAN-API-Client-Docs#13](https://github.com/spanio/SPAN-API-Client-Docs/issues/13).
+
 ## [2.6.2] - 04/2026
 
 ### Changed

@@ -25,6 +25,44 @@ from span_panel_api import (
     register_v2,
 )
 
+# Same-repo diagnostic access to library internals: the purpose of this
+# script is to observe the raw panel-published downstream-lugs properties
+# alongside the library's Kirchhoff-derived feedthrough values, so we can
+# detect empirically when the upstream firmware defect is fixed (the SPAN
+# API is in beta and does not carry a version signal).
+from span_panel_api.mqtt.const import LUGS_DOWNSTREAM  # noqa: PLC2701
+
+
+def _parse_float_or_none(value: str | None) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _read_downstream_lugs_raw(client: SpanMqttClient) -> dict[str, float | None]:
+    """Read the pre-derivation downstream-lugs MQTT properties.
+
+    Reaches into the library's accumulator intentionally — these are the
+    raw values the library *stopped reading into the snapshot* in 2.6.3.
+    We surface them here so ``compare.py`` can flag when the firmware
+    offset collapses (indicating SPAN has shipped the upstream fix).
+    """
+    homie = client._homie  # noqa: SLF001
+    if homie is None:
+        return {"active_power_w": None, "imported_energy_wh": None, "exported_energy_wh": None}
+    node = homie._find_lugs_node(LUGS_DOWNSTREAM)  # noqa: SLF001
+    acc = homie._acc  # noqa: SLF001
+    if node is None:
+        return {"active_power_w": None, "imported_energy_wh": None, "exported_energy_wh": None}
+    return {
+        "active_power_w": _parse_float_or_none(acc.get_prop(node, "active-power")),
+        "imported_energy_wh": _parse_float_or_none(acc.get_prop(node, "imported-energy")),
+        "exported_energy_wh": _parse_float_or_none(acc.get_prop(node, "exported-energy")),
+    }
+
 
 def _circuit_to_dict(circuit_id: str, c: SpanCircuitSnapshot) -> dict[str, object]:
     return {
@@ -39,7 +77,10 @@ def _circuit_to_dict(circuit_id: str, c: SpanCircuitSnapshot) -> dict[str, objec
     }
 
 
-def _snapshot_to_dict(snap: SpanPanelSnapshot) -> dict[str, object]:
+def _snapshot_to_dict(
+    snap: SpanPanelSnapshot,
+    downstream_raw: dict[str, float | None],
+) -> dict[str, object]:
     return {
         "t": time.time(),
         "main_power_w": snap.instant_grid_power_w,
@@ -48,6 +89,7 @@ def _snapshot_to_dict(snap: SpanPanelSnapshot) -> dict[str, object]:
         "main_produced_wh": snap.main_meter_energy_produced_wh,
         "feedthrough_consumed_wh": snap.feedthrough_energy_consumed_wh,
         "feedthrough_produced_wh": snap.feedthrough_energy_produced_wh,
+        "downstream_lugs_raw": downstream_raw,
         "power_flow_pv": snap.power_flow_pv,
         "power_flow_battery": snap.power_flow_battery,
         "power_flow_grid": snap.power_flow_grid,
@@ -111,7 +153,9 @@ async def main() -> int:
         for i in range(args.samples):
             if i > 0:
                 await asyncio.sleep(args.interval)
-            samples.append(_snapshot_to_dict(await client.get_snapshot()))
+            snap = await client.get_snapshot()
+            raw = _read_downstream_lugs_raw(client)
+            samples.append(_snapshot_to_dict(snap, raw))
     finally:
         await client.close()
 

@@ -178,6 +178,25 @@ def _print_sample(idx: int, v1: dict[str, Any], v2: dict[str, Any]) -> None:
     print(f"    pv={_fmt(pfp, 9)}  battery={_fmt(pfb, 9)}  "
           f"grid={_fmt(pfg, 9)}  site={_fmt(pfs, 9)}")
 
+    # v2 raw downstream-lugs (pre-derivation) — captured directly from the
+    # MQTT accumulator before the library applies its Kirchhoff fix.
+    # Watch the delta vs derived to detect when the upstream firmware is
+    # patched (spanio/SPAN-API-Client-Docs#13). Because the SPAN API is in
+    # beta, there is no version signal that would announce the fix — we
+    # detect it empirically.
+    raw = v2.get("downstream_lugs_raw") or {}
+    raw_ap = raw.get("active_power_w")
+    raw_ie = raw.get("imported_energy_wh")
+    raw_ee = raw.get("exported_energy_wh")
+    print("\n  v2 downstream-lugs raw (pre-derivation, upstream-firmware view):")
+    delta_ap = (raw_ap - derived_v2) if raw_ap is not None else None
+    print(f"    active-power:       {_fmt(raw_ap, 12)}   "
+          f"Δ vs derived: {_fmt(delta_ap, 10)}")
+    print(f"    imported-energy:    {_fmt(raw_ie, 12)}   "
+          f"(library-derived consumed: {_fmt(float(v2['feedthrough_consumed_wh']), 10)})")
+    print(f"    exported-energy:    {_fmt(raw_ee, 12)}   "
+          f"(library-derived produced: {_fmt(float(v2['feedthrough_produced_wh']), 10)})")
+
     print("\n  energy net (Wh = consumed - produced):")
     print(f"{'    field':<44}{'v1':>12}{'v2':>12}{'Δ(v2-v1)':>12}")
     rows_e: list[tuple[str, float, float]] = [
@@ -189,8 +208,10 @@ def _print_sample(idx: int, v1: dict[str, Any], v2: dict[str, Any]) -> None:
     for label, a, b in rows_e:
         print(f"{'    ' + label:<44}{_fmt(a)}{_fmt(b)}{_fmt(b - a)}")
 
-    # Cross-api consistency: derived should match across v1 and v2
-    # Reported may disagree with derived (the "defect").
+    # Cross-API consistency: derived should match across v1 and v2.
+    # Note: v2 library >= 2.6.3 derives feedthrough, so `feed_v2 ==
+    # derived_v2` by construction — the defect signal now lives on the raw
+    # downstream-lugs values (see raw_ap / raw_ie / raw_ee above).
     flags: list[str] = []
     if abs(derived_v1 - derived_v2) > 100.0:
         flags.append(
@@ -198,22 +219,36 @@ def _print_sample(idx: int, v1: dict[str, Any], v2: dict[str, Any]) -> None:
             f"v1={derived_v1:+.1f} W vs v2={derived_v2:+.1f} W"
         )
     dp1 = derived_v1 - feed_v1
-    dp2 = derived_v2 - feed_v2
     if abs(dp1) > 100.0:
         flags.append(f"v1 reported feedthrough off Kirchhoff by {dp1:+.1f} W")
-    if abs(dp2) > 100.0:
-        flags.append(f"v2 reported feedthrough off Kirchhoff by {dp2:+.1f} W   <<< MQTT defect")
     if float(v1["feedthrough_consumed_wh"]) < 0:
         flags.append(
             f"v1 feedthrough_consumed_wh is NEGATIVE ({v1['feedthrough_consumed_wh']:.0f}) — "
             f"counter cannot decrease"
         )
     de1 = net_feed_der_v1 - net_feed_rpt_v1
-    de2 = net_feed_der_v2 - net_feed_rpt_v2
     if abs(de1) > 1000.0:
         flags.append(f"v1 reported net energy off Kirchhoff by {de1:+,.0f} Wh")
-    if abs(de2) > 1000.0:
-        flags.append(f"v2 reported net energy off Kirchhoff by {de2:+,.0f} Wh")
+
+    # Raw downstream-lugs vs derived: this is the upstream-firmware tracker.
+    # When SPAN ships the fix, raw_ap will converge to derived_v2 and raw_ie
+    # will stop emitting negative values.
+    if raw_ap is not None and delta_ap is not None:
+        if abs(delta_ap) > 100.0:
+            flags.append(
+                f"firmware downstream-lugs active-power still offset by "
+                f"{delta_ap:+.1f} W vs Kirchhoff — upstream defect present"
+            )
+        elif abs(delta_ap) < 50.0:
+            flags.append(
+                f"firmware downstream-lugs active-power within {abs(delta_ap):.1f} W of "
+                f"Kirchhoff — upstream defect MAY be fixed (confirm over sustained samples)"
+            )
+    if raw_ie is not None and raw_ie < 0.0:
+        flags.append(
+            f"firmware downstream-lugs imported-energy is NEGATIVE ({raw_ie:.0f} Wh) — "
+            f"upstream counter still broken"
+        )
 
     for f in flags:
         print(f"  ! {f}")

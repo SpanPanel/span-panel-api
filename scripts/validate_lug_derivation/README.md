@@ -12,7 +12,7 @@ Diagnostic harness that compares **v1 REST**, **v2 MQTT (via the current library
 - **`v2_reader.py`** — Captures N v2-MQTT snapshots from the current workspace install. Also reaches into the library's accumulator to grab the **raw** `downstream-lugs/active-power`, `imported-energy`, `exported-energy` — pre-derivation — for firmware-fix
   tracking.
 - **`compare.py`** — Driver. Runs both readers in parallel via `uv run`, zips samples by index, prints a side-by-side table per sample, and flags anomalies.
-- **`run_local.sh`** — Gitignored credentialed wrapper. Copy the template, edit the three placeholders, run.
+- **`run_local.sh.example`** — Template for the credentialed wrapper. Copy to `run_local.sh` (which is gitignored), fill in the three credential fields, run.
 
 ## Setup
 
@@ -21,7 +21,7 @@ Diagnostic harness that compares **v1 REST**, **v2 MQTT (via the current library
    - v1 token: existing pre-issued JWT (no re-registration needed).
    - v2 passphrase: `hopPassphrase` for `/api/v2/auth/register`.
 
-2. Edit `run_local.sh` (already gitignored, so credentials won't leak):
+2. Copy `run_local.sh.example` to `run_local.sh` (the latter is gitignored, so credentials won't leak), then edit:
 
    ```bash
    HOST="192.168.X.Y"

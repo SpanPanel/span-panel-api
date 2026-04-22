@@ -36,15 +36,8 @@ _LOGGER = logging.getLogger(__name__)
 # Static mapping: (node_type, property_id) → snapshot field path
 #
 # This encodes the library's internal knowledge of how _build_snapshot()
-# populates snapshot dataclass fields. For most fields the Homie property
-# is both the runtime source and the authority for unit/datatype. For the
-# feedthrough power/energy fields the runtime values are derived via
-# Kirchhoff from main meter - Σbranches (see ``_derive_feedthrough`` in
-# homie.py) and the downstream-lugs entries below contribute unit /
-# datatype only — the panel still publishes those properties (with the
-# correct schema units), they are just no longer read for their values.
-#
-# The mapping must be kept in sync with homie.py.
+# maps Homie properties to snapshot dataclass fields. The mapping must be
+# kept in sync with homie.py.
 # ---------------------------------------------------------------------------
 
 _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
@@ -68,13 +61,9 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
     (TYPE_LUGS_UPSTREAM, "l1-current", "panel.upstream_l1_current_a"),
     (TYPE_LUGS_UPSTREAM, "l2-current", "panel.upstream_l2_current_a"),
     # --- Downstream lugs → panel.* (feedthrough) -----------------------------
-    # feedthrough_power_w and feedthrough_energy_* are DERIVED at runtime
-    # (main - Σbranches via ``_derive_feedthrough``); these entries exist so
-    # the derived fields inherit the downstream-lugs schema unit/datatype.
     (TYPE_LUGS_DOWNSTREAM, "active-power", "panel.feedthrough_power_w"),
     (TYPE_LUGS_DOWNSTREAM, "imported-energy", "panel.feedthrough_energy_consumed_wh"),
     (TYPE_LUGS_DOWNSTREAM, "exported-energy", "panel.feedthrough_energy_produced_wh"),
-    # Per-phase currents below are read directly from downstream-lugs at runtime.
     (TYPE_LUGS_DOWNSTREAM, "l1-current", "panel.downstream_l1_current_a"),
     (TYPE_LUGS_DOWNSTREAM, "l2-current", "panel.downstream_l2_current_a"),
     # --- Circuit → circuit.* -------------------------------------------------

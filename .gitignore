@@ -34,6 +34,3 @@ dmypy.json
 coverage_output.log
 **/.DS_Store
 .local_coverage_data
-
-# Local credentialed runner for validate_lug_derivation
-scripts/validate_lug_derivation/run_local.sh

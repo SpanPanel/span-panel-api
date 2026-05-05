@@ -24,6 +24,7 @@ async def create_span_client(
     passphrase: str | None = None,
     mqtt_config: MqttClientConfig | None = None,
     serial_number: str | None = None,
+    port: int = 80,
 ) -> SpanMqttClient:
     """Create a SPAN Panel MQTT client.
 
@@ -32,6 +33,7 @@ async def create_span_client(
         passphrase: Panel passphrase for v2 registration.
         mqtt_config: Pre-built MQTT broker configuration.
         serial_number: Panel serial number (extracted from detection/registration if omitted).
+        port: HTTP port of the panel bootstrap API used for registration and detection.
 
     Returns:
         A connected-ready SpanMqttClient instance.
@@ -45,7 +47,7 @@ async def create_span_client(
     if mqtt_config is None:
         if passphrase is None:
             raise SpanPanelAuthError("Neither mqtt_config nor passphrase provided")
-        auth_response = await register_v2(host, _V2_CLIENT_NAME, passphrase)
+        auth_response = await register_v2(host, _V2_CLIENT_NAME, passphrase, port=port)
         mqtt_config = MqttClientConfig(
             broker_host=auth_response.ebus_broker_host,
             username=auth_response.ebus_broker_username,
@@ -59,11 +61,13 @@ async def create_span_client(
 
     if serial_number is None:
         # Try to detect from panel status
-        result = await detect_api_version(host)
+        result = await detect_api_version(host, port=port)
         if result.status_info is not None:
             serial_number = result.status_info.serial_number
 
     if serial_number is None:
         raise SpanPanelAuthError("serial_number is required for MQTT transport but could not be determined")
 
-    return SpanMqttClient(host, serial_number, mqtt_config)
+    client = SpanMqttClient(host, serial_number, mqtt_config, panel_http_port=port)
+    await client.connect()
+    return client

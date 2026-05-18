@@ -23,10 +23,11 @@ from paho.mqtt.properties import Properties
 from paho.mqtt.reasoncodes import ReasonCode
 
 from ..auth import download_ca_cert
-from ..exceptions import SpanPanelConnectionError, SpanPanelTimeoutError
+from ..exceptions import SpanPanelAPIError, SpanPanelConnectionError, SpanPanelTimeoutError
 from .async_client import AsyncMQTTClient
 from .const import (
     MQTT_CONNECT_TIMEOUT_S,
+    MQTT_FULL_REBUILD_AFTER_FAILURES,
     MQTT_KEEPALIVE_S,
     MQTT_RECONNECT_BACKOFF_MULTIPLIER,
     MQTT_RECONNECT_MAX_DELAY_S,
@@ -97,6 +98,7 @@ class AsyncMqttBridge:
 
         self._message_callback: Callable[[str, str], None] | None = None
         self._connection_callback: Callable[[bool], None] | None = None
+        self._pre_rebuild_callback: Callable[[], None] | None = None
 
     def is_connected(self) -> bool:
         """Return whether the MQTT client is currently connected."""
@@ -109,6 +111,44 @@ class AsyncMqttBridge:
     def set_connection_callback(self, callback: Callable[[bool], None]) -> None:
         """Set callback for connection state changes: callback(is_connected)."""
         self._connection_callback = callback
+
+    def set_pre_rebuild_callback(self, callback: Callable[[], None]) -> None:
+        """Set callback invoked just before the bridge rebuilds its paho client.
+
+        Used by SpanMqttClient to reset its Homie accumulator so any stale
+        in-memory state (e.g. cached `$state=disconnected`) is discarded
+        before the new client subscribes and retained messages flow in.
+
+        Callback runs synchronously inside `_rebuild_client` before the old
+        paho client is torn down. Exceptions are caught and logged so a
+        misbehaving subscriber cannot prevent the rebuild.
+        """
+        self._pre_rebuild_callback = callback
+
+    def _make_paho_client(self, ssl_context: ssl.SSLContext | None) -> AsyncMQTTClient:
+        """Build and wire a fresh paho client.
+
+        Shared by connect() (initial connect) and _rebuild_client() (in-loop
+        rebuild). Keeps the callback wiring in one place so a rebuild is
+        provably symmetric with initial connect.
+        """
+        client = AsyncMQTTClient(
+            callback_api_version=CallbackAPIVersion.VERSION2,
+            transport=self._transport,
+            reconnect_on_failure=False,
+        )
+        client.setup()
+        client.username_pw_set(self._username, self._password)
+        # Wire socket callbacks (async versions by default)
+        client.on_socket_close = self._async_on_socket_close
+        client.on_socket_unregister_write = self._async_on_socket_unregister_write
+        # Wire MQTT callbacks (run directly on event loop — no thread dispatch)
+        client.on_connect = self._on_connect
+        client.on_disconnect = self._on_disconnect
+        client.on_message = self._on_message
+        if ssl_context is not None:
+            client.tls_set_context(ssl_context)
+        return client
 
     async def connect(self) -> None:
         """Connect to the MQTT broker.
@@ -142,26 +182,7 @@ class AsyncMqttBridge:
             except (ssl.SSLError, ValueError) as exc:
                 raise SpanPanelConnectionError(f"Failed to build SSL context for {self._panel_host}") from exc
 
-        self._client = AsyncMQTTClient(
-            callback_api_version=CallbackAPIVersion.VERSION2,
-            transport=self._transport,
-            reconnect_on_failure=False,
-        )
-        self._client.setup()
-
-        self._client.username_pw_set(self._username, self._password)
-
-        # Wire socket callbacks (async versions by default)
-        self._client.on_socket_close = self._async_on_socket_close
-        self._client.on_socket_unregister_write = self._async_on_socket_unregister_write
-
-        # Wire MQTT callbacks (run directly on event loop — no thread dispatch)
-        self._client.on_connect = self._on_connect
-        self._client.on_disconnect = self._on_disconnect
-        self._client.on_message = self._on_message
-
-        if ssl_context is not None:
-            self._client.tls_set_context(ssl_context)
+        self._client = self._make_paho_client(ssl_context)
 
         # Connect in executor (blocking: DNS, TCP, TLS handshake).
         # During executor connect, socket callbacks bridge to the event
@@ -395,9 +416,132 @@ class AsyncMqttBridge:
 
     # -- Reconnection -------------------------------------------------------
 
+    async def _rebuild_client(self) -> bool:
+        """Tear down the paho client and rebuild it from scratch.
+
+        Replicates what a manual integration reload does without going
+        through HA's config_entry teardown. Re-fetches the panel CA,
+        builds a fresh paho client with the same callbacks, fires the
+        pre-rebuild callback so SpanMqttClient can reset its accumulator,
+        and submits an initial connect via the executor.
+
+        Returns True when the new client was built and the initial connect
+        was successfully submitted. Returns False on any failure (panel
+        unreachable, CA endpoint down, executor connect raised) — the
+        previous client is left in place and the reconnect loop continues
+        retrying with it.
+
+        Recovery target: CA rotation (firmware upgrade), stale paho client
+        internal state, stuck Homie accumulator. See the design doc at
+        SpanPanel_Docs/span-panel-api/2026-05-17-mqtt-ca-refresh-on-reconnect-design.md.
+        """
+        if self._loop is None:
+            return False
+
+        old_client = self._client
+
+        # Fetch fresh CA (TLS bridges only). Failure is non-fatal — old
+        # client stays in place and the loop retries on the next tick.
+        ssl_context: ssl.SSLContext | None = None
+        if self._use_tls:
+            try:
+                ca_pem = await download_ca_cert(self._panel_host, port=self._panel_http_port)
+                ssl_context = _build_ssl_context(ca_pem)
+            except (
+                OSError,
+                SpanPanelConnectionError,
+                SpanPanelTimeoutError,
+                SpanPanelAPIError,
+                ssl.SSLError,
+                ValueError,
+            ) as exc:
+                _LOGGER.warning("Client rebuild — CA fetch failed: %s", exc)
+                return False
+
+        # Fire pre-rebuild hook before we touch any state. SpanMqttClient
+        # uses this to discard its stale Homie accumulator so retained
+        # messages on the new subscription start from a clean slate.
+        if self._pre_rebuild_callback is not None:
+            try:
+                self._pre_rebuild_callback()
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.warning("Pre-rebuild callback raised", exc_info=True)
+
+        # Everything past this point is wrapped in a broad catch so that
+        # unexpected failures (paho construction errors, etc.) cannot kill
+        # the reconnect task. The whole point of self-heal is that the
+        # loop survives — we never want the recovery path itself to be a
+        # source of unrecoverable failure.
+        try:
+            # Best-effort teardown of the old paho client. paho's disconnect()
+            # is synchronous and only severs the socket; the object itself is
+            # no longer used.
+            if old_client is not None:
+                try:
+                    old_client.disconnect()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _LOGGER.debug("Old paho client disconnect raised", exc_info=True)
+
+            # Build fresh client and assign it BEFORE the executor await so
+            # that a CONNACK arriving during the await sees the right client.
+            # Without this, the _on_connect → re-subscribe path would route
+            # through self._client which would still be the (disconnected)
+            # old_client, and the new client's subscription would never run.
+            new_client = self._make_paho_client(ssl_context)
+            new_client.on_socket_open = self._on_socket_open_sync
+            new_client.on_socket_register_write = self._on_socket_register_write_sync
+            self._client = new_client
+
+            def _blocking_connect() -> None:
+                new_client.connect(
+                    host=self._host,
+                    port=self._port,
+                    keepalive=MQTT_KEEPALIVE_S,
+                )
+
+            try:
+                await self._loop.run_in_executor(None, _blocking_connect)
+            except asyncio.CancelledError:
+                # Bridge teardown or _on_connect cancelled us mid-rebuild.
+                # Restore the previous client reference so post-teardown
+                # state stays consistent, then re-raise — CancelledError
+                # must propagate to keep the loop's cancel semantics intact.
+                self._client = old_client
+                raise
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                _LOGGER.warning("Client rebuild — initial connect failed: %s", exc)
+                # Restore the previous client so the loop keeps retrying
+                # with what it had. The new client's socket was never opened.
+                self._client = old_client
+                return False
+            finally:
+                new_client.on_socket_open = self._async_on_socket_open
+                new_client.on_socket_register_write = self._async_on_socket_register_write
+
+            _LOGGER.info("MQTT client rebuilt for reconnect (TLS=%s)", self._use_tls)
+            return True
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # _make_paho_client raised, or some other unforeseen failure
+            # after the CA was fetched. Reconnect loop MUST survive — log
+            # with traceback for triage and leave whatever client reference
+            # is current in place. CancelledError is BaseException in 3.8+
+            # so it bypasses this clause and propagates naturally.
+            _LOGGER.warning("Client rebuild — unexpected error: %s", exc, exc_info=True)
+            return False
+
     async def _reconnect_loop(self) -> None:
-        """Reconnect with exponential backoff."""
+        """Reconnect with exponential backoff.
+
+        Every MQTT_FULL_REBUILD_AFTER_FAILURES consecutive non-SSL failures
+        (or on any ssl.SSLError), rebuild the paho client from scratch —
+        re-fetching the panel CA and resetting any stale in-memory state.
+        Mirrors what a manual integration reload does without going through
+        HA's config_entry teardown. The counter resets after every rebuild
+        attempt (success or fail) and on `_connected == True`, so the
+        cadence holds throughout extended outages.
+        """
         delay = MQTT_RECONNECT_MIN_DELAY_S
+        failures_since_rebuild_attempt = 0
         while self._should_reconnect:
             if not self._connected and self._client is not None:
                 try:
@@ -407,22 +551,37 @@ class AsyncMqttBridge:
                     self._client.on_socket_open = self._on_socket_open_sync
                     self._client.on_socket_register_write = self._on_socket_register_write_sync
                     await self._loop.run_in_executor(None, self._client.reconnect)
+                except ssl.SSLError as exc:
+                    # TLS verification failure — most likely a CA rotation
+                    # (firmware upgrade). ssl.SSLError must be caught before
+                    # OSError because it is an OSError subclass.
+                    _LOGGER.warning("Reconnect TLS failure (%s), rebuilding client", exc)
+                    await self._rebuild_client()
+                    failures_since_rebuild_attempt = 0
                 except (OSError, TimeoutError) as exc:
-                    # Expected transient failures — panel offline, DNS miss, socket
-                    # timeout, refused connection. The exception type and errno are
-                    # the full diagnostic; paho/stdlib stack frames add no signal.
-                    # ssl.SSLError is an OSError subclass and falls in here too;
-                    # SSL misconfiguration would have failed at setup, so a
-                    # reconnect-time SSL error is handled as a transient failure.
+                    # Expected transient failures — panel offline, DNS miss,
+                    # socket timeout, refused connection. paho also wraps
+                    # some TLS handshake errors as generic OSError on the
+                    # executor connect path; the rebuild after threshold
+                    # catches those.
+                    failures_since_rebuild_attempt += 1
                     _LOGGER.warning("Reconnect failed (%s), retrying in %ss", exc, delay)
+                    if failures_since_rebuild_attempt >= MQTT_FULL_REBUILD_AFTER_FAILURES:
+                        await self._rebuild_client()
+                        failures_since_rebuild_attempt = 0
                 except Exception:  # pylint: disable=broad-exception-caught
                     # Unknown territory — keep the traceback so support tickets
-                    # are actionable. Never let the reconnect loop die.
+                    # are actionable. Never let the reconnect loop die. No
+                    # rebuild here — unknown errors should not be masked
+                    # behind a recovery action whose effect we cannot predict.
+                    failures_since_rebuild_attempt += 1
                     _LOGGER.warning("Reconnect failed, retrying in %ss", delay, exc_info=True)
                 finally:
                     if self._client is not None:
                         self._client.on_socket_open = self._async_on_socket_open
                         self._client.on_socket_register_write = self._async_on_socket_register_write
+            else:
+                failures_since_rebuild_attempt = 0
             await asyncio.sleep(delay)
             delay = min(
                 delay * MQTT_RECONNECT_BACKOFF_MULTIPLIER,

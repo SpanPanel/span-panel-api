@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "2.6.2"
+version = "2.6.4"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -129,7 +129,6 @@ omit = [
     "*/tests/*",
     "*/.venv/*",
     "*/venv/*",
-    "src/span_panel_api/mqtt/connection.py",
 ]
 
 [tool.coverage.report]

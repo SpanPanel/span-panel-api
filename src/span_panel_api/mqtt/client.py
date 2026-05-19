@@ -63,6 +63,10 @@ class SpanMqttClient:
         self._field_metadata: dict[str, FieldMetadata] | None = None
         self._schema_hash: str | None = None
         self._previous_schema_types: HomieSchemaTypes | None = None
+        # Cached at connect() so the pre-rebuild hook can reconstruct the
+        # Homie accumulator with the same panel size after a transport-level
+        # rebuild. Schema cannot change within a session, so caching is safe.
+        self._panel_size: int | None = None
 
     def _require_homie(self) -> HomieDeviceConsumer:
         """Return the HomieDeviceConsumer, raising if not yet connected."""
@@ -115,6 +119,7 @@ class SpanMqttClient:
 
         # Fetch schema to determine panel size and build field metadata
         schema = await get_homie_schema(self._host, port=self._panel_http_port)
+        self._panel_size = schema.panel_size
         self._accumulator = HomiePropertyAccumulator(self._serial_number)
         self._homie = HomieDeviceConsumer(self._accumulator, schema.panel_size)
 
@@ -157,6 +162,11 @@ class SpanMqttClient:
         # Wire message handler
         self._bridge.set_message_callback(self._on_message)
         self._bridge.set_connection_callback(self._on_connection_change)
+        # Pre-rebuild hook: reset Homie accumulator before the bridge swaps
+        # paho clients, so retained messages on the new subscription start
+        # from a clean slate (no stale `$state=disconnected` cached from
+        # the original outage).
+        self._bridge.set_pre_rebuild_callback(self._on_pre_rebuild)
 
         # Connect to broker
         _LOGGER.debug("MQTT: Connecting to broker...")
@@ -368,6 +378,30 @@ class SpanMqttClient:
                 cb(connected)
             except Exception:  # pylint: disable=broad-exception-caught
                 _LOGGER.warning("Connection callback raised", exc_info=True)
+
+    def _on_pre_rebuild(self) -> None:
+        """Reset Homie accumulator state before the bridge rebuilds its paho client.
+
+        Called synchronously from the bridge's `_rebuild_client` before the
+        old paho client is torn down and the new one is wired up. Discards
+        any stale `$state=disconnected` cached during the outage so the
+        new subscription's retained messages repopulate from a clean slate.
+
+        Schema-derived state (`_field_metadata`, `_schema_hash`,
+        `_previous_schema_types`) is intentionally preserved — the Homie
+        schema cannot change within a session, so the cache remains valid
+        and a refetch would just add cost. If the panel reboots and the
+        schema actually changed, the existing drift-detection log fires on
+        the next session's `connect()`.
+        """
+        if self._panel_size is None:
+            # Pre-rebuild fired before connect() cached the panel size.
+            # Treat as a no-op — there is no accumulator state to reset
+            # because connect() never completed.
+            return
+        _LOGGER.debug("Pre-rebuild — resetting Homie accumulator")
+        self._accumulator = HomiePropertyAccumulator(self._serial_number)
+        self._homie = HomieDeviceConsumer(self._accumulator, self._panel_size)
 
     async def _wait_for_circuit_names(self, timeout: float) -> None:
         """Wait for all circuit-like nodes to have a ``name`` property.

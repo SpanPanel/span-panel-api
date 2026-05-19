@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.4] - 05/2026
+
+### Fixed
+
+- **MQTT reconnect now self-heals after persistent failure** — `AsyncMqttBridge._reconnect_loop` rebuilds the paho client from scratch (re-fetching the panel CA, constructing a fresh client, resetting the Homie accumulator) after
+  `MQTT_FULL_REBUILD_AFTER_FAILURES` (3) consecutive failures, or immediately on any `ssl.SSLError`. The previous behavior pinned the panel's CA certificate into the paho client once at `connect()` time and re-used it across all reconnect attempts; if the
+  panel rotated its private CA — most plausibly during a firmware upgrade — every subsequent reconnect raised `ssl.SSLCertVerificationError` (caught by the broad `OSError` clause and silently retried) and the bridge could not recover without a config-entry
+  reload. The rebuild mirrors what a manual reload does without going through HA's `config_entry` teardown, so entities stay registered and the integration's grace-period logic continues to apply unchanged. The threshold-cadence design (counter reset on
+  every rebuild attempt, success or fail) keeps the recovery path active throughout extended outages — multi-day disconnections recover whenever the panel becomes usable again, including if the CA rotates a second time mid-outage. See
+  `SpanPanel_Docs/span-panel-api/2026-05-17-mqtt-ca-refresh-on-reconnect-design.md` for the full design.
+
+### Added
+
+- **`AsyncMqttBridge._rebuild_client()`** — internal recovery method invoked by the reconnect loop on persistent failure. Re-fetches the panel CA via `download_ca_cert()`, builds a fresh paho client via the new `_make_paho_client()` factory, fires the
+  optional pre-rebuild callback so consumers can reset their own state, tears down the old client, and submits the initial connect via the executor. Restores the previous client on any failure.
+- **`AsyncMqttBridge.set_pre_rebuild_callback()`** — internal API for `SpanMqttClient` to register a hook that fires before each rebuild. Used to reset the Homie accumulator so retained messages on the new subscription start from a clean slate.
+- **`MQTT_FULL_REBUILD_AFTER_FAILURES`** constant in `mqtt/const.py`.
+
+### Changed
+
+- **`SpanPanelAPIError` now in the bridge's CA-fetch exception list** — a `download_ca_cert()` failure during rebuild (e.g. panel returns HTTP 502 mid-outage) is caught, logged at WARNING, and the loop continues retrying with the previous client instead of
+  letting the reconnect task die.
+
 ## [2.6.2] - 04/2026
 
 ### Changed

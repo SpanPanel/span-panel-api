@@ -14,10 +14,10 @@ import pytest
 from paho.mqtt.client import ConnectFlags, DisconnectFlags, MQTTMessage
 from paho.mqtt.reasoncodes import ReasonCode
 
-from span_panel_api.exceptions import SpanPanelConnectionError
+from span_panel_api.exceptions import SpanPanelAPIError, SpanPanelConnectionError
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
-from span_panel_api.mqtt.const import MQTT_RECONNECT_MIN_DELAY_S
+from span_panel_api.mqtt.const import MQTT_FULL_REBUILD_AFTER_FAILURES, MQTT_RECONNECT_MIN_DELAY_S
 from span_panel_api.mqtt.models import MqttClientConfig
 
 from conftest import MINIMAL_DESCRIPTION, SERIAL, TOPIC_PREFIX_SERIAL
@@ -417,3 +417,541 @@ class TestSpanMqttClientConnect:
         mqtt_client_mock.subscribe.assert_called_once()
 
         await client.close()
+
+
+# ---------------------------------------------------------------------------
+# AsyncMqttBridge — rebuild path (CA refresh / stale-state recovery)
+# ---------------------------------------------------------------------------
+
+
+async def _trigger_reconnect_loop(bridge: AsyncMqttBridge, mqtt_client_mock: MagicMock) -> None:
+    """Drive the bridge into its reconnect loop via an _on_disconnect edge."""
+    bridge._on_disconnect(
+        mqtt_client_mock,
+        None,
+        DisconnectFlags(is_disconnect_packet_from_server=True),
+        ReasonCode(packetType=2, aName="Success"),
+        None,
+    )
+    assert bridge._reconnect_task is not None
+
+
+class TestBridgeReconnectRebuild:
+    """Verify the reconnect loop's CA-refresh / client-rebuild path."""
+
+    @pytest.mark.asyncio
+    async def test_ssl_error_triggers_immediate_rebuild(
+        self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A single ssl.SSLError on reconnect should fire a rebuild without
+        waiting for the OSError threshold."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+
+        # CA fetch count from initial connect — verify subsequent rebuild
+        # increments it.
+        from span_panel_api.mqtt import connection as conn_mod
+
+        download_calls_before = conn_mod.download_ca_cert.call_count  # type: ignore[attr-defined]
+
+        mqtt_client_mock.reconnect.side_effect = [ssl.SSLError("verify failed"), 0]
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.2)
+
+        # Rebuild fetched a fresh CA exactly once.
+        assert conn_mod.download_ca_cert.call_count == download_calls_before + 1  # type: ignore[attr-defined]
+        # Old client got disconnected during rebuild.
+        mqtt_client_mock.disconnect.assert_called()
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_oserror_threshold_triggers_rebuild(
+        self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Repeated OSError reconnect failures fire rebuild only after the
+        configured threshold, not on the first or second failure."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+
+        from span_panel_api.mqtt import connection as conn_mod
+
+        download_calls_before = conn_mod.download_ca_cert.call_count  # type: ignore[attr-defined]
+
+        # Three OSErrors, then success on the fourth call.
+        mqtt_client_mock.reconnect.side_effect = [OSError("EOF"), OSError("EOF"), OSError("EOF"), 0]
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        # Allow several loop iterations.
+        await asyncio.sleep(0.6)
+
+        # Rebuild fired exactly once across the threshold-many failures.
+        assert conn_mod.download_ca_cert.call_count == download_calls_before + 1  # type: ignore[attr-defined]
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_repeated_ssl_errors_each_trigger_rebuild(
+        self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SSL errors are not throttled by a once-per-outage flag — each
+        independent SSL failure triggers its own rebuild attempt."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+
+        from span_panel_api.mqtt import connection as conn_mod
+
+        download_calls_before = conn_mod.download_ca_cert.call_count  # type: ignore[attr-defined]
+
+        # Sustained outage: every reconnect raises SSL, AND the rebuild's
+        # initial connect also fails (panel unreachable at connect time).
+        # This keeps the loop running so multiple SSL errors can accumulate.
+        mqtt_client_mock.reconnect.side_effect = ssl.SSLError("verify failed")
+        mqtt_client_mock.connect.side_effect = OSError("connection refused")
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.3)
+
+        # Each SSL error fires its own rebuild attempt (counted via CA fetch).
+        # Lower bound 2 because with min_delay=0.01 and 0.3s window we get
+        # plenty of iterations; assert > 1 to prove the no-throttle behavior.
+        rebuilds = conn_mod.download_ca_cert.call_count - download_calls_before  # type: ignore[attr-defined]
+        assert rebuilds >= 3, f"expected each SSL to trigger rebuild, got {rebuilds}"
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_extended_outage_cadence(self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+        """During an extended OSError outage, rebuilds keep firing every
+        MQTT_FULL_REBUILD_AFTER_FAILURES failures — not just once per outage."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.005)
+        bridge = _make_bridge()
+        await bridge.connect()
+
+        from span_panel_api.mqtt import connection as conn_mod
+
+        download_calls_before = conn_mod.download_ca_cert.call_count  # type: ignore[attr-defined]
+
+        # Sustained outage: every reconnect raises OSError and the rebuild's
+        # initial connect also fails (panel unreachable throughout).
+        mqtt_client_mock.reconnect.side_effect = OSError("EOF")
+        mqtt_client_mock.connect.side_effect = OSError("connection refused")
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.5)
+
+        # We expect at least 2 rebuilds (across 3*2 = 6+ failures).
+        rebuilds = conn_mod.download_ca_cert.call_count - download_calls_before  # type: ignore[attr-defined]
+        assert rebuilds >= 2, f"expected >=2 rebuilds during extended outage, got {rebuilds}"
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_failed_rebuild_preserves_old_client(
+        self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If download_ca_cert raises SpanPanelAPIError (e.g. HTTP 502),
+        the rebuild bails out and the previous paho client is preserved."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+        original_client = bridge._client
+        assert original_client is not None
+
+        from span_panel_api.mqtt import connection as conn_mod
+
+        # CA endpoint returns 502 — rebuild must not crash the loop.
+        monkeypatch.setattr(conn_mod, "download_ca_cert", AsyncMock(side_effect=SpanPanelAPIError("HTTP 502")))
+
+        mqtt_client_mock.reconnect.side_effect = ssl.SSLError("verify failed")
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.1)
+
+        # The old client reference is preserved — rebuild failed before tearing it down.
+        assert bridge._client is original_client
+        # Bridge teardown intent stays consistent — reconnect loop did not die.
+        assert bridge._should_reconnect is True
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_failed_rebuild_resets_counter(self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+        """After a failed rebuild attempt, the counter resets so the next
+        rebuild fires only after another threshold-many failures, not on
+        the immediate next iteration."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+
+        from span_panel_api.mqtt import connection as conn_mod
+
+        # First two CA fetches raise 502, then succeed.
+        ca_mock = AsyncMock(
+            side_effect=[
+                SpanPanelAPIError("HTTP 502"),
+                SpanPanelAPIError("HTTP 502"),
+                "FAKE-PEM",
+            ]
+        )
+        monkeypatch.setattr(conn_mod, "download_ca_cert", ca_mock)
+
+        # Drive a stream of OSErrors. The threshold should fire rebuild every
+        # MQTT_FULL_REBUILD_AFTER_FAILURES failures, and each attempt — even
+        # if it fails at CA fetch — must reset the counter so we don't try
+        # again on the very next iteration. Rebuild's connect must also fail
+        # so the third (successful) CA fetch doesn't end the outage.
+        mqtt_client_mock.reconnect.side_effect = OSError("EOF")
+        mqtt_client_mock.connect.side_effect = OSError("connection refused")
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.5)
+
+        # We should see at most one rebuild attempt per
+        # MQTT_FULL_REBUILD_AFTER_FAILURES iterations — not one per iteration.
+        # With ~50 iterations available in 0.5s and threshold=3, we expect
+        # roughly 16 rebuild attempts maximum, definitely not 50.
+        attempts = ca_mock.call_count
+        max_iterations = int(0.5 / 0.01)
+        assert (
+            attempts <= max_iterations // MQTT_FULL_REBUILD_AFTER_FAILURES + 2
+        ), f"expected throttling — got {attempts} rebuild attempts in {max_iterations} iterations"
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_no_ca_fetch_when_tls_disabled(self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-TLS bridges skip the CA fetch entirely on rebuild but still
+        rebuild the paho client (covering the stale-paho-state case)."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = AsyncMqttBridge(
+            host="broker.local",
+            port=1883,
+            username="user",
+            password="pass",
+            panel_host="192.168.1.1",
+            serial_number=SERIAL,
+            use_tls=False,
+        )
+        await bridge.connect()
+
+        from span_panel_api.mqtt import connection as conn_mod
+
+        # SSL error wouldn't happen on a plain-TCP bridge, but the threshold
+        # path still fires on persistent OSError. Rebuild's connect also
+        # fails to extend the outage.
+        mqtt_client_mock.reconnect.side_effect = OSError("EOF")
+        mqtt_client_mock.connect.side_effect = OSError("connection refused")
+
+        download_calls_before = conn_mod.download_ca_cert.call_count  # type: ignore[attr-defined]
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.2)
+
+        # CA never fetched on a non-TLS bridge, even though the rebuild path ran.
+        assert conn_mod.download_ca_cert.call_count == download_calls_before  # type: ignore[attr-defined]
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_pre_rebuild_callback_fires_before_old_client_torn_down(
+        self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The pre-rebuild callback must fire before the bridge calls
+        disconnect() on the old paho client, so SpanMqttClient can reset
+        its accumulator while the original client is still wired."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+
+        observed_order: list[str] = []
+
+        def pre_rebuild_hook() -> None:
+            # mqtt_client_mock.disconnect is the old-client teardown call.
+            observed_order.append(
+                "pre_rebuild_then_disconnect"
+                if mqtt_client_mock.disconnect.call_count == 0
+                else "pre_rebuild_after_disconnect"
+            )
+
+        bridge.set_pre_rebuild_callback(pre_rebuild_hook)
+
+        mqtt_client_mock.reconnect.side_effect = ssl.SSLError("verify failed")
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.1)
+
+        assert observed_order == ["pre_rebuild_then_disconnect"]
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_pre_rebuild_callback_exception_does_not_break_rebuild(
+        self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A misbehaving pre-rebuild callback must not abort the rebuild."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+
+        bridge.set_pre_rebuild_callback(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+
+        from span_panel_api.mqtt import connection as conn_mod
+
+        download_calls_before = conn_mod.download_ca_cert.call_count  # type: ignore[attr-defined]
+
+        mqtt_client_mock.reconnect.side_effect = ssl.SSLError("verify failed")
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.1)
+
+        # Rebuild proceeded despite callback raising.
+        assert conn_mod.download_ca_cert.call_count == download_calls_before + 1  # type: ignore[attr-defined]
+
+        await bridge.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# SpanMqttClient — accumulator reset on bridge rebuild
+# ---------------------------------------------------------------------------
+
+
+class TestSpanMqttClientAccumulatorReset:
+    """Verify the pre-rebuild hook resets Homie state while preserving schema."""
+
+    @pytest.mark.asyncio
+    async def test_pre_rebuild_resets_accumulator(self, mqtt_client_mock: MagicMock) -> None:
+        """`_on_pre_rebuild` replaces accumulator and consumer with fresh instances."""
+        client = _make_span_client()
+
+        connect_task = asyncio.create_task(client.connect())
+        await asyncio.sleep(0.05)
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
+        await asyncio.wait_for(connect_task, timeout=5.0)
+
+        original_accumulator = client._accumulator
+        original_homie = client._homie
+        assert original_accumulator is not None
+        assert original_homie is not None
+        # Accumulator is in a ready-ish state from the simulated Homie messages.
+        assert original_homie.is_ready() is True
+
+        # Trigger the pre-rebuild hook directly — same call the bridge makes.
+        client._on_pre_rebuild()
+
+        # New accumulator / consumer instances, fresh state.
+        assert client._accumulator is not original_accumulator
+        assert client._homie is not original_homie
+        assert client._homie is not None
+        assert client._homie.is_ready() is False
+
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_pre_rebuild_preserves_schema_state(self, mqtt_client_mock: MagicMock) -> None:
+        """Schema-derived state must survive across pre-rebuild — schema cannot change in-session."""
+        client = _make_span_client()
+
+        connect_task = asyncio.create_task(client.connect())
+        await asyncio.sleep(0.05)
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
+        await asyncio.wait_for(connect_task, timeout=5.0)
+
+        schema_hash_before = client._schema_hash
+        schema_types_before = client._previous_schema_types
+        field_metadata_before = client._field_metadata
+        panel_size_before = client._panel_size
+
+        client._on_pre_rebuild()
+
+        assert client._schema_hash == schema_hash_before
+        assert client._previous_schema_types == schema_types_before
+        assert client._field_metadata == field_metadata_before
+        assert client._panel_size == panel_size_before
+
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_pre_rebuild_before_connect_is_noop(self) -> None:
+        """If pre-rebuild somehow fires before connect() completes, the
+        handler must not raise — there is no accumulator state to reset."""
+        client = _make_span_client()
+        # _panel_size is None because connect() never ran.
+        client._on_pre_rebuild()
+        # No exception, no state changes.
+        assert client._accumulator is None
+        assert client._homie is None
+
+
+# ---------------------------------------------------------------------------
+# AsyncMqttBridge — rebuild path: hardening / edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestBridgeRebuildHardening:
+    """Edge-case coverage that guards against the reconnect task dying."""
+
+    @pytest.mark.asyncio
+    async def test_rebuild_returns_false_when_loop_is_none(self, mqtt_client_mock: MagicMock) -> None:
+        """_rebuild_client must short-circuit if the bridge has no loop yet
+        (e.g., called against a freshly-constructed but never-connected bridge)."""
+        bridge = _make_bridge()
+        # Skip connect() — bridge._loop is None.
+        result = await bridge._rebuild_client()
+        assert result is False
+        # No side effects: no client, no CA fetch, no warnings.
+        assert bridge._client is None
+
+    @pytest.mark.asyncio
+    async def test_make_paho_client_raising_does_not_kill_loop(
+        self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If _make_paho_client raises during rebuild, the reconnect loop
+        must survive — the broad exception catch returns False so the
+        outer loop keeps spinning across multiple rebuild attempts."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+
+        from span_panel_api.mqtt import connection as conn_mod
+
+        # _make_paho_client always raises during this outage — simulates an
+        # unexpected paho construction failure that would otherwise leak.
+        def always_boom(ssl_context: ssl.SSLContext | None) -> object:
+            raise RuntimeError("simulated paho construction failure")
+
+        monkeypatch.setattr(bridge, "_make_paho_client", always_boom)
+
+        mqtt_client_mock.reconnect.side_effect = ssl.SSLError("verify failed")
+
+        download_calls_before = conn_mod.download_ca_cert.call_count  # type: ignore[attr-defined]
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.15)
+
+        # The loop survived multiple iterations of (SSL error → rebuild attempt →
+        # _make_paho_client raises). If the broad catch were missing, the very
+        # first failure would have killed the task and download_ca_cert would
+        # have been called exactly once. We expect at least 2 attempts.
+        rebuild_attempts = conn_mod.download_ca_cert.call_count - download_calls_before  # type: ignore[attr-defined]
+        assert rebuild_attempts >= 2, f"reconnect loop died after _make_paho_client error: only {rebuild_attempts} attempts"
+        # Task is still alive and bridge teardown semantics intact.
+        assert bridge._reconnect_task is not None
+        assert not bridge._reconnect_task.done(), "reconnect loop died on _make_paho_client error"
+        assert bridge._should_reconnect is True
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_unknown_exception_does_not_trigger_rebuild(
+        self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The design explicitly says unknown exceptions in the reconnect path
+        must NOT trigger a rebuild — recovery actions should not be applied
+        to error classes whose effect we cannot predict."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+
+        from span_panel_api.mqtt import connection as conn_mod
+
+        download_calls_before = conn_mod.download_ca_cert.call_count  # type: ignore[attr-defined]
+
+        # A non-OSError, non-SSL exception falls through to the unknown branch.
+        class WeirdProtocolError(Exception):
+            pass
+
+        mqtt_client_mock.reconnect.side_effect = WeirdProtocolError("???")
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.2)
+
+        # Many failures should have accumulated but no rebuild fires —
+        # download_ca_cert call count is unchanged.
+        assert conn_mod.download_ca_cert.call_count == download_calls_before  # type: ignore[attr-defined]
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_pre_rebuild_callback_not_fired_when_ca_fetch_fails(
+        self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the CA fetch fails, the rebuild returns False *before* firing
+        the pre-rebuild callback. The accumulator should not be reset for a
+        rebuild that never happened."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+
+        from span_panel_api.mqtt import connection as conn_mod
+
+        callback_fired = {"n": 0}
+
+        def pre_rebuild_hook() -> None:
+            callback_fired["n"] += 1
+
+        bridge.set_pre_rebuild_callback(pre_rebuild_hook)
+
+        # CA fetch fails for all attempts during this outage.
+        monkeypatch.setattr(conn_mod, "download_ca_cert", AsyncMock(side_effect=SpanPanelAPIError("HTTP 502")))
+
+        mqtt_client_mock.reconnect.side_effect = ssl.SSLError("verify failed")
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.15)
+
+        # Pre-rebuild callback must not fire — the rebuild bailed at CA fetch.
+        assert callback_fired["n"] == 0
+
+        await bridge.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_client_assigned_before_executor_await(
+        self, mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The bridge's `_client` reference must point at the new client
+        before the executor await — so a CONNACK arriving during the await
+        sees the right client when callbacks dispatch to bridge.subscribe."""
+        monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+        bridge = _make_bridge()
+        await bridge.connect()
+        original_client = bridge._client
+
+        # Capture the state of self._client at the moment _blocking_connect runs.
+        # Since mqtt_client_mock is the same MagicMock instance for old and new
+        # client, we cannot distinguish identity — but we can confirm the
+        # assignment happens before the executor by checking that bridge._client
+        # is set when the mock's connect side_effect fires.
+        observed_client_at_connect: list[object | None] = []
+
+        original_connect = mqtt_client_mock.connect.side_effect
+
+        def capturing_connect(*args: object, **kwargs: object) -> int:
+            observed_client_at_connect.append(bridge._client)
+            assert callable(original_connect)
+            return original_connect(*args, **kwargs)  # type: ignore[no-any-return]
+
+        mqtt_client_mock.connect.side_effect = capturing_connect
+
+        mqtt_client_mock.reconnect.side_effect = ssl.SSLError("verify failed")
+
+        await _trigger_reconnect_loop(bridge, mqtt_client_mock)
+        await asyncio.sleep(0.15)
+
+        # The mock connect fired at least once with bridge._client already
+        # set (not None and not pointing somewhere else).
+        assert observed_client_at_connect, "rebuild path never invoked connect"
+        for observed in observed_client_at_connect:
+            assert observed is not None, "bridge._client was None at connect time"
+
+        # After the rebuild, the original client reference is still the same
+        # mock (singleton behavior of MagicMock.return_value).
+        assert bridge._client is original_client  # same MagicMock instance
+
+        await bridge.disconnect()

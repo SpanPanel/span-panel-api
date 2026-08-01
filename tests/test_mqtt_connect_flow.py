@@ -725,7 +725,8 @@ class TestSpanMqttClientAccumulatorReset:
 
     @pytest.mark.asyncio
     async def test_pre_rebuild_resets_accumulator(self, mqtt_client_mock: MagicMock) -> None:
-        """`_on_pre_rebuild` replaces accumulator and consumer with fresh instances."""
+        """`_on_pre_rebuild` replaces the adapter (and its internal accumulator/
+        consumer) with a fresh instance."""
         client = _make_span_client()
 
         connect_task = asyncio.create_task(client.connect())
@@ -734,21 +735,18 @@ class TestSpanMqttClientAccumulatorReset:
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
         await asyncio.wait_for(connect_task, timeout=5.0)
 
-        original_accumulator = client._accumulator
-        original_homie = client._homie
-        assert original_accumulator is not None
-        assert original_homie is not None
-        # Accumulator is in a ready-ish state from the simulated Homie messages.
-        assert original_homie.is_ready() is True
+        original_adapter = client._adapter
+        assert original_adapter is not None
+        # Adapter is in a ready-ish state from the simulated Homie messages.
+        assert original_adapter.is_ready() is True
 
         # Trigger the pre-rebuild hook directly — same call the bridge makes.
         client._on_pre_rebuild()
 
-        # New accumulator / consumer instances, fresh state.
-        assert client._accumulator is not original_accumulator
-        assert client._homie is not original_homie
-        assert client._homie is not None
-        assert client._homie.is_ready() is False
+        # New adapter instance, fresh state.
+        assert client._adapter is not original_adapter
+        assert client._adapter is not None
+        assert client._adapter.is_ready() is False
 
         await client.close()
 
@@ -785,8 +783,7 @@ class TestSpanMqttClientAccumulatorReset:
         # _panel_size is None because connect() never ran.
         client._on_pre_rebuild()
         # No exception, no state changes.
-        assert client._accumulator is None
-        assert client._homie is None
+        assert client._adapter is None
 
 
 # ---------------------------------------------------------------------------

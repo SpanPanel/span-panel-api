@@ -1,6 +1,6 @@
 """SPAN Panel MQTT client.
 
-Composes AsyncMqttBridge and HomieDeviceConsumer to implement
+Composes AsyncMqttBridge and a SchemaAdapter to implement
 SpanPanelClientProtocol, CircuitControlProtocol,
 PanelControlProtocol, and StreamingCapableProtocol.
 """
@@ -13,15 +13,13 @@ import contextlib
 import logging
 import time
 
-from span_panel_api._impl.schema_0.accumulator import HomiePropertyAccumulator
-from span_panel_api._impl.schema_0.const import PROPERTY_SET_TOPIC_FMT, TYPE_CORE, WILDCARD_TOPIC_FMT
-from span_panel_api._impl.schema_0.consumer import HomieDeviceConsumer
-from span_panel_api._impl.schema_0.field_metadata import build_field_metadata, log_schema_drift
+from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+from span_panel_api._impl.schema_0.field_metadata import log_schema_drift
 
 from ..auth import get_homie_schema
 from ..exceptions import SpanPanelConnectionError, SpanPanelServerError, SpanPanelStaleDataError
 from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
-from ..protocol import PanelCapability
+from ..protocol import PanelCapability, SchemaAdapter
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S
 from .models import MqttClientConfig
@@ -44,16 +42,17 @@ class SpanMqttClient:
         broker_config: MqttClientConfig,
         snapshot_interval: float = 1.0,
         panel_http_port: int = 80,
+        adapter_factory: Callable[[str, int], SchemaAdapter] = SchemaZeroAdapter,
     ) -> None:
         self._host = host
         self._serial_number = serial_number
         self._broker_config = broker_config
         self._snapshot_interval = snapshot_interval
         self._panel_http_port = panel_http_port
+        self._adapter_factory = adapter_factory
 
         self._bridge: AsyncMqttBridge | None = None
-        self._accumulator: HomiePropertyAccumulator | None = None
-        self._homie: HomieDeviceConsumer | None = None
+        self._adapter: SchemaAdapter | None = None
         self._streaming = False
         self._snapshot_callbacks: list[Callable[[SpanPanelSnapshot], Awaitable[None]]] = []
         self._connection_callbacks: list[Callable[[bool], None]] = []
@@ -70,11 +69,25 @@ class SpanMqttClient:
         # rebuild. Schema cannot change within a session, so caching is safe.
         self._panel_size: int | None = None
 
-    def _require_homie(self) -> HomieDeviceConsumer:
-        """Return the HomieDeviceConsumer, raising if not yet connected."""
-        if self._homie is None:
+    def _build_adapter(self, panel_size: int) -> SchemaAdapter:
+        """Construct the parser for this session.
+
+        Called from connect() and from the reconnect path — the only two
+        places a parser is built today.
+        """
+        self._adapter = self._adapter_factory(self._serial_number, panel_size)
+        return self._adapter
+
+    @property
+    def adapter(self) -> SchemaAdapter | None:
+        """Return the active schema adapter, or None before connect()."""
+        return self._adapter
+
+    def _require_adapter(self) -> SchemaAdapter:
+        """Return the SchemaAdapter, raising if not yet connected."""
+        if self._adapter is None:
             raise SpanPanelConnectionError("Client not connected — call connect() first")
-        return self._homie
+        return self._adapter
 
     # -- SpanPanelClientProtocol -------------------------------------------
 
@@ -109,7 +122,7 @@ class SpanMqttClient:
         1. Fetch Homie schema to determine panel size
         2. Create AsyncMqttBridge with broker credentials
         3. Connect to MQTT broker
-        4. Subscribe to ebus/5/{serial}/#
+        4. Subscribe to the adapter's topics
         5. Wait for $state==ready and $description parsed
 
         Raises:
@@ -122,8 +135,7 @@ class SpanMqttClient:
         # Fetch schema to determine panel size and build field metadata
         schema = await get_homie_schema(self._host, port=self._panel_http_port)
         self._panel_size = schema.panel_size
-        self._accumulator = HomiePropertyAccumulator(self._serial_number)
-        self._homie = HomieDeviceConsumer(self._accumulator, schema.panel_size)
+        self._build_adapter(schema.panel_size)
 
         # Detect schema drift from previous connection
         new_hash = schema.types_schema_hash
@@ -139,7 +151,7 @@ class SpanMqttClient:
         self._previous_schema_types = schema.types
 
         # Build transport-agnostic field metadata from schema
-        self._field_metadata = build_field_metadata(schema.types)
+        self._field_metadata = self._require_adapter().build_field_metadata(schema.types)
 
         _LOGGER.debug(
             "MQTT: Creating bridge to %s:%s (serial=%s)",
@@ -176,9 +188,10 @@ class SpanMqttClient:
         _LOGGER.debug("MQTT: Broker connected, subscribing...")
 
         # Subscribe to all device topics
-        wildcard = WILDCARD_TOPIC_FMT.format(serial=self._serial_number)
-        self._bridge.subscribe(wildcard, qos=0)
-        _LOGGER.debug("MQTT: Subscribed to %s, waiting for Homie ready...", wildcard)
+        topics = self._require_adapter().topics_to_subscribe()
+        for topic in topics:
+            self._bridge.subscribe(topic, qos=0)
+        _LOGGER.debug("MQTT: Subscribed to %s, waiting for Homie ready...", topics)
 
         # Wait for Homie ready state
         try:
@@ -205,14 +218,13 @@ class SpanMqttClient:
         if self._bridge is not None:
             await self._bridge.disconnect()
             self._bridge = None
-        self._accumulator = None
         self._live = False
 
     async def ping(self) -> bool:
         """Check if MQTT connection is alive and device is ready."""
-        if self._bridge is None or self._homie is None:
+        if self._bridge is None or self._adapter is None:
             return False
-        return self._bridge.is_connected() and self._homie.is_ready()
+        return self._bridge.is_connected() and self._adapter.is_ready()
 
     def register_connection_callback(self, callback: Callable[[bool], None]) -> Callable[[], None]:
         """Subscribe to broker connection state transitions.
@@ -244,13 +256,13 @@ class SpanMqttClient:
         No network call — snapshot is built from in-memory property values
         when the liveness checks pass.
         """
-        if self._bridge is None or self._homie is None:
+        if self._bridge is None or self._adapter is None:
             raise SpanPanelStaleDataError("Client not connected — call connect() first")
         if not self._bridge.is_connected():
             raise SpanPanelStaleDataError("MQTT broker disconnected")
-        if not self._homie.is_ready():
+        if not self._adapter.is_ready():
             raise SpanPanelStaleDataError("Homie device not ready")
-        return self._homie.build_snapshot()
+        return self._adapter.build_snapshot()
 
     # -- CircuitControlProtocol --------------------------------------------
 
@@ -261,33 +273,32 @@ class SpanMqttClient:
             circuit_id: Dashless UUID (matches wire format)
             state: "OPEN" or "CLOSED"
         """
-        topic = PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=circuit_id, prop="relay")
+        topic = self._require_adapter().set_circuit_relay_topic(circuit_id)
         if self._bridge is not None:
             self._bridge.publish(topic, state, qos=1)
 
     async def set_circuit_priority(self, circuit_id: str, priority: str) -> None:
-        """Publish shed-priority change for a circuit.
+        """Publish a circuit priority change.
 
         Args:
             circuit_id: Dashless UUID (matches wire format)
             priority: v2 enum value (NEVER, SOC_THRESHOLD, OFF_GRID)
         """
-        topic = PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=circuit_id, prop="shed-priority")
+        topic = self._require_adapter().set_circuit_priority_topic(circuit_id)
         if self._bridge is not None:
             self._bridge.publish(topic, priority, qos=1)
 
     # -- PanelControlProtocol ----------------------------------------------
 
     async def set_dominant_power_source(self, value: str) -> None:
-        """Publish dominant-power-source change to the core node.
+        """Publish a dominant power source change for the panel.
 
         Args:
             value: DPS enum value (GRID, BATTERY, NONE, GENERATOR, PV)
         """
-        core_node = self._require_homie().find_node_by_type(TYPE_CORE)
-        if core_node is None:
+        topic = self._require_adapter().set_dominant_power_source_topic()
+        if topic is None:
             raise SpanPanelServerError("Core node not found in panel topology")
-        topic = PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=core_node, prop="dominant-power-source")
         if self._bridge is not None:
             self._bridge.publish(topic, value, qos=1)
 
@@ -324,18 +335,18 @@ class SpanMqttClient:
 
     def _on_message(self, topic: str, payload: str) -> None:
         """Handle incoming MQTT message (called from asyncio loop)."""
-        homie = self._homie
-        if homie is None:
+        adapter = self._adapter
+        if adapter is None:
             return
-        was_ready = homie.is_ready()
-        homie.handle_message(topic, payload)
+        was_ready = adapter.is_ready()
+        adapter.handle_message(topic, payload)
 
         # Check if device just became ready
-        if not was_ready and homie.is_ready() and self._ready_event is not None:
+        if not was_ready and adapter.is_ready() and self._ready_event is not None:
             self._ready_event.set()
 
         # Dispatch snapshot callbacks if streaming
-        if self._streaming and homie.is_ready() and self._loop is not None:
+        if self._streaming and adapter.is_ready() and self._loop is not None:
             if self._snapshot_interval <= 0:
                 # Real-time mode — dispatch immediately, no debounce.
                 self._create_dispatch_task()
@@ -360,9 +371,9 @@ class SpanMqttClient:
         # edge-only (see the guard after this block).
         if connected:
             _LOGGER.debug("MQTT connection established")
-            if self._bridge is not None:
-                wildcard = WILDCARD_TOPIC_FMT.format(serial=self._serial_number)
-                self._bridge.subscribe(wildcard, qos=0)
+            if self._bridge is not None and self._adapter is not None:
+                for topic in self._adapter.topics_to_subscribe():
+                    self._bridge.subscribe(topic, qos=0)
         else:
             _LOGGER.debug("MQTT connection lost")
             # Cancel any pending snapshot-debounce timer so it cannot
@@ -402,27 +413,26 @@ class SpanMqttClient:
             # because connect() never completed.
             return
         _LOGGER.debug("Pre-rebuild — resetting Homie accumulator")
-        self._accumulator = HomiePropertyAccumulator(self._serial_number)
-        self._homie = HomieDeviceConsumer(self._accumulator, self._panel_size)
+        self._build_adapter(self._panel_size)
 
     async def _wait_for_circuit_names(self, timeout: float) -> None:
         """Wait for all circuit-like nodes to have a ``name`` property.
 
         Retained MQTT messages may arrive after the Homie device transitions
-        to ready. This polls the HomieDeviceConsumer at short intervals and
+        to ready. This polls the schema adapter at short intervals and
         returns as soon as all circuit names are populated, or when the
         timeout elapses (non-fatal — entities will use fallback names).
         """
-        homie = self._require_homie()
+        adapter = self._require_adapter()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            missing = homie.circuit_nodes_missing_names()
+            missing = adapter.circuit_nodes_missing_names()
             if not missing:
                 _LOGGER.debug("All circuit names received")
                 return
             await asyncio.sleep(_CIRCUIT_NAMES_POLL_INTERVAL_S)
 
-        still_missing = homie.circuit_nodes_missing_names()
+        still_missing = adapter.circuit_nodes_missing_names()
         if still_missing:
             _LOGGER.warning(
                 "Timed out waiting for circuit names (%d still missing): %s",
@@ -475,15 +485,15 @@ class SpanMqttClient:
         snapshot to subscribers after the fact.
         """
         bridge = self._bridge
-        homie = self._homie
-        if bridge is None or not bridge.is_connected() or homie is None or not homie.is_ready():
+        adapter = self._adapter
+        if bridge is None or not bridge.is_connected() or adapter is None or not adapter.is_ready():
             _LOGGER.debug(
                 "Skipping stale snapshot dispatch (bridge_connected=%s, homie_ready=%s)",
                 bridge is not None and bridge.is_connected(),
-                homie is not None and homie.is_ready(),
+                adapter is not None and adapter.is_ready(),
             )
             return
-        snapshot = homie.build_snapshot()
+        snapshot = adapter.build_snapshot()
         for cb in list(self._snapshot_callbacks):
             try:
                 await cb(snapshot)

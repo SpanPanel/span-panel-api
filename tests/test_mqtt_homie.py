@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from span_panel_api._impl.schema_0 import SchemaZeroAdapter
 from span_panel_api._impl.schema_0.accumulator import HomiePropertyAccumulator
 from span_panel_api._impl.schema_0.const import (
     TOPIC_PREFIX,
@@ -1016,6 +1017,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
 
         mock_bridge = MagicMock()
         client._bridge = mock_bridge
@@ -1034,6 +1036,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
 
         mock_bridge = MagicMock()
         client._bridge = mock_bridge
@@ -1052,13 +1055,12 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._accumulator = HomiePropertyAccumulator(SERIAL)
-        client._homie = HomieDeviceConsumer(client._accumulator, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
 
         # Populate the homie description so core node is known
         desc = _make_description(_core_description())
-        client._homie.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
-        client._homie.handle_message(f"{PREFIX}/$description", desc)
+        client._adapter.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        client._adapter.handle_message(f"{PREFIX}/$description", desc)
 
         mock_bridge = MagicMock()
         client._bridge = mock_bridge
@@ -1078,8 +1080,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._accumulator = HomiePropertyAccumulator(SERIAL)
-        client._homie = HomieDeviceConsumer(client._accumulator, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
 
         # No description loaded — core node not found
         with pytest.raises(SpanPanelServerError, match="Core node not found"):
@@ -1098,14 +1099,13 @@ class TestSpanMqttClientSnapshot:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._accumulator = HomiePropertyAccumulator(SERIAL)
-        client._homie = HomieDeviceConsumer(client._accumulator, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
         client._bridge = _ConnectedBridge()
 
-        # Manually ready the homie consumer
-        client._homie.handle_message(f"{PREFIX}/$state", "ready")
-        client._homie.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
-        client._homie.handle_message(f"{PREFIX}/core/software-version", "test-fw")
+        # Manually ready the adapter
+        client._adapter.handle_message(f"{PREFIX}/$state", "ready")
+        client._adapter.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
+        client._adapter.handle_message(f"{PREFIX}/core/software-version", "test-fw")
 
         snapshot = await client.get_snapshot()
         assert snapshot.serial_number == SERIAL
@@ -1129,11 +1129,10 @@ class TestSpanMqttClientSnapshot:
         mock_bridge = MagicMock()
         mock_bridge.is_connected.return_value = True
         client._bridge = mock_bridge
-        client._accumulator = HomiePropertyAccumulator(SERIAL)
-        client._homie = HomieDeviceConsumer(client._accumulator, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
 
-        client._homie.handle_message(f"{PREFIX}/$state", "ready")
-        client._homie.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
+        client._adapter.handle_message(f"{PREFIX}/$state", "ready")
+        client._adapter.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
 
         assert await client.ping() is True
 

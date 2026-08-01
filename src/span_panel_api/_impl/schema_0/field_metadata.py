@@ -17,8 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from ..models import FieldMetadata, HomieSchemaTypes
-from .const import (
+from span_panel_api._impl.schema_0.const import (
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_CORE,
@@ -29,6 +28,7 @@ from .const import (
     TYPE_POWER_FLOWS,
     TYPE_PV,
 )
+from span_panel_api.models import FieldMetadata, HomieSchemaTypes
 
 _LOGGER = logging.getLogger(__name__)
 

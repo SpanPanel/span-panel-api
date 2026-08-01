@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from span_panel_api.models import FieldMetadata
-from span_panel_api.mqtt.field_metadata import build_field_metadata, log_schema_drift
+from span_panel_api._impl.schema_0.field_metadata import build_field_metadata, log_schema_drift
 
 
 def _make_schema_types() -> dict[str, dict[str, object]]:

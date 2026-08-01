@@ -8,10 +8,10 @@ import pytest
 
 from span_panel_api.exceptions import SpanPanelError, SpanPanelStaleDataError
 from span_panel_api.models import SpanPanelSnapshot
+from span_panel_api._impl.schema_0.const import WILDCARD_TOPIC_FMT
+from span_panel_api._impl.schema_0.consumer import HomieDeviceConsumer
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
-from span_panel_api.mqtt.const import WILDCARD_TOPIC_FMT
-from span_panel_api.mqtt.homie import HomieDeviceConsumer
 from span_panel_api.mqtt.models import MqttClientConfig
 
 

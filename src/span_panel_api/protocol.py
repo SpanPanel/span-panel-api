@@ -83,8 +83,11 @@ class StreamingCapableProtocol(Protocol):
 class SchemaAdapter(Protocol):
     """Parser for a single data-model-major schema.
 
-    Frozen within a major version of this package. Every method here is called
-    by SpanMqttClient; nothing else in the bootstrap knows the wire format.
+    Frozen within a major version of this package. Most methods here are
+    called by SpanMqttClient, which is the only bootstrap code that knows
+    the wire format; ``find_node_by_type`` and ``register_property_callback``
+    are not called by the bootstrap at all — they exist for external
+    consumers of the active adapter.
     """
 
     schema_major: str

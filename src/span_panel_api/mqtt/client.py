@@ -15,7 +15,7 @@ import logging
 import time
 
 from span_panel_api._impl.schema_0 import SchemaZeroAdapter
-from span_panel_api._impl.schema_0.field_metadata import log_schema_drift
+from span_panel_api.schema_drift import log_schema_drift
 
 from ..adapters import discover_adapters
 from ..auth import get_homie_schema
@@ -86,7 +86,13 @@ class SpanMqttClient:
 
     @property
     def adapter(self) -> SchemaAdapter | None:
-        """Return the active schema adapter, or None before connect()."""
+        """Return the active schema adapter, or None before connect().
+
+        On transport rebuild (see ``_on_pre_rebuild``), the adapter instance
+        is replaced with a fresh one — any callback registered via
+        ``adapter.register_property_callback(...)`` on the old instance does
+        not survive the rebuild and must be re-registered on the new one.
+        """
         return self._adapter
 
     @property

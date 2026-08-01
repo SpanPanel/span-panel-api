@@ -12,7 +12,7 @@ from enum import Flag, auto
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from .models import FieldMetadata, SpanPanelSnapshot
+    from .models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
 
 
 class PanelCapability(Flag):
@@ -77,3 +77,37 @@ class StreamingCapableProtocol(Protocol):
     async def start_streaming(self) -> None: ...
 
     async def stop_streaming(self) -> None: ...
+
+
+@runtime_checkable
+class SchemaAdapter(Protocol):
+    """Parser for a single data-model-major schema.
+
+    Frozen within a major version of this package. Every method here is called
+    by SpanMqttClient; nothing else in the bootstrap knows the wire format.
+    """
+
+    schema_major: str
+    SUPPORTS_DATA_MODEL_VERSIONS: tuple[str, str]
+
+    def topics_to_subscribe(self) -> list[str]: ...
+
+    def handle_message(self, topic: str, payload: str) -> None: ...
+
+    def is_ready(self) -> bool: ...
+
+    def build_snapshot(self) -> SpanPanelSnapshot: ...
+
+    def build_field_metadata(self, schema_types: HomieSchemaTypes) -> dict[str, FieldMetadata]: ...
+
+    def circuit_nodes_missing_names(self) -> list[str]: ...
+
+    def find_node_by_type(self, type_str: str) -> str | None: ...
+
+    def set_circuit_relay_topic(self, circuit_id: str) -> str: ...
+
+    def set_circuit_priority_topic(self, circuit_id: str) -> str: ...
+
+    def set_dominant_power_source_topic(self) -> str | None: ...
+
+    def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]: ...

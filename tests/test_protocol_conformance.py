@@ -46,3 +46,46 @@ class TestMqttProtocolConformance:
     def test_satisfies_streaming_protocol(self) -> None:
         if not issubclass(SpanMqttClient, StreamingCapableProtocol):
             raise TypeError("SpanMqttClient does not satisfy StreamingCapableProtocol")
+
+
+def test_schema_adapter_declares_its_methods() -> None:
+    """The protocol must name every method SpanMqttClient calls on its parser."""
+    from span_panel_api.protocol import SchemaAdapter
+
+    for name in (
+        "topics_to_subscribe",
+        "handle_message",
+        "is_ready",
+        "build_snapshot",
+        "build_field_metadata",
+        "circuit_nodes_missing_names",
+        "find_node_by_type",
+        "set_circuit_relay_topic",
+        "set_circuit_priority_topic",
+        "set_dominant_power_source_topic",
+        "register_property_callback",
+    ):
+        assert hasattr(SchemaAdapter, name), f"SchemaAdapter is missing method {name}"
+
+
+def test_schema_adapter_declares_its_class_attributes() -> None:
+    """`schema_major` and `SUPPORTS_DATA_MODEL_VERSIONS` are annotation-only members.
+
+    A bare annotation on a Protocol creates no class attribute, so `hasattr` is
+    False for them even when correctly declared — they must be checked through
+    `__annotations__` instead.
+    """
+    from span_panel_api.protocol import SchemaAdapter
+
+    for name in ("schema_major", "SUPPORTS_DATA_MODEL_VERSIONS"):
+        assert name in SchemaAdapter.__annotations__, f"SchemaAdapter is missing attribute {name}"
+
+
+def test_adapter_missing_error_reports_what_is_installed() -> None:
+    from span_panel_api.exceptions import SpanPanelAdapterMissingError
+
+    err = SpanPanelAdapterMissingError(needed="schema_1", reason="data-model-version='1.0'", available=["schema_0"])
+    assert err.needed == "schema_1"
+    assert err.available == ["schema_0"]
+    assert "schema_1" in str(err)
+    assert "schema_0" in str(err)

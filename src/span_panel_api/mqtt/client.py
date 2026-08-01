@@ -10,12 +10,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
+from importlib.metadata import version
 import logging
 import time
 
 from span_panel_api._impl.schema_0 import SchemaZeroAdapter
 from span_panel_api._impl.schema_0.field_metadata import log_schema_drift
 
+from ..adapters import discover_adapters
 from ..auth import get_homie_schema
 from ..exceptions import SpanPanelConnectionError, SpanPanelServerError, SpanPanelStaleDataError
 from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
@@ -68,6 +70,10 @@ class SpanMqttClient:
         # Homie accumulator with the same panel size after a transport-level
         # rebuild. Schema cannot change within a session, so caching is safe.
         self._panel_size: int | None = None
+        # Diagnostics — the factory overwrites these after adapter selection.
+        # Defaults describe a client built directly (bypassing create_span_client).
+        self._data_model_version: str | None = None
+        self._schema_dispatch_reason: str = "not dispatched"
 
     def _build_adapter(self, panel_size: int) -> SchemaAdapter:
         """Construct the parser for this session.
@@ -82,6 +88,26 @@ class SpanMqttClient:
     def adapter(self) -> SchemaAdapter | None:
         """Return the active schema adapter, or None before connect()."""
         return self._adapter
+
+    @property
+    def schema_major(self) -> str | None:
+        """Return the active adapter's schema major, or None before connect()."""
+        return self._adapter.schema_major if self._adapter is not None else None
+
+    @property
+    def data_model_version(self) -> str | None:
+        """Return the panel's observed data-model-version, or None if absent/not yet dispatched."""
+        return self._data_model_version
+
+    @property
+    def schema_dispatch_reason(self) -> str:
+        """Return the human-readable reason the active adapter was selected."""
+        return self._schema_dispatch_reason
+
+    @property
+    def available_adapters(self) -> list[str]:
+        """Return the sorted keys of every schema adapter discovered in this process."""
+        return sorted(discover_adapters())
 
     def _require_adapter(self) -> SchemaAdapter:
         """Return the SchemaAdapter, raising if not yet connected."""
@@ -135,7 +161,16 @@ class SpanMqttClient:
         # Fetch schema to determine panel size and build field metadata
         schema = await get_homie_schema(self._host, port=self._panel_http_port)
         self._panel_size = schema.panel_size
-        self._build_adapter(schema.panel_size)
+        adapter = self._build_adapter(schema.panel_size)
+
+        _LOGGER.info(
+            "MQTT adapter selected: %s (span-panel-api %s)\n  data-model-version: %r\n  reason: %s\n  available: %s",
+            adapter.schema_major,
+            version("span-panel-api"),
+            self._data_model_version,
+            self._schema_dispatch_reason,
+            sorted(discover_adapters()),
+        )
 
         # Detect schema drift from previous connection
         new_hash = schema.types_schema_hash

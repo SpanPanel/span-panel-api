@@ -22,6 +22,9 @@ Issues = "https://github.com/SpanPanel/span-panel-api/issues"
 [project.scripts]
 format-markdown = "scripts.format_markdown:main"
 
+[project.entry-points."span_panel_api.schema_adapters"]
+schema_0 = "span_panel_api._impl.schema_0:SchemaZeroAdapter"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",

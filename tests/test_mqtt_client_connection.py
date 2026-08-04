@@ -8,10 +8,9 @@ import pytest
 
 from span_panel_api.exceptions import SpanPanelError, SpanPanelStaleDataError
 from span_panel_api.models import SpanPanelSnapshot
+from span_panel_api._impl.schema_0.const import WILDCARD_TOPIC_FMT
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
-from span_panel_api.mqtt.const import WILDCARD_TOPIC_FMT
-from span_panel_api.mqtt.homie import HomieDeviceConsumer
 from span_panel_api.mqtt.models import MqttClientConfig
 
 
@@ -44,15 +43,15 @@ class _FakeBridge(AsyncMqttBridge):
         self.subscribed_topics.append((topic, qos))
 
 
-class _FakeHomie(HomieDeviceConsumer):
-    """Minimal Homie stub for get_snapshot() tests.
+class _FakeAdapter:
+    """Minimal SchemaAdapter stub for get_snapshot()/resubscribe tests.
 
-    Bypasses HomieDeviceConsumer.__init__ — only is_ready() and
-    build_snapshot() are invoked on this stub.
+    Only the methods SpanMqttClient actually calls on the adapter are
+    implemented: is_ready() and build_snapshot() for liveness/dispatch
+    tests, topics_to_subscribe() for resubscribe tests.
     """
 
     def __init__(self, ready: bool = True, snapshot: SpanPanelSnapshot | None = None) -> None:
-        # Intentionally do not call super().__init__ — avoids accumulator setup.
         self._ready_flag = ready
         self._snapshot = snapshot
 
@@ -61,8 +60,11 @@ class _FakeHomie(HomieDeviceConsumer):
 
     def build_snapshot(self) -> SpanPanelSnapshot:
         if self._snapshot is None:
-            raise RuntimeError("_FakeHomie: no snapshot configured")
+            raise RuntimeError("_FakeAdapter: no snapshot configured")
         return self._snapshot
+
+    def topics_to_subscribe(self) -> list[str]:
+        return [WILDCARD_TOPIC_FMT.format(serial="test-serial")]
 
 
 class TestRegisterConnectionCallback:
@@ -210,6 +212,7 @@ class TestConnectionEventDispatch:
         client = _make_client()
         bridge = _FakeBridge(connected=True)
         client._bridge = bridge
+        client._adapter = _FakeAdapter()
         client._live = False  # was offline
         calls: list[bool] = []
         client.register_connection_callback(calls.append)
@@ -231,6 +234,7 @@ class TestConnectionEventDispatch:
         client = _make_client()
         bridge = _FakeBridge(connected=True)
         client._bridge = bridge
+        client._adapter = _FakeAdapter()
         client._live = True  # already online
         calls: list[bool] = []
         client.register_connection_callback(calls.append)
@@ -278,7 +282,7 @@ class TestGetSnapshotLiveness:
     async def test_raises_stale_when_bridge_none(self) -> None:
         client = _make_client()
         client._bridge = None
-        client._homie = _FakeHomie(ready=True)
+        client._adapter = _FakeAdapter(ready=True)
 
         with pytest.raises(SpanPanelStaleDataError) as exc_info:
             await client.get_snapshot()
@@ -287,7 +291,7 @@ class TestGetSnapshotLiveness:
     async def test_raises_stale_when_homie_none(self) -> None:
         client = _make_client()
         client._bridge = _FakeBridge(connected=True)
-        client._homie = None
+        client._adapter = None
 
         with pytest.raises(SpanPanelStaleDataError) as exc_info:
             await client.get_snapshot()
@@ -296,7 +300,7 @@ class TestGetSnapshotLiveness:
     async def test_raises_stale_when_broker_disconnected(self) -> None:
         client = _make_client()
         client._bridge = _FakeBridge(connected=False)
-        client._homie = _FakeHomie(ready=True)
+        client._adapter = _FakeAdapter(ready=True)
 
         with pytest.raises(SpanPanelStaleDataError) as exc_info:
             await client.get_snapshot()
@@ -305,7 +309,7 @@ class TestGetSnapshotLiveness:
     async def test_raises_stale_when_homie_not_ready(self) -> None:
         client = _make_client()
         client._bridge = _FakeBridge(connected=True)
-        client._homie = _FakeHomie(ready=False)
+        client._adapter = _FakeAdapter(ready=False)
 
         with pytest.raises(SpanPanelStaleDataError) as exc_info:
             await client.get_snapshot()
@@ -315,7 +319,7 @@ class TestGetSnapshotLiveness:
         sentinel = _make_sentinel_snapshot()
         client = _make_client()
         client._bridge = _FakeBridge(connected=True)
-        client._homie = _FakeHomie(ready=True, snapshot=sentinel)
+        client._adapter = _FakeAdapter(ready=True, snapshot=sentinel)
 
         snapshot = await client.get_snapshot()
         assert snapshot is sentinel
@@ -323,7 +327,7 @@ class TestGetSnapshotLiveness:
     async def test_raised_exception_is_span_panel_error(self) -> None:
         client = _make_client()
         client._bridge = None
-        client._homie = None
+        client._adapter = None
 
         with pytest.raises(SpanPanelError):
             await client.get_snapshot()
@@ -355,7 +359,7 @@ class TestStaleSnapshotDispatchGuard:
         snapshot_sentinel = _make_sentinel_snapshot()
         client = _make_client()
         client._bridge = _FakeBridge(connected=False)
-        client._homie = _FakeHomie(ready=True, snapshot=snapshot_sentinel)
+        client._adapter = _FakeAdapter(ready=True, snapshot=snapshot_sentinel)
 
         calls: list[SpanPanelSnapshot] = []
 
@@ -375,7 +379,7 @@ class TestStaleSnapshotDispatchGuard:
         snapshot_sentinel = _make_sentinel_snapshot()
         client = _make_client()
         client._bridge = _FakeBridge(connected=True)
-        client._homie = _FakeHomie(ready=False, snapshot=snapshot_sentinel)
+        client._adapter = _FakeAdapter(ready=False, snapshot=snapshot_sentinel)
 
         calls: list[SpanPanelSnapshot] = []
 
@@ -393,7 +397,7 @@ class TestStaleSnapshotDispatchGuard:
         snapshot_sentinel = _make_sentinel_snapshot()
         client = _make_client()
         client._bridge = _FakeBridge(connected=True)
-        client._homie = _FakeHomie(ready=True, snapshot=snapshot_sentinel)
+        client._adapter = _FakeAdapter(ready=True, snapshot=snapshot_sentinel)
 
         calls: list[SpanPanelSnapshot] = []
 
@@ -429,3 +433,56 @@ class TestStaleSnapshotDispatchGuard:
 
         assert handle.cancelled is True
         assert client._snapshot_timer is None
+
+
+def test_adapter_is_none_before_connect() -> None:
+    """The parser needs panel_size, which only connect() knows, so there is no
+    adapter until then — mirroring today's `self._homie = None`."""
+    from span_panel_api.mqtt.client import SpanMqttClient
+    from span_panel_api.mqtt.models import MqttClientConfig
+
+    client = SpanMqttClient(
+        "192.0.2.10", "sim-40t-001", MqttClientConfig(broker_host="192.0.2.10", username="test", password="test")
+    )
+
+    assert client.adapter is None
+
+
+def test_client_defaults_to_the_schema_zero_factory() -> None:
+    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+    from span_panel_api.mqtt.client import SpanMqttClient
+    from span_panel_api.mqtt.models import MqttClientConfig
+
+    client = SpanMqttClient(
+        "192.0.2.10", "sim-40t-001", MqttClientConfig(broker_host="192.0.2.10", username="test", password="test")
+    )
+
+    assert client._adapter_factory is SchemaZeroAdapter
+
+
+def test_injected_factory_receives_serial_and_panel_size() -> None:
+    """The factory must be called with the panel_size discovered at connect,
+    not a placeholder — panel_size drives unmapped-tab computation."""
+    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+    from span_panel_api.mqtt.client import SpanMqttClient
+    from span_panel_api.mqtt.models import MqttClientConfig
+
+    seen: list[tuple[str, int]] = []
+
+    def factory(serial_number: str, panel_size: int) -> SchemaZeroAdapter:
+        seen.append((serial_number, panel_size))
+        return SchemaZeroAdapter(serial_number=serial_number, panel_size=panel_size)
+
+    client = SpanMqttClient(
+        "192.0.2.10",
+        "sim-40t-001",
+        MqttClientConfig(broker_host="192.0.2.10", username="test", password="test"),
+        adapter_factory=factory,
+    )
+
+    # Exercise the construction path directly rather than standing up a broker.
+    client._panel_size = 40
+    client._build_adapter(40)
+
+    assert seen == [("sim-40t-001", 40)]
+    assert isinstance(client.adapter, SchemaZeroAdapter)

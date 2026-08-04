@@ -40,3 +40,17 @@ class SpanPanelStaleDataError(SpanPanelError):
     but data cannot be trusted right now (broker disconnected, or the Homie
     device has declared $state=disconnected/lost).
     """
+
+
+class SpanPanelAdapterMissingError(SpanPanelError):
+    """No installed adapter covers the schema this panel publishes."""
+
+    def __init__(self, needed: str, reason: str, available: list[str]) -> None:
+        self.needed = needed
+        self.reason = reason
+        self.available = available
+        super().__init__(
+            f"Panel requires adapter {needed!r} (reason: {reason}); "
+            f"installed adapters: {sorted(available)}. "
+            "Update the integration or install the missing adapter package."
+        )

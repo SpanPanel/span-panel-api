@@ -42,6 +42,29 @@ class SpanPanelStaleDataError(SpanPanelError):
     """
 
 
+class SpanPanelSchemaVersionError(SpanPanelError):
+    """The panel reports a data-model-version this library cannot interpret.
+
+    Distinct from SpanPanelAdapterMissingError, because the remedy differs. A
+    missing adapter is a known schema with no installed parser — install or
+    update the adapter package. This is a schema whose *major cannot even be
+    determined*, so no adapter can be named. That is a panel this library has
+    never seen, and the honest response is to say so.
+
+    Absence is not this error: a panel that publishes no data-model-version at
+    all is speaking the flat schema, which is a real and supported signal.
+    """
+
+    def __init__(self, data_model_version: str) -> None:
+        self.data_model_version = data_model_version
+        super().__init__(
+            f"Cannot determine a schema major from data-model-version {data_model_version!r}. "
+            "Expected MAJOR.MINOR[.PATCH]. Refusing to guess — parsing this panel with the "
+            "wrong schema would produce plausible but incorrect power and energy values. "
+            "Please report this value."
+        )
+
+
 class SpanPanelAdapterMissingError(SpanPanelError):
     """No installed adapter covers the schema this panel publishes."""
 

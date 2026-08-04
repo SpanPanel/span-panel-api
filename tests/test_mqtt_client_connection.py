@@ -8,7 +8,7 @@ import pytest
 
 from span_panel_api.exceptions import SpanPanelError, SpanPanelStaleDataError
 from span_panel_api.models import SpanPanelSnapshot
-from span_panel_api._impl.schema_0.const import WILDCARD_TOPIC_FMT
+from span_panel_api_schema_0.const import WILDCARD_TOPIC_FMT
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.models import MqttClientConfig
@@ -448,8 +448,17 @@ def test_adapter_is_none_before_connect() -> None:
     assert client.adapter is None
 
 
-def test_client_defaults_to_the_schema_zero_factory() -> None:
-    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+def test_client_defaults_to_the_flat_adapter() -> None:
+    """Unchanged behaviour, different mechanism.
+
+    Phase 0 pinned the default as an identity check against an imported
+    SchemaZeroAdapter. Phase 1 resolves it through entry-point discovery
+    instead, so the default is deliberately *unset* at construction and only
+    materialises when a parser is built. Asserting the built adapter rather
+    than the stored factory keeps the guarantee that mattered — a directly
+    constructed client still parses the flat schema.
+    """
+    from span_panel_api_schema_0 import SchemaZeroAdapter
     from span_panel_api.mqtt.client import SpanMqttClient
     from span_panel_api.mqtt.models import MqttClientConfig
 
@@ -457,13 +466,14 @@ def test_client_defaults_to_the_schema_zero_factory() -> None:
         "192.0.2.10", "sim-40t-001", MqttClientConfig(broker_host="192.0.2.10", username="test", password="test")
     )
 
-    assert client._adapter_factory is SchemaZeroAdapter
+    assert client._adapter_factory is None
+    assert isinstance(client._build_adapter(40), SchemaZeroAdapter)
 
 
 def test_injected_factory_receives_serial_and_panel_size() -> None:
     """The factory must be called with the panel_size discovered at connect,
     not a placeholder — panel_size drives unmapped-tab computation."""
-    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+    from span_panel_api_schema_0 import SchemaZeroAdapter
     from span_panel_api.mqtt.client import SpanMqttClient
     from span_panel_api.mqtt.models import MqttClientConfig
 

@@ -21,8 +21,8 @@ from unittest.mock import patch
 
 import pytest
 
-from span_panel_api._impl.schema_0.accumulator import HomieLifecycle, HomiePropertyAccumulator
-from span_panel_api._impl.schema_0.const import TOPIC_PREFIX
+from span_panel_api_schema_0.accumulator import HomieLifecycle, HomiePropertyAccumulator
+from span_panel_api_schema_0.const import TOPIC_PREFIX
 
 SERIAL = "nj-2316-XXXX"
 PREFIX = f"{TOPIC_PREFIX}/{SERIAL}"

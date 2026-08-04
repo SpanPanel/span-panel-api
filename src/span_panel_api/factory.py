@@ -9,19 +9,22 @@ from __future__ import annotations
 import logging
 import re
 
-from .adapters import discover_adapters
+from .adapters import resolve_adapter
 from .auth import register_v2
 from .detection import detect_api_version
-from .exceptions import SpanPanelAdapterMissingError, SpanPanelAuthError
+from .exceptions import SpanPanelAuthError, SpanPanelSchemaVersionError
 from .mqtt.client import SpanMqttClient
 from .mqtt.models import MqttClientConfig
-from .protocol import SchemaAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
 _V2_CLIENT_NAME = "span-panel-api"
 
-_DMV_PATTERN = re.compile(r"^(\d+)\.\d+(?:\.\d+)?$")
+# The canonical form the published spec defines: MAJOR.MINOR[.PATCH].
+_DMV_CANONICAL = re.compile(r"^(\d+)\.\d+(?:\.\d+)?$")
+# Tolerant form: a leading integer major, optionally followed by a separator and
+# anything at all. Accepts '1', '1.0.3-rc2', '1_0'; rejects 'v1.0', '', 'x'.
+_DMV_MAJOR = re.compile(r"^(\d+)(?:[._-].*)?$")
 
 
 def _select_adapter_key(data_model_version: str | None) -> tuple[str, str]:
@@ -30,27 +33,42 @@ def _select_adapter_key(data_model_version: str | None) -> tuple[str, str]:
     Absence is the flat-schema signal — the property was introduced by the same
     firmware that introduced the parent/child model, so a panel that does not
     publish it is speaking the flat schema.
+
+    Presence is never read as flat. Falling back to schema_0 for a value we do
+    not recognise would hand a parent/child panel to the flat parser, which does
+    not fail — it produces plausible but wrong power and energy figures. A wrong
+    number in Home Assistant is worse than an error, so anything present and
+    unreadable raises instead.
+
+    Between those two poles sits a value whose major is unambiguous even though
+    its full form is not canonical ('1', '1.0-beta'). That is not a guess: the
+    major is what selects the adapter, and it was read, not assumed. Those
+    dispatch normally and log the deviation, so a firmware that starts emitting
+    a new format is visible before it is an outage.
+
+    Raises:
+        SpanPanelSchemaVersionError: A version is present but no major can be
+            extracted from it.
     """
     if data_model_version is None:
         return "schema_0", "data-model-version absent (flat schema)"
 
-    match = _DMV_PATTERN.match(data_model_version)
-    if match is None:
-        return "schema_0", f"unrecognised data-model-version={data_model_version!r}, assuming flat"
+    if (match := _DMV_CANONICAL.match(data_model_version)) is not None:
+        return f"schema_{int(match.group(1))}", f"data-model-version={data_model_version!r}"
 
-    return (
-        f"schema_{int(match.group(1))}",
-        f"data-model-version={data_model_version!r}",
-    )
+    if (match := _DMV_MAJOR.match(data_model_version)) is not None:
+        _LOGGER.warning(
+            "data-model-version=%r is not the canonical MAJOR.MINOR[.PATCH] form; "
+            "dispatching on major %s. Please report this value.",
+            data_model_version,
+            match.group(1),
+        )
+        return (
+            f"schema_{int(match.group(1))}",
+            f"data-model-version={data_model_version!r} (non-canonical; major only)",
+        )
 
-
-def _resolve_adapter_cls(key: str, reason: str) -> type[SchemaAdapter]:
-    """Look up the discovered adapter class for `key`, or raise with the installed list."""
-    registry = discover_adapters()
-    adapter_cls = registry.get(key)
-    if adapter_cls is None:
-        raise SpanPanelAdapterMissingError(needed=key, reason=reason, available=sorted(registry))
-    return adapter_cls
+    raise SpanPanelSchemaVersionError(data_model_version)
 
 
 async def create_span_client(
@@ -77,6 +95,10 @@ async def create_span_client(
             or serial_number could not be determined.
         SpanPanelConnectionError: Cannot reach panel during detection or registration.
         SpanPanelTimeoutError: Timeout during detection or registration.
+        SpanPanelSchemaVersionError: The panel reports a data-model-version whose
+            schema major cannot be determined.
+        SpanPanelAdapterMissingError: No installed package provides an adapter for
+            the schema major this panel reports.
     """
     if mqtt_config is None:
         if passphrase is None:
@@ -107,10 +129,16 @@ async def create_span_client(
     # every panel currently in the field — Phase 1 adds the fetch.
     data_model_version: str | None = None
     adapter_key, dispatch_reason = _select_adapter_key(data_model_version)
-    adapter_cls = _resolve_adapter_cls(adapter_key, dispatch_reason)
+    adapter_cls = resolve_adapter(adapter_key, dispatch_reason)
 
-    client = SpanMqttClient(host, serial_number, mqtt_config, panel_http_port=port, adapter_factory=adapter_cls)
-    client._data_model_version = data_model_version  # pylint: disable=protected-access
-    client._schema_dispatch_reason = dispatch_reason  # pylint: disable=protected-access
+    client = SpanMqttClient(
+        host,
+        serial_number,
+        mqtt_config,
+        panel_http_port=port,
+        adapter_factory=adapter_cls,
+        data_model_version=data_model_version,
+        schema_dispatch_reason=dispatch_reason,
+    )
     await client.connect()
     return client

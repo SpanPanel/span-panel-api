@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from span_panel_api._impl.schema_0.accumulator import HomiePropertyAccumulator
-from span_panel_api._impl.schema_0.consumer import HomieDeviceConsumer, _parse_int
+from span_panel_api_schema_0.accumulator import HomiePropertyAccumulator
+from span_panel_api_schema_0.consumer import HomieDeviceConsumer, _parse_int
 from span_panel_api.auth import _int, download_ca_cert, get_homie_schema
 from span_panel_api.exceptions import SpanPanelConnectionError, SpanPanelTimeoutError
 

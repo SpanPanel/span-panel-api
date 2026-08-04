@@ -14,10 +14,9 @@ from importlib.metadata import version
 import logging
 import time
 
-from span_panel_api._impl.schema_0 import SchemaZeroAdapter
 from span_panel_api.schema_drift import log_schema_drift
 
-from ..adapters import discover_adapters
+from ..adapters import DEFAULT_ADAPTER_KEY, discover_adapters, resolve_adapter
 from ..auth import get_homie_schema
 from ..exceptions import SpanPanelConnectionError, SpanPanelServerError, SpanPanelStaleDataError
 from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
@@ -44,7 +43,9 @@ class SpanMqttClient:
         broker_config: MqttClientConfig,
         snapshot_interval: float = 1.0,
         panel_http_port: int = 80,
-        adapter_factory: Callable[[str, int], SchemaAdapter] = SchemaZeroAdapter,
+        adapter_factory: Callable[[str, int], SchemaAdapter] | None = None,
+        data_model_version: str | None = None,
+        schema_dispatch_reason: str | None = None,
     ) -> None:
         self._host = host
         self._serial_number = serial_number
@@ -70,18 +71,33 @@ class SpanMqttClient:
         # Homie accumulator with the same panel size after a transport-level
         # rebuild. Schema cannot change within a session, so caching is safe.
         self._panel_size: int | None = None
-        # Diagnostics — the factory overwrites these after adapter selection.
-        # Defaults describe a client built directly (bypassing create_span_client).
-        self._data_model_version: str | None = None
-        self._schema_dispatch_reason: str = "not dispatched"
+        # Diagnostics, passed in by create_span_client so they are true from the
+        # first moment the object exists. Constructing directly leaves them
+        # describing exactly that: a client that never went through dispatch.
+        self._data_model_version = data_model_version
+        self._schema_dispatch_reason = schema_dispatch_reason or "not dispatched"
 
     def _build_adapter(self, panel_size: int) -> SchemaAdapter:
         """Construct the parser for this session.
 
         Called from connect() and from the reconnect path — the only two
         places a parser is built today.
+
+        Resolving the default here rather than in ``__init__`` is deliberate:
+        constructing a client must not require an adapter to be installed, only
+        building a parser must. That keeps ``import span_panel_api.mqtt.client``
+        working in an adapter-less install — the configuration entry-point
+        discovery exists to support — and puts the failure at the point where it
+        is actionable.
+
+        Raises:
+            SpanPanelAdapterMissingError: No adapter_factory was supplied and no
+                package registers the default adapter key.
         """
-        self._adapter = self._adapter_factory(self._serial_number, panel_size)
+        factory = self._adapter_factory
+        if factory is None:
+            factory = resolve_adapter(DEFAULT_ADAPTER_KEY, "no adapter_factory supplied to SpanMqttClient")
+        self._adapter = factory(self._serial_number, panel_size)
         return self._adapter
 
     @property

@@ -1,7 +1,8 @@
-"""SPAN Panel MQTT/Homie transport."""
+"""SPAN Panel MQTT/Homie transport.
 
-from span_panel_api._impl.schema_0.accumulator import HomieLifecycle, HomiePropertyAccumulator
-from span_panel_api._impl.schema_0.consumer import HomieDeviceConsumer
+Schema-agnostic: nothing here imports a parsing implementation. The flat-schema
+parser is reached only through the `span_panel_api.schema_adapters` entry point.
+"""
 
 from .async_client import AsyncMQTTClient
 from .client import SpanMqttClient
@@ -11,9 +12,6 @@ from .models import MqttClientConfig
 __all__ = [
     "AsyncMQTTClient",
     "AsyncMqttBridge",
-    "HomieDeviceConsumer",
-    "HomieLifecycle",
-    "HomiePropertyAccumulator",
     "MqttClientConfig",
     "SpanMqttClient",
 ]

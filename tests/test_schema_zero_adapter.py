@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+from span_panel_api_schema_0 import SchemaZeroAdapter
 from span_panel_api.protocol import SchemaAdapter
 
 SERIAL = "sim-40t-001"

@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+from span_panel_api_schema_0 import SchemaZeroAdapter
 from span_panel_api.adapters import _reset_adapter_cache
-from span_panel_api.exceptions import SpanPanelAdapterMissingError
+from span_panel_api.exceptions import SpanPanelAdapterMissingError, SpanPanelSchemaVersionError
 from span_panel_api.factory import _select_adapter_key
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.models import MqttClientConfig
@@ -21,19 +21,53 @@ def test_absent_data_model_version_selects_schema_zero() -> None:
     assert "absent" in reason
 
 
-@pytest.mark.parametrize("dmv", ["1.0", "1.4", "2.0"])
+@pytest.mark.parametrize("dmv", ["1.0", "1.4", "2.0", "1.0.3", "10.2"])
 def test_present_data_model_version_requests_a_numbered_adapter(dmv: str) -> None:
     key, reason = _select_adapter_key(dmv)
     assert key == f"schema_{dmv.split('.')[0]}"
     assert dmv in reason
 
 
+@pytest.mark.parametrize("dmv", ["1", "1.0-beta", "1.0.3-rc2", "2_0"])
+def test_non_canonical_but_unambiguous_versions_dispatch_on_their_major(dmv: str) -> None:
+    """The major was read, not assumed, so dispatching on it is not a guess.
+
+    Refusing these would take a panel offline over a formatting difference; the
+    deviation is logged instead so a new firmware format is visible early.
+    """
+    key, reason = _select_adapter_key(dmv)
+    assert key == f"schema_{dmv[0]}"
+    assert "non-canonical" in reason
+
+
+@pytest.mark.parametrize("dmv", ["", "v1.0", "unknown", "beta", "-1", " 1.0"])
+def test_unreadable_data_model_version_raises_instead_of_assuming_flat(dmv: str) -> None:
+    """The regression this guards: a present-but-unreadable version must never
+    reach the flat parser.
+
+    Falling back to schema_0 does not fail — it silently produces plausible but
+    wrong power and energy values in Home Assistant, which is strictly worse
+    than an error the user can see and report.
+    """
+    with pytest.raises(SpanPanelSchemaVersionError) as exc:
+        _select_adapter_key(dmv)
+
+    assert exc.value.data_model_version == dmv
+
+
+def test_absence_is_still_a_supported_signal_not_an_error() -> None:
+    """The flat schema predates the property, so absence must stay non-fatal —
+    it is the single most common case in the field today."""
+    key, _ = _select_adapter_key(None)
+    assert key == "schema_0"
+
+
 def test_missing_adapter_raises_with_the_installed_list() -> None:
-    from span_panel_api.factory import _resolve_adapter_cls
+    from span_panel_api.adapters import resolve_adapter
 
     _reset_adapter_cache()
     with pytest.raises(SpanPanelAdapterMissingError) as exc:
-        _resolve_adapter_cls("schema_1", "data-model-version='1.0'")
+        resolve_adapter("schema_1", "data-model-version='1.0'")
 
     assert exc.value.needed == "schema_1"
     assert "schema_0" in exc.value.available
@@ -68,9 +102,12 @@ async def test_create_span_client_wires_schema_zero_adapter_and_diagnostics() ->
     _, kwargs = mock_cls.call_args
     assert kwargs["adapter_factory"] is SchemaZeroAdapter
     mock_client.connect.assert_awaited_once()
-    # Diagnostics were assigned directly on the instance ahead of connect().
-    assert mock_client._data_model_version is None  # pylint: disable=protected-access
-    assert "absent" in mock_client._schema_dispatch_reason  # pylint: disable=protected-access
+    # Diagnostics travel through the constructor, so they are true before
+    # connect() rather than patched onto private state afterwards. There is no
+    # longer a window where a connected client reports a selected adapter next
+    # to schema_dispatch_reason='not dispatched'.
+    assert kwargs["data_model_version"] is None
+    assert "absent" in kwargs["schema_dispatch_reason"]
 
 
 # ---------------------------------------------------------------------------

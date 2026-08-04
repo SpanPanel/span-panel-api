@@ -15,7 +15,8 @@ Field path convention: ``{snapshot_type}.{field_name}``
 
 from __future__ import annotations
 
-from span_panel_api._impl.schema_0.const import (
+from span_panel_api.models import FieldMetadata, HomieSchemaTypes
+from span_panel_api_schema_0.const import (
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_CORE,
@@ -26,14 +27,14 @@ from span_panel_api._impl.schema_0.const import (
     TYPE_POWER_FLOWS,
     TYPE_PV,
 )
-from span_panel_api.models import FieldMetadata, HomieSchemaTypes
 
 # ---------------------------------------------------------------------------
 # Static mapping: (node_type, property_id) → snapshot field path
 #
 # This encodes the library's internal knowledge of how _build_snapshot()
 # maps Homie properties to snapshot dataclass fields. The mapping must be
-# kept in sync with homie.py.
+# kept in sync with consumer.py (which held this class as homie.py before
+# the Phase 0 relocation).
 # ---------------------------------------------------------------------------
 
 _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (

@@ -12,8 +12,15 @@ import logging
 import time
 from typing import ClassVar
 
-from span_panel_api._impl.schema_0.accumulator import HomiePropertyAccumulator
-from span_panel_api._impl.schema_0.const import (
+from span_panel_api.models import (
+    SpanBatterySnapshot,
+    SpanCircuitSnapshot,
+    SpanEvseSnapshot,
+    SpanPanelSnapshot,
+    SpanPVSnapshot,
+)
+from span_panel_api_schema_0.accumulator import HomiePropertyAccumulator
+from span_panel_api_schema_0.const import (
     LUGS_DOWNSTREAM,
     LUGS_UPSTREAM,
     TYPE_BESS,
@@ -26,13 +33,6 @@ from span_panel_api._impl.schema_0.const import (
     TYPE_POWER_FLOWS,
     TYPE_PV,
     normalize_circuit_id,
-)
-from span_panel_api.models import (
-    SpanBatterySnapshot,
-    SpanCircuitSnapshot,
-    SpanEvseSnapshot,
-    SpanPanelSnapshot,
-    SpanPVSnapshot,
 )
 
 _LOGGER = logging.getLogger(__name__)

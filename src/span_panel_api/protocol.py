@@ -93,6 +93,22 @@ class SchemaAdapter(Protocol):
     schema_major: str
     SUPPORTS_DATA_MODEL_VERSIONS: tuple[str, str]
 
+    def __init__(self, serial_number: str, panel_size: int) -> None:
+        """Construct a parser for one panel session.
+
+        Declared because construction is part of the contract: the transport
+        resolves an adapter *class* from the entry-point registry and calls it.
+        Phase 0 typed the seam as ``Callable[[str, int], SchemaAdapter]``, which
+        left the signature unchecked against implementations; stating it here
+        puts it back under the type checker.
+
+        ``panel_size`` is a flat-schema concept the transport fetches on the
+        adapter's behalf, so this signature is the one part of the protocol
+        expected to change when schema_1 lands — see the Phase 1 follow-ups,
+        item 2. It is stated rather than hidden precisely so that change is a
+        visible protocol break rather than a silent runtime TypeError.
+        """
+
     def topics_to_subscribe(self) -> list[str]: ...
 
     def handle_message(self, topic: str, payload: str) -> None: ...

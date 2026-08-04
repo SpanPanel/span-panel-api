@@ -81,6 +81,26 @@ def test_schema_adapter_declares_its_class_attributes() -> None:
         assert name in SchemaAdapter.__annotations__, f"SchemaAdapter is missing attribute {name}"
 
 
+def test_schema_adapter_construction_signature_matches_its_implementation() -> None:
+    """Construction is part of the contract, so it must be checked like the rest.
+
+    `hasattr(SchemaAdapter, "__init__")` is vacuous — every object has one. The
+    assertion with teeth is that the protocol's declared signature and the
+    installed adapter's actual signature agree, which is what the transport
+    depends on when it calls a class resolved from the entry-point registry.
+    """
+    import inspect
+
+    from span_panel_api_schema_0 import SchemaZeroAdapter
+    from span_panel_api.protocol import SchemaAdapter
+
+    declared = list(inspect.signature(SchemaAdapter.__init__).parameters)
+    implemented = list(inspect.signature(SchemaZeroAdapter.__init__).parameters)
+
+    assert declared == ["self", "serial_number", "panel_size"]
+    assert implemented == declared, f"SchemaZeroAdapter.__init__{implemented} does not match the protocol {declared}"
+
+
 def test_adapter_missing_error_reports_what_is_installed() -> None:
     from span_panel_api.exceptions import SpanPanelAdapterMissingError
 

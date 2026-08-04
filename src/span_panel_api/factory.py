@@ -9,13 +9,12 @@ from __future__ import annotations
 import logging
 import re
 
-from .adapters import discover_adapters
+from .adapters import resolve_adapter
 from .auth import register_v2
 from .detection import detect_api_version
-from .exceptions import SpanPanelAdapterMissingError, SpanPanelAuthError
+from .exceptions import SpanPanelAuthError
 from .mqtt.client import SpanMqttClient
 from .mqtt.models import MqttClientConfig
-from .protocol import SchemaAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,15 +41,6 @@ def _select_adapter_key(data_model_version: str | None) -> tuple[str, str]:
         f"schema_{int(match.group(1))}",
         f"data-model-version={data_model_version!r}",
     )
-
-
-def _resolve_adapter_cls(key: str, reason: str) -> type[SchemaAdapter]:
-    """Look up the discovered adapter class for `key`, or raise with the installed list."""
-    registry = discover_adapters()
-    adapter_cls = registry.get(key)
-    if adapter_cls is None:
-        raise SpanPanelAdapterMissingError(needed=key, reason=reason, available=sorted(registry))
-    return adapter_cls
 
 
 async def create_span_client(
@@ -107,7 +97,7 @@ async def create_span_client(
     # every panel currently in the field — Phase 1 adds the fetch.
     data_model_version: str | None = None
     adapter_key, dispatch_reason = _select_adapter_key(data_model_version)
-    adapter_cls = _resolve_adapter_cls(adapter_key, dispatch_reason)
+    adapter_cls = resolve_adapter(adapter_key, dispatch_reason)
 
     client = SpanMqttClient(host, serial_number, mqtt_config, panel_http_port=port, adapter_factory=adapter_cls)
     client._data_model_version = data_model_version  # pylint: disable=protected-access

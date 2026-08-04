@@ -29,11 +29,11 @@ def test_present_data_model_version_requests_a_numbered_adapter(dmv: str) -> Non
 
 
 def test_missing_adapter_raises_with_the_installed_list() -> None:
-    from span_panel_api.factory import _resolve_adapter_cls
+    from span_panel_api.adapters import resolve_adapter
 
     _reset_adapter_cache()
     with pytest.raises(SpanPanelAdapterMissingError) as exc:
-        _resolve_adapter_cls("schema_1", "data-model-version='1.0'")
+        resolve_adapter("schema_1", "data-model-version='1.0'")
 
     assert exc.value.needed == "schema_1"
     assert "schema_0" in exc.value.available

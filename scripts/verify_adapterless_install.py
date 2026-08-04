@@ -57,9 +57,20 @@ def main() -> None:
     )
 
     # 4. Building a parser must raise the named error, not an opaque one, and
-    #    must say which adapter was wanted.
+    #    must say which adapter was wanted. A flat schema is used because that
+    #    is the case a bootstrap-only install is expected to fail on: every
+    #    panel in the field today reports no data-model-version, so dispatch
+    #    asks for the default key and finds nothing providing it.
+    from span_panel_api.models import V2HomieSchema
+
+    flat_schema = V2HomieSchema(
+        firmware_version="spanos2/r202603/05",
+        types_schema_hash="sha256:0000000000000000",
+        types={"energy.ebus.device.circuit": {"space": {"datatype": "integer", "format": "1:32:1"}}},
+    )
+
     try:
-        client._build_adapter(32)  # pylint: disable=protected-access
+        client._build_adapter(flat_schema)  # pylint: disable=protected-access
     except SpanPanelAdapterMissingError as exc:
         if exc.needed != DEFAULT_ADAPTER_KEY:
             _fail(f"error names adapter {exc.needed!r}, expected {DEFAULT_ADAPTER_KEY!r}")

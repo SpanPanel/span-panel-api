@@ -16,6 +16,12 @@ on:
 # release time: the adapter declares a floor on the bootstrap
 # (span-panel-api>=X), so the committed versions are load-bearing for resolution
 # and cannot be treated as placeholders that a release stamps over.
+#
+# Publishing uses PyPI trusted publishing, which is configured per project. A
+# distribution released here for the first time needs a pending publisher
+# created on PyPI beforehand (project name, this repo, workflow `release.yml`,
+# environment `release`); without it the publish step fails on an otherwise
+# correct build.
 jobs:
   deploy:
     runs-on: ubuntu-latest

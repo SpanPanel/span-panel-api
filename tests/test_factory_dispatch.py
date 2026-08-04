@@ -7,7 +7,7 @@ import pytest
 
 from span_panel_api._impl.schema_0 import SchemaZeroAdapter
 from span_panel_api.adapters import _reset_adapter_cache
-from span_panel_api.exceptions import SpanPanelAdapterMissingError
+from span_panel_api.exceptions import SpanPanelAdapterMissingError, SpanPanelSchemaVersionError
 from span_panel_api.factory import _select_adapter_key
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.models import MqttClientConfig
@@ -21,11 +21,45 @@ def test_absent_data_model_version_selects_schema_zero() -> None:
     assert "absent" in reason
 
 
-@pytest.mark.parametrize("dmv", ["1.0", "1.4", "2.0"])
+@pytest.mark.parametrize("dmv", ["1.0", "1.4", "2.0", "1.0.3", "10.2"])
 def test_present_data_model_version_requests_a_numbered_adapter(dmv: str) -> None:
     key, reason = _select_adapter_key(dmv)
     assert key == f"schema_{dmv.split('.')[0]}"
     assert dmv in reason
+
+
+@pytest.mark.parametrize("dmv", ["1", "1.0-beta", "1.0.3-rc2", "2_0"])
+def test_non_canonical_but_unambiguous_versions_dispatch_on_their_major(dmv: str) -> None:
+    """The major was read, not assumed, so dispatching on it is not a guess.
+
+    Refusing these would take a panel offline over a formatting difference; the
+    deviation is logged instead so a new firmware format is visible early.
+    """
+    key, reason = _select_adapter_key(dmv)
+    assert key == f"schema_{dmv[0]}"
+    assert "non-canonical" in reason
+
+
+@pytest.mark.parametrize("dmv", ["", "v1.0", "unknown", "beta", "-1", " 1.0"])
+def test_unreadable_data_model_version_raises_instead_of_assuming_flat(dmv: str) -> None:
+    """The regression this guards: a present-but-unreadable version must never
+    reach the flat parser.
+
+    Falling back to schema_0 does not fail — it silently produces plausible but
+    wrong power and energy values in Home Assistant, which is strictly worse
+    than an error the user can see and report.
+    """
+    with pytest.raises(SpanPanelSchemaVersionError) as exc:
+        _select_adapter_key(dmv)
+
+    assert exc.value.data_model_version == dmv
+
+
+def test_absence_is_still_a_supported_signal_not_an_error() -> None:
+    """The flat schema predates the property, so absence must stay non-fatal —
+    it is the single most common case in the field today."""
+    key, _ = _select_adapter_key(None)
+    assert key == "schema_0"
 
 
 def test_missing_adapter_raises_with_the_installed_list() -> None:

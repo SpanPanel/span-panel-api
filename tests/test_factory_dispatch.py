@@ -102,9 +102,12 @@ async def test_create_span_client_wires_schema_zero_adapter_and_diagnostics() ->
     _, kwargs = mock_cls.call_args
     assert kwargs["adapter_factory"] is SchemaZeroAdapter
     mock_client.connect.assert_awaited_once()
-    # Diagnostics were assigned directly on the instance ahead of connect().
-    assert mock_client._data_model_version is None  # pylint: disable=protected-access
-    assert "absent" in mock_client._schema_dispatch_reason  # pylint: disable=protected-access
+    # Diagnostics travel through the constructor, so they are true before
+    # connect() rather than patched onto private state afterwards. There is no
+    # longer a window where a connected client reports a selected adapter next
+    # to schema_dispatch_reason='not dispatched'.
+    assert kwargs["data_model_version"] is None
+    assert "absent" in kwargs["schema_dispatch_reason"]
 
 
 # ---------------------------------------------------------------------------

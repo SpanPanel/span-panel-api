@@ -5,25 +5,46 @@ HOMIE_VERSION = 5
 HOMIE_DOMAIN = "ebus"
 TOPIC_PREFIX = f"{HOMIE_DOMAIN}/{HOMIE_VERSION}"
 
-# Topic patterns (serial_number substituted at runtime)
-DEVICE_TOPIC_FMT = f"{TOPIC_PREFIX}/{{serial}}"
-STATE_TOPIC_FMT = f"{TOPIC_PREFIX}/{{serial}}/$state"
-DESCRIPTION_TOPIC_FMT = f"{TOPIC_PREFIX}/{{serial}}/$description"
-PROPERTY_TOPIC_FMT = f"{TOPIC_PREFIX}/{{serial}}/{{node}}/{{prop}}"
+# Topic patterns (serial_number substituted at runtime).
+# The adapter subscribes with the wildcard and publishes with the set pattern;
+# per-topic read formats are not needed because every message arrives through
+# the one wildcard subscription.
 PROPERTY_SET_TOPIC_FMT = f"{TOPIC_PREFIX}/{{serial}}/{{node}}/{{prop}}/set"
 WILDCARD_TOPIC_FMT = f"{TOPIC_PREFIX}/{{serial}}/#"
 
-# Homie type strings from schema
+# ---------------------------------------------------------------------------
+# Homie type strings.
+#
+# Two namespaces that are easy to conflate and are NOT the same set:
+#
+#   * the `types` block of GET /api/v2/homie/schema, which declares the
+#     properties, units and datatypes available to a type; and
+#   * the `type` string a node actually carries in its $description on the wire.
+#
+# Every constant below is a node type observed on the wire. The ones in the
+# first group are also declared in the schema, so metadata lookup finds them
+# directly. See tests/test_schema_provenance.py, which asserts that.
+# ---------------------------------------------------------------------------
 TYPE_CORE = "energy.ebus.device.distribution-enclosure.core"
 TYPE_LUGS = "energy.ebus.device.lugs"
-TYPE_LUGS_UPSTREAM = "energy.ebus.device.lugs.upstream"
-TYPE_LUGS_DOWNSTREAM = "energy.ebus.device.lugs.downstream"
 TYPE_CIRCUIT = "energy.ebus.device.circuit"
 TYPE_BESS = "energy.ebus.device.bess"
 TYPE_PV = "energy.ebus.device.pv"
 TYPE_EVSE = "energy.ebus.device.evse"
-TYPE_PCS = "energy.ebus.device.pcs"
 TYPE_POWER_FLOWS = "energy.ebus.device.power-flows"
+
+# Wire-only subtypes: real node types published by real firmware (confirmed
+# against a live panel in 1eef0dc), but NOT declared in the schema's `types`
+# block, which carries only the base `energy.ebus.device.lugs`. Firmware uses
+# one convention or the other — typed nodes, or generic nodes plus a
+# `direction` property — and _find_lugs_node handles both.
+#
+# Because the schema does not declare them, every one of these needs an entry
+# in field_metadata._LUGS_FALLBACK mapping it to a declared type, or property
+# metadata silently comes back empty for those nodes. The provenance test
+# asserts that pairing rather than trusting it.
+TYPE_LUGS_UPSTREAM = "energy.ebus.device.lugs.upstream"
+TYPE_LUGS_DOWNSTREAM = "energy.ebus.device.lugs.downstream"
 
 # Lugs direction values
 LUGS_UPSTREAM = "UPSTREAM"

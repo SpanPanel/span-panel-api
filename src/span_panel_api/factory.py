@@ -131,8 +131,14 @@ async def create_span_client(
     adapter_key, dispatch_reason = _select_adapter_key(data_model_version)
     adapter_cls = resolve_adapter(adapter_key, dispatch_reason)
 
-    client = SpanMqttClient(host, serial_number, mqtt_config, panel_http_port=port, adapter_factory=adapter_cls)
-    client._data_model_version = data_model_version  # pylint: disable=protected-access
-    client._schema_dispatch_reason = dispatch_reason  # pylint: disable=protected-access
+    client = SpanMqttClient(
+        host,
+        serial_number,
+        mqtt_config,
+        panel_http_port=port,
+        adapter_factory=adapter_cls,
+        data_model_version=data_model_version,
+        schema_dispatch_reason=dispatch_reason,
+    )
     await client.connect()
     return client

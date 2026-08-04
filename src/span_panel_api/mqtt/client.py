@@ -44,6 +44,8 @@ class SpanMqttClient:
         snapshot_interval: float = 1.0,
         panel_http_port: int = 80,
         adapter_factory: Callable[[str, int], SchemaAdapter] | None = None,
+        data_model_version: str | None = None,
+        schema_dispatch_reason: str | None = None,
     ) -> None:
         self._host = host
         self._serial_number = serial_number
@@ -69,10 +71,11 @@ class SpanMqttClient:
         # Homie accumulator with the same panel size after a transport-level
         # rebuild. Schema cannot change within a session, so caching is safe.
         self._panel_size: int | None = None
-        # Diagnostics — the factory overwrites these after adapter selection.
-        # Defaults describe a client built directly (bypassing create_span_client).
-        self._data_model_version: str | None = None
-        self._schema_dispatch_reason: str = "not dispatched"
+        # Diagnostics, passed in by create_span_client so they are true from the
+        # first moment the object exists. Constructing directly leaves them
+        # describing exactly that: a client that never went through dispatch.
+        self._data_model_version = data_model_version
+        self._schema_dispatch_reason = schema_dispatch_reason or "not dispatched"
 
     def _build_adapter(self, panel_size: int) -> SchemaAdapter:
         """Construct the parser for this session.

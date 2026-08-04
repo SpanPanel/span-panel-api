@@ -62,7 +62,9 @@ EXPECTED_PUBLIC_API = {
     "validate_solar_tabs",
     # Exceptions
     "SpanPanelAPIError",
+    "SpanPanelAdapterMissingError",
     "SpanPanelAuthError",
+    "SpanPanelSchemaVersionError",
     "SpanPanelConnectionError",
     "SpanPanelError",
     "SpanPanelServerError",

@@ -33,7 +33,8 @@ from span_panel_api.models import FieldMetadata, HomieSchemaTypes
 #
 # This encodes the library's internal knowledge of how _build_snapshot()
 # maps Homie properties to snapshot dataclass fields. The mapping must be
-# kept in sync with homie.py.
+# kept in sync with consumer.py (which held this class as homie.py before
+# the Phase 0 relocation).
 # ---------------------------------------------------------------------------
 
 _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (

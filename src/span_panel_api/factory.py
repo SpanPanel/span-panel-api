@@ -7,68 +7,18 @@ Handles v2 registration when only a passphrase is provided.
 from __future__ import annotations
 
 import logging
-import re
 
-from .adapters import DEFAULT_ADAPTER_KEY, resolve_adapter
-from .auth import register_v2
+from .adapters import resolve_adapter
+from .auth import get_homie_schema, register_v2
 from .detection import detect_api_version
-from .exceptions import SpanPanelAuthError, SpanPanelSchemaVersionError
+from .dispatch import select_adapter_key
+from .exceptions import SpanPanelAuthError
 from .mqtt.client import SpanMqttClient
 from .mqtt.models import MqttClientConfig
 
 _LOGGER = logging.getLogger(__name__)
 
 _V2_CLIENT_NAME = "span-panel-api"
-
-# The canonical form the published spec defines: MAJOR.MINOR[.PATCH].
-_DMV_CANONICAL = re.compile(r"^(\d+)\.\d+(?:\.\d+)?$")
-# Tolerant form: a leading integer major, optionally followed by a separator and
-# anything at all. Accepts '1', '1.0.3-rc2', '1_0'; rejects 'v1.0', '', 'x'.
-_DMV_MAJOR = re.compile(r"^(\d+)(?:[._-].*)?$")
-
-
-def _select_adapter_key(data_model_version: str | None) -> tuple[str, str]:
-    """Tier 1 dispatch: the panel's data-model-version selects the adapter major.
-
-    Absence is the flat-schema signal — the property was introduced by the same
-    firmware that introduced the parent/child model, so a panel that does not
-    publish it is speaking the flat schema.
-
-    Presence is never read as flat. Falling back to schema_0 for a value we do
-    not recognise would hand a parent/child panel to the flat parser, which does
-    not fail — it produces plausible but wrong power and energy figures. A wrong
-    number in Home Assistant is worse than an error, so anything present and
-    unreadable raises instead.
-
-    Between those two poles sits a value whose major is unambiguous even though
-    its full form is not canonical ('1', '1.0-beta'). That is not a guess: the
-    major is what selects the adapter, and it was read, not assumed. Those
-    dispatch normally and log the deviation, so a firmware that starts emitting
-    a new format is visible before it is an outage.
-
-    Raises:
-        SpanPanelSchemaVersionError: A version is present but no major can be
-            extracted from it.
-    """
-    if data_model_version is None:
-        return DEFAULT_ADAPTER_KEY, "data-model-version absent (flat schema)"
-
-    if (match := _DMV_CANONICAL.match(data_model_version)) is not None:
-        return f"schema_{int(match.group(1))}", f"data-model-version={data_model_version!r}"
-
-    if (match := _DMV_MAJOR.match(data_model_version)) is not None:
-        _LOGGER.warning(
-            "data-model-version=%r is not the canonical MAJOR.MINOR[.PATCH] form; "
-            "dispatching on major %s. Please report this value.",
-            data_model_version,
-            match.group(1),
-        )
-        return (
-            f"schema_{int(match.group(1))}",
-            f"data-model-version={data_model_version!r} (non-canonical; major only)",
-        )
-
-    raise SpanPanelSchemaVersionError(data_model_version)
 
 
 async def create_span_client(
@@ -124,11 +74,13 @@ async def create_span_client(
     if serial_number is None:
         raise SpanPanelAuthError("serial_number is required for MQTT transport but could not be determined")
 
-    # Phase 0: the factory does not fetch the Homie schema, so no panel can
-    # report a data-model-version yet. `None` is the correct observation for
-    # every panel currently in the field — Phase 1 adds the fetch.
-    data_model_version: str | None = None
-    adapter_key, dispatch_reason = _select_adapter_key(data_model_version)
+    # Dispatch reads the schema over REST before the broker is opened. SPAN
+    # confirmed the absence of `dataModelVersion` on this endpoint is a reliable
+    # flat-versus-parent/child signal, mirroring MQTT's `info/data-model-version`
+    # — so the parser is chosen before a single message is consumed, rather than
+    # a wrong parser being discovered by its output.
+    schema = await get_homie_schema(host, port=port)
+    adapter_key, dispatch_reason = select_adapter_key(schema.data_model_version)
     adapter_cls = resolve_adapter(adapter_key, dispatch_reason)
 
     client = SpanMqttClient(
@@ -137,8 +89,9 @@ async def create_span_client(
         mqtt_config,
         panel_http_port=port,
         adapter_factory=adapter_cls,
-        data_model_version=data_model_version,
+        data_model_version=schema.data_model_version,
         schema_dispatch_reason=dispatch_reason,
+        schema=schema,
     )
     await client.connect()
     return client

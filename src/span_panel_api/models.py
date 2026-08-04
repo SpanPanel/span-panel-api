@@ -143,6 +143,14 @@ class V2HomieSchema:
     firmware_version: str
     types_schema_hash: str  # SHA-256, first 16 hex chars
     types: HomieSchemaTypes
+    # The flat-vs-parent/child discriminator, and the reason this endpoint is
+    # fetched before MQTT is opened rather than during connect(). Absent on flat
+    # firmware (r202603-r202627) and present from r202633, which SPAN confirmed
+    # is a reliable signal over REST — the same one MQTT publishes as
+    # ``info/data-model-version``. Defaulted so a caller constructing this model
+    # directly still describes a flat panel, which is what every panel in the
+    # field is today.
+    data_model_version: str | None = None
 
     @property
     def panel_size(self) -> int:

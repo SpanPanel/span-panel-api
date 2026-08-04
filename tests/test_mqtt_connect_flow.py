@@ -764,14 +764,14 @@ class TestSpanMqttClientAccumulatorReset:
         schema_hash_before = client._schema_hash
         schema_types_before = client._previous_schema_types
         field_metadata_before = client._field_metadata
-        panel_size_before = client._panel_size
+        schema_before = client._schema
 
         client._on_pre_rebuild()
 
         assert client._schema_hash == schema_hash_before
         assert client._previous_schema_types == schema_types_before
         assert client._field_metadata == field_metadata_before
-        assert client._panel_size == panel_size_before
+        assert client._schema == schema_before
 
         await client.close()
 
@@ -780,7 +780,7 @@ class TestSpanMqttClientAccumulatorReset:
         """If pre-rebuild somehow fires before connect() completes, the
         handler must not raise — there is no accumulator state to reset."""
         client = _make_span_client()
-        # _panel_size is None because connect() never ran.
+        # _schema is None because connect() never ran.
         client._on_pre_rebuild()
         # No exception, no state changes.
         assert client._adapter is None

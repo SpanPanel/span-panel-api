@@ -16,7 +16,7 @@ from span_panel_api_schema_0.consumer import HomieDeviceConsumer
 from span_panel_api_schema_0.field_metadata import build_field_metadata
 
 if TYPE_CHECKING:
-    from span_panel_api.models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
+    from span_panel_api.models import FieldMetadata, SpanPanelSnapshot, V2HomieSchema
 
 
 class SchemaZeroAdapter:
@@ -25,10 +25,16 @@ class SchemaZeroAdapter:
     schema_major = "schema_0"
     SUPPORTS_DATA_MODEL_VERSIONS: tuple[str, str] = (">=0", "<1.0")
 
-    def __init__(self, serial_number: str, panel_size: int) -> None:
+    def __init__(self, serial_number: str, schema: V2HomieSchema) -> None:
         self._serial_number = serial_number
+        # `panel_size` is derived here rather than handed in, because deriving
+        # it means reading the flat schema's `types` block for the circuit
+        # `space` format — knowledge that belongs to this package. The
+        # transport used to do this on every adapter's behalf, which only
+        # worked while every adapter was this one.
+        self._schema = schema
         self._accumulator = HomiePropertyAccumulator(serial_number)
-        self._consumer = HomieDeviceConsumer(self._accumulator, panel_size)
+        self._consumer = HomieDeviceConsumer(self._accumulator, schema.panel_size)
 
     def topics_to_subscribe(self) -> list[str]:
         return [WILDCARD_TOPIC_FMT.format(serial=self._serial_number)]
@@ -42,8 +48,8 @@ class SchemaZeroAdapter:
     def build_snapshot(self) -> SpanPanelSnapshot:
         return self._consumer.build_snapshot()
 
-    def build_field_metadata(self, schema_types: HomieSchemaTypes) -> dict[str, FieldMetadata]:
-        return build_field_metadata(schema_types)
+    def build_field_metadata(self) -> dict[str, FieldMetadata]:
+        return build_field_metadata(self._schema.types)
 
     def circuit_nodes_missing_names(self) -> list[str]:
         return self._consumer.circuit_nodes_missing_names()

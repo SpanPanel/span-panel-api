@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`data-model-version` dispatch is live.** The factory hardcoded `None`, so the guard that refuses a parent/child panel was written, tested and never invoked — every panel resolved to the flat parser regardless of what it reported. The Homie schema is
+  now fetched over REST **before** the broker is opened and the version drives adapter selection, which SPAN confirmed is a reliable flat-versus-parent/child signal on that endpoint. A `1.0` panel now raises `SpanPanelAdapterMissingError` naming the
+  adapter to install, instead of dying inside the flat parser on a missing `energy.ebus.device.circuit/space` property.
+- **A directly constructed `SpanMqttClient` dispatches too.** Building a client without `create_span_client` previously always resolved the flat adapter, so it carried the same defect the factory path had. Dispatch now happens wherever a parser is built,
+  and fills in `data_model_version` / `schema_dispatch_reason` rather than leaving them reading `"not dispatched"`.
+
+### Changed
+
+- **BREAKING: `SchemaAdapter.__init__` takes the schema, not a panel size.** `adapter_cls(serial_number, schema)` replaces `adapter_cls(serial_number, panel_size)`. `panel_size` is read out of a block only the flat schema has, so the bootstrap had to
+  understand a wire format it is meant to know nothing about, and an adapter whose schema is shaped differently had no way to say so. Each adapter now reads what its own format defines.
+- **BREAKING: `SchemaAdapter.build_field_metadata()` takes no arguments.** It previously received `schema.types` — again a flat-shaped parameter on a format-agnostic protocol. The adapter holds the schema it was constructed with.
+- **`V2HomieSchema.data_model_version`** carries the `dataModelVersion` field, `None` when the panel omits it. Absence is the flat signal and stays distinct from an empty string.
+- **Tier 1 dispatch moved to `span_panel_api.dispatch.select_adapter_key`** from the private `factory._select_adapter_key`, so the transport can dispatch without importing the factory. `adapters.py` continues to answer "what is installed"; the new module
+  answers "what does this panel need".
+
 ## [3.0.0b1] - 08/2026
 
 Pre-release. `span-panel-api` becomes a transport and a dispatcher that contains **no parser**. Wire formats ship as separate distributions and register themselves via entry points, so support for a new panel schema arrives by installing a package rather

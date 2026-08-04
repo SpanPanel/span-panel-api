@@ -10,6 +10,8 @@ from span_panel_api.exceptions import SpanPanelAdapterMissingError
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.models import MqttClientConfig
 
+from conftest import MOCK_SCHEMA
+
 
 def test_discovers_the_self_registered_schema_zero_adapter() -> None:
     _reset_adapter_cache()
@@ -40,7 +42,7 @@ def test_default_factory_resolves_the_flat_adapter_through_discovery() -> None:
     _reset_adapter_cache()
     client = _client()
 
-    adapter = client._build_adapter(32)
+    adapter = client._build_adapter(MOCK_SCHEMA)
 
     assert adapter.schema_major == DEFAULT_ADAPTER_KEY
     assert type(adapter) is discover_adapters()[DEFAULT_ADAPTER_KEY]
@@ -61,7 +63,7 @@ def test_building_a_parser_without_any_adapter_raises_by_name() -> None:
     client = _client()
 
     with patch("span_panel_api.adapters._REGISTRY", {}), pytest.raises(SpanPanelAdapterMissingError) as exc:
-        client._build_adapter(32)
+        client._build_adapter(MOCK_SCHEMA)
 
     assert exc.value.needed == DEFAULT_ADAPTER_KEY
     assert exc.value.available == []
@@ -74,7 +76,7 @@ def test_an_explicit_factory_bypasses_discovery_entirely() -> None:
     client = _client(adapter_factory=real_cls)
 
     with patch("span_panel_api.adapters.discover_adapters", side_effect=AssertionError("must not be consulted")):
-        adapter = client._build_adapter(32)
+        adapter = client._build_adapter(MOCK_SCHEMA)
 
     assert type(adapter) is real_cls
 

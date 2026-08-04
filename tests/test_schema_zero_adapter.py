@@ -11,6 +11,8 @@ from __future__ import annotations
 import pytest
 
 from span_panel_api_schema_0 import SchemaZeroAdapter
+
+from conftest import flat_schema
 from span_panel_api.protocol import SchemaAdapter
 
 SERIAL = "sim-40t-001"
@@ -18,7 +20,7 @@ SERIAL = "sim-40t-001"
 
 @pytest.fixture
 def adapter() -> SchemaZeroAdapter:
-    return SchemaZeroAdapter(serial_number=SERIAL, panel_size=40)
+    return SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(40))
 
 
 def test_satisfies_the_protocol(adapter: SchemaZeroAdapter) -> None:

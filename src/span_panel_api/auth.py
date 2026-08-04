@@ -206,10 +206,19 @@ async def get_homie_schema(
     types_json = json.dumps(data.get("types", {}), sort_keys=True)
     schema_hash = "sha256:" + hashlib.sha256(types_json.encode()).hexdigest()[:16]
 
+    # Read before anything else interprets the payload. A parent/child response
+    # carries `deviceClasses` where this one reads `types`, so every field below
+    # degrades to empty for such a panel — which is harmless only because this
+    # value routes it to a different parser before those fields are used.
+    # Absence is the flat signal and must stay distinct from an empty string.
+    raw_data_model_version = data.get("dataModelVersion")
+    data_model_version = None if raw_data_model_version is None else str(raw_data_model_version)
+
     return V2HomieSchema(
         firmware_version=str(data.get("firmwareVersion", "")),
         types_schema_hash=schema_hash,
         types=types,
+        data_model_version=data_model_version,
     )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Protocol
 from unittest.mock import patch
 
 import pytest
@@ -119,6 +120,53 @@ def test_required_members_are_derived_from_the_protocol() -> None:
     assert "build_snapshot" in _REQUIRED_MEMBERS
     # Dunders are excluded: presence tells us nothing, every object has them.
     assert not [member for member in _REQUIRED_MEMBERS if member.startswith("_")]
+
+
+def test_every_kind_of_declared_member_is_required_not_just_plain_methods() -> None:
+    """A property is not callable and neither is a classmethod object, so a
+    kind-filtered derivation would silently stop requiring them. SchemaAdapter
+    declares only plain methods today; this pins the rule before it declares more."""
+    from span_panel_api.adapters import _derive_required_members
+
+    class SurfaceProbe(Protocol):
+        annotated: str
+
+        @property
+        def a_property(self) -> int: ...
+
+        @classmethod
+        def a_classmethod(cls) -> None: ...
+
+        @staticmethod
+        def a_staticmethod() -> None: ...
+
+        def a_method(self) -> None: ...
+
+    assert set(_derive_required_members(SurfaceProbe)) == {
+        "annotated",
+        "a_property",
+        "a_classmethod",
+        "a_staticmethod",
+        "a_method",
+    }
+
+
+def test_an_adapter_missing_a_non_method_member_is_still_rejected() -> None:
+    """The end-to-end consequence of the rule above: presence checking has to
+    reach members that are not plain methods, or a defective adapter registers.
+
+    Built from _REQUIRED_MEMBERS so it stays honest as the protocol grows: the
+    'complete' half proves the fixture really does satisfy the check, which is
+    what makes the 'incomplete' half's rejection attributable to the one
+    removed member rather than to an unrelated gap.
+    """
+    from span_panel_api.adapters import _REQUIRED_MEMBERS
+
+    complete = {name: (lambda self, *args, **kwargs: None) for name in _REQUIRED_MEMBERS}
+    incomplete = {name: value for name, value in complete.items() if name != "SUPPORTS_DATA_MODEL_VERSIONS"}
+
+    assert _discover_with(_FakeEntryPoint("schema_9", type("Complete", (), complete))) != {}
+    assert _discover_with(_FakeEntryPoint("schema_9", type("Incomplete", (), incomplete))) == {}
 
 
 @pytest.mark.parametrize(

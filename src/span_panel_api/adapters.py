@@ -17,16 +17,36 @@ _LOGGER = logging.getLogger(__name__)
 _ENTRY_POINT_GROUP = "span_panel_api.schema_adapters"
 _REGISTRY: dict[str, type[SchemaAdapter]] | None = None
 
-# Derived from the protocol rather than restated, so the check cannot drift out
-# of sync with the contract it enforces — adding a method to SchemaAdapter
-# automatically makes it required of every adapter package.
-#
-# `issubclass` is not available here: SchemaAdapter has non-method members, and
-# runtime_checkable protocols with data attributes reject issubclass() outright.
-_REQUIRED_MEMBERS: tuple[str, ...] = (
-    *sorted(SchemaAdapter.__annotations__),
-    *sorted(name for name, value in vars(SchemaAdapter).items() if callable(value) and not name.startswith("_")),
-)
+
+def _derive_required_members(protocol: type) -> tuple[str, ...]:
+    """Every public member a protocol declares, whatever kind it is.
+
+    Derived from the protocol rather than restated, so the check cannot drift
+    out of sync with the contract it enforces — adding any public member to
+    SchemaAdapter automatically makes it required of every adapter package.
+
+    Two sources, because a protocol declares members two ways: annotation-only
+    data members live in ``__annotations__`` and never reach ``vars()``, while
+    anything with a body lives in ``vars()`` and is not annotated.
+
+    Member *kind* is deliberately not filtered on. Screening ``vars()`` for
+    ``callable`` looks equivalent and is not: a ``property`` object is not
+    callable and neither is a ``classmethod`` object, so that filter would
+    silently stop requiring a member the day the protocol declared one. Every
+    public name in ``vars()`` is a member the protocol body declared — Protocol's
+    own machinery (``_is_protocol``, ``__protocol_attrs__``, ``__subclasshook__``)
+    is uniformly underscore-prefixed — so no kind check is needed to begin with.
+
+    ``issubclass`` is not an option here: SchemaAdapter has non-method members,
+    and runtime_checkable protocols with data attributes reject it outright.
+    """
+    return (
+        *sorted(getattr(protocol, "__annotations__", {})),
+        *sorted(name for name in vars(protocol) if not name.startswith("_")),
+    )
+
+
+_REQUIRED_MEMBERS: tuple[str, ...] = _derive_required_members(SchemaAdapter)
 
 # The adapter key for panels that publish no data-model-version. This is a
 # bootstrap-level fact — Tier 1 dispatch reads absence as "flat schema" — not an

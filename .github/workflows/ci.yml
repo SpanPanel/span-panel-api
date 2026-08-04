@@ -97,6 +97,22 @@ jobs:
     - name: Check packages
       run: uv run twine check dist/*
 
+    # Every distribution here is fully annotated, so every distribution has to
+    # carry the marker that lets a consumer's type checker see those annotations.
+    # Without it the package resolves to Any downstream and the typing is inert.
+    - name: Verify every wheel ships a py.typed marker
+      run: |
+        python -c "
+        import glob, sys, zipfile
+        wheels = glob.glob('dist/*.whl')
+        if not wheels:
+            sys.exit('::error::no wheels were built')
+        for wheel in wheels:
+            if not any(n.endswith('/py.typed') for n in zipfile.ZipFile(wheel).namelist()):
+                sys.exit(f'::error::{wheel} ships no py.typed marker; downstream type checking would resolve it as Any')
+            print(f'{wheel}: py.typed present')
+        "
+
     # The configuration entry-point discovery exists to support, and the one
     # nothing else in CI exercises: the bootstrap wheel installed with no
     # adapter present. It must import, and it must fail by name rather than

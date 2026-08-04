@@ -85,3 +85,92 @@ def test_resolve_adapter_names_what_is_installed() -> None:
 
     assert exc.value.needed == "schema_9"
     assert DEFAULT_ADAPTER_KEY in exc.value.available
+
+
+# ---------------------------------------------------------------------------
+# Entry-point validation — a bad adapter package must not become an opaque
+# TypeError deep inside connect()
+# ---------------------------------------------------------------------------
+
+
+class _FakeEntryPoint:
+    def __init__(self, name: str, value: object) -> None:
+        self.name = name
+        self._value = value
+
+    def load(self) -> object:
+        return self._value
+
+
+def _discover_with(*eps: _FakeEntryPoint) -> dict[str, object]:
+    _reset_adapter_cache()
+    with patch("span_panel_api.adapters.entry_points", return_value=list(eps)):
+        return dict(discover_adapters())
+
+
+def test_required_members_are_derived_from_the_protocol() -> None:
+    """The check must not restate the contract — a method added to SchemaAdapter
+    becomes required of every adapter without anyone remembering to update a list."""
+    from span_panel_api.adapters import _REQUIRED_MEMBERS
+    from span_panel_api.protocol import SchemaAdapter
+
+    assert set(SchemaAdapter.__annotations__) <= set(_REQUIRED_MEMBERS)
+    assert "topics_to_subscribe" in _REQUIRED_MEMBERS
+    assert "build_snapshot" in _REQUIRED_MEMBERS
+    # Dunders are excluded: presence tells us nothing, every object has them.
+    assert not [member for member in _REQUIRED_MEMBERS if member.startswith("_")]
+
+
+@pytest.mark.parametrize(
+    ("label", "value"),
+    [
+        ("a module", pytest),
+        ("a function", lambda serial, size: None),
+        ("an instance rather than a class", object()),
+        ("a string", "span_panel_api_schema_0:SchemaZeroAdapter"),
+    ],
+)
+def test_non_class_entry_points_are_skipped_not_registered(label: str, value: object) -> None:
+    """The failure that actually happens: an entry point pointing at the wrong
+    kind of object. Phase 0 stored it and blew up later inside connect()."""
+    assert _discover_with(_FakeEntryPoint("schema_9", value)) == {}, label
+
+
+def test_a_class_missing_protocol_members_is_skipped() -> None:
+    class NotAnAdapter:
+        schema_major = "schema_9"
+
+    assert _discover_with(_FakeEntryPoint("schema_9", NotAnAdapter)) == {}
+
+
+def test_a_conforming_class_is_registered() -> None:
+    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+
+    registry = _discover_with(_FakeEntryPoint("schema_0", SchemaZeroAdapter))
+
+    assert registry == {"schema_0": SchemaZeroAdapter}
+
+
+def test_one_bad_adapter_does_not_hide_the_good_ones() -> None:
+    """A broken third-party adapter must not take down a panel whose own adapter
+    is installed and fine."""
+    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+
+    registry = _discover_with(
+        _FakeEntryPoint("schema_9", "not a class"),
+        _FakeEntryPoint("schema_0", SchemaZeroAdapter),
+    )
+
+    assert registry == {"schema_0": SchemaZeroAdapter}
+
+
+def test_an_entry_point_that_raises_on_load_is_skipped() -> None:
+    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+
+    class Exploding(_FakeEntryPoint):
+        def load(self) -> object:
+            raise ImportError("adapter package is half-installed")
+
+    registry = _discover_with(Exploding("schema_9", None), _FakeEntryPoint("schema_0", SchemaZeroAdapter))
+
+    assert registry == {"schema_0": SchemaZeroAdapter}

@@ -28,7 +28,7 @@ jobs:
         enable-cache: true
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --all-packages
 
     - name: Run pre-commit hooks
       run: |
@@ -36,7 +36,10 @@ jobs:
 
     - name: Run tests with pytest
       run: |
-        uv run pytest tests/ -v --cov=src/span_panel_api --cov-report=xml --cov-report=term-missing
+        uv run pytest tests/ -v \
+          --cov=src/span_panel_api \
+          --cov=packages/schema-0/src/span_panel_api_schema_0 \
+          --cov-report=xml --cov-report=term-missing
 
 
 
@@ -57,11 +60,11 @@ jobs:
         enable-cache: true
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --all-packages
 
     - name: Run Bandit security scan
       run: |
-        uv run bandit -r src/ -f json -o bandit-report.json || true
+        uv run bandit -r src/ packages/ -f json -o bandit-report.json || true
 
     - name: Upload Bandit scan results
       uses: actions/upload-artifact@v7
@@ -86,13 +89,23 @@ jobs:
         enable-cache: true
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --all-packages
 
-    - name: Build package
-      run: uv build
+    - name: Build packages
+      run: uv build --all-packages
 
-    - name: Check package
+    - name: Check packages
       run: uv run twine check dist/*
+
+    # The configuration entry-point discovery exists to support, and the one
+    # nothing else in CI exercises: the bootstrap wheel installed with no
+    # adapter present. It must import, and it must fail by name rather than
+    # with ModuleNotFoundError.
+    - name: Verify the bootstrap installs without an adapter
+      run: |
+        uv venv /tmp/bootstrap-only
+        VIRTUAL_ENV=/tmp/bootstrap-only uv pip install dist/span_panel_api-*.whl
+        VIRTUAL_ENV=/tmp/bootstrap-only uv run --no-project python scripts/verify_adapterless_install.py
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v7

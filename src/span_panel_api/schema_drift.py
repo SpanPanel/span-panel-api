@@ -3,7 +3,7 @@
 Schema-agnostic: operates purely on ``HomieSchemaTypes`` dicts (a mapping of
 node type to property definitions) and has no dependency on flat-schema
 (schema_0) internals. Lives at the bootstrap level so ``span_panel_api.mqtt``
-can call it without importing anything from ``_impl/schema_0``.
+can call it without importing anything from an adapter distribution.
 """
 
 from __future__ import annotations

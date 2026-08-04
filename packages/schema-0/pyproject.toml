@@ -1,0 +1,35 @@
+[project]
+name = "span-panel-api-schema-0"
+version = "1.0.0b1"
+description = "Flat-schema (data-model-version absent) parser for span-panel-api"
+authors = [
+    {name = "SpanPanel"}
+]
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10,<4.0"
+dependencies = [
+    "span-panel-api>=3.0.0b1,<4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/SpanPanel/span-panel-api"
+Issues = "https://github.com/SpanPanel/span-panel-api/issues"
+
+# The whole point of this distribution. The bootstrap finds this adapter by
+# discovering the group, never by importing this package.
+[project.entry-points."span_panel_api.schema_adapters"]
+schema_0 = "span_panel_api_schema_0:SchemaZeroAdapter"
+
+# Resolve the bootstrap from the workspace when developing here. Published
+# wheels are unaffected: this table is uv-only metadata and the dependency
+# above is what a consumer installing from PyPI sees.
+[tool.uv.sources]
+span-panel-api = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/span_panel_api_schema_0"]

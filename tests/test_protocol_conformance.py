@@ -91,7 +91,7 @@ def test_schema_adapter_construction_signature_matches_its_implementation() -> N
     """
     import inspect
 
-    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+    from span_panel_api_schema_0 import SchemaZeroAdapter
     from span_panel_api.protocol import SchemaAdapter
 
     declared = list(inspect.signature(SchemaAdapter.__init__).parameters)

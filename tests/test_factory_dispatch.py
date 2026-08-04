@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+from span_panel_api_schema_0 import SchemaZeroAdapter
 from span_panel_api.adapters import _reset_adapter_cache
 from span_panel_api.exceptions import SpanPanelAdapterMissingError, SpanPanelSchemaVersionError
 from span_panel_api.factory import _select_adapter_key

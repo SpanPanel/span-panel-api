@@ -10,10 +10,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from span_panel_api._impl.schema_0.accumulator import HomiePropertyAccumulator
-from span_panel_api._impl.schema_0.const import PROPERTY_SET_TOPIC_FMT, TYPE_CORE, WILDCARD_TOPIC_FMT
-from span_panel_api._impl.schema_0.consumer import HomieDeviceConsumer
-from span_panel_api._impl.schema_0.field_metadata import build_field_metadata
+from span_panel_api_schema_0.accumulator import HomiePropertyAccumulator
+from span_panel_api_schema_0.const import PROPERTY_SET_TOPIC_FMT, TYPE_CORE, WILDCARD_TOPIC_FMT
+from span_panel_api_schema_0.consumer import HomieDeviceConsumer
+from span_panel_api_schema_0.field_metadata import build_field_metadata
 
 if TYPE_CHECKING:
     from span_panel_api.models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot

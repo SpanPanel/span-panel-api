@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "2.6.4"
+version = "3.0.0b1"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -22,11 +22,18 @@ Issues = "https://github.com/SpanPanel/span-panel-api/issues"
 [project.scripts]
 format-markdown = "scripts.format_markdown:main"
 
-[project.entry-points."span_panel_api.schema_adapters"]
-schema_0 = "span_panel_api._impl.schema_0:SchemaZeroAdapter"
+# No [project.entry-points."span_panel_api.schema_adapters"] block here, and that
+# absence is the point of Phase 1: this distribution registers no adapter and
+# imports none. Adapters are separate distributions that register themselves —
+# see packages/schema-0. Adding a block here would silently re-couple the
+# bootstrap to a parser and undo the split.
 
 [dependency-groups]
 dev = [
+    # The adapter is a dev dependency, never a runtime one: the bootstrap must
+    # remain installable without it. It is here so the test suite exercises the
+    # two distributions together, which is the configuration users will run.
+    "span-panel-api-schema-0",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-cov",
@@ -46,6 +53,16 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# One repo, independent distributions. The adapter is a workspace member so the
+# test suite runs against both halves together, while `uv build` in each
+# directory still produces a distribution that can be installed on its own —
+# which is what the adapter-less install test depends on.
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+span-panel-api-schema-0 = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/span_panel_api", "scripts"]
@@ -97,6 +114,10 @@ ignore = [
 force-sort-within-sections = true
 combine-as-imports = true
 split-on-trailing-comma = false
+# Both distributions in this workspace are first-party. Stated explicitly
+# because the repo now has two source roots, and inference from a single `src/`
+# would classify the adapter package as third-party.
+known-first-party = ["span_panel_api", "span_panel_api_schema_0"]
 
 [tool.mypy]
 python_version = "3.13"
@@ -126,7 +147,7 @@ ignore_missing_imports = true
 
 [tool.coverage.run]
 data_file = ".local_coverage_data"
-source = ["src/span_panel_api"]
+source = ["src/span_panel_api", "packages/schema-0/src/span_panel_api_schema_0"]
 omit = [
     "tests/*",
     "*/tests/*",
@@ -172,6 +193,13 @@ ignore-paths = [
 
 [tool.pylint.messages_control]
 disable = [
+    # Import order is enforced by ruff's isort rules (lint select "I"), which
+    # knows both workspace source roots via known-first-party. pylint has no
+    # equivalent setting — only known-standard-library and known-third-party —
+    # so it classifies span_panel_api_schema_0 as third-party and disagrees with
+    # ruff on every adapter module. One authority for import order; ruff is the
+    # one that can be told the truth about this layout.
+    "wrong-import-order",
     "missing-module-docstring",
     "missing-class-docstring",
     "missing-function-docstring",

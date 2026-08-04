@@ -15,7 +15,8 @@ Field path convention: ``{snapshot_type}.{field_name}``
 
 from __future__ import annotations
 
-from span_panel_api._impl.schema_0.const import (
+from span_panel_api.models import FieldMetadata, HomieSchemaTypes
+from span_panel_api_schema_0.const import (
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_CORE,
@@ -26,7 +27,6 @@ from span_panel_api._impl.schema_0.const import (
     TYPE_POWER_FLOWS,
     TYPE_PV,
 )
-from span_panel_api.models import FieldMetadata, HomieSchemaTypes
 
 # ---------------------------------------------------------------------------
 # Static mapping: (node_type, property_id) → snapshot field path

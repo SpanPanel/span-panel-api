@@ -144,7 +144,7 @@ def test_a_class_missing_protocol_members_is_skipped() -> None:
 
 
 def test_a_conforming_class_is_registered() -> None:
-    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+    from span_panel_api_schema_0 import SchemaZeroAdapter
 
     registry = _discover_with(_FakeEntryPoint("schema_0", SchemaZeroAdapter))
 
@@ -154,7 +154,7 @@ def test_a_conforming_class_is_registered() -> None:
 def test_one_bad_adapter_does_not_hide_the_good_ones() -> None:
     """A broken third-party adapter must not take down a panel whose own adapter
     is installed and fine."""
-    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+    from span_panel_api_schema_0 import SchemaZeroAdapter
 
     registry = _discover_with(
         _FakeEntryPoint("schema_9", "not a class"),
@@ -165,7 +165,7 @@ def test_one_bad_adapter_does_not_hide_the_good_ones() -> None:
 
 
 def test_an_entry_point_that_raises_on_load_is_skipped() -> None:
-    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+    from span_panel_api_schema_0 import SchemaZeroAdapter
 
     class Exploding(_FakeEntryPoint):
         def load(self) -> object:

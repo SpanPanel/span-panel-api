@@ -14,7 +14,7 @@ from paho.mqtt.reasoncodes import ReasonCode
 
 import span_panel_api._http as _http_mod
 from span_panel_api.models import V2HomieSchema
-from span_panel_api._impl.schema_0.const import TOPIC_PREFIX, TYPE_CORE
+from span_panel_api_schema_0.const import TOPIC_PREFIX, TYPE_CORE
 
 
 @pytest.fixture(autouse=True)

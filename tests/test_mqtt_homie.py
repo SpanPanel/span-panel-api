@@ -22,9 +22,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from span_panel_api._impl.schema_0 import SchemaZeroAdapter
-from span_panel_api._impl.schema_0.accumulator import HomiePropertyAccumulator
-from span_panel_api._impl.schema_0.const import (
+from span_panel_api_schema_0 import SchemaZeroAdapter
+from span_panel_api_schema_0.accumulator import HomiePropertyAccumulator
+from span_panel_api_schema_0.const import (
     TOPIC_PREFIX,
     TYPE_BESS,
     TYPE_CIRCUIT,
@@ -36,7 +36,7 @@ from span_panel_api._impl.schema_0.const import (
     TYPE_POWER_FLOWS,
     TYPE_PV,
 )
-from span_panel_api._impl.schema_0.consumer import HomieDeviceConsumer
+from span_panel_api_schema_0.consumer import HomieDeviceConsumer
 from span_panel_api.mqtt.const import HOMIE_STATE_READY, MQTT_DEFAULT_MQTTS_PORT, MQTT_DEFAULT_WS_PORT, MQTT_DEFAULT_WSS_PORT
 from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.models import MqttClientConfig
@@ -178,18 +178,18 @@ class TestHomieConsumerState:
 
 class TestHomieCircuitSnapshot:
     def test_circuit_id_normalization(self):
-        from span_panel_api._impl.schema_0.const import normalize_circuit_id
+        from span_panel_api_schema_0.const import normalize_circuit_id
 
         assert normalize_circuit_id("aabbccdd-1122-3344-5566-778899001122") == "aabbccdd11223344556677889900112" + "2"
 
     def test_circuit_id_denormalization(self):
-        from span_panel_api._impl.schema_0.const import denormalize_circuit_id
+        from span_panel_api_schema_0.const import denormalize_circuit_id
 
         result = denormalize_circuit_id("aabbccdd11223344556677889900112" + "2")
         assert result == "aabbccdd-1122-3344-5566-778899001122"
 
     def test_denormalize_non_uuid(self):
-        from span_panel_api._impl.schema_0.const import denormalize_circuit_id
+        from span_panel_api_schema_0.const import denormalize_circuit_id
 
         # Non-32-char strings pass through unchanged
         assert denormalize_circuit_id("short") == "short"

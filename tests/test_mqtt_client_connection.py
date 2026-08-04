@@ -8,7 +8,7 @@ import pytest
 
 from span_panel_api.exceptions import SpanPanelError, SpanPanelStaleDataError
 from span_panel_api.models import SpanPanelSnapshot
-from span_panel_api._impl.schema_0.const import WILDCARD_TOPIC_FMT
+from span_panel_api_schema_0.const import WILDCARD_TOPIC_FMT
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.models import MqttClientConfig
@@ -458,7 +458,7 @@ def test_client_defaults_to_the_flat_adapter() -> None:
     than the stored factory keeps the guarantee that mattered — a directly
     constructed client still parses the flat schema.
     """
-    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+    from span_panel_api_schema_0 import SchemaZeroAdapter
     from span_panel_api.mqtt.client import SpanMqttClient
     from span_panel_api.mqtt.models import MqttClientConfig
 
@@ -473,7 +473,7 @@ def test_client_defaults_to_the_flat_adapter() -> None:
 def test_injected_factory_receives_serial_and_panel_size() -> None:
     """The factory must be called with the panel_size discovered at connect,
     not a placeholder — panel_size drives unmapped-tab computation."""
-    from span_panel_api._impl.schema_0 import SchemaZeroAdapter
+    from span_panel_api_schema_0 import SchemaZeroAdapter
     from span_panel_api.mqtt.client import SpanMqttClient
     from span_panel_api.mqtt.models import MqttClientConfig
 

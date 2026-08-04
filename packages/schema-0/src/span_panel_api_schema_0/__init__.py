@@ -1,6 +1,6 @@
 """Flat-schema adapter package (data-model-version absent)."""
 
-from span_panel_api._impl.schema_0.adapter import SchemaZeroAdapter
+from span_panel_api_schema_0.adapter import SchemaZeroAdapter
 
 # Re-exported from the adapter rather than restated. The protocol requires the
 # range as a class attribute, so the class is the source of truth; a second

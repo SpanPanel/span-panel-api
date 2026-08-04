@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 
-from .adapters import resolve_adapter
+from .adapters import DEFAULT_ADAPTER_KEY, resolve_adapter
 from .auth import register_v2
 from .detection import detect_api_version
 from .exceptions import SpanPanelAuthError, SpanPanelSchemaVersionError
@@ -51,7 +51,7 @@ def _select_adapter_key(data_model_version: str | None) -> tuple[str, str]:
             extracted from it.
     """
     if data_model_version is None:
-        return "schema_0", "data-model-version absent (flat schema)"
+        return DEFAULT_ADAPTER_KEY, "data-model-version absent (flat schema)"
 
     if (match := _DMV_CANONICAL.match(data_model_version)) is not None:
         return f"schema_{int(match.group(1))}", f"data-model-version={data_model_version!r}"

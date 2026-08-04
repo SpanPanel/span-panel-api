@@ -62,6 +62,19 @@ def test_absence_is_still_a_supported_signal_not_an_error() -> None:
     assert key == "schema_0"
 
 
+def test_the_flat_key_is_the_one_the_transport_resolves() -> None:
+    """Dispatch and the transport's default path must name the same adapter.
+
+    They are the two callers of resolve_adapter, and a divergence between them
+    is invisible in a dev workspace where every adapter is installed: it only
+    appears as an unresolvable key in a real install.
+    """
+    from span_panel_api.adapters import DEFAULT_ADAPTER_KEY
+
+    key, _ = _select_adapter_key(None)
+    assert key == DEFAULT_ADAPTER_KEY
+
+
 def test_missing_adapter_raises_with_the_installed_list() -> None:
     from span_panel_api.adapters import resolve_adapter
 

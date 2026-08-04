@@ -4,6 +4,18 @@ on:
   release:
     types: [published]
 
+# This repo publishes two distributions that version independently: the
+# bootstrap (span-panel-api) and each schema adapter (span-panel-api-schema-N).
+# One release publishes exactly one of them, chosen by the tag prefix:
+#
+#   v3.0.0b1            -> span-panel-api            (the historical convention)
+#   schema-0-v1.0.0b1   -> span-panel-api-schema-0
+#
+# The version lives in the distribution's own pyproject.toml and this workflow
+# only verifies the tag agrees. It deliberately does not rewrite the version at
+# release time: the adapter declares a floor on the bootstrap
+# (span-panel-api>=X), so the committed versions are load-bearing for resolution
+# and cannot be treated as placeholders that a release stamps over.
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -25,16 +37,63 @@ jobs:
       with:
         enable-cache: true
 
-    - name: Update version from tag
+    - name: Resolve the distribution from the tag
+      id: target
       run: |
-        # Extract version from git tag (remove 'v' prefix if present)
-        VERSION=${GITHUB_REF#refs/tags/}
-        VERSION=${VERSION#v}
-        echo "Setting version to $VERSION"
-        sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+        TAG=${GITHUB_REF#refs/tags/}
+        case "$TAG" in
+          schema-*-v*)
+            SCHEMA=${TAG#schema-}
+            SCHEMA=${SCHEMA%%-v*}
+            PACKAGE="span-panel-api-schema-$SCHEMA"
+            MANIFEST="packages/schema-$SCHEMA/pyproject.toml"
+            VERSION=${TAG#schema-$SCHEMA-v}
+            ;;
+          v*)
+            PACKAGE="span-panel-api"
+            MANIFEST="pyproject.toml"
+            VERSION=${TAG#v}
+            ;;
+          *)
+            echo "::error::Tag '$TAG' names no distribution. Use 'vX.Y.Z' for the bootstrap or 'schema-N-vX.Y.Z' for an adapter."
+            exit 1
+            ;;
+        esac
+        if [ ! -f "$MANIFEST" ]; then
+          echo "::error::Tag '$TAG' resolves to '$MANIFEST', which does not exist."
+          exit 1
+        fi
+        echo "Tag '$TAG' releases $PACKAGE $VERSION from $MANIFEST"
+        echo "package=$PACKAGE" >> "$GITHUB_OUTPUT"
+        echo "manifest=$MANIFEST" >> "$GITHUB_OUTPUT"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+    - name: Verify the tag matches the committed version
+      run: |
+        DECLARED=$(python -c "import sys, tomllib; print(tomllib.load(open(sys.argv[1], 'rb'))['project']['version'])" "${{ steps.target.outputs.manifest }}")
+        if [ "$DECLARED" != "${{ steps.target.outputs.version }}" ]; then
+          echo "::error::${{ steps.target.outputs.manifest }} declares version '$DECLARED' but the tag says '${{ steps.target.outputs.version }}'. Commit the version bump before tagging."
+          exit 1
+        fi
+        echo "Version $DECLARED confirmed."
+
+    # Only the tagged distribution is built, so dist/ holds exactly what this
+    # release publishes and the publish step cannot pick up a sibling package.
     - name: Build package
-      run: uv build
+      run: uv build --package "${{ steps.target.outputs.package }}"
+
+    - name: Verify the wheel ships a py.typed marker
+      run: |
+        python -c "
+        import glob, sys, zipfile
+        wheels = glob.glob('dist/*.whl')
+        if not wheels:
+            sys.exit('::error::no wheel was built')
+        for wheel in wheels:
+            if not any(n.endswith('/py.typed') for n in zipfile.ZipFile(wheel).namelist()):
+                sys.exit(f'::error::{wheel} ships no py.typed marker; downstream type checking would resolve it as Any')
+            print(f'{wheel}: py.typed present')
+        "
 
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1

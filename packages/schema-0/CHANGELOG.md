@@ -19,6 +19,7 @@ Pre-release. First release as a standalone distribution.
   per-adapter: parent/child firmware renames it to `deviceClassesSchemaHash` along with the block it covers, so a future `schema_1` declares its own rather than inheriting one that does not exist on its firmware.
 - **Provenance tests** asserting that all 64 hardcoded `(node_type, property_id)` pairs still resolve against the captured schema, that `HOMIE_DOMAIN` / `HOMIE_VERSION` still match it, and that the two lugs subtypes real firmware publishes remain absent
   from the schema _and_ present in the metadata alias table. This is the only signal that catches schema drift before release; every other symptom reaches production as a silent absence.
+- **A `py.typed` marker**, so consumers type-check against this package's real annotations rather than resolving everything it exports as `Any`.
 
 ### Known deviations from the published schema
 

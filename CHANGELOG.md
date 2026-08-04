@@ -43,6 +43,16 @@ than by upgrading the transport. This is prototype work being proven end to end 
   read but whose form is non-canonical (`1`, `1.0-beta`) dispatches on that major and logs the deviation. A value with no extractable major now raises. Previously all three fell through to the flat parser, which does not fail — it produces plausible but
   wrong power and energy figures.
 - **Dispatch diagnostics travel through the `SpanMqttClient` constructor**, removing the window where a connected client reported a selected adapter alongside `schema_dispatch_reason='not dispatched'`.
+- **Releases are now per-distribution and the tag no longer sets the version.** A tag selects which distribution to publish — `vX.Y.Z` for `span-panel-api`, `schema-N-vX.Y.Z` for an adapter — and the release fails unless the tagged version matches the one
+  committed in that distribution's `pyproject.toml`. The previous workflow rewrote the root version from the tag and built only the root package, which under a two-distribution layout would have published the bootstrap with no adapter alongside it. Version
+  numbers are now load-bearing between the two (the adapter declares a floor on the bootstrap), so they belong in the repository rather than being stamped at release time.
+
+### Fixed
+
+- **Adapter distributions ship a `py.typed` marker.** Without it a consumer's type checker refuses to read the adapter's annotations and resolves every symbol it exports as `Any`, silently erasing the strict typing at the wheel boundary. CI now fails any
+  wheel built without one.
+- **Protocol conformance checking no longer depends on member kind.** The required-member set is derived from every public member `SchemaAdapter` declares, not only the callable ones — a `property` or `classmethod` object is not callable, so the previous
+  derivation would have quietly stopped requiring such a member the day the protocol declared one.
 
 ## [2.6.4] - 05/2026
 

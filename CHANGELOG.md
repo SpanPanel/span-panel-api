@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0b1] - 08/2026
+
+Pre-release. `span-panel-api` becomes a transport and a dispatcher that contains **no parser**. Wire formats ship as separate distributions and register themselves via entry points, so support for a new panel schema arrives by installing a package rather
+than by upgrading the transport. This is prototype work being proven end to end before any decision to land it on `main`.
+
+### Removed
+
+- **BREAKING: `span-panel-api` no longer contains a parser.** Installing it alone gives a client that connects and then raises `SpanPanelAdapterMissingError`. Flat-schema panels (firmware `r202603`–`r202627`) need **`span-panel-api-schema-0`** installed
+  alongside it:
+
+  ```console
+  pip install span-panel-api span-panel-api-schema-0
+  ```
+
+- **BREAKING: `HomieLifecycle`, `HomiePropertyAccumulator` and `HomieDeviceConsumer` are no longer exported** from `span_panel_api` or `span_panel_api.mqtt`. All three are flat-schema-specific rather than Homie-convention-level: the accumulator filters
+  every topic against a single device's prefix and stores `node → prop`, which drops nearly every message under the parent/child model; `HomieLifecycle`'s members are not Homie 5 `$state` values but a consumer-side progression encoding "one description
+  received ⇒ ready", which is the flat readiness model. They now live in `span_panel_api_schema_0`.
+- **Removed dead constants** `DEVICE_TOPIC_FMT`, `STATE_TOPIC_FMT`, `DESCRIPTION_TOPIC_FMT`, `PROPERTY_TOPIC_FMT` (unreferenced before the Phase 0 relocation) and `TYPE_PCS` (a real schema type this library does not consume).
+
+### Added
+
+- **`span_panel_api.adapters.resolve_adapter(key, reason)`** — the single place a missing adapter becomes a named error, used by both Tier 1 dispatch and the transport's default path.
+- **`SpanPanelSchemaVersionError`**, raised when a panel reports a `data-model-version` whose schema major cannot be determined. Distinct from `SpanPanelAdapterMissingError` because the remedy differs: a missing adapter is a known schema with no installed
+  parser, while this is a schema no adapter can even be named for.
+- **`SpanPanelAdapterMissingError` and `SpanPanelSchemaVersionError` are now exported** from the top-level package — both are errors a user sees when their panel outruns their install, so catching them should not require reaching into a private module.
+- **`SchemaAdapter.__init__` is declared on the protocol.** Construction was always part of the contract (the transport resolves an adapter class from the registry and calls it), but was previously typed only as a `Callable`, leaving the signature
+  unchecked against implementations.
+- **Entry-point validation.** `discover_adapters()` now verifies each loaded object is a class implementing the protocol before registering it, and skips it with a logged reason otherwise. One broken third-party adapter cannot take down a panel whose own
+  adapter is fine.
+- **`scripts/verify_adapterless_install.py`** and a CI step that runs it against a venv holding only the bootstrap wheel.
+
+### Changed
+
+- **`SpanMqttClient(adapter_factory=...)` is now optional.** When omitted, the parser is resolved through entry-point discovery at `_build_adapter()` rather than imported. Resolution is lazy by design: constructing a client must not require an adapter to
+  be installed, only building a parser must.
+- **Dispatch refuses an unreadable `data-model-version` instead of assuming flat.** Absence still means the flat schema — that is a real signal, since the property was introduced by the firmware that introduced parent/child. A value whose major _can_ be
+  read but whose form is non-canonical (`1`, `1.0-beta`) dispatches on that major and logs the deviation. A value with no extractable major now raises. Previously all three fell through to the flat parser, which does not fail — it produces plausible but
+  wrong power and energy figures.
+- **Dispatch diagnostics travel through the `SpanMqttClient` constructor**, removing the window where a connected client reported a selected adapter alongside `schema_dispatch_reason='not dispatched'`.
+
 ## [2.6.4] - 05/2026
 
 ### Fixed

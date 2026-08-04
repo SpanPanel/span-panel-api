@@ -13,6 +13,8 @@ from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.models import MqttClientConfig
 
+from conftest import flat_schema as _schema
+
 
 def _make_client() -> SpanMqttClient:
     """Build a SpanMqttClient without I/O for unit testing."""
@@ -436,7 +438,7 @@ class TestStaleSnapshotDispatchGuard:
 
 
 def test_adapter_is_none_before_connect() -> None:
-    """The parser needs panel_size, which only connect() knows, so there is no
+    """The parser needs the schema, which only connect() has, so there is no
     adapter until then — mirroring today's `self._homie = None`."""
     from span_panel_api.mqtt.client import SpanMqttClient
     from span_panel_api.mqtt.models import MqttClientConfig
@@ -467,21 +469,23 @@ def test_client_defaults_to_the_flat_adapter() -> None:
     )
 
     assert client._adapter_factory is None
-    assert isinstance(client._build_adapter(40), SchemaZeroAdapter)
+    assert isinstance(client._build_adapter(_schema(40)), SchemaZeroAdapter)
 
 
-def test_injected_factory_receives_serial_and_panel_size() -> None:
-    """The factory must be called with the panel_size discovered at connect,
-    not a placeholder — panel_size drives unmapped-tab computation."""
+def test_injected_factory_receives_serial_and_schema() -> None:
+    """The factory must be called with the schema discovered at connect, not a
+    placeholder — the adapter reads panel size from it, which drives
+    unmapped-tab computation."""
+    from span_panel_api.models import V2HomieSchema
     from span_panel_api_schema_0 import SchemaZeroAdapter
     from span_panel_api.mqtt.client import SpanMqttClient
     from span_panel_api.mqtt.models import MqttClientConfig
 
-    seen: list[tuple[str, int]] = []
+    seen: list[tuple[str, V2HomieSchema]] = []
 
-    def factory(serial_number: str, panel_size: int) -> SchemaZeroAdapter:
-        seen.append((serial_number, panel_size))
-        return SchemaZeroAdapter(serial_number=serial_number, panel_size=panel_size)
+    def factory(serial_number: str, schema: V2HomieSchema) -> SchemaZeroAdapter:
+        seen.append((serial_number, schema))
+        return SchemaZeroAdapter(serial_number=serial_number, schema=schema)
 
     client = SpanMqttClient(
         "192.0.2.10",
@@ -491,8 +495,9 @@ def test_injected_factory_receives_serial_and_panel_size() -> None:
     )
 
     # Exercise the construction path directly rather than standing up a broker.
-    client._panel_size = 40
-    client._build_adapter(40)
+    schema = _schema(40)
+    client._build_adapter(schema)
 
-    assert seen == [("sim-40t-001", 40)]
+    assert seen == [("sim-40t-001", schema)]
+    assert seen[0][1].panel_size == 40
     assert isinstance(client.adapter, SchemaZeroAdapter)

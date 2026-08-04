@@ -40,6 +40,8 @@ from span_panel_api_schema_0.consumer import HomieDeviceConsumer
 from span_panel_api.mqtt.const import HOMIE_STATE_READY, MQTT_DEFAULT_MQTTS_PORT, MQTT_DEFAULT_WS_PORT, MQTT_DEFAULT_WSS_PORT
 from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.models import MqttClientConfig
+
+from conftest import flat_schema
 from span_panel_api.protocol import (
     PanelCapability,
 )
@@ -1017,7 +1019,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         mock_bridge = MagicMock()
         client._bridge = mock_bridge
@@ -1036,7 +1038,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         mock_bridge = MagicMock()
         client._bridge = mock_bridge
@@ -1055,7 +1057,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         # Populate the homie description so core node is known
         desc = _make_description(_core_description())
@@ -1080,7 +1082,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         # No description loaded — core node not found
         with pytest.raises(SpanPanelServerError, match="Core node not found"):
@@ -1099,7 +1101,7 @@ class TestSpanMqttClientSnapshot:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
         client._bridge = _ConnectedBridge()
 
         # Manually ready the adapter
@@ -1129,7 +1131,7 @@ class TestSpanMqttClientSnapshot:
         mock_bridge = MagicMock()
         mock_bridge.is_connected.return_value = True
         client._bridge = mock_bridge
-        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         client._adapter.handle_message(f"{PREFIX}/$state", "ready")
         client._adapter.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))

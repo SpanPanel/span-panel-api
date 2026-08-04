@@ -97,7 +97,7 @@ def test_schema_adapter_construction_signature_matches_its_implementation() -> N
     declared = list(inspect.signature(SchemaAdapter.__init__).parameters)
     implemented = list(inspect.signature(SchemaZeroAdapter.__init__).parameters)
 
-    assert declared == ["self", "serial_number", "panel_size"]
+    assert declared == ["self", "serial_number", "schema"]
     assert implemented == declared, f"SchemaZeroAdapter.__init__{implemented} does not match the protocol {declared}"
 
 

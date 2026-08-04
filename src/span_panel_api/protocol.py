@@ -12,7 +12,7 @@ from enum import Flag, auto
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from .models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
+    from .models import FieldMetadata, SpanPanelSnapshot, V2HomieSchema
 
 
 class PanelCapability(Flag):
@@ -93,20 +93,18 @@ class SchemaAdapter(Protocol):
     schema_major: str
     SUPPORTS_DATA_MODEL_VERSIONS: tuple[str, str]
 
-    def __init__(self, serial_number: str, panel_size: int) -> None:
+    def __init__(self, serial_number: str, schema: V2HomieSchema) -> None:
         """Construct a parser for one panel session.
 
         Declared because construction is part of the contract: the transport
         resolves an adapter *class* from the entry-point registry and calls it.
-        Phase 0 typed the seam as ``Callable[[str, int], SchemaAdapter]``, which
-        left the signature unchecked against implementations; stating it here
-        puts it back under the type checker.
 
-        ``panel_size`` is a flat-schema concept the transport fetches on the
-        adapter's behalf, so this signature is the one part of the protocol
-        expected to change when schema_1 lands — see the Phase 1 follow-ups,
-        item 2. It is stated rather than hidden precisely so that change is a
-        visible protocol break rather than a silent runtime TypeError.
+        Takes the whole schema rather than anything derived from it. The
+        previous signature passed ``panel_size``, which the transport extracted
+        on the adapter's behalf from a block only the flat schema has — so the
+        bootstrap had to understand a wire format it is supposed to know nothing
+        about, and any adapter whose schema is shaped differently could not say
+        so. Each adapter now reads what its own format defines.
         """
 
     def topics_to_subscribe(self) -> list[str]: ...
@@ -117,7 +115,7 @@ class SchemaAdapter(Protocol):
 
     def build_snapshot(self) -> SpanPanelSnapshot: ...
 
-    def build_field_metadata(self, schema_types: HomieSchemaTypes) -> dict[str, FieldMetadata]: ...
+    def build_field_metadata(self) -> dict[str, FieldMetadata]: ...
 
     def circuit_nodes_missing_names(self) -> list[str]: ...
 

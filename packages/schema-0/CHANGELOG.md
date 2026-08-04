@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is fixed — the flat single-device schema, SPAN firmware `r202603` through `r202627` — and is identified by `SUPPORTS_DATA_MODEL_VERSIONS`
 rather than by this version number. A release here means this parser changed, never that the panel did.
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING: `SchemaZeroAdapter(serial_number, schema)`** replaces `SchemaZeroAdapter(serial_number, panel_size)`, following the protocol change in `span-panel-api`. Panel size is now derived here, by reading the circuit `space` format out of the flat
+  schema's `types` block — knowledge that belongs to this package rather than to the transport, which was previously doing it on every adapter's behalf.
+- **`build_field_metadata()` takes no arguments**, reading the schema this adapter was constructed with.
+
+Requires `span-panel-api` with the reshaped `SchemaAdapter` protocol; the dependency floor is raised accordingly at release.
+
 ## [1.0.0b1] - 08/2026
 
 Pre-release. First release as a standalone distribution.

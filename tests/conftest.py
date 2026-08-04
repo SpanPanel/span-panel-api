@@ -34,16 +34,41 @@ TOPIC_PREFIX_SERIAL = f"{TOPIC_PREFIX}/{SERIAL}"
 # Minimal Homie description that makes the device "ready"
 MINIMAL_DESCRIPTION = json.dumps({"nodes": {"core": {"type": TYPE_CORE}}})
 
-# Mock schema for SpanMqttClient.connect() — panel_size=32
-_MOCK_SCHEMA = V2HomieSchema(
-    firmware_version="test",
-    types_schema_hash="sha256:test",
-    types={
-        "energy.ebus.device.circuit": {
-            "space": {"datatype": "integer", "format": "1:32:1"},
+
+def flat_schema(panel_size: int = 32) -> V2HomieSchema:
+    """A flat-schema REST response declaring ``panel_size`` breaker spaces.
+
+    No ``data_model_version``: absence is exactly what marks a payload as flat,
+    so this is what dispatch reads to select schema_0.
+    """
+    return V2HomieSchema(
+        firmware_version="test",
+        types_schema_hash="sha256:test",
+        types={
+            "energy.ebus.device.circuit": {
+                "space": {"datatype": "integer", "format": f"1:{panel_size}:1"},
+            },
         },
-    },
-)
+    )
+
+
+def parent_child_schema(data_model_version: str = "1.0") -> V2HomieSchema:
+    """A parent/child REST response, as r202633+ firmware serves it.
+
+    ``types`` is empty because that firmware keeps its definitions under
+    ``deviceClasses`` — which is exactly why the version has to be read before
+    anything tries to parse the payload.
+    """
+    return V2HomieSchema(
+        firmware_version="spanos2/r202633/01",
+        types_schema_hash="sha256:test",
+        types={},
+        data_model_version=data_model_version,
+    )
+
+
+# Mock schema for SpanMqttClient.connect() — panel_size=32, flat.
+MOCK_SCHEMA = flat_schema(32)
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +134,8 @@ async def mqtt_client_mock() -> AsyncGenerator[MagicMock, None]:
         patch("span_panel_api.mqtt.connection.AsyncMQTTClient") as cls,
         patch("span_panel_api.mqtt.connection.download_ca_cert", return_value="FAKE-PEM"),
         patch("span_panel_api.mqtt.connection._build_ssl_context", return_value=MagicMock()),
-        patch("span_panel_api.mqtt.client.get_homie_schema", return_value=_MOCK_SCHEMA),
+        patch("span_panel_api.mqtt.client.get_homie_schema", return_value=MOCK_SCHEMA),
+        patch("span_panel_api.factory.get_homie_schema", return_value=MOCK_SCHEMA),
     ):
         mock_client = cls.return_value
         mock_client.connect.side_effect = _connect

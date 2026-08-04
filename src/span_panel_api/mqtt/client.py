@@ -16,10 +16,11 @@ import time
 
 from span_panel_api.schema_drift import log_schema_drift
 
-from ..adapters import DEFAULT_ADAPTER_KEY, discover_adapters, resolve_adapter
+from ..adapters import discover_adapters, resolve_adapter
 from ..auth import get_homie_schema
+from ..dispatch import select_adapter_key
 from ..exceptions import SpanPanelConnectionError, SpanPanelServerError, SpanPanelStaleDataError
-from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot
+from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot, V2HomieSchema
 from ..protocol import PanelCapability, SchemaAdapter
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S
@@ -43,9 +44,10 @@ class SpanMqttClient:
         broker_config: MqttClientConfig,
         snapshot_interval: float = 1.0,
         panel_http_port: int = 80,
-        adapter_factory: Callable[[str, int], SchemaAdapter] | None = None,
+        adapter_factory: Callable[[str, V2HomieSchema], SchemaAdapter] | None = None,
         data_model_version: str | None = None,
         schema_dispatch_reason: str | None = None,
+        schema: V2HomieSchema | None = None,
     ) -> None:
         self._host = host
         self._serial_number = serial_number
@@ -67,23 +69,33 @@ class SpanMqttClient:
         self._field_metadata: dict[str, FieldMetadata] | None = None
         self._schema_hash: str | None = None
         self._previous_schema_types: HomieSchemaTypes | None = None
-        # Cached at connect() so the pre-rebuild hook can reconstruct the
-        # Homie accumulator with the same panel size after a transport-level
-        # rebuild. Schema cannot change within a session, so caching is safe.
-        self._panel_size: int | None = None
-        # Diagnostics, passed in by create_span_client so they are true from the
-        # first moment the object exists. Constructing directly leaves them
-        # describing exactly that: a client that never went through dispatch.
+        # Supplied by create_span_client, which already fetched it to dispatch
+        # on; None when constructed directly, in which case connect() fetches.
+        # Either way it is cached for the pre-rebuild hook, which rebuilds the
+        # parser after a transport-level rebuild. A panel cannot change schema
+        # within a session, so caching is safe.
+        self._schema = schema
+        # Diagnostics. create_span_client passes these so they are true from the
+        # first moment the object exists; constructing directly leaves them
+        # describing a client that has not dispatched yet, which connect() then
+        # fills in once it has a schema to dispatch on.
         self._data_model_version = data_model_version
         self._schema_dispatch_reason = schema_dispatch_reason or "not dispatched"
 
-    def _build_adapter(self, panel_size: int) -> SchemaAdapter:
+    def _build_adapter(self, schema: V2HomieSchema) -> SchemaAdapter:
         """Construct the parser for this session.
 
         Called from connect() and from the reconnect path — the only two
         places a parser is built today.
 
-        Resolving the default here rather than in ``__init__`` is deliberate:
+        With no injected factory this dispatches on the schema rather than
+        assuming the flat adapter. That matters because a client can be built
+        directly, bypassing create_span_client: before, such a client handed a
+        parent/child panel to the flat parser, which does not fail — it reports
+        plausible and wrong figures. Dispatch now happens on whichever path a
+        parser is built, so there is one answer rather than two.
+
+        Resolving the adapter here rather than in ``__init__`` is deliberate:
         constructing a client must not require an adapter to be installed, only
         building a parser must. That keeps ``import span_panel_api.mqtt.client``
         working in an adapter-less install — the configuration entry-point
@@ -91,13 +103,18 @@ class SpanMqttClient:
         is actionable.
 
         Raises:
+            SpanPanelSchemaVersionError: The panel reports a data-model-version
+                whose schema major cannot be determined.
             SpanPanelAdapterMissingError: No adapter_factory was supplied and no
-                package registers the default adapter key.
+                installed package registers the key this panel needs.
         """
         factory = self._adapter_factory
         if factory is None:
-            factory = resolve_adapter(DEFAULT_ADAPTER_KEY, "no adapter_factory supplied to SpanMqttClient")
-        self._adapter = factory(self._serial_number, panel_size)
+            adapter_key, dispatch_reason = select_adapter_key(schema.data_model_version)
+            self._data_model_version = schema.data_model_version
+            self._schema_dispatch_reason = dispatch_reason
+            factory = resolve_adapter(adapter_key, dispatch_reason)
+        self._adapter = factory(self._serial_number, schema)
         return self._adapter
 
     @property
@@ -180,10 +197,13 @@ class SpanMqttClient:
         self._loop = asyncio.get_running_loop()
         self._ready_event = asyncio.Event()
 
-        # Fetch schema to determine panel size and build field metadata
-        schema = await get_homie_schema(self._host, port=self._panel_http_port)
-        self._panel_size = schema.panel_size
-        adapter = self._build_adapter(schema.panel_size)
+        # create_span_client already fetched this to dispatch on; refetching
+        # would be a second call to the same unauthenticated endpoint for a
+        # value that cannot have changed. A directly-constructed client has no
+        # schema yet, so it fetches here and dispatches in _build_adapter.
+        schema = self._schema if self._schema is not None else await get_homie_schema(self._host, port=self._panel_http_port)
+        self._schema = schema
+        adapter = self._build_adapter(schema)
 
         _LOGGER.info(
             "MQTT adapter selected: %s (span-panel-api %s)\n  data-model-version: %r\n  reason: %s\n  available: %s",
@@ -207,8 +227,10 @@ class SpanMqttClient:
         self._schema_hash = new_hash
         self._previous_schema_types = schema.types
 
-        # Build transport-agnostic field metadata from schema
-        self._field_metadata = self._require_adapter().build_field_metadata(schema.types)
+        # Build transport-agnostic field metadata. The adapter holds the schema
+        # it was constructed with, so the transport no longer has to pick out
+        # the block a particular wire format keeps its type definitions in.
+        self._field_metadata = self._require_adapter().build_field_metadata()
 
         _LOGGER.debug(
             "MQTT: Creating bridge to %s:%s (serial=%s)",
@@ -463,14 +485,22 @@ class SpanMqttClient:
         and a refetch would just add cost. If the panel reboots and the
         schema actually changed, the existing drift-detection log fires on
         the next session's `connect()`.
+
+        A cached schema is also what makes the rebuild safe to run from a
+        synchronous callback. ``_build_adapter`` can raise — on an unreadable
+        version, or on a key nothing provides — but a cached schema means
+        connect() already dispatched and resolved successfully on this exact
+        value, so neither can fail here. The guard below is what enforces that:
+        no schema means connect() never completed, and there is nothing to
+        rebuild.
         """
-        if self._panel_size is None:
-            # Pre-rebuild fired before connect() cached the panel size.
-            # Treat as a no-op — there is no accumulator state to reset
-            # because connect() never completed.
+        if self._schema is None:
+            # Pre-rebuild fired before connect() cached the schema. Treat as a
+            # no-op — there is no accumulator state to reset because connect()
+            # never completed.
             return
         _LOGGER.debug("Pre-rebuild — resetting Homie accumulator")
-        self._build_adapter(self._panel_size)
+        self._build_adapter(self._schema)
 
     async def _wait_for_circuit_names(self, timeout: float) -> None:
         """Wait for all circuit-like nodes to have a ``name`` property.

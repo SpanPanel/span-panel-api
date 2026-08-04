@@ -40,7 +40,7 @@ from .models import (
     V2HomieSchema,
     V2StatusInfo,
 )
-from .mqtt import HomieLifecycle, HomiePropertyAccumulator, MqttClientConfig, SpanMqttClient
+from .mqtt import MqttClientConfig, SpanMqttClient
 from .phase_validation import (
     PhaseDistribution,
     are_tabs_opposite_phase,
@@ -93,8 +93,6 @@ __all__ = [  # noqa: RUF022
     "regenerate_passphrase",
     "register_v2",
     # Transport
-    "HomieLifecycle",
-    "HomiePropertyAccumulator",
     "MqttClientConfig",
     "SpanMqttClient",
     # Phase validation

@@ -1,7 +1,13 @@
-"""Guard: Phase 0 is a restructure, so the public surface must not move.
+"""Guard: the public surface only moves on purpose.
 
-The HA integration pins span-panel-api and imports these names directly. If this
-test fails, the change is no longer Phase 0 — it is a breaking release.
+The HA integration pins span-panel-api and imports these names directly, so a
+failure here means either an accidental break or a deliberate one whose record
+belongs in the same commit. The set below is a two-way pin — it fails on both
+removals and additions — and editing it is how a break gets acknowledged.
+
+Phase 0 held it fixed. Phase 1 deliberately breaks it (3.0): the three
+flat-schema names below were removed, because the bootstrap can no longer import
+a parsing implementation to re-export.
 """
 
 from __future__ import annotations
@@ -45,8 +51,6 @@ EXPECTED_PUBLIC_API = {
     "regenerate_passphrase",
     "register_v2",
     # Transport
-    "HomieLifecycle",
-    "HomiePropertyAccumulator",
     "MqttClientConfig",
     "SpanMqttClient",
     # Phase validation

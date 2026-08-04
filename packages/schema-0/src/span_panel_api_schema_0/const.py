@@ -1,5 +1,25 @@
 """Constants for the flat-schema (Homie v5) parsing implementation."""
 
+# ---------------------------------------------------------------------------
+# Provenance anchor — the schema revision every fact in this module was read
+# from. `tests/test_schema_provenance.py` fails when a captured schema reports a
+# different one, which is the only pre-release signal that this adapter has
+# drifted from the wire it claims to parse.
+#
+# The field name is per-adapter, not per-bootstrap: flat firmware publishes
+# `typesSchemaHash` over a `types` block, while parent/child renames it to
+# `deviceClassesSchemaHash` over `deviceClasses` — the hash is renamed with the
+# block it covers, so schema_1 declares its own.
+#
+# Content-derived, not build-derived: SPAN defines it as the SHA-256 of the
+# canonicalized schema object and states the schema "may remain unchanged across
+# multiple firmware releases". So it moves when the schema moves, not on every
+# release — which is what makes it usable as an anchor rather than noise.
+# ---------------------------------------------------------------------------
+SCHEMA_ANCHOR_FIELD = "typesSchemaHash"
+SCHEMA_ANCHOR = "sha256:d347556a07d98f40"
+SCHEMA_ANCHOR_FIRMWARE = "spanos2/r202603/05"
+
 # Homie v5 topic structure
 HOMIE_VERSION = 5
 HOMIE_DOMAIN = "ebus"

@@ -23,9 +23,16 @@ A Python client library for the SPAN Panel v2 API, using MQTT/Homie for real-tim
 
 ## Installation
 
+Two packages: the transport, and a parser for your panel's schema. `span-panel-api` contains no parser — installing it alone gives a client that connects and then raises `SpanPanelAdapterMissingError`.
+
 ```bash
-pip install span-panel-api
+pip install span-panel-api span-panel-api-schema-0
 ```
+
+`span-panel-api-schema-0` parses the flat schema used by firmware `r202603` through `r202627`, which is every panel in the field today. Panels reporting a `data-model-version` need the adapter for that schema major instead; the error names the one it could
+not find and lists what is installed.
+
+Parsers are discovered through the `span_panel_api.schema_adapters` entry-point group, so support for a new panel schema arrives by installing a package rather than by upgrading the transport. The two version independently — see [RELEASE.md](RELEASE.md).
 
 ### Dependencies
 

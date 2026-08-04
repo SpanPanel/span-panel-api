@@ -70,6 +70,28 @@ To install pre-commit hooks:
 
 This installs dependencies (if needed) and configures git pre-commit hooks.
 
+## Workspace layout
+
+This repository is a uv workspace publishing more than one distribution: the bootstrap (`span-panel-api`, at the root) and one parser package per panel schema (`packages/schema-N/`). `uv sync` installs the workspace, so the test suite runs against every
+distribution together.
+
+To work with the packages individually:
+
+```bash
+# Install the workspace including every member
+uv sync --all-packages
+
+# Build every distribution
+uv build --all-packages
+
+# Build just one
+uv build --package span-panel-api-schema-0
+```
+
+## Releasing
+
+See [RELEASE.md](RELEASE.md) — each distribution versions and publishes independently, and the tag name selects which one is published.
+
 ## Contributing
 
 1. Fork and clone the repository

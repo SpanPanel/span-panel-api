@@ -77,6 +77,10 @@ repos:
           - pytest
           - types-PyYAML
           - paho-mqtt
+          # schema-1 parses the parent/child tree with the eBus SDK, which
+          # ships py.typed — so the hook needs it installed to resolve those
+          # types rather than silently reporting import-not-found.
+          - ebus-sdk>=0.17.0
         args: ['--config-file=pyproject.toml']
         exclude: '^src/span_panel_api/generated_client/.*|scripts/.*|tests/.*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
 

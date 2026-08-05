@@ -192,6 +192,11 @@ exclude_dirs = ["tests", "scripts"]
 [tool.pylint.main]
 load-plugins = ["pylint.extensions.no_self_use"]
 extension-pkg-allow-list = []
+# Every source root in the workspace, so cross-package imports resolve no matter
+# which files a run happens to cover. Without this, pylint only finds
+# `span_panel_api` when a run also includes a file under `src/` — so committing
+# an adapter package on its own reports import-error for imports that are fine.
+init-hook = "import sys; sys.path[:0] = ['src', 'packages/schema-0/src', 'packages/schema-1/src']"
 ignore-paths = [
     "^tests/.*",
     "^scripts/.*",

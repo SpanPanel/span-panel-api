@@ -37,11 +37,19 @@ def _wheel_source_packages() -> list[tuple[str, Path]]:
     return found
 
 
-def test_the_workspace_has_more_than_one_distribution() -> None:
+def test_every_workspace_member_is_discovered() -> None:
     """Guards the parametrisation below against passing vacuously: if manifest
-    discovery breaks, every packaging test silently collects nothing."""
+    discovery breaks, every packaging test silently collects nothing.
+
+    Derived from the directories on disk rather than a hardcoded list, so
+    adding an adapter does not require editing this file — the failure mode
+    worth catching is discovery finding *fewer* manifests than exist.
+    """
     distributions = {name for name, _ in _wheel_source_packages()}
-    assert distributions == {"span-panel-api", "span-panel-api-schema-0"}
+    expected = 1 + len(list(_REPO_ROOT.glob("packages/*/pyproject.toml")))
+
+    assert "span-panel-api" in distributions
+    assert len(distributions) == expected, f"discovered {sorted(distributions)}, expected {expected} distributions"
 
 
 @pytest.mark.parametrize(

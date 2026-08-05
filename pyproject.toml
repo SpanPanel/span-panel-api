@@ -34,6 +34,7 @@ dev = [
     # remain installable without it. It is here so the test suite exercises the
     # two distributions together, which is the configuration users will run.
     "span-panel-api-schema-0",
+    "span-panel-api-schema-1",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-cov",
@@ -63,6 +64,7 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 span-panel-api-schema-0 = { workspace = true }
+span-panel-api-schema-1 = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/span_panel_api", "scripts"]
@@ -147,7 +149,11 @@ ignore_missing_imports = true
 
 [tool.coverage.run]
 data_file = ".local_coverage_data"
-source = ["src/span_panel_api", "packages/schema-0/src/span_panel_api_schema_0"]
+source = [
+    "src/span_panel_api",
+    "packages/schema-0/src/span_panel_api_schema_0",
+    "packages/schema-1/src/span_panel_api_schema_1",
+]
 omit = [
     "tests/*",
     "*/tests/*",

@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "span-panel-api",
     "span-panel-api-schema-0",
+    "span-panel-api-schema-1",
 ]
 
 [[package]]
@@ -487,6 +488,30 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ae/b6/03bb70946330e88ffec97aefd3ea75ba575cb2e762061e0e62a213befee8/docutils-0.22.4.tar.gz", hash = "sha256:4db53b1fde9abecbb74d91230d32ab626d94f6badfc575d6db9194a49df29968", size = 2291750, upload-time = "2025-12-18T19:00:26.443Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/10/5da547df7a391dcde17f59520a231527b8571e6f46fc8efb02ccb370ab12/docutils-0.22.4-py3-none-any.whl", hash = "sha256:d0013f540772d1420576855455d050a2180186c91c15779301ac2ccb3eeb68de", size = 633196, upload-time = "2025-12-18T19:00:18.077Z" },
+]
+
+[[package]]
+name = "ebus-mqtt-client"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "paho-mqtt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b9/05/43c255aac2fe76e51642080315897306751fee1d4414fc6a099a1a5d9af5/ebus_mqtt_client-0.4.0.tar.gz", hash = "sha256:83ac9cfe4672fbbc1622d46ad7fe53d345654ca0dd85109c0894cb9fea8c73b1", size = 27690, upload-time = "2026-08-03T19:58:51.972Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/f3/e5549b9d340c958bf9ee8927b23ce724b7296a76b395ff0f5cbe55be1f77/ebus_mqtt_client-0.4.0-py3-none-any.whl", hash = "sha256:d64d6ac7f39f42791a59c932ce1cebefadb35accf88b1b3367258fa5fb7f54ff", size = 16625, upload-time = "2026-08-03T19:58:50.606Z" },
+]
+
+[[package]]
+name = "ebus-sdk"
+version = "0.17.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ebus-mqtt-client" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a2/82/064f03fbc9da08737d15f9f90ec01fd1c4e9d4d2e8ad17e2699951d20356/ebus_sdk-0.17.0.tar.gz", hash = "sha256:7014d2c73b5eb4befb59b0d9c682b6b56a46698c47201ae49fb61af3b99559bb", size = 141056, upload-time = "2026-08-03T00:25:34.475Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/41/d3f6d5f2af755cce32614654a97eed421efac46fe4d20847643871b3e579/ebus_sdk-0.17.0-py3-none-any.whl", hash = "sha256:5232fa9990298b8785d092f7446e9b4a1a9d4a535a8422666c9b89c57d6248d0", size = 91032, upload-time = "2026-08-03T00:25:33.12Z" },
 ]
 
 [[package]]
@@ -1320,6 +1345,7 @@ dev = [
     { name = "radon" },
     { name = "ruff" },
     { name = "span-panel-api-schema-0" },
+    { name = "span-panel-api-schema-1" },
     { name = "twine" },
     { name = "types-pyyaml" },
     { name = "vulture" },
@@ -1346,6 +1372,7 @@ dev = [
     { name = "radon" },
     { name = "ruff", specifier = ">=0.15.5" },
     { name = "span-panel-api-schema-0", editable = "packages/schema-0" },
+    { name = "span-panel-api-schema-1", editable = "packages/schema-1" },
     { name = "twine" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20250915" },
     { name = "vulture", specifier = ">=2.14" },
@@ -1361,6 +1388,21 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "span-panel-api", editable = "." }]
+
+[[package]]
+name = "span-panel-api-schema-1"
+version = "0.1.0b1"
+source = { editable = "packages/schema-1" }
+dependencies = [
+    { name = "ebus-sdk" },
+    { name = "span-panel-api" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ebus-sdk", specifier = ">=0.17.0,<1.0" },
+    { name = "span-panel-api", editable = "." },
+]
 
 [[package]]
 name = "stevedore"

@@ -17,6 +17,7 @@ tree, and the SDK repopulates — so there is no resync hook to wire or forget.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from ebus_sdk import Controller
@@ -27,6 +28,7 @@ from span_panel_api_schema_1.const import (
     NODE_INFO,
     NODE_LOAD_SHED,
     NODE_SWITCH,
+    PROP_MODEL,
     PROP_NAME,
     PROP_PRIORITY,
     PROP_RELAY,
@@ -43,6 +45,8 @@ if TYPE_CHECKING:
 
     from span_panel_api.models import FieldMetadata, SpanPanelSnapshot, V2HomieSchema
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class SchemaOneAdapter:
     """Parser for the parent/child schema (data-model-version 1.x)."""
@@ -56,6 +60,7 @@ class SchemaOneAdapter:
         self._routes = ControllerRoutes()
         self._controller = Controller(root_device_id=serial_number, mqttc=self._routes)
         self._property_callbacks: list[Callable[[str, str, str, str | None], None]] = []
+        self._awaiting: tuple[str, ...] = ()
         self._controller.set_on_property_changed_callback(self._on_property_changed)
         # Records the subscriptions the tree walk needs; nothing reaches the
         # wire, because this object has no connection to reach it with.
@@ -79,14 +84,33 @@ class SchemaOneAdapter:
         self._routes.dispatch(topic, payload)
 
     def is_ready(self) -> bool:
-        """Ready when the panel has announced itself and described its tree.
+        """Ready when the whole declared tree has described itself.
 
-        Children are deliberately not required: a panel with a slow-announcing
-        child would otherwise never become ready, and the snapshot already
-        handles a partial tree.
+        The flat schema gets its entire topology in one `$description`, so
+        "described" and "complete" are the same event. Under parent/child the
+        topology arrives as one description per device, and the root's says
+        ready as soon as *its own* arrives — while its children are still
+        landing. Treating that as ready hands the transport a panel with a
+        handful of circuits and no model, which it reports as a healthy
+        connection. So readiness waits for every device the tree declares.
+
+        Child *state* is deliberately not required. A commissioned DER that is
+        currently offline publishes `lost` but keeps its retained description,
+        and a panel should not fail to connect because a battery is unplugged.
+
+        The model is required only when the root's description declares it: the
+        panel's size comes from nowhere else, and a snapshot built a moment too
+        early reports zero spaces, which erases every unmapped position rather
+        than merely mis-stating a number. Asking only for what the panel itself
+        promised keeps a firmware that omits the property connectable — it
+        falls back to the drift warning in `panel_size_from_model`.
         """
         root = self._controller.get_root(self._serial_number)
-        return root is not None and root.state == STATE_READY and bool(root.description)
+        if root is None or root.state != STATE_READY or not root.description:
+            return False
+        if self._awaiting_descriptions(root):
+            return False
+        return self._model_arrived(root)
 
     def build_snapshot(self) -> SpanPanelSnapshot:
         root = self._require_root()
@@ -98,16 +122,35 @@ class SchemaOneAdapter:
         return build_field_metadata(devices)
 
     def circuit_nodes_missing_names(self) -> list[str]:
-        """Circuits whose retained name has not arrived yet.
+        """Devices whose retained identity has not arrived yet.
 
         The transport polls this during connect so the first snapshot carries
-        human-readable names rather than falling back to identifiers.
+        real names rather than falling back to identifiers.
+
+        Readiness proves the tree's *shape* — every device the tree declares
+        has described itself. It cannot prove the tree's *labels*: a
+        description says which properties exist, and their retained values
+        arrive as separate messages that may land after the last description
+        does. That gap exists under the flat schema too; it just matters more
+        here, because a DER is its own device and the integration registers it
+        from this first snapshot.
+
+        Named for the flat schema's circuits, where a missing name was the only
+        way to get a placeholder. Under parent/child every mapped device has
+        the same exposure, so a DER missing the model it declared is reported
+        alongside a circuit missing its name.
         """
-        return [
-            circuit.device_id
-            for circuit in TreeRoles(self._children()).circuits
-            if not circuit.get_property(NODE_INFO, PROP_NAME)
-        ]
+        roles = TreeRoles(self._children())
+        missing = [circuit.device_id for circuit in roles.circuits if not circuit.get_property(NODE_INFO, PROP_NAME)]
+        ders = (roles.bess, roles.pv, *roles.evse)
+        missing.extend(
+            device.device_id
+            for device in ders
+            if device is not None
+            and PROP_MODEL in device.get_node_properties(NODE_INFO)
+            and device.get_property(NODE_INFO, PROP_MODEL) is None
+        )
+        return missing
 
     def find_node_by_type(self, type_str: str) -> str | None:
         """Return the id of the first device declaring `type_str`.
@@ -172,6 +215,34 @@ class SchemaOneAdapter:
 
     def _children(self) -> list[DiscoveredDevice]:
         return list(self._controller.get_descendants(self._serial_number))
+
+    def _awaiting_descriptions(self, root: DiscoveredDevice) -> tuple[str, ...]:
+        """Devices the tree declares that have not described themselves yet.
+
+        Walks declarations rather than discoveries, and at any depth: a child
+        may declare children of its own, and those count too. Logged when the
+        set changes, because the alternative diagnostic for a tree that never
+        completes is a bare 30-second connect timeout.
+        """
+        described = {device.device_id: device for device in self._children() if device.description is not None}
+        awaiting = {
+            child_id
+            for device in (root, *described.values())
+            for child_id in device.children_ids
+            if child_id not in described
+        }
+        pending = tuple(sorted(awaiting))
+        if pending != self._awaiting:
+            self._awaiting = pending
+            if pending:
+                _LOGGER.debug("Waiting on %d declared devices: %s", len(pending), ", ".join(pending))
+        return pending
+
+    def _model_arrived(self, root: DiscoveredDevice) -> bool:
+        """Whether the panel has published the model it said it would."""
+        if PROP_MODEL not in root.get_node_properties(NODE_INFO):
+            return True
+        return root.get_property(NODE_INFO, PROP_MODEL) is not None
 
     def _on_property_changed(self, device_id: str, node_id: str, property_id: str, value: str, _old: str | None) -> None:
         """Fan a Controller property change out to registered consumers.

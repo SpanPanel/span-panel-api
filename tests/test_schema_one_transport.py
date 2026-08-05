@@ -14,6 +14,7 @@ import pytest
 from ebus_sdk import MqttControllerTransport
 
 from span_panel_api_schema_1 import ControllerRoutes
+from span_panel_api_schema_1.transport import MAX_HELD_MESSAGES
 
 
 def test_it_satisfies_the_sdk_transport_protocol() -> None:
@@ -81,9 +82,10 @@ def test_dispatch_delivers_bytes_to_the_matching_callback() -> None:
     callback.assert_called_once_with("ebus/5/panel/meter/active-power", b"-121.0")
 
 
-def test_a_topic_matching_no_route_is_dropped() -> None:
+def test_a_topic_matching_no_route_reaches_nobody_yet() -> None:
     """Expected, not exceptional: the wire subscription is broader than the
-    SDK's interest by construction."""
+    SDK's interest by construction. It is held rather than delivered — see the
+    ordering tests below for why it is not simply thrown away."""
     routes = ControllerRoutes()
     callback = MagicMock()
     routes.subscribe("ebus/5/panel/#", callback)
@@ -91,6 +93,7 @@ def test_a_topic_matching_no_route_is_dropped() -> None:
     routes.dispatch("ebus/5/other-device/meter/active-power", "1.0")
 
     callback.assert_not_called()
+    assert routes.held == 1
 
 
 def test_the_most_recently_recorded_matching_route_wins() -> None:
@@ -142,3 +145,89 @@ def test_rerecording_a_pattern_replaces_it_and_moves_it_to_most_recent() -> None
 
     second.assert_called_once()
     first.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Arrival order
+#
+# One wire subscription delivers the whole tree at once, but the SDK registers
+# its routes as it walks that tree. Anything arriving ahead of its route has to
+# survive the gap, because the broker chooses the replay order and is under no
+# obligation to hand back a parent before its children.
+# ---------------------------------------------------------------------------
+
+
+def test_a_message_that_arrives_before_its_route_is_delivered_when_the_route_appears() -> None:
+    routes = ControllerRoutes()
+    callback = MagicMock()
+
+    routes.dispatch("ebus/5/child-a/meter/active-power", "-3500.0")
+    callback.assert_not_called()
+
+    routes.subscribe("ebus/5/child-a/+/+", callback)
+
+    callback.assert_called_once_with("ebus/5/child-a/meter/active-power", b"-3500.0")
+    assert routes.held == 0
+
+
+def test_a_held_topic_keeps_only_its_latest_value() -> None:
+    """The same last-value-wins rule the broker applies to the retained message
+    this stands in for. Delivering the stale reading too would be worse than
+    dropping it — the SDK would end on whichever arrived last."""
+    routes = ControllerRoutes()
+    callback = MagicMock()
+
+    routes.dispatch("ebus/5/child-a/meter/active-power", "-3500.0")
+    routes.dispatch("ebus/5/child-a/meter/active-power", "-3400.0")
+    routes.subscribe("ebus/5/child-a/+/+", callback)
+
+    callback.assert_called_once_with("ebus/5/child-a/meter/active-power", b"-3400.0")
+
+
+def test_releasing_a_message_can_register_the_routes_that_release_the_rest() -> None:
+    """How a whole tree unfolds from one root subscription.
+
+    Releasing the root's description is what makes the SDK subscribe to its
+    children, whose own messages are already held — so release has to be
+    re-entrant, or the tree stops one level down.
+    """
+    routes = ControllerRoutes()
+    child = MagicMock(name="child")
+
+    def on_root(_topic: str, _payload: bytes) -> None:
+        routes.subscribe("ebus/5/child-a/+/+", child)
+
+    routes.dispatch("ebus/5/child-a/meter/active-power", "-3500.0")
+    routes.dispatch("ebus/5/panel/$description", "{}")
+
+    routes.subscribe("ebus/5/panel/$description", on_root)
+
+    child.assert_called_once_with("ebus/5/child-a/meter/active-power", b"-3500.0")
+    assert routes.held == 0
+
+
+def test_a_released_message_is_not_delivered_again() -> None:
+    routes = ControllerRoutes()
+    callback = MagicMock()
+    routes.dispatch("ebus/5/child-a/meter/active-power", "-3500.0")
+
+    routes.subscribe("ebus/5/child-a/+/+", callback)
+    routes.subscribe("ebus/5/child-a/+/+", callback)
+
+    callback.assert_called_once()
+
+
+def test_held_messages_stop_accumulating_at_the_ceiling() -> None:
+    """Unclaimed topics would otherwise be a slow leak in a process that runs
+    for months. Values already held still update — it is new topics that stop."""
+    routes = ControllerRoutes()
+
+    for index in range(MAX_HELD_MESSAGES + 10):
+        routes.dispatch(f"ebus/5/device-{index}/meter/active-power", "1.0")
+    routes.dispatch("ebus/5/device-0/meter/active-power", "2.0")
+
+    assert routes.held == MAX_HELD_MESSAGES
+
+    callback = MagicMock()
+    routes.subscribe("ebus/5/device-0/+/+", callback)
+    callback.assert_called_once_with("ebus/5/device-0/meter/active-power", b"2.0")

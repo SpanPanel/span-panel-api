@@ -32,12 +32,14 @@ def _schema() -> V2HomieSchema:
     )
 
 
-def _feed(adapter: SchemaOneAdapter, device_ids: list[str] | None = None) -> None:
+def _feed(adapter: SchemaOneAdapter, device_ids: list[str] | None = None, omit: tuple[str, ...] = ()) -> None:
     """Replay retained topics the way the broker would deliver them.
 
-    The panel first, because the SDK gates a child's subscription on its
-    parent reaching `ready` — feeding children first would be discarded, which
-    is the behaviour, not a quirk of the test.
+    The panel first by default, which is the friendly order — the SDK gates a
+    child's subscription on its parent reaching `ready`, so anything earlier
+    has no route yet. The transport holds those messages until the route
+    appears; `test_children_before_the_panel` covers the unfriendly order,
+    which a broker is equally entitled to replay.
     """
     for device_id in device_ids or [PANEL, *[d for d in _TREE if d != PANEL]]:
         topics = _TREE[device_id]
@@ -45,7 +47,7 @@ def _feed(adapter: SchemaOneAdapter, device_ids: list[str] | None = None) -> Non
         adapter.handle_message(f"{prefix}/$description", topics["$description"])
         adapter.handle_message(f"{prefix}/$state", topics["$state"])
         for topic, value in topics.items():
-            if not topic.startswith("$"):
+            if not topic.startswith("$") and topic not in omit:
                 adapter.handle_message(f"{prefix}/{topic}", value)
 
 
@@ -82,6 +84,31 @@ def test_replaying_the_tree_makes_it_ready(adapter: SchemaOneAdapter) -> None:
     assert adapter.is_ready() is True
 
 
+def test_children_before_the_panel_still_yields_the_whole_tree(adapter: SchemaOneAdapter) -> None:
+    """A broker replays its retained store in whatever order it likes.
+
+    Found by the live reconnect check, not by review: seeded in this order the
+    panel parsed as ready with zero circuits — a complete, silent loss that
+    reported itself as a healthy connection.
+    """
+    reversed_order = [*[d for d in _TREE if d != PANEL], PANEL]
+    late = SchemaOneAdapter(PANEL, _schema())
+    _feed(late, reversed_order)
+
+    assert late.is_ready() is True
+    assert _fingerprint(late) == _fingerprint(adapter)
+
+
+def _fingerprint(adapter: SchemaOneAdapter) -> tuple[str, int, int, list[str]]:
+    snapshot = adapter.build_snapshot()
+    return (
+        snapshot.serial_number,
+        snapshot.panel_size,
+        len(snapshot.circuits),
+        sorted(snapshot.evse),
+    )
+
+
 def test_a_panel_that_never_becomes_ready_is_not_ready() -> None:
     """The SDK gates child subscription on the parent's ready edge, so a
     non-ready panel yields nothing — silently, which is why it is asserted."""
@@ -91,6 +118,56 @@ def test_a_panel_that_never_becomes_ready_is_not_ready() -> None:
     adapter.handle_message(f"{prefix}/$state", "disconnected")
 
     assert adapter.is_ready() is False
+
+
+def test_a_root_whose_children_are_still_arriving_is_not_ready() -> None:
+    """The root reaches ready as soon as *its own* description lands.
+
+    Trusting that hands the transport a panel with a few circuits and no model
+    — which it reports as a healthy connection. Found by the live reconnect
+    check: the first connect parsed 4 of 37 circuits and nothing said so.
+    """
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    _feed(adapter, [PANEL])
+
+    assert adapter.is_ready() is False
+
+
+def test_an_offline_child_does_not_block_readiness(adapter: SchemaOneAdapter) -> None:
+    """A commissioned DER that is unplugged publishes `lost` but keeps its
+    retained description. A panel must not fail to connect over it."""
+    adapter.handle_message("ebus/5/bess/$state", "lost")
+
+    assert adapter.is_ready() is True
+
+
+def test_readiness_waits_for_the_model_the_panel_declared() -> None:
+    """Panel size comes from nowhere else, and a snapshot built a moment early
+    reports zero spaces — which erases every unmapped position rather than
+    mis-stating a number."""
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    _feed(adapter, omit=("info/model",))
+
+    assert adapter.is_ready() is False
+
+    adapter.handle_message(f"ebus/5/{PANEL}/info/model", _TREE[PANEL]["info/model"])
+
+    assert adapter.is_ready() is True
+    assert adapter.build_snapshot().panel_size == 40
+
+
+def test_a_panel_that_declares_no_model_still_connects() -> None:
+    """Waiting for a property the firmware never promised would make one
+    missing field fatal. The drift warning already covers the consequence."""
+    description = json.loads(_TREE[PANEL]["$description"])
+    del description["nodes"]["info"]["properties"]["model"]
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    adapter.handle_message(f"ebus/5/{PANEL}/$description", json.dumps(description))
+    adapter.handle_message(f"ebus/5/{PANEL}/$state", _TREE[PANEL]["$state"])
+    _feed(adapter, [d for d in _TREE if d != PANEL])
+
+    assert adapter.is_ready() is True
+    assert adapter.build_snapshot().panel_size == 0
 
 
 def test_snapshot_is_built_from_the_discovered_tree(adapter: SchemaOneAdapter) -> None:
@@ -165,6 +242,24 @@ def test_dominant_power_source_has_no_topic(adapter: SchemaOneAdapter) -> None:
 
 def test_circuits_missing_names_is_empty_once_retained_names_arrive(adapter: SchemaOneAdapter) -> None:
     assert adapter.circuit_nodes_missing_names() == []
+
+
+def test_a_der_missing_its_declared_model_is_reported_alongside_circuits() -> None:
+    """Readiness proves the tree's shape, not its labels.
+
+    A DER's identity arrives as its own retained message, which can land after
+    the last description — and the integration registers an HA device from the
+    first snapshot, so a placeholder there is permanent until reload.
+    """
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    _feed(adapter, omit=("info/model",))
+    adapter.handle_message(f"ebus/5/{PANEL}/info/model", _TREE[PANEL]["info/model"])
+
+    assert "pv" in adapter.circuit_nodes_missing_names()
+
+    adapter.handle_message("ebus/5/pv/info/model", _TREE["pv"]["info/model"])
+
+    assert "pv" not in adapter.circuit_nodes_missing_names()
 
 
 def test_find_node_by_type_answers_with_a_device_id(adapter: SchemaOneAdapter) -> None:

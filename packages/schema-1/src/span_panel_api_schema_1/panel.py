@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from span_panel_api.models import SpanCircuitSnapshot
 from span_panel_api_schema_1.const import (
     CLOUD_CONNECTED,
     NODE_BREAKER,
@@ -34,12 +35,14 @@ from span_panel_api_schema_1.const import (
     NODE_METER,
     NODE_POWER_FLOWS,
     NODE_STATUS,
+    PANEL_SIZE_BY_MODEL,
     PROP_ACTIVE_POWER,
     PROP_CLOUD_CONNECTION,
     PROP_ETHERNET,
     PROP_EXPORTED_ENERGY,
     PROP_FIRMWARE_VERSION,
     PROP_IMPORTED_ENERGY,
+    PROP_MODEL,
     PROP_RATING,
     PROP_RELAY,
     PROP_SERIAL_NUMBER,
@@ -48,6 +51,7 @@ from span_panel_api_schema_1.const import (
     PROP_VOLTAGE_B,
     PROP_WIFI,
     UNKNOWN,
+    UNMAPPED_TAB_PREFIX,
 )
 
 if TYPE_CHECKING:
@@ -89,28 +93,101 @@ def flag(device: DiscoveredDevice | None, node: str, prop: str) -> bool:
     return text(device, node, prop).strip().lower() == "true"
 
 
-def panel_size_from_tabs(occupied: list[int]) -> int:
-    """Best-effort panel size: the highest occupied breaker space.
+def panel_size_from_model(model: str) -> int:
+    """Total breaker spaces for a panel model, or 0 when the model is unknown.
 
-    **This is a lower bound, not the panel's size**, and v1.0 gives us nothing
-    better. The flat schema carried the true size in the Homie schema's `space`
-    format (`"1:32:1"`, max = 32). Its v1.0 successor, `info/spaces`, is a plain
-    string with no format, the panel device publishes no size property, and the
-    migration guide maps `space` to `spaces` without mentioning panel size at
-    all.
+    `info/model` is the only place v1.0 states the panel's size. The flat schema
+    carried it in the Homie schema's `space` format (`"1:32:1"`, max = 32); the
+    successor `info/spaces` is a plain string with no format, and the panel
+    device publishes no size property.
 
-    So a 40-space panel whose highest occupied slot is 36 reports 36. Anything
-    that enumerates *unoccupied* slots — the flat parser's unmapped-tab
-    synthesis — is therefore not reproducible from the wire under v1.0.
+    The highest *occupied* space is not a substitute: it is a lower bound, so a
+    40-space panel whose highest occupied slot is 36 would report 36 and every
+    position above it would silently cease to exist. Since unoccupied positions
+    are exactly `total - occupied`, that would delete the integration's
+    unmapped-circuit sensors rather than merely miscount a display value.
 
-    Treated as a product question rather than papered over: see the v1.0
-    user-visible entity and config deltas write-up. Deriving it from
-    `info/model` (`"MAIN_40"`) would work on today's firmware and is exactly the
-    kind of undocumented vendor parsing that breaks silently later.
+    Unknown models return 0 and log, because inventing a size is worse than
+    reporting none: a wrong total fabricates unmapped positions that are not
+    there, or hides real ones.
     """
-    if not occupied:
+    size = PANEL_SIZE_BY_MODEL.get(model.strip().upper())
+    if size is None:
+        if model:
+            _LOGGER.warning(
+                "Unknown panel model %r; panel size unavailable and unmapped positions cannot be derived. Known models: %s",
+                model,
+                ", ".join(sorted(PANEL_SIZE_BY_MODEL)),
+            )
         return 0
-    return max(occupied)
+    return size
+
+
+def panel_model_drift(panel: DiscoveredDevice) -> tuple[str, ...]:
+    """Models the panel says are valid that we have no size for.
+
+    The panel advertises the model enum as a Homie ``$format`` on
+    ``info/model``, but nothing in the schema or the SDK states how many spaces
+    each model has — that half is ours. So the panel can legitimately announce
+    a model we cannot size, and this is how we find out at connect time rather
+    than through a user reporting missing positions.
+
+    Same reasoning as the flat adapter's schema-drift detection: the failure is
+    a silent absence, so it needs a signal that does not depend on anyone
+    noticing an absence.
+    """
+    definition = panel.get_node_properties(NODE_INFO).get(PROP_MODEL)
+    if not isinstance(definition, dict):
+        return ()
+    advertised = str(definition.get("format", ""))
+    if not advertised:
+        return ()
+    unknown = [
+        value.strip()
+        for value in advertised.split(",")
+        if value.strip() and value.strip().upper() not in PANEL_SIZE_BY_MODEL
+    ]
+    if unknown:
+        _LOGGER.warning(
+            "Panel advertises model(s) %s that this adapter cannot size; "
+            "unmapped positions would be wrong for such a panel. Known: %s",
+            ", ".join(unknown),
+            ", ".join(sorted(PANEL_SIZE_BY_MODEL)),
+        )
+    return tuple(unknown)
+
+
+def build_unmapped_tabs(panel_size: int, occupied: set[int]) -> dict[str, SpanCircuitSnapshot]:
+    """Synthesise a zero-power entry for every unoccupied breaker position.
+
+    The integration surfaces these as unmapped-circuit sensors, gated by its
+    own `enable_unmapped_circuit_sensors` option, and builds entity ids from
+    the circuit id — so the `unmapped_tab_<n>` naming is a compatibility
+    contract with entities that already exist, not an internal detail.
+
+    Reproducible under v1.0 only because the model gives a true total: the tree
+    itself lists occupied positions and says nothing about the rest. A panel
+    whose model is unrecognised yields nothing rather than a guess.
+    """
+    unmapped: dict[str, SpanCircuitSnapshot] = {}
+    for tab in range(1, panel_size + 1):
+        if tab in occupied:
+            continue
+        circuit_id = f"{UNMAPPED_TAB_PREFIX}{tab}"
+        unmapped[circuit_id] = SpanCircuitSnapshot(
+            circuit_id=circuit_id,
+            name=f"Unmapped Tab {tab}",
+            relay_state="CLOSED",
+            instant_power_w=0.0,
+            produced_energy_wh=0.0,
+            consumed_energy_wh=0.0,
+            tabs=[tab],
+            priority=UNKNOWN,
+            is_user_controllable=False,
+            is_sheddable=False,
+            is_never_backup=False,
+        )
+    return unmapped
 
 
 def find_lugs(devices: list[DiscoveredDevice], upstream: bool) -> DiscoveredDevice | None:

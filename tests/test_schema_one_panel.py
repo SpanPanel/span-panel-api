@@ -13,7 +13,13 @@ import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
-from span_panel_api_schema_1.panel import PanelFields, find_lugs, panel_size_from_tabs
+from span_panel_api_schema_1.panel import (
+    PanelFields,
+    build_unmapped_tabs,
+    find_lugs,
+    panel_model_drift,
+    panel_size_from_model,
+)
 
 _TREE = json.loads((Path(__file__).parent / "fixtures" / "parent_child_tree.json").read_text(encoding="utf-8"))
 
@@ -152,21 +158,83 @@ def test_retired_fields_are_none_rather_than_substituted(fields: PanelFields) ->
 
 
 # ---------------------------------------------------------------------------
-# Panel size — the gap
+# Panel size — from the model, because nothing else states it
 # ---------------------------------------------------------------------------
 
 
-def test_panel_size_is_a_lower_bound_from_occupied_spaces() -> None:
-    """v1.0 publishes no panel size anywhere: `info/spaces` is a plain string
-    with no format, the panel device has no size property, and the migration
-    guide does not map one. The highest occupied space is the best available
-    answer and it undercounts."""
-    assert panel_size_from_tabs([1, 3, 36, 38]) == 38
-    assert panel_size_from_tabs([]) == 0
+def test_panel_size_comes_from_the_model() -> None:
+    """`info/model` is the only place v1.0 states the panel's size, and it is a
+    closed enum the panel itself advertises via Homie `$format`."""
+    assert panel_size_from_model("MAIN_40") == 40
+    assert panel_size_from_model("MAIN_16") == 16
+    assert panel_size_from_model("MLO_48") == 48
 
 
-def test_panel_size_undercounts_a_sparsely_populated_panel() -> None:
-    """The failure this documents: a 40-space panel whose highest occupied slot
-    is 36 reports 36, so anything enumerating unoccupied slots is not
-    reproducible from the wire."""
-    assert panel_size_from_tabs([1, 2, 36]) == 36
+def test_panel_size_reads_the_model_off_the_fixture() -> None:
+    panel = _device(PANEL)
+
+    assert panel.get_property("info", "model") == "MAIN_40"
+    assert panel_size_from_model(panel.get_property("info", "model")) == 40
+
+
+def test_an_unknown_model_yields_no_size_rather_than_a_guess() -> None:
+    """Inventing a size is worse than reporting none: a wrong total fabricates
+    unmapped positions that do not exist, or hides real ones."""
+    assert panel_size_from_model("MAIN_99") == 0
+    assert panel_size_from_model("") == 0
+
+
+def test_the_panel_advertises_every_model_we_can_size(caplog: pytest.LogCaptureFixture) -> None:
+    """The panel publishes the valid model set as `$format`, but neither the
+    schema nor the SDK states the sizes — that half is ours. This is how a model
+    we cannot size shows up at connect time instead of as missing positions."""
+    definition = _device(PANEL).get_node_properties("info")["model"]
+    assert definition["format"] == "MAIN_16,MLO_24,MAIN_32,MAIN_40,MLO_48"
+
+    assert panel_model_drift(_device(PANEL)) == ()
+
+
+def test_a_model_we_cannot_size_is_reported_as_drift() -> None:
+    panel = _device(PANEL)
+    description = json.loads(_TREE[PANEL]["$description"])
+    description["nodes"]["info"]["properties"]["model"]["format"] = "MAIN_40,MAIN_64"
+    panel.update_description(json.dumps(description))
+
+    assert panel_model_drift(panel) == ("MAIN_64",)
+
+
+# ---------------------------------------------------------------------------
+# Unmapped positions — reproducible under v1.0 only because the model gives a total
+# ---------------------------------------------------------------------------
+
+
+def test_unmapped_tabs_fill_every_unoccupied_position() -> None:
+    unmapped = build_unmapped_tabs(panel_size=6, occupied={1, 3})
+
+    assert sorted(unmapped) == [
+        "unmapped_tab_2",
+        "unmapped_tab_4",
+        "unmapped_tab_5",
+        "unmapped_tab_6",
+    ]
+    assert unmapped["unmapped_tab_2"].tabs == [2]
+    assert unmapped["unmapped_tab_2"].instant_power_w == 0.0
+    assert unmapped["unmapped_tab_2"].name == "Unmapped Tab 2"
+
+
+def test_the_unmapped_id_format_matches_the_flat_adapter() -> None:
+    """The integration builds entity ids from this — `sensor.span_panel_
+    unmapped_tab_32_power` — so a rename would strand existing entities."""
+    unmapped = build_unmapped_tabs(panel_size=32, occupied=set(range(1, 32)))
+
+    assert list(unmapped) == ["unmapped_tab_32"]
+
+
+def test_a_fully_occupied_panel_has_no_unmapped_positions() -> None:
+    assert build_unmapped_tabs(panel_size=4, occupied={1, 2, 3, 4}) == {}
+
+
+def test_an_unsizable_panel_yields_no_unmapped_positions() -> None:
+    """Better nothing than a fabricated set: size 0 is what an unknown model
+    reports, and inventing positions would create phantom entities."""
+    assert build_unmapped_tabs(panel_size=0, occupied={1}) == {}

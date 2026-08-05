@@ -68,6 +68,39 @@ PRIORITY_NEVER = "NEVER"
 UNKNOWN = "UNKNOWN"
 CLOUD_CONNECTED = "CONNECTED"
 
+PROP_MODEL = "model"
+
+# Breaker spaces per panel model.
+#
+# This is the only source of the panel's total size in v1.0. The flat schema
+# carried it in the Homie schema's `space` format (`"1:32:1"`, max = 32); its
+# successor `info/spaces` is a plain string with no format, and the panel device
+# publishes no size property. What v1.0 does publish is `info/model`, a **closed
+# enum** — the topic reference, the migration guide, and the panel's own Homie
+# `$format` all list exactly these five values — so this is a lookup over a
+# defined value set, not an inference from a vendor string.
+#
+# The *sizes* are ours: neither the SDK nor the published schema states how many
+# spaces a model has, only which model names are valid. `panel_model_drift`
+# exists because of that split — the panel can tell us a model we have no size
+# for, and we would rather say so than guess.
+#
+# Total size matters beyond a display field: unoccupied positions are only
+# knowable as `total - occupied`, and synthesising them is what gives the
+# integration its unmapped-circuit sensors.
+PANEL_SIZE_BY_MODEL: dict[str, int] = {
+    "MAIN_16": 16,
+    "MLO_24": 24,
+    "MAIN_32": 32,
+    "MAIN_40": 40,
+    "MLO_48": 48,
+}
+
+# Prefix for synthesised unoccupied-position entries. Must match the flat
+# adapter's, because the integration keys entities off it and a rename would
+# strand every existing unmapped-tab entity.
+UNMAPPED_TAB_PREFIX = "unmapped_tab_"
+
 # The Homie attribute that carries what the flat schema published as the
 # `never-backup` boolean. v1.0 retires the property and expresses it as
 # mutability: a circuit commissioned never-backup has its priority locked, so

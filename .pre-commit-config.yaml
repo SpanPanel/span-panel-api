@@ -96,6 +96,9 @@ repos:
           - pytest
           - pyyaml
           - paho-mqtt
+          # schema-1 imports the eBus SDK; without it here the hook reports
+          # import-error for a dependency that is correctly declared.
+          - ebus-sdk>=0.17.0
         exclude: '^src/span_panel_api/generated_client/.*|tests/.*|generate_client\.py|scripts/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
   # Check for common security issues

@@ -1,0 +1,187 @@
+"""The parent/child adapter behind the SchemaAdapter protocol.
+
+Driven by replaying the captured tree through `handle_message`, which is exactly
+how the transport feeds it — so these exercise the SDK's real discovery path
+(root ready, then each child) rather than a stubbed tree.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from span_panel_api.adapters import _derive_required_members
+from span_panel_api.models import V2HomieSchema
+from span_panel_api.protocol import SchemaAdapter
+from span_panel_api_schema_1 import SchemaOneAdapter
+
+_TREE = json.loads((Path(__file__).parent / "fixtures" / "parent_child_tree.json").read_text(encoding="utf-8"))
+
+PANEL = "example-40t-001"
+SOLAR_CIRCUIT = "573066aaddd7b75114c4563ce3af18c4"
+
+
+def _schema() -> V2HomieSchema:
+    return V2HomieSchema(
+        firmware_version="spanos2/r202633/01",
+        types_schema_hash="sha256:test",
+        types={},
+        data_model_version="1.0",
+    )
+
+
+def _feed(adapter: SchemaOneAdapter, device_ids: list[str] | None = None) -> None:
+    """Replay retained topics the way the broker would deliver them.
+
+    The panel first, because the SDK gates a child's subscription on its
+    parent reaching `ready` — feeding children first would be discarded, which
+    is the behaviour, not a quirk of the test.
+    """
+    for device_id in device_ids or [PANEL, *[d for d in _TREE if d != PANEL]]:
+        topics = _TREE[device_id]
+        prefix = f"ebus/5/{device_id}"
+        adapter.handle_message(f"{prefix}/$description", topics["$description"])
+        adapter.handle_message(f"{prefix}/$state", topics["$state"])
+        for topic, value in topics.items():
+            if not topic.startswith("$"):
+                adapter.handle_message(f"{prefix}/{topic}", value)
+
+
+@pytest.fixture(name="adapter")
+def _adapter() -> SchemaOneAdapter:
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    _feed(adapter)
+    return adapter
+
+
+def test_it_satisfies_the_schema_adapter_protocol() -> None:
+    missing = [m for m in _derive_required_members(SchemaAdapter) if not hasattr(SchemaOneAdapter, m)]
+
+    assert missing == []
+    assert SchemaOneAdapter.schema_major == "schema_1"
+    assert SchemaOneAdapter.SUPPORTS_DATA_MODEL_VERSIONS == (">=1.0", "<2.0")
+
+
+def test_construction_touches_no_connection() -> None:
+    """The transport builds a parser before a connection exists, so this must
+    work with nothing to talk to."""
+    adapter = SchemaOneAdapter(PANEL, _schema())
+
+    assert adapter.is_ready() is False
+
+
+def test_one_broad_subscription_covers_the_whole_tree() -> None:
+    """Children are peers of the panel in the topic tree, so the wildcard spans
+    devices. The adapter is asked this once and cannot add more later."""
+    assert SchemaOneAdapter(PANEL, _schema()).topics_to_subscribe() == ["ebus/5/#"]
+
+
+def test_replaying_the_tree_makes_it_ready(adapter: SchemaOneAdapter) -> None:
+    assert adapter.is_ready() is True
+
+
+def test_a_panel_that_never_becomes_ready_is_not_ready() -> None:
+    """The SDK gates child subscription on the parent's ready edge, so a
+    non-ready panel yields nothing — silently, which is why it is asserted."""
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    prefix = f"ebus/5/{PANEL}"
+    adapter.handle_message(f"{prefix}/$description", _TREE[PANEL]["$description"])
+    adapter.handle_message(f"{prefix}/$state", "disconnected")
+
+    assert adapter.is_ready() is False
+
+
+def test_snapshot_is_built_from_the_discovered_tree(adapter: SchemaOneAdapter) -> None:
+    snapshot = adapter.build_snapshot()
+
+    assert snapshot.serial_number == PANEL
+    assert snapshot.panel_size == 40
+    assert snapshot.circuits[SOLAR_CIRCUIT].name == "Solar Inverter"
+    assert snapshot.battery.soe_percentage == pytest.approx(50.4104, rel=1e-4)
+    # 5 circuits occupying 8 positions (two are multi-pole), so 32 remain.
+    assert len(snapshot.circuits) == 37
+
+
+def test_building_a_snapshot_before_discovery_fails_loudly() -> None:
+    adapter = SchemaOneAdapter(PANEL, _schema())
+
+    with pytest.raises(RuntimeError, match="not ready"):
+        adapter.build_snapshot()
+
+
+# ---------------------------------------------------------------------------
+# Field metadata
+# ---------------------------------------------------------------------------
+
+
+def test_field_metadata_takes_units_from_the_tree(adapter: SchemaOneAdapter) -> None:
+    metadata = adapter.build_field_metadata()
+
+    assert metadata["circuit.instant_power_w"].unit == "W"
+    assert metadata["circuit.instant_power_w"].datatype == "float"
+    assert metadata["circuit.current_a"].unit == "A"
+    assert metadata["panel.l1_voltage"].unit == "V"
+    assert metadata["battery.soe_percentage"].unit == "%"
+
+
+def test_field_metadata_omits_fields_the_mapper_declines(adapter: SchemaOneAdapter) -> None:
+    """Advertising a unit for a reading that never arrives would have the
+    integration validate against a field nothing populates."""
+    metadata = adapter.build_field_metadata()
+
+    assert "panel.dominant_power_source" not in metadata
+    assert "panel.grid_islandable" not in metadata
+    assert "pv.relative_position" not in metadata
+
+
+def test_field_metadata_is_empty_before_discovery() -> None:
+    assert SchemaOneAdapter(PANEL, _schema()).build_field_metadata() == {}
+
+
+# ---------------------------------------------------------------------------
+# Commands — the adapter names the topic, the transport publishes it
+# ---------------------------------------------------------------------------
+
+
+def test_command_topics_address_the_child_device(adapter: SchemaOneAdapter) -> None:
+    """Under parent/child a circuit is its own device, so its command topic is
+    rooted at the circuit rather than nested under the panel."""
+    assert adapter.set_circuit_relay_topic(SOLAR_CIRCUIT) == f"ebus/5/{SOLAR_CIRCUIT}/switch/relay/set"
+    assert adapter.set_circuit_priority_topic(SOLAR_CIRCUIT) == f"ebus/5/{SOLAR_CIRCUIT}/load-shed/priority/set"
+
+
+def test_dominant_power_source_has_no_topic(adapter: SchemaOneAdapter) -> None:
+    """It split into two different controls on different devices. None makes
+    the transport reject the command rather than publish where nothing listens."""
+    assert adapter.set_dominant_power_source_topic() is None
+
+
+# ---------------------------------------------------------------------------
+# Discovery helpers the transport uses
+# ---------------------------------------------------------------------------
+
+
+def test_circuits_missing_names_is_empty_once_retained_names_arrive(adapter: SchemaOneAdapter) -> None:
+    assert adapter.circuit_nodes_missing_names() == []
+
+
+def test_find_node_by_type_answers_with_a_device_id(adapter: SchemaOneAdapter) -> None:
+    assert adapter.find_node_by_type("energy.ebus.device.bess") == "bess"
+    assert adapter.find_node_by_type("energy.ebus.device.nonexistent") is None
+
+
+def test_property_callbacks_receive_updates() -> None:
+    seen: list[tuple[str, str, str, str | None]] = []
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    unregister = adapter.register_property_callback(lambda d, n, p, v: seen.append((d, n, p, v)))
+
+    _feed(adapter, [PANEL])
+
+    assert any(node == "status" and prop == "relay" for _, node, prop, _ in seen)
+
+    unregister()
+    before = len(seen)
+    _feed(adapter, [PANEL])
+    assert len(seen) == before

@@ -70,6 +70,13 @@ CLOUD_CONNECTED = "CONNECTED"
 
 PROP_MODEL = "model"
 
+# Topic root. Children are peers of the panel in the topic tree rather than
+# nodes beneath it, so a subscription covering the tree spans the domain.
+HOMIE_DOMAIN = "ebus"
+HOMIE_VERSION = "5"
+
+STATE_READY = "ready"
+
 # Breaker spaces per panel model.
 #
 # This is the only source of the panel's total size in v1.0. The flat schema

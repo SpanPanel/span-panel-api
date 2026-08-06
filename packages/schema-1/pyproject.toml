@@ -14,7 +14,7 @@ dependencies = [
     # schema-0 stay clean, so a flat-panel install never pulls it in — which is
     # what bounds the release coupling this dependency introduces to panels on
     # r202633+.
-    "ebus-sdk>=0.17.0,<1.0",
+    "ebus-sdk>=0.18.0,<1.0",
 ]
 
 [project.urls]

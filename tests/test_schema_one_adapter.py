@@ -203,6 +203,28 @@ def test_field_metadata_takes_units_from_the_tree(adapter: SchemaOneAdapter) -> 
     assert metadata["battery.soe_percentage"].unit == "%"
 
 
+def test_no_property_declares_an_abstract_unit() -> None:
+    """Units must reach Home Assistant renderable, not as a catalog token.
+
+    eBus catalogs may carry an abstract `unit: "energy"` rather than a concrete
+    one, which a device resolves in its own `$description`. Reading the runtime
+    description is what keeps us clear of it — but only as long as the panel
+    resolves it too, and the symptom if it stops is an entity whose unit reads
+    the literal string. Asserted against the captured tree for the same reason
+    the flat adapter asserts its schema facts: a silent absence needs a signal
+    that does not depend on anyone noticing it.
+    """
+    abstract = {"energy", "power", "current", "voltage"}
+    declared = {
+        properties.get("unit")
+        for device in _TREE.values()
+        for node in json.loads(device["$description"]).get("nodes", {}).values()
+        for properties in node.get("properties", {}).values()
+    }
+
+    assert not declared & abstract, f"abstract unit tokens in the captured tree: {sorted(declared & abstract)}"
+
+
 def test_field_metadata_omits_fields_the_mapper_declines(adapter: SchemaOneAdapter) -> None:
     """Advertising a unit for a reading that never arrives would have the
     integration validate against a field nothing populates."""

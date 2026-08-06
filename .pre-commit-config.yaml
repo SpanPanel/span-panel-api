@@ -80,7 +80,7 @@ repos:
           # schema-1 parses the parent/child tree with the eBus SDK, which
           # ships py.typed — so the hook needs it installed to resolve those
           # types rather than silently reporting import-not-found.
-          - ebus-sdk>=0.17.0
+          - ebus-sdk>=0.18.0
         args: ['--config-file=pyproject.toml']
         exclude: '^src/span_panel_api/generated_client/.*|scripts/.*|tests/.*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
 
@@ -98,7 +98,7 @@ repos:
           - paho-mqtt
           # schema-1 imports the eBus SDK; without it here the hook reports
           # import-error for a dependency that is correctly declared.
-          - ebus-sdk>=0.17.0
+          - ebus-sdk>=0.18.0
         exclude: '^src/span_panel_api/generated_client/.*|tests/.*|generate_client\.py|scripts/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
   # Check for common security issues

@@ -3,6 +3,18 @@ name: Release
 on:
   release:
     types: [published]
+  # A `release: published` event reaches this workflow only through webhook
+  # delivery, and a dropped delivery is silent: the release exists, the tag
+  # exists, nothing publishes, and the run list looks the same as it did before.
+  # Dispatch goes through the API instead, so a release can always be driven to
+  # PyPI by hand.
+  #
+  #   gh workflow run release.yml --ref schema-1-v0.1.0b1
+  #
+  # Dispatch a tag, never a branch. The steps below read the distribution and
+  # version out of the tag name, so a branch ref carries neither; it falls
+  # through to the error case rather than being guessed at.
+  workflow_dispatch:
 
 # This repo publishes two distributions that version independently: the
 # bootstrap (span-panel-api) and each schema adapter (span-panel-api-schema-N).

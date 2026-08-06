@@ -77,3 +77,29 @@ class SpanPanelAdapterMissingError(SpanPanelError):
             f"installed adapters: {sorted(available)}. "
             "Update the integration or install the missing adapter package."
         )
+
+
+class SpanPanelAdapterIncompatibleError(SpanPanelError):
+    """An adapter for this schema is installed, but this package cannot use it.
+
+    Distinct from SpanPanelAdapterMissingError because the remedy is the
+    opposite one. "Missing" means nothing claims this schema, and the answer is
+    to install something. This means a package *does* claim it and was rejected,
+    so installing more cannot help — the two installed pieces were built against
+    different versions of the same contract, and one of them has to move.
+
+    Raised rather than logged because the panel needing this adapter has no
+    other parser. Discovery still only logs, so one unusable third-party adapter
+    does not take down a panel whose own adapter is fine; this fires only when
+    the rejected adapter turns out to be the one actually required.
+    """
+
+    def __init__(self, needed: str, reason: str, defect: str) -> None:
+        self.needed = needed
+        self.reason = reason
+        self.defect = defect
+        super().__init__(
+            f"Panel requires adapter {needed!r} (reason: {reason}), and an installed "
+            f"package registers it, but it cannot be used: {defect} "
+            "Upgrade span-panel-api and the adapter package together."
+        )

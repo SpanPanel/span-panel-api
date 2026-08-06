@@ -22,6 +22,11 @@ if TYPE_CHECKING:
 class SchemaZeroAdapter:
     """Parser for the flat single-device schema (firmware r202603-r202627)."""
 
+    # A literal, deliberately not imported from span_panel_api.protocol: a value
+    # read from the installed bootstrap would agree with every bootstrap, which
+    # is the disagreement the check exists to find. Bump when this adapter is
+    # rebuilt against a new contract, never to match what happens to be installed.
+    ADAPTER_CONTRACT: int = 1
     schema_major = "schema_0"
     SUPPORTS_DATA_MODEL_VERSIONS: tuple[str, str] = (">=0", "<1.0")
 

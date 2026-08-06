@@ -79,6 +79,30 @@ class StreamingCapableProtocol(Protocol):
     async def stop_streaming(self) -> None: ...
 
 
+ADAPTER_CONTRACT_VERSION = 1
+"""The bootstrap-to-adapter contract this package speaks.
+
+Bumped only when a change leaves existing adapters unusable — a different
+``__init__`` signature, or a method whose meaning changes under an unchanged
+name. Purely additive changes do not bump it: ``_derive_required_members``
+already requires every member the protocol declares, so an adapter missing a
+newly added method is rejected on that basis alone.
+
+This exists because member presence is not the whole contract. A Protocol
+cannot express signatures at runtime, so an adapter carrying every required
+name and the wrong ``__init__`` arity passes discovery and fails much later,
+inside the transport, as a bare ``TypeError`` about an argument count. That is
+exactly what a stale adapter looks like, and it is the least actionable moment
+to find out. A declared integer is checkable at discovery, where the remedy —
+upgrade this package — can still be named.
+
+**Adapters must declare this as a literal, never by importing this constant.**
+An adapter that echoes whatever the installed bootstrap defines agrees with
+every bootstrap by construction, which is precisely the disagreement being
+looked for. The value has to be baked into the adapter's wheel at build time.
+"""
+
+
 @runtime_checkable
 class SchemaAdapter(Protocol):
     """Parser for a single data-model-major schema.
@@ -90,6 +114,7 @@ class SchemaAdapter(Protocol):
     consumers of the active adapter.
     """
 
+    ADAPTER_CONTRACT: int
     schema_major: str
     SUPPORTS_DATA_MODEL_VERSIONS: tuple[str, str]
 

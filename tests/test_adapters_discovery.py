@@ -1,14 +1,21 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 from unittest.mock import patch
 
 import pytest
 
-from span_panel_api.adapters import DEFAULT_ADAPTER_KEY, _reset_adapter_cache, discover_adapters, resolve_adapter
-from span_panel_api.exceptions import SpanPanelAdapterMissingError
+from span_panel_api.adapters import (
+    DEFAULT_ADAPTER_KEY,
+    _Discovery,
+    _reset_adapter_cache,
+    discover_adapters,
+    resolve_adapter,
+)
+from span_panel_api.exceptions import SpanPanelAdapterIncompatibleError, SpanPanelAdapterMissingError
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.models import MqttClientConfig
+from span_panel_api.protocol import ADAPTER_CONTRACT_VERSION
 
 from conftest import MOCK_SCHEMA
 
@@ -37,6 +44,15 @@ def _client(adapter_factory: object = None) -> SpanMqttClient:
     return SpanMqttClient("panel.local", "SERIAL123", config, **kwargs)  # type: ignore[arg-type]
 
 
+def _nothing_installed() -> Any:
+    """Patch discovery to a completed scan that found nothing.
+
+    A completed empty scan, not a missing one: `None` would make the next call
+    re-scan and pick up this environment's real adapters.
+    """
+    return patch("span_panel_api.adapters._DISCOVERY", _Discovery(adapters={}, rejected={}))
+
+
 def test_default_factory_resolves_the_flat_adapter_through_discovery() -> None:
     """No adapter_factory means "resolve the default key", not "import SchemaZeroAdapter"."""
     _reset_adapter_cache()
@@ -53,7 +69,7 @@ def test_constructing_a_client_does_not_require_an_installed_adapter() -> None:
 
     This is the property that lets the bootstrap ship without a parser at all.
     """
-    with patch("span_panel_api.adapters._REGISTRY", {}):
+    with _nothing_installed():
         _client()  # must not raise
 
 
@@ -62,7 +78,7 @@ def test_building_a_parser_without_any_adapter_raises_by_name() -> None:
     _reset_adapter_cache()
     client = _client()
 
-    with patch("span_panel_api.adapters._REGISTRY", {}), pytest.raises(SpanPanelAdapterMissingError) as exc:
+    with _nothing_installed(), pytest.raises(SpanPanelAdapterMissingError) as exc:
         client._build_adapter(MOCK_SCHEMA)
 
     assert exc.value.needed == DEFAULT_ADAPTER_KEY
@@ -109,6 +125,23 @@ def _discover_with(*eps: _FakeEntryPoint) -> dict[str, object]:
     _reset_adapter_cache()
     with patch("span_panel_api.adapters.entry_points", return_value=list(eps)):
         return dict(discover_adapters())
+
+
+def _conforming_members(contract: object = ADAPTER_CONTRACT_VERSION) -> dict[str, object]:
+    """Members for a class that passes discovery, derived from the protocol.
+
+    Derived rather than listed so it stays honest as SchemaAdapter grows: a test
+    that builds its fixture by hand starts passing for the wrong reason the day
+    a member is added.
+
+    ADAPTER_CONTRACT is the one member a callable will not do for, because it is
+    checked for value and not only presence — which is the whole point of it.
+    """
+    from span_panel_api.adapters import _REQUIRED_MEMBERS
+
+    members: dict[str, object] = {name: (lambda self, *args, **kwargs: None) for name in _REQUIRED_MEMBERS}
+    members["ADAPTER_CONTRACT"] = contract
+    return members
 
 
 def test_required_members_are_derived_from_the_protocol() -> None:
@@ -162,9 +195,7 @@ def test_an_adapter_missing_a_non_method_member_is_still_rejected() -> None:
     what makes the 'incomplete' half's rejection attributable to the one
     removed member rather than to an unrelated gap.
     """
-    from span_panel_api.adapters import _REQUIRED_MEMBERS
-
-    complete = {name: (lambda self, *args, **kwargs: None) for name in _REQUIRED_MEMBERS}
+    complete = _conforming_members()
     incomplete = {name: value for name, value in complete.items() if name != "SUPPORTS_DATA_MODEL_VERSIONS"}
 
     assert _discover_with(_FakeEntryPoint("schema_9", type("Complete", (), complete))) != {}
@@ -222,5 +253,98 @@ def test_an_entry_point_that_raises_on_load_is_skipped() -> None:
             raise ImportError("adapter package is half-installed")
 
     registry = _discover_with(Exploding("schema_9", None), _FakeEntryPoint("schema_0", SchemaZeroAdapter))
+
+    assert registry == {"schema_0": SchemaZeroAdapter}
+
+
+# ---------------------------------------------------------------------------
+# Contract versioning — an adapter built against a different bootstrap must be
+# rejected where the remedy can still be named, not at construction
+# ---------------------------------------------------------------------------
+
+
+def test_the_shipped_adapters_declare_the_contract_this_package_speaks() -> None:
+    """The pairing that actually ships. Both adapters version independently of
+    the bootstrap, so nothing but this check keeps their declared contract
+    honest when the protocol moves."""
+    from span_panel_api_schema_0 import SchemaZeroAdapter
+    from span_panel_api_schema_1 import SchemaOneAdapter
+
+    assert SchemaZeroAdapter.ADAPTER_CONTRACT == ADAPTER_CONTRACT_VERSION
+    assert SchemaOneAdapter.ADAPTER_CONTRACT == ADAPTER_CONTRACT_VERSION
+
+
+@pytest.mark.parametrize(
+    ("label", "contract"),
+    [
+        ("older", ADAPTER_CONTRACT_VERSION - 1),
+        ("newer", ADAPTER_CONTRACT_VERSION + 1),
+    ],
+)
+def test_an_adapter_built_for_another_contract_is_rejected(label: str, contract: int) -> None:
+    """Both directions, because either half can be the stale one: an old adapter
+    against a new bootstrap, or an adapter from a future release against this."""
+    members = _conforming_members(contract=contract)
+
+    assert _discover_with(_FakeEntryPoint("schema_9", type("Mismatched", (), members))) == {}, label
+
+
+def test_a_contract_that_is_not_an_integer_is_rejected() -> None:
+    """`True == 1` is the trap: bool is a subclass of int, so a truthy marker
+    would otherwise compare equal to contract 1 and be accepted."""
+    assert _discover_with(_FakeEntryPoint("schema_9", type("Truthy", (), _conforming_members(contract=True)))) == {}
+    assert _discover_with(_FakeEntryPoint("schema_9", type("Stringly", (), _conforming_members(contract="1")))) == {}
+
+
+def test_an_adapter_predating_contract_versioning_is_rejected_by_age_not_by_shape() -> None:
+    """The real regression this closes: schema-1 0.1.0b1 paired with a bootstrap
+    whose adapters took `panel_size`. Such an adapter carries every other
+    required name, so nothing but the contract member distinguishes it, and
+    without one it reached construction and died on argument count."""
+    members = _conforming_members()
+    del members["ADAPTER_CONTRACT"]
+
+    _reset_adapter_cache()
+    with patch(
+        "span_panel_api.adapters.entry_points",
+        return_value=[_FakeEntryPoint("schema_9", type("Ancient", (), members))],
+    ):
+        with pytest.raises(SpanPanelAdapterIncompatibleError) as exc:
+            resolve_adapter("schema_9", "test")
+
+    assert "predates contract versioning" in str(exc.value)
+
+
+def test_a_rejected_adapter_is_reported_as_unusable_not_as_missing() -> None:
+    """Absent and rejected are opposite remedies. Reporting a stale adapter as
+    missing sends someone to install a package they already have."""
+    members = _conforming_members(contract=ADAPTER_CONTRACT_VERSION + 1)
+
+    _reset_adapter_cache()
+    with patch(
+        "span_panel_api.adapters.entry_points",
+        return_value=[_FakeEntryPoint("schema_9", type("FromTheFuture", (), members))],
+    ):
+        with pytest.raises(SpanPanelAdapterIncompatibleError) as exc:
+            resolve_adapter("schema_9", "panel needs it")
+
+    assert exc.value.needed == "schema_9"
+    assert "contract" in exc.value.defect
+    # Still the missing error when nothing registers the key at all, so the two
+    # paths cannot quietly collapse into one message.
+    assert not isinstance(exc.value, SpanPanelAdapterMissingError)
+
+
+def test_a_rejected_adapter_does_not_make_a_working_one_unreachable() -> None:
+    """The rejection is per entry point. A stale third-party adapter must not
+    stop the panel whose own adapter is fine, which is why discovery logs rather
+    than raises and only resolve_adapter turns it into an error."""
+    from span_panel_api_schema_0 import SchemaZeroAdapter
+
+    stale = type("Stale", (), _conforming_members(contract=ADAPTER_CONTRACT_VERSION + 1))
+    registry = _discover_with(
+        _FakeEntryPoint("schema_9", stale),
+        _FakeEntryPoint("schema_0", SchemaZeroAdapter),
+    )
 
     assert registry == {"schema_0": SchemaZeroAdapter}

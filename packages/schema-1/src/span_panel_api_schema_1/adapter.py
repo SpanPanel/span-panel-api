@@ -51,6 +51,11 @@ _LOGGER = logging.getLogger(__name__)
 class SchemaOneAdapter:
     """Parser for the parent/child schema (data-model-version 1.x)."""
 
+    # A literal, deliberately not imported from span_panel_api.protocol: a value
+    # read from the installed bootstrap would agree with every bootstrap, which
+    # is the disagreement the check exists to find. Bump when this adapter is
+    # rebuilt against a new contract, never to match what happens to be installed.
+    ADAPTER_CONTRACT: int = 1
     schema_major = "schema_1"
     SUPPORTS_DATA_MODEL_VERSIONS: tuple[str, str] = (">=1.0", "<2.0")
 

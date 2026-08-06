@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is the parent/child device tree SPAN firmware `r202633+` publishes, identified by `SUPPORTS_DATA_MODEL_VERSIONS` rather than by this version
 number. A release here means this parser changed, never that the panel did.
 
+## [0.1.0b2] - 08/2026
+
+Pre-release. Corrects the dependency floor `0.1.0b1` shipped with, and follows the reshaped `SchemaAdapter` protocol released in `span-panel-api` 3.0.0b2.
+
+### Added
+
+- **`ADAPTER_CONTRACT = 1`**, declaring which version of the bootstrap-to-adapter contract this parser was built against. Declared as a literal rather than imported from `span_panel_api.protocol`: a value read from the installed bootstrap would agree with
+  every bootstrap, which is exactly the disagreement the check exists to find.
+
+### Fixed
+
+- **The `span-panel-api` floor was `>=3.0.0b1`, which no published bootstrap could satisfy in practice.** `0.1.0b1` was built against a bootstrap that reads the panel's `data-model-version` and constructs adapters with the whole schema; the only bootstrap
+  on PyPI at the time did neither. Its `V2HomieSchema` had no `data_model_version` field at all, so a `1.x` panel could not even be represented, and its factory hardcoded the version to `None` — meaning this adapter was discoverable and never selectable.
+  The floor is now `>=3.0.0b2`, the first release where both hold. Nothing was installed against the old floor; the combination was unreachable rather than broken in the field.
+
 ## [0.1.0b1] - 08/2026
 
 Pre-release. First release as a standalone distribution, and the first parser for the parent/child data model.

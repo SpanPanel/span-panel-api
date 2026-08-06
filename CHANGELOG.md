@@ -4,7 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0b2] - 08/2026
+
+Pre-release. Releases the reshaped `SchemaAdapter` protocol that `3.0.0b1` predates, and makes the mismatch between the two detectable rather than fatal at construction.
+
+### Added
+
+- **Adapter contract versioning.** `SchemaAdapter` now requires an `ADAPTER_CONTRACT` integer, and discovery rejects any adapter that does not declare this package's `ADAPTER_CONTRACT_VERSION`. Member presence was never the whole contract: a Protocol
+  cannot express signatures at runtime, so an adapter carrying every required name and the previous `__init__` arity passed discovery and failed much later inside the transport, as a bare `TypeError` about an argument count — the least actionable moment to
+  learn that two installed packages were built against different versions of each other. Adapters must declare the value as a **literal**; one read from the installed bootstrap would agree with every bootstrap, which is the disagreement being looked for.
+- **`SpanPanelAdapterIncompatibleError`**, raised when the adapter a panel needs is installed but unusable. Distinct from `SpanPanelAdapterMissingError` because the remedy inverts: missing means install something, incompatible means installing more cannot
+  help. Reporting the second as the first sends someone to install a package they already have. Discovery still only _logs_ a rejection, so one unusable third-party adapter cannot take down a panel whose own adapter is fine; the error surfaces only when
+  the rejected adapter turns out to be the one required.
 
 ### Fixed
 

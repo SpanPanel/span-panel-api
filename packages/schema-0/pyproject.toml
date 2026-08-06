@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api-schema-0"
-version = "1.0.0b1"
+version = "1.0.0b2"
 description = "Flat-schema (data-model-version absent) parser for span-panel-api"
 authors = [
     {name = "SpanPanel"}
@@ -9,7 +9,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10,<4.0"
 dependencies = [
-    "span-panel-api>=3.0.0b1,<4.0",
+    "span-panel-api>=3.0.0b2,<4.0",
 ]
 
 [project.urls]

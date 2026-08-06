@@ -7,15 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is fixed — the flat single-device schema, SPAN firmware `r202603` through `r202627` — and is identified by `SUPPORTS_DATA_MODEL_VERSIONS`
 rather than by this version number. A release here means this parser changed, never that the panel did.
 
-## [Unreleased]
+## [1.0.0b2] - 08/2026
+
+Pre-release. Follows the reshaped `SchemaAdapter` protocol released in `span-panel-api` 3.0.0b2.
+
+### Added
+
+- **`ADAPTER_CONTRACT = 1`**, declaring which version of the bootstrap-to-adapter contract this parser was built against. Declared as a literal rather than imported from `span_panel_api.protocol`: a value read from the installed bootstrap would agree with
+  every bootstrap, which is exactly the disagreement the check exists to find.
 
 ### Changed
 
 - **BREAKING: `SchemaZeroAdapter(serial_number, schema)`** replaces `SchemaZeroAdapter(serial_number, panel_size)`, following the protocol change in `span-panel-api`. Panel size is now derived here, by reading the circuit `space` format out of the flat
   schema's `types` block — knowledge that belongs to this package rather than to the transport, which was previously doing it on every adapter's behalf.
 - **`build_field_metadata()` takes no arguments**, reading the schema this adapter was constructed with.
-
-Requires `span-panel-api` with the reshaped `SchemaAdapter` protocol; the dependency floor is raised accordingly at release.
+- **The `span-panel-api` floor is now `>=3.0.0b2`.** `1.0.0b1` declared `>=3.0.0b1`, which admitted a bootstrap that constructs adapters with `panel_size` — a pairing that could not work. Installing that combination now fails by name at discovery rather
+  than on argument count inside the transport, but the floor is what stops a resolver reaching it at all.
 
 ## [1.0.0b1] - 08/2026
 

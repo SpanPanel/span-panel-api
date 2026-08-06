@@ -66,6 +66,11 @@ PROP_CURRENT_A = "current-a"
 PROP_CURRENT_B = "current-b"
 
 PROP_GRID_STATE = "grid-state"
+# The MID's islanding answer, and the true successor of the flat schema's
+# `bess/grid-state`: same ON_GRID/OFF_GRID vocabulary. Kept next to
+# PROP_GRID_STATE deliberately, because the two are easy to confuse and only
+# one of them is what an existing consumer means by "grid state".
+PROP_ISLANDING_STATE = "islanding-state"
 PROP_DIRECTION = "direction"
 DIRECTION_UPSTREAM = "UPSTREAM"
 
@@ -262,7 +267,18 @@ class PanelFields:
 
         # Grid state moved to the MID device, which is where islanding is
         # actually decided. Absent when the panel has no MID.
-        self.grid_state = text(mid, NODE_GRID, PROP_GRID_STATE) or None
+        #
+        # **From `islanding-state`, not from `grid-state`.** The MID publishes
+        # both, and the names invite exactly the wrong choice: the flat schema's
+        # `grid_state` was the BESS's `grid-state`, an ON_GRID/OFF_GRID
+        # islanding answer, and its v1.0 successor is `grid/islanding-state`
+        # with that same value set. The MID's own `grid/grid-state` is a
+        # different question — whether the utility supply is UP, DOWN or
+        # DEGRADED — and is new in v1.0 with no flat equivalent. Matching on
+        # the property name puts UP where consumers expect ON_GRID: the entity
+        # keeps its id and its history, and every template comparing it simply
+        # stops being true.
+        self.grid_state = text(mid, NODE_GRID, PROP_ISLANDING_STATE) or None
 
         # Retired in v1.0 with no drop-in successor, and deliberately left
         # None rather than substituted: `dominant-power-source` split into

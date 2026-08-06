@@ -13,6 +13,7 @@ import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
+from span_panel_api_schema_1.const import NODE_GRID
 from span_panel_api_schema_1.panel import (
     PanelFields,
     build_unmapped_tabs,
@@ -24,6 +25,7 @@ from span_panel_api_schema_1.panel import (
 _TREE = json.loads((Path(__file__).parent / "fixtures" / "parent_child_tree.json").read_text(encoding="utf-8"))
 
 PANEL = "example-40t-001"
+MID = "bess-mid"
 
 
 def _device(device_id: str) -> DiscoveredDevice:
@@ -145,8 +147,32 @@ def test_missing_lugs_yield_zeros_not_errors() -> None:
 
 
 def test_grid_state_comes_from_the_mid(fields: PanelFields) -> None:
-    """It moved off the panel to the device where islanding is decided."""
-    assert fields.grid_state == "UP"
+    """It moved off the panel to the device where islanding is decided.
+
+    And it comes from `islanding-state`, keeping the flat schema's
+    ON_GRID/OFF_GRID vocabulary.
+    """
+    assert fields.grid_state == "ON_GRID"
+
+
+def test_grid_state_is_not_the_mids_utility_health_signal() -> None:
+    """The MID publishes two grid properties and only one of them is this.
+
+    `grid/grid-state` answers whether the utility supply is UP, DOWN or
+    DEGRADED — new in v1.0, with no flat equivalent. `grid/islanding-state`
+    answers ON_GRID/OFF_GRID, which is what the flat schema's `grid_state`
+    meant and what every existing template compares against. Taking the
+    similarly-named one keeps the entity's id and history while silently
+    changing its vocabulary, so this pins the distinction rather than trusting
+    it.
+    """
+    mid = _device(MID)
+    assert mid.get_property(NODE_GRID, "grid-state") == "UP"
+    assert mid.get_property(NODE_GRID, "islanding-state") == "ON_GRID"
+
+    fields = PanelFields(panel=_device(PANEL), upstream_lugs=None, downstream_lugs=None, mid=mid)
+
+    assert fields.grid_state == "ON_GRID"
 
 
 def test_retired_fields_are_none_rather_than_substituted(fields: PanelFields) -> None:

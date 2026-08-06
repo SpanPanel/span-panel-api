@@ -99,7 +99,7 @@ def test_der_snapshots_are_populated(snapshot: SpanPanelSnapshot) -> None:
 def test_panel_and_lugs_values_reach_the_snapshot(snapshot: SpanPanelSnapshot) -> None:
     assert snapshot.instant_grid_power_w == -5847.0
     assert snapshot.power_flow_pv == 8500.0
-    assert snapshot.grid_state == "UP"
+    assert snapshot.grid_state == "ON_GRID"
     assert snapshot.l1_voltage == 120.0
 
 

@@ -40,3 +40,6 @@ Both found by verifying reconnect against a live broker, and both presented as a
   cannot leak.
 - **Readiness asked only about the root**, so a connection completed with a fraction of its circuits and no panel size. It now waits for every declared device to describe itself, at any depth. Child _state_ is deliberately not required, so an offline DER
   does not block a connection; the model is required only when the root's description declares it.
+- **`grid_state` read the wrong one of the MID's two grid properties.** The MID publishes both `grid/islanding-state` (`ON_GRID`/`OFF_GRID`/`UNKNOWN`) and `grid/grid-state` (`UP`/`DOWN`/`DEGRADED`/`UNKNOWN`). The flat schema's `grid_state` was the BESS's
+  `grid-state`, an islanding answer, so its successor is `islanding-state`; `grid/grid-state` asks whether the utility supply is healthy and is new in v1.0 with no flat equivalent. Matching on the property name rather than the value set put `UP` where a
+  consumer expects `ON_GRID` — an entity keeping its id and history while its vocabulary silently changed. `grid/grid-state` is left unmapped, being a new signal rather than a replacement for an existing field.

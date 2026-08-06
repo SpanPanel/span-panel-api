@@ -21,16 +21,15 @@ dependencies = [
 Homepage = "https://github.com/SpanPanel/span-panel-api"
 Issues = "https://github.com/SpanPanel/span-panel-api/issues"
 
-# NO [project.entry-points."span_panel_api.schema_adapters"] BLOCK YET.
+# The whole point of this distribution. Dispatch resolves `schema_1` for a 1.x
+# panel by discovering this group, never by importing this package.
 #
-# Deliberate, and the reason is the failure mode. Registering `schema_1` makes
-# dispatch resolve it for a 1.x panel, which would then fail somewhere inside
-# snapshot building — an opaque error, late, on a path the user cannot act on.
-# Unregistered, the same panel gets the clean SpanPanelAdapterMissingError that
-# Phase 2 Part A built, naming exactly what is missing.
-#
-# The entry point lands with the snapshot mapper (Phase 2 task 4), when this
-# package can answer for a panel end to end.
+# Held back until the parser could answer for a panel end to end — mapper,
+# field metadata, command topics, and recovery from a real broker outage.
+# Installing this package remains the opt-in: a 1.x panel without it still gets
+# the named SpanPanelAdapterMissingError rather than a silent misparse.
+[project.entry-points."span_panel_api.schema_adapters"]
+schema_1 = "span_panel_api_schema_1:SchemaOneAdapter"
 
 [tool.uv.sources]
 span-panel-api = { workspace = true }

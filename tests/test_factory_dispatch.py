@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from span_panel_api_schema_0 import SchemaZeroAdapter
+from span_panel_api_schema_1 import SchemaOneAdapter
 from span_panel_api.adapters import _reset_adapter_cache
 from span_panel_api.exceptions import SpanPanelAdapterMissingError, SpanPanelSchemaVersionError
 from span_panel_api.dispatch import select_adapter_key
@@ -76,14 +77,22 @@ def test_the_flat_key_is_the_one_the_transport_resolves() -> None:
 
 
 def test_missing_adapter_raises_with_the_installed_list() -> None:
+    """A panel whose schema outruns the install.
+
+    Asks for a major nothing provides rather than `schema_1`, which this
+    workspace now installs. The assertion is about the shape of the failure —
+    named, with the installed set — not about which adapters happen to be
+    absent today.
+    """
     from span_panel_api.adapters import resolve_adapter
 
     _reset_adapter_cache()
     with pytest.raises(SpanPanelAdapterMissingError) as exc:
-        resolve_adapter("schema_1", "data-model-version='1.0'")
+        resolve_adapter("schema_2", "data-model-version='2.0'")
 
-    assert exc.value.needed == "schema_1"
+    assert exc.value.needed == "schema_2"
     assert "schema_0" in exc.value.available
+    assert "schema_1" in exc.value.available
 
 
 # ---------------------------------------------------------------------------
@@ -179,33 +188,60 @@ async def test_diagnostics_properties_before_and_after_connect(mqtt_client_mock:
 
 
 @pytest.mark.asyncio
-async def test_a_parent_child_panel_is_refused_rather_than_parsed_as_flat() -> None:
-    """The bug Part A closes.
+async def test_a_parent_child_panel_gets_the_parent_child_parser() -> None:
+    """The bug Part A closed, now that the parser it asks for exists.
 
     Before, `create_span_client` hardcoded `data_model_version = None`, so a
     panel reporting `1.0` was handed to the flat parser regardless of what it
-    said. Reverting the dispatch here shows what that cost: the flat parser
-    reaches for `energy.ebus.device.circuit/space`, which a parent/child
-    payload keeps under `deviceClasses`, and the run dies on
+    said. What that cost: the flat parser reaches for
+    `energy.ebus.device.circuit/space`, which a parent/child payload keeps
+    under `deviceClasses`, and the run dies on
 
         ValueError: Schema missing 'energy.ebus.device.circuit/space' property
 
-    — a message about a missing property, for a panel whose real problem is
-    that nothing installed can parse it. The panel is now refused by name
-    instead, naming the adapter to install and what is already there.
+    — a message about a missing property, for a panel whose real problem was
+    that nothing installed could parse it. Until `schema_1` registered, such a
+    panel was refused by name; now the name resolves, and this pins that it
+    resolves to the parent/child parser rather than quietly to the flat one.
+    """
+    from span_panel_api.factory import create_span_client
+
+    _reset_adapter_cache()
+    config = MqttClientConfig(broker_host="broker.local", username="user", password="pass")
+    schema = parent_child_schema()
+    with (
+        patch("span_panel_api.factory.SpanMqttClient") as mock_cls,
+        patch("span_panel_api.factory.get_homie_schema", return_value=schema),
+    ):
+        mock_cls.return_value.connect = AsyncMock()
+        await create_span_client("192.168.1.1", mqtt_config=config, serial_number="test-serial")
+
+    _, kwargs = mock_cls.call_args
+    assert kwargs["adapter_factory"] is SchemaOneAdapter
+    assert kwargs["data_model_version"] == "1.0"
+    assert "1.0" in kwargs["schema_dispatch_reason"]
+
+
+@pytest.mark.asyncio
+async def test_a_panel_newer_than_the_install_is_refused_rather_than_parsed_as_flat() -> None:
+    """The other half of the same guarantee.
+
+    A schema major nothing provides must be refused by name, not fall back to
+    whichever parser happens to be installed — which is the failure the flat
+    default used to produce, one major later.
     """
     from span_panel_api.factory import create_span_client
 
     _reset_adapter_cache()
     config = MqttClientConfig(broker_host="broker.local", username="user", password="pass")
     with (
-        patch("span_panel_api.factory.get_homie_schema", return_value=parent_child_schema()),
+        patch("span_panel_api.factory.get_homie_schema", return_value=parent_child_schema("2.0")),
         pytest.raises(SpanPanelAdapterMissingError) as exc,
     ):
         await create_span_client("192.168.1.1", mqtt_config=config, serial_number="test-serial")
 
-    assert exc.value.needed == "schema_1"
-    assert "schema_0" in exc.value.available
+    assert exc.value.needed == "schema_2"
+    assert "schema_1" in exc.value.available
 
 
 @pytest.mark.asyncio
@@ -216,15 +252,18 @@ async def test_a_directly_constructed_client_dispatches_too() -> None:
     documents direct construction, and the integration uses it. Before, that
     path always resolved the flat adapter, so it carried exactly the bug the
     factory path just had fixed. Dispatch now happens wherever a parser is
-    built.
+    built, which is what makes handing this client a 1.x schema produce a
+    parent/child parser rather than a flat one.
     """
     _reset_adapter_cache()
     config = MqttClientConfig(broker_host="broker.local", username="user", password="pass")
     client = SpanMqttClient("192.168.1.1", SERIAL, config)
-    with pytest.raises(SpanPanelAdapterMissingError) as exc:
-        client._build_adapter(parent_child_schema())
 
-    assert exc.value.needed == "schema_1"
+    client._build_adapter(parent_child_schema())
+
+    assert isinstance(client.adapter, SchemaOneAdapter)
+    assert client.schema_major == "schema_1"
+    assert client.data_model_version == "1.0"
 
 
 def test_dispatch_records_what_it_read_on_the_client() -> None:

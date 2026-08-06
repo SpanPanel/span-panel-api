@@ -5,6 +5,12 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  # Push and pull_request both arrive by webhook, so a dropped delivery leaves a
+  # commit with no run at all -- which reads the same as a commit that passed.
+  # Dispatch re-runs this against any ref on demand.
+  #
+  #   gh workflow run ci.yml --ref develop
+  workflow_dispatch:
 
 jobs:
   lint-and-test:

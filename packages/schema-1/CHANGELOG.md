@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is the parent/child device tree SPAN firmware `r202633+` publishes, identified by `SUPPORTS_DATA_MODEL_VERSIONS` rather than by this version
 number. A release here means this parser changed, never that the panel did.
 
+## [Unreleased]
+
+### Added
+
+- **Spec conformance checking.** `spec_lock.json` ships with the package and records what this parser targets: the firmware range, the eBus specification commit its vocabulary was read from, and the version of every capability, device and registry it
+  implements. It is the consumer counterpart to the simulator's publisher lockfile, and both are pinned to the same specification commit — though the anchor shared between them is the **firmware range**, not that commit, because the specification says what
+  a device class _may_ publish while a panel publishes one specific tree.
+- **The 13 capability catalogs this adapter addresses**, byte-copied under `spec/` along with the device-types registry. Vendored rather than depended on because the specification is a git repository of versioned documents, not a package. They exist to be
+  checked against, never parsed in production: units and datatypes still come from each device's `$description`, since the catalog is the superset across all hardware rather than a statement about the panel in front of us. Formatting hooks are excluded
+  from `spec/`, because a lint fix there would quietly invalidate the byte comparison that makes the copies worth having.
+- **`tests/test_schema_one_conformance.py`**, which asks the consumer's question rather than the publisher's. A publisher asks whether everything it emits is legal, and for it an omission is unremarkable. This asks whether every name the adapter _reads_ is
+  one the specification defines — because a consumer addressing a name that no longer exists does not fail, it goes quiet: the property never arrives, metadata lookup returns `None`, and an entity disappears. `ebus-sdk` 0.18.0 removing the `battery`
+  capability key in favour of `soc`, with no alias, is exactly that shape.
+- **An explicit SPAN extension allowlist.** Fourteen of the forty-two properties this adapter reads are absent from every catalog — per-phase meter readings, panel link states, circuit `spaces`, the EVSE surface. All are legal, since the specification
+  permits properties it has never heard of. They are enumerated with reasons so that a name missing from the catalog must be a deliberate claim about SPAN's vocabulary rather than an unnoticed typo; at runtime the two are indistinguishable. Tests also fail
+  when an extension is later adopted upstream, or when one is declared for a property nothing reads.
+
+Provenance (byte comparison against a specification checkout) is skipped unless `EBUS_SPEC_DIR` is set, so conformance runs everywhere while the byte check stays opportunistic. Provenance proves the right bytes were copied; it cannot prove they were
+understood, which is what conformance is for.
+
 ## [0.1.0b2] - 08/2026
 
 Pre-release. Corrects the dependency floor `0.1.0b1` shipped with, and follows the reshaped `SchemaAdapter` protocol released in `span-panel-api` 3.0.0b2.

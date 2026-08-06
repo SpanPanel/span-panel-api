@@ -36,6 +36,12 @@
   },
   "globs": ["**/*.md"],
   "ignores": [
+    // Byte copies of the eBus specification, verified by byte comparison in
+    // tests/test_schema_one_conformance.py. Upstream's line lengths are not
+    // ours to correct, and a fix here would invalidate that comparison.
+    // `globs` above scans the tree directly, so pre-commit's `exclude` cannot
+    // filter this out -- it has to be ignored here.
+    "packages/schema-1/spec/**",
     ".venv/**",
     "venv/**",
     "node_modules/**",

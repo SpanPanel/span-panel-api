@@ -1,0 +1,40 @@
+{
+  "$schema": "https://ebus.energy/schemas/ebus-spec.json",
+  "role": "consumer",
+  "firmware": {
+    "family": "spanos2",
+    "range": "r202633+",
+    "data_model_version": ">=1.0,<2.0"
+  },
+  "spec_repo": "https://github.com/electrification-bus/specification",
+  "synced_commit": "4254526b0a8c11cab0d40fd700b1fc295c0479c6",
+  "synced_date": "2026-08-06",
+  "framework": "0.7",
+  "implements": {
+    "capabilities": {
+      "breaker": "0.1",
+      "connection": "0.1",
+      "door": "0.1",
+      "grid": "0.1",
+      "info": "0.2",
+      "load-shed": "0.3",
+      "meter": "0.2",
+      "pcs": "0.3",
+      "power-flows": "0.1",
+      "shed": "0.2",
+      "soc": "0.1",
+      "status": "0.1",
+      "switch": "0.1"
+    },
+    "devices": {
+      "distribution-enclosure": "0.12",
+      "circuit": "0.3",
+      "bess": "0.14"
+    },
+    "registries": {
+      "capability-types": "0.19",
+      "device-types": "0.5"
+    }
+  },
+  "notes": "role=consumer: span-panel-api-schema-1 parses the Homie 5 distribution-enclosure tree that SPAN firmware r202633+ publishes, and is hot-loaded by span-panel-api through the span_panel_api.schema_adapters entry-point group. It is the consumer counterpart to SpanPanel/simulator (role=publisher), which is pinned to the same synced_commit; the shared anchor between them is the firmware range above, not this commit, because the spec says what a device class MAY publish while a panel publishes one specific tree. PROVENANCE: packages/schema-1/spec/catalogs/*.json are byte copies of the specification's capabilities/ at synced_commit, and spec/registries/device-types.md is a byte copy of that registry. They are verified by byte comparison when a specification checkout is available (EBUS_SPEC_DIR); the comparison skips when none is, so the conformance check below always runs while the provenance check is opportunistic. Never hand-edit anything under spec/ -- an edit makes the byte comparison meaningless. WHAT IS VENDORED AND WHY SO LITTLE: only the 13 capability catalogs this adapter addresses, because a consumer needs the vocabulary it reads and nothing else. Datatypes, units and formats are deliberately NOT taken from these catalogs at runtime: the adapter reads them from each device's $description, because the same capability exposes different properties on different device classes (meter is voltage on the panel, power and energy on a circuit, both currents on lugs) and the catalog is the superset across all hardware rather than a statement about this panel. The vendored copies exist to be checked against, not to be parsed in production. ABSTRACT UNITS: four catalog properties carry unit: energy, a dimension rather than a unit (conventions/property-json.md 0.2). Being description-driven makes this adapter correct here by construction, and a test asserts it rather than leaving it to luck. EXTENSIONS: SPAN publishes properties no catalog defines -- per-phase meter readings, panel status links, circuit spaces. Those are legal under the specification and are enumerated as an explicit allowlist in tests/test_schema_one_conformance.py, so a name that is absent from the catalog has to be declared deliberately rather than assumed. PINNING RULE: pin what this adapter actually reads AND that exists in the current spec. pv/evse/mid/lugs have no standalone versioned device model upstream and are covered transitively as child device_types of distribution-enclosure 0.12, so they are not separately pinned."
+}

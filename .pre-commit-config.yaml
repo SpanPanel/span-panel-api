@@ -3,10 +3,15 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
+      # `packages/schema-1/spec/` holds byte copies of the eBus specification,
+      # verified by byte comparison in tests/test_schema_one_conformance.py. Any
+      # hook that rewrites a file must skip it: a "fix" there would silently
+      # invalidate the comparison that makes the copies trustworthy. Non-mutating
+      # checks (check-json) deliberately still run, since a corrupt copy should fail.
       - id: trailing-whitespace
-        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
       - id: end-of-file-fixer
-        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
       - id: check-yaml
         exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
       - id: check-toml
@@ -20,7 +25,7 @@ repos:
         exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
       - id: mixed-line-ending
         args: ['--fix=lf']
-        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
 
   # Ruff for formatting and linting
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -55,7 +60,7 @@ repos:
       - id: prettier
         types: [markdown]
         args: ['--config', '.prettierrc.json']
-        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|node_modules/.*|htmlcov/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|node_modules/.*|htmlcov/.*'
 
   # Markdownlint for markdown files (after Prettier formatting)
   - repo: https://github.com/DavidAnson/markdownlint-cli2
@@ -63,7 +68,7 @@ repos:
     hooks:
       - id: markdownlint-cli2
         args: ['--config', '.markdownlint-cli2.jsonc']
-        exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|node_modules/.*|htmlcov/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|node_modules/.*|htmlcov/.*'
 
   # MyPy for type checking
   - repo: https://github.com/pre-commit/mirrors-mypy

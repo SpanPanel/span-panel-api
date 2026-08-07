@@ -133,6 +133,37 @@ def test_a_root_whose_children_are_still_arriving_is_not_ready() -> None:
     assert adapter.is_ready() is False
 
 
+def test_readiness_goes_back_to_false_when_the_panel_declares_a_new_child(adapter: SchemaOneAdapter) -> None:
+    """Readiness is a reconciling predicate, not a barrier that latches.
+
+    A Homie tree grows out of band: commission a circuit and the panel
+    republishes a `$description` naming a child nobody has heard from. The
+    common consumer defect is to treat the first ready as settled and stop
+    reconciling, so the new device is never seen — a failure that moves from
+    startup to steady state, which makes it harder to find rather than less
+    real. `ebus-sdk`'s `doc/consuming-a-homie-tree.md` names it the one-shot
+    barrier.
+
+    The transport consults `is_ready()` on every snapshot, so this must fall
+    back to False and recover once the newcomer describes itself.
+    """
+    assert adapter.is_ready() is True
+
+    description = json.loads(_TREE[PANEL]["$description"])
+    description["children"] = [*description.get("children", []), "circuit-38"]
+    adapter.handle_message(f"ebus/5/{PANEL}/$description", json.dumps(description))
+
+    assert adapter.is_ready() is False, "a declared but unheard-of child left readiness latched True"
+
+    adapter.handle_message(
+        "ebus/5/circuit-38/$description",
+        json.dumps({"homie": "5.0", "name": "New circuit", "type": "energy.ebus.device.circuit", "nodes": {}}),
+    )
+    adapter.handle_message("ebus/5/circuit-38/$state", "ready")
+
+    assert adapter.is_ready() is True, "readiness did not recover once the new child described itself"
+
+
 def test_an_offline_child_does_not_block_readiness(adapter: SchemaOneAdapter) -> None:
     """A commissioned DER that is unplugged publishes `lost` but keeps its
     retained description. A panel must not fail to connect over it."""

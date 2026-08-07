@@ -99,6 +99,18 @@ class SchemaOneAdapter:
         handful of circuits and no model, which it reports as a healthy
         connection. So readiness waits for every device the tree declares.
 
+        Completeness comes from `Controller.is_tree_complete()` rather than a
+        walk of our own. It is the SDK's reconciling predicate for exactly this
+        question, it terminates on a declared cycle, and having one
+        implementation means our answer cannot drift from the tree the
+        controller actually holds. `_awaiting_descriptions` survives as the
+        diagnostic the predicate does not provide — which devices, not merely
+        whether.
+
+        This is a predicate, never a barrier: the transport consults it on every
+        snapshot, so a device commissioned later correctly makes it False again
+        until that device describes itself.
+
         Child *state* is deliberately not required. A commissioned DER that is
         currently offline publishes `lost` but keeps its retained description,
         and a panel should not fail to connect because a battery is unplugged.
@@ -113,7 +125,12 @@ class SchemaOneAdapter:
         root = self._controller.get_root(self._serial_number)
         if root is None or root.state != STATE_READY or not root.description:
             return False
-        if self._awaiting_descriptions(root):
+        # Diagnostic first, and unconditionally, so the pending set stays
+        # accurate: a tree that never completes then names the devices it is
+        # waiting on instead of expiring as a bare 30-second connect timeout,
+        # which `is_tree_complete()` alone cannot tell anyone.
+        self._awaiting_descriptions(root)
+        if not self._controller.is_tree_complete(self._serial_number):
             return False
         return self._model_arrived(root)
 

@@ -29,9 +29,16 @@ number. A release here means this parser changed, never that the panel did.
 - **An explicit record of what the producer does not exercise.** Of the 42 `(capability, property)` pairs this adapter reads, the simulator's captured tree declares 41. The exception is `grid/islanding-state`: the simulator models a MID but its tracked
   config publishes none, so `grid_state` — corrected in `0.1.0b2` to read `islanding-state` rather than `grid-state` — is the single mapping the producer gives no evidence for. Recorded rather than left implicit, because a passing suite otherwise reads as
   coverage it does not have. The entry is rejected once the simulator starts publishing it.
+- **The parser is now driven end to end from what the producer actually publishes.** Every other test in this package runs on a fixture captured off the upstream _generic_ eBus panel simulator, which by construction never carries SPAN's own vocabulary.
+  `spec/fixtures/simulator_wire.json` is a capture from SPAN's publisher instead — descriptions, `$state` and all 494 property values across 37 devices — fed in sorted topic order, the way a retained store replays it rather than the way a tree is walked.
+  The parser reaches ready on it, sizes the panel from `MAIN_40`, and parses all 30 circuits. Values are deliberately not asserted: the producer's config carries `noise_factor` and its clock advances, so pinning a wattage would fail on every recapture for
+  a reason nobody could act on.
+- **Two producer-side gaps are pinned rather than left to be noticed.** `grid_state` stays `None` because nothing instantiates a MID, and every DER — BESS, PV and both EVSEs — declares `info/model` in its `$description` and never publishes a value (PV
+  declares five `info` properties and publishes one). The second breaks the single standing obligation eBus places on a publisher, to declare accurately what it publishes, and is invisible to a conformance checker: comparing declarations against catalogs
+  cannot see a declaration nothing fulfils. Only a capture carrying values can, which is the argument for this fixture existing. Both are asserted as current expectations, so closing either fails the test that describes it.
 
-Provenance (byte comparison against a specification or simulator checkout) is skipped unless `EBUS_SPEC_DIR` / `SPAN_SIMULATOR_DIR` are set, so conformance and coverage run everywhere while the byte checks stay opportunistic. Provenance proves the right
-bytes were copied; it cannot prove they were understood, which is what the other two are for.
+Provenance (byte comparison against a specification or simulator checkout) is skipped unless `EBUS_SPEC_DIR` / `SPAN_SIMULATOR_DIR` are set, so conformance and coverage run everywhere while the byte checks stay opportunistic. The wire capture is compared
+on shape rather than bytes for the same reason its values are not asserted. Provenance proves the right bytes were copied; it cannot prove they were understood, which is what the other two are for.
 
 ### Fixed
 

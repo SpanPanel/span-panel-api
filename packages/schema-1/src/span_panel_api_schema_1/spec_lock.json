@@ -12,12 +12,15 @@
   "framework": "0.7",
   "peer": {
     "repo": "https://github.com/SpanPanel/panelbench",
-    "ref": "main",
+    "ref": "feat/wire-capture",
     "role": "publisher",
-    "commit": "b6f638850cf75acd14c181517b08ca7be7f866c1",
+    "commit": "7e170a3",
     "synced_commit": "4254526b0a8c11cab0d40fd700b1fc295c0479c6",
     "firmware_range": "r202633+",
-    "fixture": "tests/conformance/fixtures/golden_tree.json"
+    "fixtures": {
+      "tree": "tests/conformance/fixtures/golden_tree.json",
+      "wire": "tests/conformance/fixtures/golden_wire.json"
+    }
   },
   "implements": {
     "capabilities": {

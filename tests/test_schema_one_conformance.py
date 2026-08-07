@@ -52,6 +52,7 @@ _SPEC = Path(__file__).parent.parent / "packages" / "schema-1" / "spec"
 _CATALOGS = _SPEC / "catalogs"
 _DEVICE_TYPES = _SPEC / "registries" / "device-types.md"
 _SIMULATOR_TREE = _SPEC / "fixtures" / "simulator_tree.json"
+_SIMULATOR_WIRE = _SPEC / "fixtures" / "simulator_wire.json"
 _SOURCE = Path(const.__file__).parent
 _LOCK = _SOURCE / "spec_lock.json"
 
@@ -62,10 +63,31 @@ def _lock() -> dict[str, object]:
     return loaded
 
 
-def _peer() -> dict[str, str]:
+def _peer() -> dict[str, object]:
     peer = _lock()["peer"]
     assert isinstance(peer, dict)
-    return {str(key): str(value) for key, value in peer.items()}
+    return peer
+
+
+def _peer_str(key: str) -> str:
+    value = _peer()[key]
+    assert isinstance(value, str), f"peer.{key} should be a string"
+    return value
+
+
+def _peer_fixtures() -> dict[str, str]:
+    """The captures vendored from the peer, by kind.
+
+    Two of them, answering different questions: `tree` is `$description`
+    documents and is what the conformance profile is computed from; `wire` adds
+    `$state` and every property value, and is the only one that can drive this
+    parser end to end. A consumer checked against declarations alone has been
+    checked for understanding the shape of a panel, not for building the right
+    snapshot from one.
+    """
+    fixtures = _peer()["fixtures"]
+    assert isinstance(fixtures, dict)
+    return {str(kind): str(path) for kind, path in fixtures.items()}
 
 
 def _catalog(node: str) -> dict[str, object]:
@@ -322,7 +344,7 @@ def test_the_peer_is_pinned_to_the_same_specification_commit() -> None:
     everywhere. Its real job is to make bumping our own pin without looking at
     the other side impossible to do quietly.
     """
-    assert _peer()["synced_commit"] == _lock()["synced_commit"], (
+    assert _peer_str("synced_commit") == _lock()["synced_commit"], (
         "this adapter and the simulator it is developed against are pinned to different "
         "specification commits; re-vendor both, or record why they may differ."
     )
@@ -334,7 +356,7 @@ def test_the_peer_targets_the_same_firmware() -> None:
     firmware = _lock()["firmware"]
     assert isinstance(firmware, dict)
 
-    assert _peer()["firmware_range"] == firmware["range"]
+    assert _peer_str("firmware_range") == firmware["range"]
 
 
 def test_every_property_read_is_exercised_by_the_simulator() -> None:
@@ -402,18 +424,39 @@ def test_vendored_catalogs_are_byte_identical_to_the_specification() -> None:
     )
 
 
-def test_the_vendored_simulator_tree_matches_the_simulator() -> None:
-    """The captured tree against the simulator that produced it."""
+def test_the_vendored_captures_match_the_simulator() -> None:
+    """Both captures against the simulator that produced them.
+
+    Byte comparison for the tree, whose content is deterministic. The wire
+    capture carries values perturbed by `noise_factor` and an advancing clock, so
+    it is compared on shape: same devices, same topics. Holding it to bytes would
+    fail on every recapture for a reason nobody can act on.
+    """
     sim_dir = os.environ.get("SPAN_SIMULATOR_DIR")
     if not sim_dir:
-        pytest.skip("set SPAN_SIMULATOR_DIR to a simulator checkout to verify the captured tree")
+        pytest.skip("set SPAN_SIMULATOR_DIR to a simulator checkout to verify the captured fixtures")
 
-    peer = _peer()
-    source = Path(sim_dir) / peer["fixture"]
-    assert source.exists(), f"{source} is missing; is {sim_dir} on {peer['ref']}?"
+    fixtures = _peer_fixtures()
+    ref, commit = _peer_str("ref"), _peer_str("commit")
 
-    assert source.read_bytes() == _SIMULATOR_TREE.read_bytes(), (
-        f"the captured tree differs from {source}. Re-capture it and update peer.commit " f"(recorded: {peer['commit']})."
+    tree_source = Path(sim_dir) / fixtures["tree"]
+    assert tree_source.exists(), f"{tree_source} is missing; is {sim_dir} on {ref}?"
+    assert tree_source.read_bytes() == _SIMULATOR_TREE.read_bytes(), (
+        f"the captured tree differs from {tree_source}. Re-capture it and update peer.commit " f"(recorded: {commit})."
+    )
+
+    wire_source = Path(sim_dir) / fixtures["wire"]
+    assert wire_source.exists(), f"{wire_source} is missing; is {sim_dir} on {ref}?"
+    with wire_source.open() as handle:
+        theirs = json.load(handle)
+    with _SIMULATOR_WIRE.open() as handle:
+        ours = json.load(handle)
+
+    assert set(theirs) == set(ours), "the simulator now publishes a different device set than the vendored capture"
+    differing = sorted(device for device in ours if set(ours[device]) != set(theirs[device]))
+    assert not differing, (
+        f"these devices publish different topics than the vendored capture: {differing}. "
+        f"Re-vendor from {wire_source} and update peer.commit (recorded: {commit})."
     )
 
 
@@ -425,10 +468,8 @@ def test_the_peer_record_matches_the_simulator_lockfile() -> None:
 
     with (Path(sim_dir) / ".ebus-spec.json").open() as handle:
         theirs = json.load(handle)
-    peer = _peer()
-
-    assert theirs["role"] == peer["role"], "the peer is not publishing; this pairing is not what it claims"
-    assert theirs["synced_commit"] == peer["synced_commit"], (
-        f"the simulator now pins {theirs['synced_commit']}, we recorded {peer['synced_commit']}. "
+    assert theirs["role"] == _peer_str("role"), "the peer is not publishing; this pairing is not what it claims"
+    assert theirs["synced_commit"] == _peer_str("synced_commit"), (
+        f"the simulator now pins {theirs['synced_commit']}, we recorded {_peer_str('synced_commit')}. "
         "Re-vendor and update both, or the two sides are reading different vocabularies."
     )

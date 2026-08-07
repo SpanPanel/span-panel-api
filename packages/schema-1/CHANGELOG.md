@@ -23,9 +23,21 @@ number. A release here means this parser changed, never that the panel did.
 - **An explicit SPAN extension allowlist.** Fourteen of the forty-two properties this adapter reads are absent from every catalog — per-phase meter readings, panel link states, circuit `spaces`, the EVSE surface. All are legal, since the specification
   permits properties it has never heard of. They are enumerated with reasons so that a name missing from the catalog must be a deliberate claim about SPAN's vocabulary rather than an unnoticed typo; at runtime the two are indistinguishable. Tests also fail
   when an extension is later adopted upstream, or when one is declared for a property nothing reads.
+- **A peer record and simulator coverage check.** `spec_lock.json` now records the producer this parser is developed against — the SPAN simulator, `role: publisher` — with the specification commit and firmware range it pins, and a captured copy of the tree
+  it publishes is vendored alongside the catalogs. Two sides reading different vocabularies is now a test failure rather than something noticed later, and the anchor asserted between them is the **firmware range**, since the specification says what a
+  device class may publish while a panel publishes one specific tree.
+- **An explicit record of what the producer does not exercise.** Of the 42 `(capability, property)` pairs this adapter reads, the simulator's captured tree declares 41. The exception is `grid/islanding-state`: the simulator models a MID but its tracked
+  config publishes none, so `grid_state` — corrected in `0.1.0b2` to read `islanding-state` rather than `grid-state` — is the single mapping the producer gives no evidence for. Recorded rather than left implicit, because a passing suite otherwise reads as
+  coverage it does not have. The entry is rejected once the simulator starts publishing it.
 
-Provenance (byte comparison against a specification checkout) is skipped unless `EBUS_SPEC_DIR` is set, so conformance runs everywhere while the byte check stays opportunistic. Provenance proves the right bytes were copied; it cannot prove they were
-understood, which is what conformance is for.
+Provenance (byte comparison against a specification or simulator checkout) is skipped unless `EBUS_SPEC_DIR` / `SPAN_SIMULATOR_DIR` are set, so conformance and coverage run everywhere while the byte checks stay opportunistic. Provenance proves the right
+bytes were copied; it cannot prove they were understood, which is what the other two are for.
+
+### Fixed
+
+- **The conformance check was reading the wrong set of names.** Built from `_PROPERTY_FIELD_MAP` alone, it covered only properties that carry field metadata and silently skipped everything the snapshot mapper reads directly — the MID, `connection`
+  feeds/fed-by, `info/direction`. `grid_state`, the most recently corrected mapping in this package, was among them. The read set is now derived from the source itself, so it cannot fall behind the code; that immediately surfaced `info/direction` as a
+  fifteenth undeclared extension.
 
 ## [0.1.0b2] - 08/2026
 

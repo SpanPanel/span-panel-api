@@ -12,9 +12,9 @@
   "framework": "0.7",
   "peer": {
     "repo": "https://github.com/SpanPanel/panelbench",
-    "ref": "feat/wire-capture",
+    "ref": "main",
     "role": "publisher",
-    "commit": "7e170a3",
+    "commit": "266ff31b0fe4a7e515813201f6f0ac38c3cd1feb",
     "synced_commit": "4254526b0a8c11cab0d40fd700b1fc295c0479c6",
     "firmware_range": "r202633+",
     "fixtures": {

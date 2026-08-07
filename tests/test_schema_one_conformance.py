@@ -22,7 +22,7 @@ Three checks with different reach, deliberately:
 - **Coverage** — this adapter against a captured tree from the SPAN simulator,
   the producer our development is done against. Always runs, from a vendored copy.
 - **Provenance** — the vendored copies against their sources. Skipped unless
-  `EBUS_SPEC_DIR` / `SPAN_SIMULATOR_DIR` point at checkouts.
+  `EBUS_SPEC_DIR` / `PANELBENCH_DIR` point at checkouts.
 
 Provenance proves we copied the right bytes; it cannot prove we understood them.
 The first two are where the understanding gets checked, which is why they are the
@@ -88,6 +88,24 @@ def _peer_fixtures() -> dict[str, str]:
     fixtures = _peer()["fixtures"]
     assert isinstance(fixtures, dict)
     return {str(kind): str(path) for kind, path in fixtures.items()}
+
+
+def _checkout(variable: str, what: str) -> Path:
+    """A sibling checkout named by an environment variable, or skip.
+
+    A variable that is unset and one pointing at a directory that is gone are the
+    same situation — the checkout is not available — and both should skip. Letting
+    a stale path through instead produces a FileNotFoundError from somewhere deep
+    in a comparison, which reads as a broken test rather than an unconfigured one.
+    Set them in `.env`; see `.env.example`.
+    """
+    configured = os.environ.get(variable)
+    if not configured:
+        pytest.skip(f"set {variable} to {what}")
+    path = Path(configured)
+    if not path.is_dir():
+        pytest.skip(f"{variable}={configured} does not exist; point it at {what}")
+    return path
 
 
 def _catalog(node: str) -> dict[str, object]:
@@ -407,11 +425,7 @@ def test_vendored_catalogs_are_byte_identical_to_the_specification() -> None:
     that must run everywhere, and making them depend on a second repository would
     mean they stop running.
     """
-    spec_dir = os.environ.get("EBUS_SPEC_DIR")
-    if not spec_dir:
-        pytest.skip("set EBUS_SPEC_DIR to a specification checkout to verify vendored bytes")
-
-    spec = Path(spec_dir)
+    spec = _checkout("EBUS_SPEC_DIR", "a specification checkout to verify vendored bytes")
     differing = [
         path.name
         for path in sorted(_CATALOGS.glob("*.json"))
@@ -432,20 +446,17 @@ def test_the_vendored_captures_match_the_simulator() -> None:
     it is compared on shape: same devices, same topics. Holding it to bytes would
     fail on every recapture for a reason nobody can act on.
     """
-    sim_dir = os.environ.get("SPAN_SIMULATOR_DIR")
-    if not sim_dir:
-        pytest.skip("set SPAN_SIMULATOR_DIR to a simulator checkout to verify the captured fixtures")
-
+    sim_dir = _checkout("PANELBENCH_DIR", "a panelbench checkout to verify the captured fixtures")
     fixtures = _peer_fixtures()
     ref, commit = _peer_str("ref"), _peer_str("commit")
 
-    tree_source = Path(sim_dir) / fixtures["tree"]
+    tree_source = sim_dir / fixtures["tree"]
     assert tree_source.exists(), f"{tree_source} is missing; is {sim_dir} on {ref}?"
     assert tree_source.read_bytes() == _SIMULATOR_TREE.read_bytes(), (
         f"the captured tree differs from {tree_source}. Re-capture it and update peer.commit " f"(recorded: {commit})."
     )
 
-    wire_source = Path(sim_dir) / fixtures["wire"]
+    wire_source = sim_dir / fixtures["wire"]
     assert wire_source.exists(), f"{wire_source} is missing; is {sim_dir} on {ref}?"
     with wire_source.open() as handle:
         theirs = json.load(handle)
@@ -462,11 +473,9 @@ def test_the_vendored_captures_match_the_simulator() -> None:
 
 def test_the_peer_record_matches_the_simulator_lockfile() -> None:
     """What we believe the producer pins, against what it actually pins."""
-    sim_dir = os.environ.get("SPAN_SIMULATOR_DIR")
-    if not sim_dir:
-        pytest.skip("set SPAN_SIMULATOR_DIR to a simulator checkout to verify the peer record")
+    sim_dir = _checkout("PANELBENCH_DIR", "a panelbench checkout to verify the peer record")
 
-    with (Path(sim_dir) / ".ebus-spec.json").open() as handle:
+    with (sim_dir / ".ebus-spec.json").open() as handle:
         theirs = json.load(handle)
     assert theirs["role"] == _peer_str("role"), "the peer is not publishing; this pairing is not what it claims"
     assert theirs["synced_commit"] == _peer_str("synced_commit"), (

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from pathlib import Path
 from collections.abc import AsyncGenerator
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +17,34 @@ from paho.mqtt.reasoncodes import ReasonCode
 import span_panel_api._http as _http_mod
 from span_panel_api.models import V2HomieSchema
 from span_panel_api_schema_0.const import TOPIC_PREFIX, TYPE_CORE
+
+_DOTENV = Path(__file__).parent.parent / ".env"
+
+
+def _load_dotenv() -> None:
+    """Populate the environment from `.env`, without overriding what is set.
+
+    Read directly rather than through python-dotenv: this supplies developer
+    defaults for the optional provenance checks (`EBUS_SPEC_DIR`,
+    `PANELBENCH_DIR`), and taking a dependency to parse two lines would put a
+    package in the test path to save nothing.
+
+    `setdefault`, never assignment. An exported value is a deliberate choice for
+    this run — pointing at a different checkout to reproduce something — and a
+    file silently winning over it is the kind of surprise that costs an
+    afternoon. See `.env.example`; absence is fine, the checks skip.
+    """
+    if not _DOTENV.exists():
+        return
+    for raw in _DOTENV.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
 
 
 @pytest.fixture(autouse=True)

@@ -37,8 +37,8 @@ number. A release here means this parser changed, never that the panel did.
   declares five `info` properties and publishes one). The second breaks the single standing obligation eBus places on a publisher, to declare accurately what it publishes, and is invisible to a conformance checker: comparing declarations against catalogs
   cannot see a declaration nothing fulfils. Only a capture carrying values can, which is the argument for this fixture existing. Both are asserted as current expectations, so closing either fails the test that describes it.
 
-Provenance (byte comparison against a specification or simulator checkout) is skipped unless `EBUS_SPEC_DIR` / `SPAN_SIMULATOR_DIR` are set, so conformance and coverage run everywhere while the byte checks stay opportunistic. The wire capture is compared
-on shape rather than bytes for the same reason its values are not asserted. Provenance proves the right bytes were copied; it cannot prove they were understood, which is what the other two are for.
+Provenance (byte comparison against a specification or simulator checkout) is skipped unless `EBUS_SPEC_DIR` / `PANELBENCH_DIR` are set, so conformance and coverage run everywhere while the byte checks stay opportunistic. The wire capture is compared on
+shape rather than bytes for the same reason its values are not asserted. Provenance proves the right bytes were copied; it cannot prove they were understood, which is what the other two are for.
 
 ### Fixed
 

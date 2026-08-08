@@ -282,10 +282,43 @@ def test_command_topics_address_the_child_device(adapter: SchemaOneAdapter) -> N
     assert adapter.set_circuit_priority_topic(SOLAR_CIRCUIT) == f"ebus/5/{SOLAR_CIRCUIT}/load-shed/priority/set"
 
 
-def test_dominant_power_source_has_no_topic(adapter: SchemaOneAdapter) -> None:
-    """It split into two different controls on different devices. None makes
-    the transport reject the command rather than publish where nothing listens."""
-    assert adapter.set_dominant_power_source_topic() is None
+def test_dominant_power_source_writes_the_panel_assertion(adapter: SchemaOneAdapter) -> None:
+    """It split in two; this is the settable half, on the panel's shed node.
+
+    Returned None until 2026-08-08, which left a real capability unreachable:
+    comms to the BESS drop, the grid returns, and the user has no way to assert
+    that it is up so the BESS stops discharging. The panel offered the control
+    the whole time — `shed/asserted-islanding-state`, `settable=True` — and the
+    adapter simply never named it.
+    """
+    assert adapter.set_dominant_power_source_topic() == f"ebus/5/{PANEL}/shed/asserted-islanding-state/set"
+
+
+def test_the_flat_vocabulary_is_translated_not_forwarded(adapter: SchemaOneAdapter) -> None:
+    """The published protocol speaks flat's enum; the panel accepts a different one.
+
+    Forwarding the caller's string would publish a value outside
+    `NONE,ON_GRID,OFF_GRID` and the panel would reject it. The narrowing loses
+    nothing real: six *source classes* were pressed into service as a manual
+    override, and the override only ever needed on-grid, off-grid, or nothing.
+    """
+    assert adapter.dominant_power_source_payload("GRID") == "ON_GRID"
+
+    for off_grid in ("BATTERY", "PV", "GENERATOR"):
+        assert adapter.dominant_power_source_payload(off_grid) == "OFF_GRID", off_grid
+
+    for no_assertion in ("NONE", "UNKNOWN"):
+        assert adapter.dominant_power_source_payload(no_assertion) == "NONE", no_assertion
+
+
+def test_an_unrecognised_value_is_refused_rather_than_guessed(adapter: SchemaOneAdapter) -> None:
+    """None means "no legal representation", and the transport raises on it.
+
+    Asserting an islanding state the user did not ask for is worse than refusing
+    the command, because this control tells a BESS whether to keep discharging.
+    """
+    assert adapter.dominant_power_source_payload("SOLAR") is None
+    assert adapter.dominant_power_source_payload("") is None
 
 
 # ---------------------------------------------------------------------------

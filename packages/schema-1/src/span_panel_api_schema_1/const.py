@@ -49,6 +49,9 @@ PROP_RELAY_CONTROLLABLE = "relay-controllable"
 PROP_RELAY_REQUESTER = "relay-requester"
 PROP_SPACES = "spaces"
 
+# shed node
+PROP_ASSERTED_ISLANDING_STATE = "asserted-islanding-state"
+
 # Panel-level
 PROP_DATA_MODEL_VERSION = "data-model-version"
 PROP_FIRMWARE_VERSION = "firmware-version"

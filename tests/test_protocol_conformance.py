@@ -63,6 +63,7 @@ def test_schema_adapter_declares_its_methods() -> None:
         "set_circuit_relay_topic",
         "set_circuit_priority_topic",
         "set_dominant_power_source_topic",
+        "dominant_power_source_payload",
         "register_property_callback",
     ):
         assert hasattr(SchemaAdapter, name), f"SchemaAdapter is missing method {name}"

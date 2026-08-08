@@ -374,12 +374,22 @@ class SpanMqttClient:
 
         Args:
             value: DPS enum value (GRID, BATTERY, NONE, GENERATOR, PV)
+
+        The adapter names both the topic and the payload, because the two
+        schemas do not accept the same values. Flat takes this vocabulary
+        directly; v1.0 routes the command to `shed/asserted-islanding-state`,
+        whose enum is `NONE`/`ON_GRID`/`OFF_GRID`. Publishing `value` unchanged
+        would put a string outside that enum on the wire.
         """
-        topic = self._require_adapter().set_dominant_power_source_topic()
+        adapter = self._require_adapter()
+        topic = adapter.set_dominant_power_source_topic()
         if topic is None:
             raise SpanPanelServerError("Core node not found in panel topology")
+        payload = adapter.dominant_power_source_payload(value)
+        if payload is None:
+            raise SpanPanelServerError(f"{value!r} has no representation on this schema's control")
         if self._bridge is not None:
-            self._bridge.publish(topic, value, qos=1)
+            self._bridge.publish(topic, payload, qos=1)
 
     # -- StreamingCapableProtocol ------------------------------------------
 

@@ -74,5 +74,22 @@ class SchemaZeroAdapter:
             return None
         return PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=core_node, prop="dominant-power-source")
 
+    def dominant_power_source_payload(self, value: str) -> str | None:
+        """Flat speaks this vocabulary already, so the caller's value passes through.
+
+        The method exists because `schema_1` has to translate — its successor
+        property accepts `NONE`/`ON_GRID`/`OFF_GRID`, not a source class — and a
+        caller should not have to know which schema it is talking to. Here the
+        translation is the identity.
+
+        Validated rather than passed blindly: an unrecognised value returns None
+        and the transport refuses the command, which matches `schema_1`'s
+        behaviour and is better than putting a string outside the enum on the
+        wire.
+        """
+        allowed = {"GRID", "BATTERY", "PV", "GENERATOR", "NONE", "UNKNOWN"}
+        candidate = value.strip().upper()
+        return candidate if candidate in allowed else None
+
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
         return self._consumer.register_property_callback(callback)

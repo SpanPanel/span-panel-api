@@ -27,7 +27,9 @@ from span_panel_api_schema_1.const import (
     HOMIE_VERSION,
     NODE_INFO,
     NODE_LOAD_SHED,
+    NODE_SHED,
     NODE_SWITCH,
+    PROP_ASSERTED_ISLANDING_STATE,
     PROP_MODEL,
     PROP_NAME,
     PROP_PRIORITY,
@@ -197,16 +199,48 @@ class SchemaOneAdapter:
         return self._set_topic(circuit_id, NODE_LOAD_SHED, PROP_PRIORITY)
 
     def set_dominant_power_source_topic(self) -> str | None:
-        """No v1.0 equivalent, so no topic.
+        """The settable successor: `shed/asserted-islanding-state` on the panel.
 
-        `dominant-power-source` split into `grid-forming-entity` and
-        `asserted-islanding-state`, which are different controls on different
-        devices rather than a renamed one. Returning None makes the transport
-        reject the command instead of publishing to a topic nothing serves —
-        and which successor to expose is a product decision, tracked in the
-        entity and config deltas write-up.
+        `dominant-power-source` split in two. The read half became
+        `grid/grid-forming-entity` on the MID; this is the write half, and it is
+        the only settable one, so it is what a caller of
+        `set_dominant_power_source` is reaching for.
+
+        The catalog scopes it to exactly the case the control exists to serve:
+        "consulted only while the host has lost or degraded communication with
+        the device that senses that state (its MID / BESS)". Concretely — comms
+        to the BESS drop, the grid returns, the user asserts the grid is up, and
+        the BESS stops discharging. Returning None here, as this did until the
+        successor was decided, left that recovery unavailable during an outage.
+
+        Payload translation is not optional: the flat enum this protocol speaks
+        is not the one the panel accepts. See `dominant_power_source_payload`.
         """
-        return None
+        return self._set_topic(self._serial_number, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
+
+    def dominant_power_source_payload(self, value: str) -> str | None:
+        """Translate a flat `dominant-power-source` value into an assertion.
+
+        The published protocol speaks flat's vocabulary — `GRID`, `BATTERY`,
+        `PV`, `GENERATOR`, `NONE`, `UNKNOWN` — because that is the contract
+        callers were written against. The panel accepts `NONE`, `ON_GRID`,
+        `OFF_GRID`. Publishing the caller's string unchanged would put a value
+        outside the enum on the wire.
+
+        The narrowing loses nothing, because the six values were a *source
+        class* pressed into service as a manual override and the job only ever
+        needed on-grid, off-grid, or no assertion. Anything not recognised
+        returns None rather than guessing, so the transport refuses the command
+        instead of asserting something the user did not ask for.
+        """
+        return {
+            "GRID": "ON_GRID",
+            "BATTERY": "OFF_GRID",
+            "PV": "OFF_GRID",
+            "GENERATOR": "OFF_GRID",
+            "NONE": "NONE",
+            "UNKNOWN": "NONE",
+        }.get(value.strip().upper())
 
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
         """Subscribe to per-property updates; returns an unregister callable."""

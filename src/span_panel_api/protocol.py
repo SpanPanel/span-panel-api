@@ -152,4 +152,16 @@ class SchemaAdapter(Protocol):
 
     def set_dominant_power_source_topic(self) -> str | None: ...
 
+    def dominant_power_source_payload(self, value: str) -> str | None:
+        """Translate a caller's value into what this schema's wire accepts.
+
+        Callers speak the flat vocabulary (`GRID`, `BATTERY`, `PV`, `GENERATOR`,
+        `NONE`, `UNKNOWN`) because that is the published contract. Under v1.0 the
+        settable successor is `shed/asserted-islanding-state`, whose enum is
+        `NONE`/`ON_GRID`/`OFF_GRID`, so the value has to be mapped rather than
+        forwarded. Returning None means "no legal representation", and the
+        transport should refuse the command rather than publish a value the
+        panel will reject.
+        """
+
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]: ...

@@ -205,13 +205,17 @@ _SPAN_EXTENSIONS: dict[tuple[str, str], str] = {
 # Not defects on either side, but the precise list of what our development
 # producer does not exercise — which is exactly the part of the parser that gets
 # no evidence from testing against it.
-_NOT_EXERCISED_BY_SIMULATOR: dict[tuple[str, str], str] = {
-    (const.NODE_GRID, PROP_ISLANDING_STATE): (
-        "the simulator models a MID (wire/profiles/mid.json) but its tracked config publishes none, "
-        "so grid_state — corrected 2026-08-06 to read islanding-state rather than grid-state — is the "
-        "one mapping the producer gives no evidence for"
-    ),
-}
+#
+# Empty as of 2026-08-08, and that is a measurement rather than a default. Its
+# one entry was grid/islanding-state, excused because the simulator modelled a
+# MID but no tracked config published one. The producer now publishes a MID, so
+# the entry stopped being true and the check below said so. Every property this
+# parser reads is now exercised by the capture it is developed against.
+#
+# The mechanism stays for the next gap. An empty dict is the honest state, and it
+# is load-bearing: the coverage check now holds every mapping with nothing
+# excused, so a future producer regression fails rather than lands here.
+_NOT_EXERCISED_BY_SIMULATOR: dict[tuple[str, str], str] = {}
 
 
 # ---------------------------------------------------------------------------

@@ -89,31 +89,33 @@ def test_every_circuit_the_simulator_publishes_is_parsed(adapter: SchemaOneAdapt
     assert all(snapshot.circuits[circuit_id].name for circuit_id in real), "a circuit arrived with no name"
 
 
-def test_the_ders_declare_a_model_they_never_publish(adapter: SchemaOneAdapter) -> None:
-    """A producer-side gap, pinned so it cannot fade into the background.
+def test_no_der_declares_a_property_it_never_publishes(adapter: SchemaOneAdapter) -> None:
+    """The producer-side gap that closed on 2026-08-08, held shut.
 
-    Every DER the simulator publishes declares `info/model` in its
-    `$description` and never sends a value for it. PV is the widest: it declares
-    firmware-version, model, nominal-power, serial-number and vendor-name, and
-    publishes vendor-name alone.
+    This asserted `["bess", "pv", "evse", "evse-2"]` until the producer adopted
+    the upstream emitter and its DER metadata keys. Every one of those four
+    declared `info/model` in its `$description` and never sent a value; PV was the
+    widest, declaring firmware-version, model, nominal-power, serial-number and
+    vendor-name while publishing vendor-name alone.
 
-    That breaks the one standing obligation eBus places on a publisher — be
-    self-describing, declare accurately what you publish — and it is the failure
-    mode this parser's `circuit_nodes_missing_names()` exists to surface: a
-    consumer waits on a value that is promised and never arrives, so the entity
-    is created and never updates.
+    It breaks the one standing obligation eBus places on a publisher — declare
+    accurately what you publish — and the consumer symptom is specific: an entity
+    is created from the declaration, waits for a value that never arrives, and
+    never updates. That is why `circuit_nodes_missing_names()` exists.
 
-    Worth knowing that panelbench's own conformance checker **cannot** catch
-    this. It compares declarations against catalogs, so a property declared and
-    never published is conformant by construction. Only a capture that carries
-    values can see it, which is the argument for this fixture existing.
+    Worth keeping the note that panelbench's own conformance checker **cannot**
+    see this. It compares declarations against catalogs, so a property declared
+    and never published is conformant by construction. Only a capture carrying
+    values catches it, which remains the argument for this fixture.
 
-    Pinned rather than asserted away: when the simulator publishes these, this
-    test fails and the expectation gets deleted.
+    Now asserted empty rather than deleted. The list reaching zero is the
+    interesting state to defend: any DER that starts over-declaring again fails
+    here, named, instead of quietly recreating stale entities.
     """
-    assert adapter.circuit_nodes_missing_names() == ["bess", "pv", "evse", "evse-2"], (
-        "the set of devices declaring a model they never publish has changed. If the simulator "
-        "now publishes them, delete this test and assert circuit_nodes_missing_names() is empty."
+    assert adapter.circuit_nodes_missing_names() == [], (
+        "these devices declare a property they never publish, which creates entities that "
+        "never update. This was empty as of the 2026-08-08 recapture, so it is a producer "
+        "regression rather than a known gap."
     )
 
 
@@ -143,19 +145,24 @@ def test_field_metadata_covers_what_the_snapshot_carries(adapter: SchemaOneAdapt
     ), "an abstract unit token reached field metadata; units must come from the device description"
 
 
-def test_grid_state_is_absent_because_the_simulator_publishes_no_mid(adapter: SchemaOneAdapter) -> None:
-    """The one gap, asserted rather than left to be noticed.
+def test_grid_state_is_read_from_the_mid(adapter: SchemaOneAdapter) -> None:
+    """The gap this used to pin, now closed and asserted from the other side.
 
-    `grid_state` reads the MID's `grid/islanding-state`. The simulator supports a
-    MID fully — profile, resolvers, snapshot field — but nothing instantiates one,
-    so no config produces it and this capture cannot exercise the mapping.
+    Until 2026-08-08 this test asserted `grid_state is None`, because the
+    simulator supported a MID fully — profile, resolvers, snapshot field — and no
+    config instantiated one, so the mapping had no evidence behind it. The
+    producer now publishes a MID and this reads a real value, so the expectation
+    inverts rather than disappears: the mapping is exercised, and going back to
+    `None` would be a regression, not a return to normal.
 
-    Pinned as an expectation so that the day the simulator does publish a MID,
-    this fails and says so, rather than the gap quietly persisting behind a
-    passing suite. Its counterpart is `_NOT_EXERCISED_BY_SIMULATOR` in
-    `test_schema_one_conformance.py`; both must be cleared together.
+    `ON_GRID` and not `UP` is the substance. The MID publishes both
+    `grid/islanding-state` (`ON_GRID`) and `grid/grid-state` (`UP`), and reading
+    the wrong one is precisely the defect corrected on 2026-08-06 — flat-schema
+    vocabulary sitting in a v1.0 property. Asserting the value proves which
+    property the reader reached, where asserting "not None" would pass either way.
     """
-    assert adapter.build_snapshot().grid_state is None, (
-        "the simulator now publishes a MID. Drop this test, and drop grid/islanding-state "
-        "from _NOT_EXERCISED_BY_SIMULATOR so the coverage check holds it instead."
+    assert adapter.build_snapshot().grid_state == "ON_GRID", (
+        "grid_state must come from the MID's grid/islanding-state. 'UP' or 'DOWN' means "
+        "the reader has drifted onto grid/grid-state; None means the producer stopped "
+        "publishing a MID and the mapping is unexercised again."
     )

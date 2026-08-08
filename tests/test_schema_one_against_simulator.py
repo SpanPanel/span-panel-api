@@ -89,34 +89,73 @@ def test_every_circuit_the_simulator_publishes_is_parsed(adapter: SchemaOneAdapt
     assert all(snapshot.circuits[circuit_id].name for circuit_id in real), "a circuit arrived with no name"
 
 
-def test_no_der_declares_a_property_it_never_publishes(adapter: SchemaOneAdapter) -> None:
-    """The producer-side gap that closed on 2026-08-08, held shut.
+def test_no_der_declares_a_model_it_never_publishes(adapter: SchemaOneAdapter) -> None:
+    """The `info/model` half of the producer gap, closed on 2026-08-08.
 
     This asserted `["bess", "pv", "evse", "evse-2"]` until the producer adopted
-    the upstream emitter and its DER metadata keys. Every one of those four
-    declared `info/model` in its `$description` and never sent a value; PV was the
-    widest, declaring firmware-version, model, nominal-power, serial-number and
-    vendor-name while publishing vendor-name alone.
+    the upstream emitter and its DER metadata keys. All four declared
+    `info/model` and never sent a value.
 
-    It breaks the one standing obligation eBus places on a publisher — declare
-    accurately what you publish — and the consumer symptom is specific: an entity
-    is created from the declaration, waits for a value that never arrives, and
-    never updates. That is why `circuit_nodes_missing_names()` exists.
+    Scope is exactly `model`, because that is what `circuit_nodes_missing_names()`
+    measures for a DER — `PROP_MODEL` declared with no value, alongside circuits
+    missing `PROP_NAME`. The wider declared-but-unpublished question is
+    `test_the_ders_still_declare_two_identity_fields_they_never_publish` below,
+    which is not empty.
+
+    The consumer symptom is specific: an entity is created from the declaration,
+    waits for a value that never arrives, and never updates.
 
     Worth keeping the note that panelbench's own conformance checker **cannot**
     see this. It compares declarations against catalogs, so a property declared
     and never published is conformant by construction. Only a capture carrying
     values catches it, which remains the argument for this fixture.
 
-    Now asserted empty rather than deleted. The list reaching zero is the
-    interesting state to defend: any DER that starts over-declaring again fails
-    here, named, instead of quietly recreating stale entities.
+    Asserted empty rather than deleted: zero is the state worth defending.
     """
     assert adapter.circuit_nodes_missing_names() == [], (
-        "these devices declare a property they never publish, which creates entities that "
-        "never update. This was empty as of the 2026-08-08 recapture, so it is a producer "
-        "regression rather than a known gap."
+        "these devices declare info/model and never publish it, which creates entities "
+        "that never update. This was empty as of the 2026-08-08 recapture, so it is a "
+        "producer regression rather than a known gap."
     )
+
+
+def test_the_ders_still_declare_two_identity_fields_they_never_publish() -> None:
+    """The rest of §5.2, which adopting the upstream emitter did *not* close.
+
+    `circuit_nodes_missing_names()` looks only at `info/model`, so it reports
+    clean while three declared properties still arrive with no value. Reading the
+    capture directly is the only way to see the whole class, and leaving it
+    unmeasured would let "the model gap closed" read as "the gap closed".
+
+    `battery.software_version` in the delta analysis's Class B depends on the BESS
+    firmware-version below, so that mapping stays untestable until this moves —
+    `battery.serial_number`, its Class B twin, is now unblocked because the BESS
+    does publish `info/serial-number`.
+
+    Pinned as an exact set so it fails in either direction: a new over-declaration
+    appears, or one of these is finally published and the expectation should
+    shrink.
+    """
+    with _WIRE.open() as handle:
+        wire = json.load(handle)
+    with (_WIRE.parent / "simulator_tree.json").open() as handle:
+        tree = json.load(handle)
+
+    gaps = {}
+    for device in ("bess", "pv", "evse", "evse-2"):
+        declared = {
+            f"{node}/{prop}"
+            for node, body in (tree[device].get("nodes") or {}).items()
+            for prop in (body.get("properties") or {})
+        }
+        published = {key for key in wire[device] if not key.startswith("$")}
+        if absent := sorted(declared - published):
+            gaps[device] = absent
+
+    assert gaps == {
+        "bess": ["info/firmware-version"],
+        "pv": ["info/firmware-version", "info/serial-number"],
+    }, f"the declared-but-unpublished set moved: {gaps}"
 
 
 def test_the_fields_the_integration_consumes_are_populated(adapter: SchemaOneAdapter) -> None:

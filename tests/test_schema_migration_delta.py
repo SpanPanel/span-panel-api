@@ -51,14 +51,29 @@ EVSE surface, all of which it publishes.
 | EVSE | full |
 
 `PROVISIONAL_DER` is exactly that unpublished set — not a hedge across DER
-generally. And one member is probably misclassified already: `battery.model`
-reads as an addition here, while the eBus consumer guide has flat firmware
-publishing `bess/model` as the SKU, which would make it a *semantic change* — the
-most dangerous class — rather than a new field.
+generally. Some members are probably misclassified, but **in the benign
+direction**, and the reason is worth understanding because it generalises.
 
-A live flat panel cannot close this either: the one available has no BESS and no
-Drives. It would attest the panel and circuit rows, which is where the two real
-orphans are.
+A user does not see which property a value came from; they see the value. So the
+adapter is free to re-source a field as long as the *meaning* survives, and for
+BESS identity it deliberately does:
+
+    info/part-number  ->  battery.model         (the SKU stays in `model`)
+    info/model        ->  battery.product_name  (the designation gets a new field)
+
+Flat firmware publishes `bess/model` as the SKU. v1.0's `battery.model` is also
+the SKU, by that mapping. So on a flat capture that carried BESS identity,
+`battery.model` would reclassify as **identity** — not as a semantic change — and
+`battery.serial_number` likewise. Only the two `product_name` fields look like
+genuine additions, because the designation had no flat home at all.
+
+The general point: a re-sourced field is a migration risk only when the mapper
+passes the change through. Where it absorbs the change, the delta is real in the
+wire and invisible in the entity, which is the outcome §1 is asking for.
+
+A live flat panel cannot settle these either: the one available has no BESS and
+no Drives. It would attest the panel and circuit rows, which is where the two
+real orphans are.
 
 Circuits are 96% of the entity surface and are attested. That is the useful half,
 and it is clean.
@@ -115,10 +130,15 @@ their telemetry correctly against it, so `soc`, `soe`, `connected` and the rest
 are attested. These four are the fields nothing sends and therefore nothing can
 vouch for.
 
-Real flat firmware is documented to publish at least `bess/model`, so
-`battery.model` is more likely a semantic change (SKU → designation) than a new
-field. Resolving these needs a capture from flat firmware with a BESS attached,
-which no available panel has.
+Expect this set to shrink toward **identity**, not toward semantic change. The
+mapper re-sources `battery.model` from `info/part-number`, which is the SKU that
+flat's `bess/model` also carried, so a flat capture with BESS identity would move
+`battery.model` and `battery.serial_number` into the identity bucket. The two
+`product_name` entries are likely genuine additions: the designation had no flat
+home.
+
+Resolving this needs a capture from flat firmware with a BESS attached, which no
+available panel has.
 """
 
 

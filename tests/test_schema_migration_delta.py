@@ -71,6 +71,20 @@ The general point: a re-sourced field is a migration risk only when the mapper
 passes the change through. Where it absorbs the change, the delta is real in the
 wire and invisible in the entity, which is the outcome §1 is asking for.
 
+Absorbing everything would be the wrong reading, though, and this harness should
+not be mistaken for an argument to. Absorption protects stability, not value, and
+v1.0 carries more data than flat did. The risk of changing a field scales with how
+likely something compares it — state and telemetry drive automations and
+statistics, metadata renders on a device card and essentially nothing hinges on
+it. And adding a field is not the same act as changing one: a new field cannot
+break an automation that never referenced it.
+
+So `battery.product_name` is a free win rather than a hazard, and the delta
+document treats "keep the SKU in `battery.model`" as a product call worth
+revisiting rather than a default. `EXPECTED_ORPHANS` and `PROVISIONAL_DER` are
+about entities that would *stop* arriving; nothing here argues against surfacing
+new ones.
+
 A live flat panel cannot settle these either: the one available has no BESS and
 no Drives. It would attest the panel and circuit rows, which is where the two
 real orphans are.

@@ -144,12 +144,27 @@ while `UNKNOWN` reads as a working sensor that does not know. Both members are
 already documented; the test exists so a third cannot appear quietly.
 """
 
+ATTESTED_AGAINST_FIRMWARE: dict[str, str] = {
+    "pv.product_name": (
+        "classified an addition here only because the frozen simulator never sends "
+        "pv/product-name. A capture from real flat firmware does send it, so this is an "
+        "IDENTITY — the entity exists today and survives the migration. Measured by "
+        "test_live_flat_differential.py; the simulator gap is recorded there as KNOWN_GAPS"
+    ),
+}
+"""Rows the mechanical diff gets wrong, corrected by a capture from real firmware.
+
+The classification can only see what its flat reference sends, so a simulator gap
+reads as a v1.0 addition. This is where Phase 3b pays for itself: one row moved
+from *addition* to *identity* on evidence, and it moved in the direction that
+matters — a field we thought was new turns out to be one users already have.
+"""
+
 PROVISIONAL_DER: frozenset[str] = frozenset(
     {
         "battery.model",
         "battery.product_name",
         "battery.serial_number",
-        "pv.product_name",
     }
 )
 """Additions that may not be additions, because the flat reference never sends them.
@@ -337,13 +352,16 @@ def test_every_degraded_field_is_a_known_one(flat: Any, parent_child: Any) -> No
     )
 
 
-def test_der_additions_that_the_flat_reference_cannot_vouch_for(flat: Any, parent_child: Any) -> None:
-    """Pins the provisional set, so it shrinks deliberately rather than drifting.
+def test_der_additions_are_provisional_or_attested_but_never_unexamined(flat: Any, parent_child: Any) -> None:
+    """Every DER addition is accounted for as one of exactly two things.
 
-    These classify as additions only because the frozen flat simulator publishes
-    no BESS identity and almost no PV identity. If a flat capture ever arrives
-    from firmware with a BESS attached, this list should shrink and some members
-    will move to Severity 3 semantic changes instead.
+    Either the flat reference cannot vouch for it (`PROVISIONAL_DER`, because the
+    frozen simulator never sends BESS identity), or a capture from real firmware
+    has settled it (`ATTESTED_AGAINST_FIRMWARE`, which is how `pv.product_name`
+    turned out to be an identity users already have rather than something new).
+
+    A third option — an addition in neither list — means one appeared and nobody
+    asked which it was.
     """
     additions: set[str] = set()
     for scope, before, after in (
@@ -353,9 +371,11 @@ def test_der_additions_that_the_flat_reference_cannot_vouch_for(flat: Any, paren
         found, _ = _classify(scope, before, after)
         additions |= found
 
-    assert additions == set(PROVISIONAL_DER), (
-        f"the unattested DER addition set moved: {sorted(additions)}. Every member is a "
-        "field the flat simulator cannot vouch for; reconcile before treating it as new."
+    accounted = set(PROVISIONAL_DER) | set(ATTESTED_AGAINST_FIRMWARE)
+    assert additions == accounted, (
+        f"the DER addition set moved: {sorted(additions)}. Each member is either a field "
+        "the frozen simulator cannot vouch for or one real firmware has settled; a new one "
+        "needs deciding which, because 'addition' is the bucket that hides a surviving entity."
     )
 
 

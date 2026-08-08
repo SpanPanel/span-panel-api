@@ -127,6 +127,23 @@ EXPECTED_ORPHANS: dict[str, str] = {
     ),
 }
 
+EXPECTED_DEGRADED: dict[str, str] = {
+    "panel.dsm_state": (
+        "reads UNKNOWN on v1.0 where flat answered. Its authoritative input survives as "
+        "the MID's grid/islanding-state and its fallback as grid power, so the UNKNOWN is "
+        "more conservative than the data requires — reconstruction is an open item"
+    ),
+    "panel.current_run_config": (
+        "reads UNKNOWN on v1.0 where flat answered; no v1.0 source identified yet. " "Severity 2 in the delta document"
+    ),
+}
+"""Fields that survive the migration as entities but stop carrying an answer.
+
+Worse for a user than an orphan, because an orphan goes stale and is noticeable
+while `UNKNOWN` reads as a working sensor that does not know. Both members are
+already documented; the test exists so a third cannot appear quietly.
+"""
+
 PROVISIONAL_DER: frozenset[str] = frozenset(
     {
         "battery.model",
@@ -197,10 +214,37 @@ def parent_child() -> Any:
     return _feed(SchemaOneAdapter(serial_number=_SERIAL, schema=_pc_schema()), _PC).build_snapshot()
 
 
+_SENTINEL = "UNKNOWN"
+"""A value that occupies a field without informing it.
+
+Found by falsifying the differential in `test_live_flat_differential.py`: deleting
+`core/door` from a capture changed nothing, because `door_state` falls back to
+`UNKNOWN` rather than to `None`. A population diff cannot see a field degrade that
+way, so a field that stopped being published would classify as *identity* — the
+safest bucket — while a user sees a permanently useless entity.
+"""
+
+
 def _populated(obj: Any) -> set[str]:
     if obj is None:
         return set()
     return {f.name for f in dataclasses.fields(obj) if getattr(obj, f.name) is not None}
+
+
+def _degraded(before: Any, after: Any) -> set[str]:
+    """Fields carrying a real value on flat and only a sentinel on v1.0.
+
+    A fourth bucket rather than folded into orphans, because `UNKNOWN` is a legal
+    state for several of these enums. What makes it a delta is the *transition*:
+    the flat panel answered and the v1.0 panel does not.
+    """
+    if before is None or after is None:
+        return set()
+    return {
+        f.name
+        for f in dataclasses.fields(after)
+        if getattr(after, f.name) == _SENTINEL and getattr(before, f.name, None) not in (None, _SENTINEL)
+    }
 
 
 def _classify(scope: str, flat_obj: Any, pc_obj: Any) -> tuple[set[str], set[str]]:
@@ -267,6 +311,29 @@ def test_every_orphan_is_a_decision_someone_made(flat: Any, parent_child: Any) -
     stale = sorted(set(EXPECTED_ORPHANS) - orphans)
     assert not stale, (
         "these are recorded as orphans but no longer are; delete them so the list keeps " f"meaning something: {stale}"
+    )
+
+
+def test_every_degraded_field_is_a_known_one(flat: Any, parent_child: Any) -> None:
+    """Fields that survive as entities but stop carrying an answer.
+
+    Invisible to the population diff above — the entity exists and holds a string,
+    so nothing looks wrong — which is why this is separate. To a user it is worse
+    than an orphan: an orphan goes stale and is noticeable, while `UNKNOWN` looks
+    like a working sensor reporting that it does not know.
+    """
+    degraded: set[str] = set()
+    for scope, before, after in (
+        ("panel", flat, parent_child),
+        ("battery", flat.battery, parent_child.battery),
+        ("pv", flat.pv, parent_child.pv),
+    ):
+        degraded |= {f"{scope}.{name}" for name in _degraded(before, after)}
+
+    assert degraded == set(EXPECTED_DEGRADED), (
+        f"the set of fields that answer on flat and read {_SENTINEL!r} on v1.0 moved: "
+        f"{sorted(degraded)}. Both known members have a reconstruction recorded in the "
+        "delta document; a new one is a regression."
     )
 
 

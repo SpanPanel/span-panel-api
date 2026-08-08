@@ -34,3 +34,9 @@ dmypy.json
 coverage_output.log
 **/.DS_Store
 .local_coverage_data
+
+# Captures taken from a real panel. These carry the panel's serial (which is also
+# its MQTT username), the household's circuit names, and real consumption — none
+# of which belongs in a repository. The differential that reads them commits its
+# *verdict* only, never the capture, and skips when the file is absent.
+tests/fixtures/live_*.json

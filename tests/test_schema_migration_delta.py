@@ -1,0 +1,277 @@
+"""Phase 3: what happens to a user's entities when firmware moves flat → v1.0.
+
+The acceptance criterion is that a user upgrades and **nothing in their Home
+Assistant changes**. This produces the classification mechanically rather than by
+argument: drive both adapters over a capture of the *same logical panel*, and
+diff which `SpanPanelSnapshot` fields each populates.
+
+Same panel is not a claim, it is checked below — serial `sim-40t-001`, 30
+configured circuits, and every circuit UUID identical across both captures.
+That last one is the load-bearing fact for entity survival: `unique_id` is
+circuit-UUID-derived, so identical UUIDs mean the registry keeps the same
+`entity_id`, which means `statistic_id` is unchanged and long-term history
+survives.
+
+**Population, not values.** The two captures are different runs of different
+simulators, so values cannot match and asserting them would be noise. What
+matters is whether a field a user has today still arrives tomorrow.
+
+Three buckets:
+
+- **identity** — populated on both sides. The entity survives unremarked.
+- **addition** — v1.0 only. New; a product decision about whether to surface it,
+  never a migration risk.
+- **orphan** — flat only. **The dangerous bucket.** An entity that exists today
+  and stops updating, which HA shows as stale rather than gone.
+
+An orphan not on `EXPECTED_ORPHANS` fails. That is the whole point: the list is
+short, every member is a decision someone made on purpose, and anything else is a
+regression that reached a user.
+
+---
+
+**What this cannot tell you, which matters as much as what it can.**
+
+The flat side is the frozen simulator, a proxy for flat firmware rather than
+firmware itself. The gap is narrower than "DER is unverified", and worth stating
+precisely, because the two halves have very different support.
+
+*Telemetry is attested.* The simulator models the BESS and the Drives, and the
+integration renders their entities correctly against it — which is real evidence
+for `soc`, `soe`, `connected`, `nameplate-capacity`, `relative-position` and the
+EVSE surface, all of which it publishes.
+
+*Identity is not published at all*, so nothing can attest it:
+
+| device | identity keys the flat simulator publishes |
+| --- | --- |
+| panel | `model`, `serial-number`, `software-version` |
+| BESS | **none** |
+| PV | `vendor-name` only |
+| EVSE | full |
+
+`PROVISIONAL_DER` is exactly that unpublished set — not a hedge across DER
+generally. And one member is probably misclassified already: `battery.model`
+reads as an addition here, while the eBus consumer guide has flat firmware
+publishing `bess/model` as the SKU, which would make it a *semantic change* — the
+most dangerous class — rather than a new field.
+
+A live flat panel cannot close this either: the one available has no BESS and no
+Drives. It would attest the panel and circuit rows, which is where the two real
+orphans are.
+
+Circuits are 96% of the entity surface and are attested. That is the useful half,
+and it is clean.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from span_panel_api.models import V2HomieSchema
+from span_panel_api_schema_0 import SchemaZeroAdapter
+from span_panel_api_schema_1 import SchemaOneAdapter
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+_FLAT = _FIXTURES / "flat_wire.json"
+_PC = Path(__file__).parent.parent / "packages" / "schema-1" / "spec" / "fixtures" / "simulator_wire.json"
+_SERIAL = "sim-40t-001"
+
+EXPECTED_ORPHANS: dict[str, str] = {
+    "panel.dominant_power_source": (
+        "split upstream into grid/grid-forming-entity and shed/asserted-islanding-state, "
+        "which are different controls on different devices; which successor is exposed, "
+        "if any, is an open product decision"
+    ),
+    "panel.grid_islandable": (
+        "no v1.0 source; the flat panel advertised islandability as a panel property and "
+        "the redesign expresses it through the presence of a MID instead"
+    ),
+    "pv.relative_position": (
+        "flat publishes pv/relative-position; schema_1 does not map the v1.0 equivalent yet. "
+        "Unlike the two above this is a gap rather than a decision, and closing it is cheap"
+    ),
+}
+
+PROVISIONAL_DER: frozenset[str] = frozenset(
+    {
+        "battery.model",
+        "battery.product_name",
+        "battery.serial_number",
+        "pv.product_name",
+    }
+)
+"""Additions that may not be additions, because the flat reference never sends them.
+
+Each is classified `addition` only because the frozen flat simulator publishes no
+BESS identity and no PV identity beyond `vendor-name`. This is narrower than "DER
+is unverified": the simulator models both devices and the integration renders
+their telemetry correctly against it, so `soc`, `soe`, `connected` and the rest
+are attested. These four are the fields nothing sends and therefore nothing can
+vouch for.
+
+Real flat firmware is documented to publish at least `bess/model`, so
+`battery.model` is more likely a semantic change (SKU → designation) than a new
+field. Resolving these needs a capture from flat firmware with a BESS attached,
+which no available panel has.
+"""
+
+
+def _flat_schema(panel_size: int = 40) -> V2HomieSchema:
+    """No `data_model_version`: its absence is what marks a payload as flat."""
+    return V2HomieSchema(
+        firmware_version="spanos2/r202627/01",
+        types_schema_hash="sha256:flat-capture",
+        types={
+            "energy.ebus.device.circuit": {
+                "space": {"datatype": "integer", "format": f"1:{panel_size}:1"},
+            },
+        },
+    )
+
+
+def _pc_schema() -> V2HomieSchema:
+    return V2HomieSchema(
+        firmware_version="spanos2/r202633/01",
+        types_schema_hash="sha256:pc-capture",
+        types={},
+        data_model_version="1.0",
+    )
+
+
+def _feed(adapter: Any, capture_path: Path) -> Any:
+    """Replay a capture the way the retained store does: sorted, one at a time."""
+    capture = json.loads(capture_path.read_text())
+    for device in sorted(capture):
+        for key in sorted(capture[device]):
+            adapter.handle_message(f"ebus/5/{device}/{key}", capture[device][key])
+    return adapter
+
+
+@pytest.fixture(scope="module")
+def flat() -> Any:
+    return _feed(SchemaZeroAdapter(serial_number=_SERIAL, schema=_flat_schema()), _FLAT).build_snapshot()
+
+
+@pytest.fixture(scope="module")
+def parent_child() -> Any:
+    return _feed(SchemaOneAdapter(serial_number=_SERIAL, schema=_pc_schema()), _PC).build_snapshot()
+
+
+def _populated(obj: Any) -> set[str]:
+    if obj is None:
+        return set()
+    return {f.name for f in dataclasses.fields(obj) if getattr(obj, f.name) is not None}
+
+
+def _classify(scope: str, flat_obj: Any, pc_obj: Any) -> tuple[set[str], set[str]]:
+    """Returns (additions, orphans) as dotted `scope.field` names."""
+    before, after = _populated(flat_obj), _populated(pc_obj)
+    return (
+        {f"{scope}.{name}" for name in after - before},
+        {f"{scope}.{name}" for name in before - after},
+    )
+
+
+def test_both_captures_describe_the_same_logical_panel(flat: Any, parent_child: Any) -> None:
+    """The premise. Without it every difference below is ambiguous between a
+    migration delta and two simulators being configured differently."""
+    assert flat.serial_number == parent_child.serial_number == _SERIAL
+    assert len(flat.circuits) == len(parent_child.circuits)
+    assert set(flat.evse) == set(parent_child.evse)
+
+
+def test_every_circuit_keeps_its_identity_across_the_migration(flat: Any, parent_child: Any) -> None:
+    """The single fact that decides whether history survives.
+
+    `unique_id` is circuit-UUID-derived, so identical UUIDs on both sides mean the
+    registry keeps the same `entity_id`, `statistic_id` is unchanged, and
+    long-term statistics stay continuous. A UUID that moved would orphan a
+    circuit's entire history — 32 circuits' worth, silently.
+    """
+    assert set(flat.circuits) == set(parent_child.circuits), (
+        "circuit identities diverge across the migration; every non-matching circuit " "loses its recorder history"
+    )
+
+
+def test_no_circuit_field_is_orphaned(flat: Any, parent_child: Any) -> None:
+    """Circuits are 96% of the entity surface and the attested part of the flat
+    reference, so this is the strongest claim the harness can make."""
+    orphans: set[str] = set()
+    for circuit_id in sorted(set(flat.circuits) & set(parent_child.circuits)):
+        _, found = _classify("circuit", flat.circuits[circuit_id], parent_child.circuits[circuit_id])
+        orphans |= found
+
+    assert not orphans, f"circuit fields that stop being published after the migration: {sorted(orphans)}"
+
+
+def test_every_orphan_is_a_decision_someone_made(flat: Any, parent_child: Any) -> None:
+    """Phase 3's exit criterion: zero unclassified orphans.
+
+    An unexpected entry here is a user-visible regression — an entity that exists
+    today, keeps its name, and stops updating.
+    """
+    orphans: set[str] = set()
+    for scope, before, after in (
+        ("panel", flat, parent_child),
+        ("battery", flat.battery, parent_child.battery),
+        ("pv", flat.pv, parent_child.pv),
+    ):
+        _, found = _classify(scope, before, after)
+        orphans |= found
+
+    unexplained = sorted(orphans - set(EXPECTED_ORPHANS))
+    assert (
+        not unexplained
+    ), "these fields are populated on flat and absent on v1.0, and nobody decided that:\n  " + "\n  ".join(unexplained)
+
+    stale = sorted(set(EXPECTED_ORPHANS) - orphans)
+    assert not stale, (
+        "these are recorded as orphans but no longer are; delete them so the list keeps " f"meaning something: {stale}"
+    )
+
+
+def test_der_additions_that_the_flat_reference_cannot_vouch_for(flat: Any, parent_child: Any) -> None:
+    """Pins the provisional set, so it shrinks deliberately rather than drifting.
+
+    These classify as additions only because the frozen flat simulator publishes
+    no BESS identity and almost no PV identity. If a flat capture ever arrives
+    from firmware with a BESS attached, this list should shrink and some members
+    will move to Severity 3 semantic changes instead.
+    """
+    additions: set[str] = set()
+    for scope, before, after in (
+        ("battery", flat.battery, parent_child.battery),
+        ("pv", flat.pv, parent_child.pv),
+    ):
+        found, _ = _classify(scope, before, after)
+        additions |= found
+
+    assert additions == set(PROVISIONAL_DER), (
+        f"the unattested DER addition set moved: {sorted(additions)}. Every member is a "
+        "field the flat simulator cannot vouch for; reconcile before treating it as new."
+    )
+
+
+def test_the_flat_reference_publishes_no_bess_identity() -> None:
+    """Why the set above is provisional, asserted rather than described.
+
+    Reads the capture directly. If the flat simulator ever gains BESS identity,
+    this fails and the provisional set can be re-derived against something real.
+    """
+    body = json.loads(_FLAT.read_text())[_SERIAL]
+    identity = sorted(
+        key
+        for key in body
+        if key.startswith("bess/") and key.split("/", 1)[1] in {"model", "product-name", "serial-number", "software-version"}
+    )
+
+    assert not identity, (
+        f"the flat simulator now publishes BESS identity ({identity}); re-derive "
+        "PROVISIONAL_DER against it instead of assuming those fields are additions"
+    )

@@ -256,6 +256,77 @@ def test_no_property_declares_an_abstract_unit() -> None:
     assert not declared & abstract, f"abstract unit tokens in the captured tree: {sorted(declared & abstract)}"
 
 
+def test_the_downstream_lugs_fields_carry_metadata(adapter: SchemaOneAdapter) -> None:
+    """Five fields were populated with no metadata behind them until 2026-08-08.
+
+    `_PROPERTY_FIELD_MAP` keys on (device type, node, property), and the two lugs
+    devices match on all three — same `energy.ebus.device.lugs`, same `meter`
+    node, same properties — so one row per property is all it can hold, and those
+    rows went to the `upstream_*` paths. The snapshot mapper never had the problem
+    because it resolves the pair by `info/direction`.
+
+    The consequence was not a wrong value but an absent guard:
+    `schema_validation.py` cross-checks the integration's declared unit against
+    this table, so five sensors had nothing to check against — and they are the
+    feedthrough readings, which the lugs fidelity gap already makes the least
+    testable part of the surface.
+    """
+    metadata = adapter.build_field_metadata()
+
+    assert metadata["panel.feedthrough_power_w"].unit == "W"
+    assert metadata["panel.feedthrough_energy_consumed_wh"].unit == "Wh"
+    assert metadata["panel.feedthrough_energy_produced_wh"].unit == "Wh"
+    assert metadata["panel.downstream_l1_current_a"].unit == "A"
+    assert metadata["panel.downstream_l2_current_a"].unit == "A"
+
+
+def test_the_upstream_lugs_fields_are_not_displaced(adapter: SchemaOneAdapter) -> None:
+    """Held separately because the two lugs resolve through different paths now.
+
+    The upstream fields come from the table; the downstream ones from a
+    direction-resolved lookup layered over it. A change that made the second
+    overwrite the first would leave both sets present and both describing the
+    same device, which reads as working.
+    """
+    metadata = adapter.build_field_metadata()
+
+    assert metadata["panel.upstream_l1_current_a"].unit == "A"
+    assert metadata["panel.upstream_l2_current_a"].unit == "A"
+    assert metadata["panel.instant_grid_power_w"].unit == "W"
+
+
+def test_the_downstream_fields_need_a_downstream_device() -> None:
+    """The strongest available check, and worth saying why it is not stronger.
+
+    **Which** lugs device the lookup resolves cannot be asserted here. Both
+    declare byte-identical `meter` metadata — same five properties, same units —
+    so swapping `upstream=False` for `upstream=True` produces exactly the same
+    result, verified by mutation. That is the fidelity gap §5.3 of the survival
+    analysis records, reappearing one layer up: with the two devices
+    indistinguishable, a correct resolution and a swapped one are the same
+    output.
+
+    What *is* checkable is that these fields come from a resolved device at all
+    rather than leaking out of the table. Feed a tree with no downstream lugs and
+    they must be absent, while the upstream fields survive untouched.
+    """
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    _feed(adapter, device_ids=[device for device in _TREE if device != "lugs-downstream"])
+
+    metadata = adapter.build_field_metadata()
+
+    for absent in (
+        "panel.feedthrough_power_w",
+        "panel.feedthrough_energy_consumed_wh",
+        "panel.feedthrough_energy_produced_wh",
+        "panel.downstream_l1_current_a",
+        "panel.downstream_l2_current_a",
+    ):
+        assert absent not in metadata, f"{absent} was described with no device to describe"
+
+    assert metadata["panel.upstream_l1_current_a"].unit == "A"
+
+
 def test_field_metadata_omits_fields_the_mapper_declines(adapter: SchemaOneAdapter) -> None:
     """Advertising a unit for a reading that never arrives would have the
     integration validate against a field nothing populates."""

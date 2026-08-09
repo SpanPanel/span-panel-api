@@ -29,6 +29,9 @@ from span_panel_api_schema_1.const import (
     NODE_SOC,
     NODE_STATUS,
     NODE_SWITCH,
+    PROP_ACTIVE_POWER,
+    PROP_EXPORTED_ENERGY,
+    PROP_IMPORTED_ENERGY,
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_EVSE,
@@ -36,6 +39,8 @@ from span_panel_api_schema_1.const import (
     TYPE_PANEL,
     TYPE_PV,
 )
+from span_panel_api_schema_1.panel import PROP_CURRENT_A, PROP_CURRENT_B, find_lugs
+from span_panel_api_schema_1.snapshot import device_type as declared_type
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
@@ -127,7 +132,53 @@ def build_field_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMeta
         if found is not None:
             unit, datatype = found
             metadata[field_path] = FieldMetadata(unit=unit, datatype=datatype)
+    metadata.update(_downstream_lugs_metadata(devices))
     return metadata
+
+
+_DOWNSTREAM_LUGS_FIELDS: tuple[tuple[str, str], ...] = (
+    (PROP_ACTIVE_POWER, "panel.feedthrough_power_w"),
+    (PROP_IMPORTED_ENERGY, "panel.feedthrough_energy_consumed_wh"),
+    (PROP_EXPORTED_ENERGY, "panel.feedthrough_energy_produced_wh"),
+    (PROP_CURRENT_A, "panel.downstream_l1_current_a"),
+    (PROP_CURRENT_B, "panel.downstream_l2_current_a"),
+)
+"""The five fields the table above cannot address, and why it cannot.
+
+`_PROPERTY_FIELD_MAP` is keyed `(device type, node, property)`, and the two lugs
+devices share all three — same `energy.ebus.device.lugs`, same `meter` node, same
+properties — differing only in the `info/direction` value. So one row per property
+is all the table can hold, and those rows go to the `upstream_*` paths.
+
+The snapshot mapper has never had this problem, because it resolves the two
+devices by direction and reads each. That is why these five fields are *populated*
+and yet carry no metadata: the values were right, and `schema_validation.py` had
+nothing to check their units against — five sensors with no guard against a silent
+unit change, in exactly the region the lugs fidelity gap makes least testable.
+"""
+
+
+def _downstream_lugs_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMetadata]:
+    """Metadata for the downstream lugs, resolved by direction rather than by type.
+
+    Uses the same `find_lugs` the snapshot mapper uses, so the metadata and the
+    value can never disagree about which device is which.
+    """
+    downstream = find_lugs([d for d in devices if declared_type(d).startswith(TYPE_LUGS)], upstream=False)
+    if downstream is None:
+        return {}
+
+    declared = _properties(_nodes(downstream.description or {}).get(NODE_METER, {}))
+    found: dict[str, FieldMetadata] = {}
+    for property_id, field_path in _DOWNSTREAM_LUGS_FIELDS:
+        definition = declared.get(property_id)
+        if definition is None:
+            continue
+        found[field_path] = FieldMetadata(
+            unit=_optional_str(definition.get("unit")),
+            datatype=str(definition.get("datatype") or "string"),
+        )
+    return found
 
 
 def _lookup(

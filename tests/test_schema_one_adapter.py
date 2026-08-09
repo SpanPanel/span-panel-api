@@ -295,6 +295,33 @@ def test_the_upstream_lugs_fields_are_not_displaced(adapter: SchemaOneAdapter) -
     assert metadata["panel.instant_grid_power_w"].unit == "W"
 
 
+def test_the_bess_serial_is_described_and_its_firmware_is_not(adapter: SchemaOneAdapter) -> None:
+    """Class B of the survival analysis, which was misdiagnosed.
+
+    It recorded `battery.serial_number` and `battery.software_version` as having
+    "no mapping at all… simply never picked up". `build_battery` has always read
+    both. What was missing was the *value*: the producer of the day published no
+    BESS identity, so both read `None`, and an unpopulated field was mistaken for
+    an unmapped one.
+
+    So the gap was a metadata row, not a mapping. `serial_number` gets one — the
+    BESS declares it and now publishes it.
+
+    `software_version` deliberately does not. The BESS declares
+    `info/firmware-version` and never sends a value, which is the residual half of
+    §5.2, and describing it would advertise a reading that never arrives — the
+    exact failure the metadata builder's own docstring refuses to commit. It stays
+    absent until the producer publishes it, and
+    `test_the_ders_still_declare_two_identity_fields_they_never_publish` fails when
+    that changes.
+    """
+    metadata = adapter.build_field_metadata()
+
+    assert metadata["battery.serial_number"].datatype == "string"
+    assert metadata["battery.serial_number"].unit is None
+    assert "battery.software_version" not in metadata
+
+
 def test_the_downstream_fields_need_a_downstream_device() -> None:
     """The strongest available check, and worth saying why it is not stronger.
 

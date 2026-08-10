@@ -127,10 +127,15 @@ def build_pv(pv: DiscoveredDevice | None, feeds: dict[str, str]) -> SpanPVSnapsh
     )
 
 
-def build_evse(evse: DiscoveredDevice, feeds: dict[str, str]) -> SpanEvseSnapshot:
-    """Build one EVSE snapshot."""
+def build_evse(evse: DiscoveredDevice, feeds: dict[str, str], *, node_id: str) -> SpanEvseSnapshot:
+    """Build one EVSE snapshot.
+
+    `node_id` is supplied rather than taken from `evse.device_id`: it feeds the
+    integration's device-registry `identifiers`, so it has to be the harmonised
+    key, not the v1.0 device id. See `_harmonised_evse_keys`.
+    """
     return SpanEvseSnapshot(
-        node_id=evse.device_id,
+        node_id=node_id,
         feed_circuit_id=feeds.get(evse.device_id, ""),
         status=text(evse, NODE_STATUS, PROP_STATUS, UNKNOWN),
         lock_state=text(evse, NODE_SWITCH, PROP_LOCK_STATE, UNKNOWN),

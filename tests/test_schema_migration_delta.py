@@ -296,47 +296,44 @@ def test_every_circuit_keeps_its_identity_across_the_migration(flat: Any, parent
     ), "circuit identities diverge across the migration; every non-matching circuit loses its recorder history"
 
 
-def test_evse_identity_does_not_survive_the_migration(flat: Any, parent_child: Any) -> None:
-    """The circuit test's answer, inverted — and only visible once the ids were right.
+def test_evse_identity_survives_the_migration(flat: Any, parent_child: Any) -> None:
+    """The circuit test's answer, for the other device class that carries an identity.
 
-    Flat keys an EVSE by its node name (`evse`, `evse-2`). v1.0 keys it by the
-    proxied device id the migration guide specifies, `<proxier-id>-<identifier>`.
-    Those are disjoint, so nothing carries over.
+    An EVSE entity's `unique_id` and its device-registry `identifiers` are both built
+    from what this library hands over -- the snapshot key and `node_id`. So if those
+    move between schemas, a user's charger orphans and a duplicate appears beside it.
+    Keeping them still is this seam's job: the integration is not supposed to know
+    which wire schema is underneath, and an adapter that needed a `unique_id`
+    migration upstairs would be an adapter that failed.
 
-    **This was invisible until 2026-08-10.** The v1.0 producer published bare
-    `evse` / `evse-2` — flat-shaped ids that no panel publishes — inherited from an
-    example script. Both sides matched, the premise check passed, and EVSE identity
-    looked as safe as circuit identity. Correcting the producer's ids
-    (panelbench `38fb634`) made the two sides disagree, which is the true state.
+    **This was briefly broken, and the way it hid is the lesson.** v1.0 keyed EVSEs by
+    device id while flat keys by firmware's node name, so the two disagreed. It went
+    unnoticed for as long as it did because the v1.0 *producer* published bare
+    `evse` / `evse-2` -- flat-shaped ids no panel emits, copied from an example
+    script -- which made both sides match and this comparison read clean. Correcting
+    the producer's ids (panelbench `38fb634`) exposed the disagreement; harmonising
+    the keys in `_harmonised_evse_keys` closed it.
 
-    **What this does and does not establish.** It establishes that the snapshot key
-    changes, and the snapshot key is what an `evse` entity's identity is built from
-    here. It does *not* establish that a user loses EVSE history: the integration
-    still pins `2.6.4` and is not on this adapter, so how it derives an EVSE
-    `unique_id` cannot be read from this repository. Nor is the flat side attested —
-    the frozen simulator supplies it and the one live panel available has no Drives,
-    so real flat firmware's EVSE identity is unverified.
-
-    So this is a *finding pending firmware confirmation*, not a settled break. It is
-    asserted rather than left to a document because the failure mode it guards
-    against is the one that already happened: a producer detail quietly making the
-    comparison come out reassuring.
-
-    Circuits, by contrast, are attested and identical — see
-    `test_every_circuit_keeps_its_identity_across_the_migration`.
+    What the harmoniser assumes is stated there and worth repeating here: which Drive
+    becomes `evse` rather than `evse-2` is firmware's enumeration order, which v1.0
+    does not publish, so it is reconstructed from the feed circuit's lowest tab. A
+    single-EVSE install cannot be affected by that choice. A two-Drive install is
+    where a wrong guess would swap two chargers' histories, and it is the one thing
+    here still worth confirming with SPAN.
     """
-    assert len(flat.evse) == len(parent_child.evse) > 0, "the two captures model different EVSE counts"
-
-    assert not (set(flat.evse) & set(parent_child.evse)), (
-        "EVSE identities now overlap across the migration. If the producer's ids were "
-        "corrected toward <proxier-id>-<identifier> this should be disjoint; an overlap "
-        "means something reintroduced flat-shaped ids on the v1.0 side, which is what "
-        "hid this break until 2026-08-10."
+    assert set(flat.evse) == set(parent_child.evse), (
+        "EVSE identities diverge across the migration; every non-matching charger "
+        "orphans its history and reappears as a new device"
     )
 
-    assert all(
-        key.startswith(f"{_SERIAL}-") for key in parent_child.evse
-    ), f"v1.0 EVSE keys should be <proxier-id>-<identifier> with this panel as proxier, got {sorted(parent_child.evse)}"
+    for key, evse in parent_child.evse.items():
+        assert evse.node_id == key, (
+            f"{key}: node_id drives the device-registry identifier and must match the " f"snapshot key, got {evse.node_id!r}"
+        )
+
+    assert {evse.feed_circuit_id for evse in flat.evse.values()} == {
+        evse.feed_circuit_id for evse in parent_child.evse.values()
+    }, "the two captures feed their EVSEs from different circuits, so they are not the same panel"
 
 
 def test_no_circuit_field_is_orphaned(flat: Any, parent_child: Any) -> None:

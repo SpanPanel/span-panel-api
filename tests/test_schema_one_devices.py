@@ -151,7 +151,7 @@ def test_no_pv_yields_the_empty_snapshot() -> None:
 
 
 def test_evse_state_and_metadata() -> None:
-    evse = build_evse(_device("evse"), {})
+    evse = build_evse(_device("evse"), {}, node_id="evse")
 
     assert evse.node_id == "evse"
     assert evse.status == "CHARGING"
@@ -166,4 +166,4 @@ def test_evse_state_and_metadata() -> None:
 def test_evse_without_a_feeding_circuit_reports_empty_not_none() -> None:
     """`feed_circuit_id` is non-optional on the dataclass, so an unclaimed EVSE
     gets the empty string rather than breaking construction."""
-    assert build_evse(_device("evse"), {}).feed_circuit_id == ""
+    assert build_evse(_device("evse"), {}, node_id="evse").feed_circuit_id == ""

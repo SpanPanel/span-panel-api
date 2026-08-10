@@ -191,11 +191,15 @@ def _harmonised_evse_keys(
         flat  evse    feed 249a2f59...        v1.0  circuit 249a2f59... feeds ...-001
         flat  evse-2  feed 1bfdc7ec...        v1.0  circuit 1bfdc7ec... feeds ...-001-2
 
-    **The ordering is the assumption, and it is narrow.** Which of those becomes
-    `evse` rather than `evse-2` is firmware's enumeration order, which v1.0 does not
-    publish. Ordering by the feed circuit's lowest tab reproduces flat's assignment
-    on the only paired capture available, and matches how a panel would plausibly
-    enumerate its own breakers. It is not confirmed by SPAN.
+    **The ordering is the assumption, and the evidence for it is weaker than it
+    looks.** Which of those becomes `evse` rather than `evse-2` is firmware's
+    enumeration order, and v1.0 publishes no ordinal, no node name, nothing that
+    recalls the flat identity -- `info/serial-number` says which physical Drive this
+    is, never what flat called it. Ordering by the feed circuit's lowest tab does
+    reproduce flat's assignment on the paired capture, but that capture cannot
+    discriminate: its config lists the Drives in the same order as their tabs, so
+    tab-order and commissioning-order predict the same answer. The rule is a
+    plausible reconstruction, not a measured one, and SPAN has not confirmed it.
 
     Blast radius if the assumption is wrong: **none for a single-EVSE install**,
     where there is nothing to order and the key is `evse` either way — which is the

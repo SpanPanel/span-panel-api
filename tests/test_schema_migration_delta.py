@@ -134,7 +134,7 @@ EXPECTED_DEGRADED: dict[str, str] = {
         "more conservative than the data requires — reconstruction is an open item"
     ),
     "panel.current_run_config": (
-        "reads UNKNOWN on v1.0 where flat answered; no v1.0 source identified yet. " "Severity 2 in the delta document"
+        "reads UNKNOWN on v1.0 where flat answered; no v1.0 source identified yet. Severity 2 in the delta document"
     ),
 }
 """Fields that survive the migration as entities but stop carrying an answer.
@@ -276,7 +276,11 @@ def test_both_captures_describe_the_same_logical_panel(flat: Any, parent_child: 
     migration delta and two simulators being configured differently."""
     assert flat.serial_number == parent_child.serial_number == _SERIAL
     assert len(flat.circuits) == len(parent_child.circuits)
-    assert set(flat.evse) == set(parent_child.evse)
+    # Count, not keys. The EVSE keys legitimately differ across the migration —
+    # that is a delta, not a configuration difference, and asserting sameness here
+    # would put a real finding in the premise where it reads as a broken fixture.
+    # `test_evse_identity_does_not_survive_the_migration` holds it instead.
+    assert len(flat.evse) == len(parent_child.evse)
 
 
 def test_every_circuit_keeps_its_identity_across_the_migration(flat: Any, parent_child: Any) -> None:
@@ -287,9 +291,52 @@ def test_every_circuit_keeps_its_identity_across_the_migration(flat: Any, parent
     long-term statistics stay continuous. A UUID that moved would orphan a
     circuit's entire history — 32 circuits' worth, silently.
     """
-    assert set(flat.circuits) == set(parent_child.circuits), (
-        "circuit identities diverge across the migration; every non-matching circuit " "loses its recorder history"
+    assert set(flat.circuits) == set(
+        parent_child.circuits
+    ), "circuit identities diverge across the migration; every non-matching circuit loses its recorder history"
+
+
+def test_evse_identity_does_not_survive_the_migration(flat: Any, parent_child: Any) -> None:
+    """The circuit test's answer, inverted — and only visible once the ids were right.
+
+    Flat keys an EVSE by its node name (`evse`, `evse-2`). v1.0 keys it by the
+    proxied device id the migration guide specifies, `<proxier-id>-<identifier>`.
+    Those are disjoint, so nothing carries over.
+
+    **This was invisible until 2026-08-10.** The v1.0 producer published bare
+    `evse` / `evse-2` — flat-shaped ids that no panel publishes — inherited from an
+    example script. Both sides matched, the premise check passed, and EVSE identity
+    looked as safe as circuit identity. Correcting the producer's ids
+    (panelbench `38fb634`) made the two sides disagree, which is the true state.
+
+    **What this does and does not establish.** It establishes that the snapshot key
+    changes, and the snapshot key is what an `evse` entity's identity is built from
+    here. It does *not* establish that a user loses EVSE history: the integration
+    still pins `2.6.4` and is not on this adapter, so how it derives an EVSE
+    `unique_id` cannot be read from this repository. Nor is the flat side attested —
+    the frozen simulator supplies it and the one live panel available has no Drives,
+    so real flat firmware's EVSE identity is unverified.
+
+    So this is a *finding pending firmware confirmation*, not a settled break. It is
+    asserted rather than left to a document because the failure mode it guards
+    against is the one that already happened: a producer detail quietly making the
+    comparison come out reassuring.
+
+    Circuits, by contrast, are attested and identical — see
+    `test_every_circuit_keeps_its_identity_across_the_migration`.
+    """
+    assert len(flat.evse) == len(parent_child.evse) > 0, "the two captures model different EVSE counts"
+
+    assert not (set(flat.evse) & set(parent_child.evse)), (
+        "EVSE identities now overlap across the migration. If the producer's ids were "
+        "corrected toward <proxier-id>-<identifier> this should be disjoint; an overlap "
+        "means something reintroduced flat-shaped ids on the v1.0 side, which is what "
+        "hid this break until 2026-08-10."
     )
+
+    assert all(
+        key.startswith(f"{_SERIAL}-") for key in parent_child.evse
+    ), f"v1.0 EVSE keys should be <proxier-id>-<identifier> with this panel as proxier, got {sorted(parent_child.evse)}"
 
 
 def test_no_circuit_field_is_orphaned(flat: Any, parent_child: Any) -> None:
@@ -324,9 +371,9 @@ def test_every_orphan_is_a_decision_someone_made(flat: Any, parent_child: Any) -
     ), "these fields are populated on flat and absent on v1.0, and nobody decided that:\n  " + "\n  ".join(unexplained)
 
     stale = sorted(set(EXPECTED_ORPHANS) - orphans)
-    assert not stale, (
-        "these are recorded as orphans but no longer are; delete them so the list keeps " f"meaning something: {stale}"
-    )
+    assert (
+        not stale
+    ), f"these are recorded as orphans but no longer are; delete them so the list keeps meaning something: {stale}"
 
 
 def test_every_degraded_field_is_a_known_one(flat: Any, parent_child: Any) -> None:

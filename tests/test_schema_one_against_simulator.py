@@ -119,6 +119,16 @@ def test_no_der_declares_a_model_it_never_publishes(adapter: SchemaOneAdapter) -
     )
 
 
+_DER_TYPES = frozenset(
+    {
+        "energy.ebus.device.bess",
+        "energy.ebus.device.pv",
+        "energy.ebus.device.evse",
+    }
+)
+"""The proxied DER classes, which are what the over-declaration check covers."""
+
+
 def test_the_ders_still_declare_two_identity_fields_they_never_publish() -> None:
     """The rest of §5.2, which adopting the upstream emitter did *not* close.
 
@@ -135,26 +145,39 @@ def test_the_ders_still_declare_two_identity_fields_they_never_publish() -> None
     Pinned as an exact set so it fails in either direction: a new over-declaration
     appears, or one of these is finally published and the expectation should
     shrink.
+
+    **Keyed by device type, not device id.** The ids are `<proxier>-<identifier>`
+    and move with the panel serial and the DER's own serial, so keying on them
+    would make this fail whenever a config changed — for a reason that has nothing
+    to do with what it measures. Type is the stable discriminator, and it is what
+    the mapper itself resolves on.
     """
     with _WIRE.open() as handle:
         wire = json.load(handle)
     with (_WIRE.parent / "simulator_tree.json").open() as handle:
         tree = json.load(handle)
 
-    gaps = {}
-    for device in ("bess", "pv", "evse", "evse-2"):
+    gaps: dict[str, list[str]] = {}
+    for device_id, description in tree.items():
+        device_type = str(description.get("type") or "")
+        if device_type not in _DER_TYPES:
+            continue
         declared = {
             f"{node}/{prop}"
-            for node, body in (tree[device].get("nodes") or {}).items()
+            for node, body in (description.get("nodes") or {}).items()
             for prop in (body.get("properties") or {})
         }
-        published = {key for key in wire[device] if not key.startswith("$")}
+        published = {key for key in wire[device_id] if not key.startswith("$")}
         if absent := sorted(declared - published):
-            gaps[device] = absent
+            already = gaps.setdefault(device_type, absent)
+            assert already == absent, (
+                f"two {device_type} devices disagree on which declarations go unpublished "
+                f"({already} vs {absent}); collapsing by type would hide one of them"
+            )
 
     assert gaps == {
-        "bess": ["info/firmware-version"],
-        "pv": ["info/firmware-version", "info/serial-number"],
+        "energy.ebus.device.bess": ["info/firmware-version"],
+        "energy.ebus.device.pv": ["info/firmware-version", "info/serial-number"],
     }, f"the declared-but-unpublished set moved: {gaps}"
 
 

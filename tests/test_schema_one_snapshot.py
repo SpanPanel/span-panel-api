@@ -92,8 +92,12 @@ def test_der_snapshots_are_populated(snapshot: SpanPanelSnapshot) -> None:
     assert snapshot.battery.connected is True
     assert snapshot.pv.product_name == "IQ8PLUS-72-2-US"
     assert snapshot.pv.feed_circuit_id == SOLAR_CIRCUIT
-    assert set(snapshot.evse) == {"evse", "evse-2"}
-    assert snapshot.evse["evse"].status == "CHARGING"
+    # Keyed by serial, not by device id: on real flat firmware the EVSE node id is
+    # the Drive's serial (SpanPanel/span#214), so this is what keeps a charger's
+    # `unique_id` still across the migration. The reference tree's bare `evse` /
+    # `evse-2` device ids are the simulator's naming, not a panel's.
+    assert set(snapshot.evse) == {"SIM-EVSE-example-40t-001", "SIM-EVSE-example-40t-001-2"}
+    assert snapshot.evse["SIM-EVSE-example-40t-001"].status == "CHARGING"
 
 
 def test_panel_and_lugs_values_reach_the_snapshot(snapshot: SpanPanelSnapshot) -> None:

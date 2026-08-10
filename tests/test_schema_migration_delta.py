@@ -300,30 +300,28 @@ def test_evse_identity_survives_the_migration(flat: Any, parent_child: Any) -> N
     """The circuit test's answer, for the other device class that carries an identity.
 
     An EVSE entity's `unique_id` and its device-registry `identifiers` are both built
-    from what this library hands over -- the snapshot key and `node_id`. So if those
+    from what this library hands over -- the snapshot key and `node_id` -- so if those
     move between schemas, a user's charger orphans and a duplicate appears beside it.
-    Keeping them still is this seam's job: the integration is not supposed to know
-    which wire schema is underneath, and an adapter that needed a `unique_id`
-    migration upstairs would be an adapter that failed.
 
-    **This was briefly broken, and the way it hid is the lesson.** v1.0 keyed EVSEs by
-    device id while flat keys by firmware's node name, so the two disagreed. It went
-    unnoticed for as long as it did because the v1.0 *producer* published bare
-    `evse` / `evse-2` -- flat-shaped ids no panel emits, copied from an example
-    script -- which made both sides match and this comparison read clean. Correcting
-    the producer's ids (panelbench `38fb634`) exposed the disagreement; harmonising
-    the keys in `_harmonised_evse_keys` closed it.
+    **The comparison is against firmware, not against the flat simulator.** On a real
+    panel the EVSE node id *is* the Drive's serial: SpanPanel/span#214 has the topic
+    `ebus/5/<panel-serial>/<drive-serial>`, diagnostics keyed
+    `"evse": {"dt-2302-c1km3": ...}`, and a maintainer confirming that node id is what
+    the `unique_id` is built from. The frozen flat simulator instead names its nodes
+    `evse` / `evse-2`, positional slots no panel publishes -- so `set(flat.evse)` is
+    the wrong thing to assert against, and asserting it is what previously produced an
+    elaborate reconstruction of a naming scheme that does not exist.
 
-    What the harmoniser assumes is stated there and worth repeating here: which Drive
-    becomes `evse` rather than `evse-2` is firmware's enumeration order, which v1.0
-    does not publish, so it is reconstructed from the feed circuit's lowest tab. A
-    single-EVSE install cannot be affected by that choice. A two-Drive install is
-    where a wrong guess would swap two chargers' histories, and it is the one thing
-    here still worth confirming with SPAN.
+    So flat's *serials* stand in for flat's keys, which is what firmware would have
+    published. The simulator gap is recorded in the delta document.
     """
-    assert set(flat.evse) == set(parent_child.evse), (
-        "EVSE identities diverge across the migration; every non-matching charger "
-        "orphans its history and reappears as a new device"
+    flat_identity = {evse.serial_number for evse in flat.evse.values()}
+    assert flat_identity == {None} or None not in flat_identity, "a flat EVSE published no serial to key on"
+
+    assert set(parent_child.evse) == flat_identity, (
+        "v1.0 EVSE keys do not match the serials flat publishes. On real firmware the "
+        "flat node id is that serial, so a mismatch here is a charger that orphans its "
+        "history and returns as a new device."
     )
 
     for key, evse in parent_child.evse.items():

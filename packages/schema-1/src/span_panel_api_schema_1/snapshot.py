@@ -170,7 +170,7 @@ def _harmonised_evse_keys(evse_devices: Sequence[DiscoveredDevice]) -> dict[Disc
     On real flat firmware the EVSE **node id is the Drive's serial**. Confirmed on a
     live panel in SpanPanel/span#214: the reporter's topic is
     `ebus/5/<panel-serial>/<drive-serial>`, their diagnostics show the snapshot keyed
-    `"evse": {"dt-2302-c1km3": ...}`, and the whole thread turns on that node id being
+    `"evse": {"<drive-serial>": ...}`, and the whole thread turns on that node id being
     what the `unique_id` is built from. `schema_0` writes `result[node_id]` verbatim,
     so against firmware it is already serial-keyed without knowing it.
 

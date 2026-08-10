@@ -306,7 +306,7 @@ def test_evse_identity_survives_the_migration(flat: Any, parent_child: Any) -> N
     **The comparison is against firmware, not against the flat simulator.** On a real
     panel the EVSE node id *is* the Drive's serial: SpanPanel/span#214 has the topic
     `ebus/5/<panel-serial>/<drive-serial>`, diagnostics keyed
-    `"evse": {"dt-2302-c1km3": ...}`, and a maintainer confirming that node id is what
+    `"evse": {"<drive-serial>": ...}`, and a maintainer confirming that node id is what
     the `unique_id` is built from. The frozen flat simulator instead names its nodes
     `evse` / `evse-2`, positional slots no panel publishes -- so `set(flat.evse)` is
     the wrong thing to assert against, and asserting it is what previously produced an

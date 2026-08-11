@@ -31,6 +31,7 @@ from span_panel_api_schema_1.panel import (
     build_unmapped_tabs,
     find_lugs,
     panel_size_from_model,
+    resolve_dominant_power_source,
     resolve_dsm_state,
     resolve_grid_islandable,
     resolve_islanding_state,
@@ -125,6 +126,12 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
     # is what makes PANEL_BACKUP distinguishable from PANEL_OFF_GRID authoritatively
     # instead of guessed from a power source the way flat had to.
     device_types = {device.device_id: device_type(device) for device in children}
+    device_names: dict[str, str] = {}
+    for device in children:
+        description: dict[str, object] = device.description or {}
+        name = description.get("name")
+        if name:
+            device_names[device.device_id] = str(name)
     inverters = [device for device in children if device_type(device) == TYPE_INVERTER]
     islanding = resolve_islanding_state(roles.mid, panel)
 
@@ -153,7 +160,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         wlan_link=fields.wlan_link,
         wwan_link=fields.wwan_link,
         panel_size=panel_size,
-        dominant_power_source=fields.dominant_power_source,
+        dominant_power_source=resolve_dominant_power_source(roles.mid, device_types),
         grid_state=fields.grid_state,
         grid_islandable=resolve_grid_islandable(inverters),
         l1_voltage=fields.l1_voltage,
@@ -172,7 +179,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         circuits=circuits,
         battery=build_battery(roles.bess, owners),
         pv=build_pv(roles.pv, feeds),
-        mid=build_mid(roles.mid),
+        mid=build_mid(roles.mid, device_names),
         evse={key: build_evse(device, feeds, node_id=key) for device, key in _harmonised_evse_keys(roles.evse).items()},
     )
 

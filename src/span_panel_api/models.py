@@ -101,7 +101,15 @@ class SpanMidSnapshot:
     grid_state: str | None = None
     """`grid/grid-state` — whether utility power is present, distinct from islanding."""
     grid_forming_entity: str | None = None
-    """`grid/grid-forming-entity` — which device is currently forming the grid."""
+    """`grid/grid-forming-entity` — the raw wire value: `GRID`, or a Homie device id."""
+    grid_forming_device_name: str | None = None
+    """The forming device's display name, or `None` when the grid itself is forming.
+
+    The raw value above is a Homie device id, which means nothing on a dashboard — it is
+    not a Home Assistant device id, and an opaque string is worse than none. This is the
+    device's own `$description.name` (`Battery`, `Solar`, `SPAN Drive - Garage`), which
+    is the part a person can read. The literal stays available beside it.
+    """
 
 
 @dataclass(frozen=True, slots=True)

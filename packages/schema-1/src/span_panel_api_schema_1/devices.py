@@ -33,9 +33,11 @@ from span_panel_api_schema_1.const import (
     NODE_SWITCH,
     UNKNOWN,
 )
-from span_panel_api_schema_1.panel import number, text
+from span_panel_api_schema_1.panel import number, resolve_grid_forming_device_name, text
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from ebus_sdk.homie import DiscoveredDevice
 
 PROP_FIRMWARE_VERSION = "firmware-version"
@@ -164,7 +166,7 @@ PROP_GRID_STATE = "grid-state"
 PROP_GRID_FORMING_ENTITY = "grid-forming-entity"
 
 
-def build_mid(mid: DiscoveredDevice | None) -> SpanMidSnapshot | None:
+def build_mid(mid: DiscoveredDevice | None, device_names: Mapping[str, str]) -> SpanMidSnapshot | None:
     """Build the MID snapshot, or `None` when the panel publishes no MID.
 
     `None` is the presence signal, so there is nothing for a consumer to infer from a
@@ -189,4 +191,5 @@ def build_mid(mid: DiscoveredDevice | None) -> SpanMidSnapshot | None:
         islanding_state=_optional(text(mid, NODE_GRID, PROP_ISLANDING_STATE)),
         grid_state=_optional(text(mid, NODE_GRID, PROP_GRID_STATE)),
         grid_forming_entity=_optional(text(mid, NODE_GRID, PROP_GRID_FORMING_ENTITY)),
+        grid_forming_device_name=resolve_grid_forming_device_name(mid, device_names),
     )

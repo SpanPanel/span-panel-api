@@ -193,7 +193,7 @@ def test_the_mid_is_surfaced_as_its_own_device() -> None:
     identity drops to the Homie device id. `test_the_mid_identity_is_its_serial` covers
     the path that matters more, against a capture that has one.
     """
-    mid = build_mid(_device("bess-mid"))
+    mid = build_mid(_device("bess-mid"), {})
 
     assert mid is not None
     assert mid.islanding_state == "ON_GRID"
@@ -211,4 +211,4 @@ def test_a_panel_with_no_mid_reports_none_rather_than_an_empty_device() -> None:
     is always present; its own docstring records that only that one field is reliable.
     A new optional device should not inherit that guessing game.
     """
-    assert build_mid(None) is None
+    assert build_mid(None, {}) is None

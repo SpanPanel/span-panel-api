@@ -113,11 +113,12 @@ _PC = Path(__file__).parent.parent / "packages" / "schema-1" / "spec" / "fixture
 _SERIAL = "sim-40t-001"
 
 EXPECTED_ORPHANS: dict[str, str] = {
-    "panel.dominant_power_source": (
-        "split upstream into grid/grid-forming-entity and shed/asserted-islanding-state, "
-        "which are different controls on different devices; which successor is exposed, "
-        "if any, is an open product decision"
-    ),
+    # `panel.dominant_power_source` was here until 2026-08-10. It is populated now: the
+    # integration's entity for it is already named `grid_forming_entity`, so v1.0's
+    # `grid/grid-forming-entity` is the same concept, and dereferencing the device id
+    # against the tree recovers flat's source-class enum. The precision v1.0 adds --
+    # *which* device -- is surfaced beside it as `mid.grid_forming_device_name` rather
+    # than inside it, so no automation meets a value it has never seen.
     "panel.grid_islandable": (
         "no v1.0 source; the flat panel advertised islandability as a panel property and "
         "the redesign expresses it through the presence of a MID instead"

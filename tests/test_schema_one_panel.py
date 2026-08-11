@@ -13,13 +13,15 @@ import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
-from span_panel_api_schema_1.const import NODE_GRID, TYPE_BESS
+from span_panel_api_schema_1.const import NODE_GRID, TYPE_BESS, TYPE_PV
 from span_panel_api_schema_1.panel import (
     PanelFields,
     build_unmapped_tabs,
     find_lugs,
     panel_model_drift,
     panel_size_from_model,
+    resolve_dominant_power_source,
+    resolve_grid_forming_device_name,
     resolve_grid_islandable,
     resolve_islanding_state,
     resolve_run_config,
@@ -389,3 +391,50 @@ def test_an_inverter_that_says_nothing_is_unknown_not_incapable() -> None:
     """
     assert resolve_grid_islandable([_synthetic("inv-1")]) is None
     assert resolve_grid_islandable([]) is None
+
+
+def test_dominant_power_source_dereferences_the_forming_device_to_a_class() -> None:
+    """The entity keeps flat's closed enum, so nothing comparing to `BATTERY` breaks.
+
+    The integration's sensor for this field is already named `grid_forming_entity`, so
+    v1.0's property is the same concept it has always shown. Only the encoding changed:
+    flat published a source class, v1.0 names the device. Dereferencing recovers the
+    class from the tree.
+    """
+    types = {"bess-1": TYPE_BESS, "pv-1": TYPE_PV}
+
+    assert resolve_dominant_power_source(_synthetic("mid", grid__grid_forming_entity="GRID"), types) == "GRID"
+    assert resolve_dominant_power_source(_synthetic("mid", grid__grid_forming_entity="bess-1"), types) == "BATTERY"
+    assert resolve_dominant_power_source(_synthetic("mid", grid__grid_forming_entity="pv-1"), types) == "PV"
+
+
+def test_an_unresolvable_forming_entity_cannot_escape_as_a_raw_id() -> None:
+    """`UNKNOWN` is in flat's enum already, so the value space stays closed.
+
+    A device id naming something outside this tree, or a class with no mapping, must not
+    reach an entity as an opaque string — that is exactly the silent break the decision
+    to dereference exists to avoid. The device-type registry instructs consumers to
+    tolerate unknown `$type` values; this is what tolerating one looks like.
+    """
+    stranger = _synthetic("mid", grid__grid_forming_entity="some-device-not-in-this-tree")
+    unmapped = _synthetic("mid", grid__grid_forming_entity="wh-1")
+
+    assert resolve_dominant_power_source(stranger, {}) == "UNKNOWN"
+    assert resolve_dominant_power_source(unmapped, {"wh-1": "energy.ebus.device.water-heater"}) == "UNKNOWN"
+    assert resolve_dominant_power_source(None, {}) is None
+
+
+def test_the_forming_device_is_named_readably_not_by_wire_id() -> None:
+    """A Homie device id is not a Home Assistant device id.
+
+    `sim-40t-001-SIM-BESS-40T-001` on a dashboard is worse than nothing. The device's own
+    `$description.name` is what a person recognises, and it is the precision v1.0 adds
+    over flat — *which* battery, not merely that a battery is forming.
+    """
+    names = {"bess-1": "Battery", "pv-1": "Solar"}
+
+    assert resolve_grid_forming_device_name(_synthetic("mid", grid__grid_forming_entity="bess-1"), names) == "Battery"
+    # The grid is not a device, so there is nothing to name.
+    assert resolve_grid_forming_device_name(_synthetic("mid", grid__grid_forming_entity="GRID"), names) is None
+    # Unresolvable: the raw id stays on `grid_forming_entity` for anyone who needs it.
+    assert resolve_grid_forming_device_name(_synthetic("mid", grid__grid_forming_entity="ghost"), names) is None

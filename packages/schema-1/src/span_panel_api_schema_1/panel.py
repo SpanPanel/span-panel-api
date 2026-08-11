@@ -56,6 +56,7 @@ from span_panel_api_schema_1.const import (
     PROP_VOLTAGE_B,
     PROP_WIFI,
     TYPE_BESS,
+    TYPE_PV,
     UNKNOWN,
     UNMAPPED_TAB_PREFIX,
 )
@@ -439,3 +440,70 @@ def resolve_grid_islandable(inverters: Sequence[DiscoveredDevice]) -> bool | Non
     if not known:
         return None
     return any(known)
+
+
+# Flat's `dominant-power-source` enum, keyed by the device class v1.0 names instead.
+# `GENERATOR` has no row because the device-type registry has no generator: flat's value
+# came from the panel computing a source class, v1.0 names an actual device, and there is
+# no generator device to name yet. One row when there is.
+_POWER_SOURCE_BY_TYPE: dict[str, str] = {
+    TYPE_BESS: "BATTERY",
+    TYPE_PV: "PV",
+}
+
+
+def resolve_dominant_power_source(
+    mid: DiscoveredDevice | None,
+    device_types: Mapping[str, str],
+) -> str | None:
+    """Flat's `dominant_power_source`, from the MID's grid-forming entity.
+
+    The integration's entity for this field is already named `grid_forming_entity`, so
+    v1.0's `grid/grid-forming-entity` is the same concept it has always shown — not a
+    successor to negotiate. What changed is the encoding: flat published a closed enum of
+    source *classes*, v1.0 names the actual *device*. Dereferencing the id against the
+    tree recovers the class, so the entity keeps its value space and nothing comparing
+    against `BATTERY` stops matching.
+
+    **Anything unresolvable becomes `UNKNOWN`, which is in flat's enum already.** A device
+    id naming something outside this tree, or a class with no row above, cannot escape as
+    a raw id — the device-type registry itself instructs consumers to tolerate unknown
+    `$type` values, and this is what tolerating one looks like from a consumer.
+
+    The precision v1.0 adds — *which* battery, distinguishable when a site has two — is
+    not discarded, it is surfaced beside this rather than inside it, as
+    `SpanMidSnapshot.grid_forming_device_name`. Absorb the change in the state entity that
+    exists, surface the addition separately: a changed value breaks automations silently,
+    a new field cannot.
+
+    `None` rather than `UNKNOWN` when there is no MID or no answer at all, matching what
+    the field already does on a panel that publishes nothing.
+    """
+    forming = text(mid, NODE_GRID, PROP_GRID_FORMING_ENTITY).strip()
+    if not forming:
+        return None
+    if forming.upper() == "GRID":
+        return "GRID"
+    return _POWER_SOURCE_BY_TYPE.get(device_types.get(forming, ""), UNKNOWN)
+
+
+def resolve_grid_forming_device_name(
+    mid: DiscoveredDevice | None,
+    device_names: Mapping[str, str],
+) -> str | None:
+    """The readable name of whatever is forming the grid, or `None` when it is the grid.
+
+    The wire value is a Homie device id -- `sim-40t-001-SIM-BESS-40T-001`. That means
+    nothing to someone reading a dashboard: it is not a Home Assistant device id, and an
+    opaque string is worse than no string. Homie's `$description.name` is the device's
+    own display name (`Battery`, `Solar`, `SPAN Drive - Garage`), which is what a person
+    would recognise, so that is what gets surfaced.
+
+    `None` when the grid is forming (there is no device to name), when no MID publishes
+    an answer, or when the id resolves to nothing -- the raw id is still on
+    `grid_forming_entity` for anyone who needs the literal value.
+    """
+    forming = text(mid, NODE_GRID, PROP_GRID_FORMING_ENTITY).strip()
+    if not forming or forming.upper() == "GRID":
+        return None
+    return device_names.get(forming)

@@ -113,6 +113,13 @@ _PC = Path(__file__).parent.parent / "packages" / "schema-1" / "spec" / "fixture
 _SERIAL = "sim-40t-001"
 
 EXPECTED_ORPHANS: dict[str, str] = {
+    # `pv.relative_position` was here until 2026-08-10, and it was right that closing it
+    # was cheap. v1.0 retired the property deliberately -- the enclosure model says the
+    # position "is derivable from which enclosure-side connection-owner references the
+    # DER" -- so `resolve_relative_position` reads the connection records instead.
+    # Verified against the pair: flat says IN_PANEL for PV and UPSTREAM for the BESS, and
+    # the derivation produces exactly those.
+    #
     # `panel.dominant_power_source` was here until 2026-08-10. It is populated now: the
     # integration's entity for it is already named `grid_forming_entity`, so v1.0's
     # `grid/grid-forming-entity` is the same concept, and dereferencing the device id
@@ -122,10 +129,6 @@ EXPECTED_ORPHANS: dict[str, str] = {
     "panel.grid_islandable": (
         "no v1.0 source; the flat panel advertised islandability as a panel property and "
         "the redesign expresses it through the presence of a MID instead"
-    ),
-    "pv.relative_position": (
-        "flat publishes pv/relative-position; schema_1 does not map the v1.0 equivalent yet. "
-        "Unlike the two above this is a gap rather than a decision, and closing it is cheap"
     ),
 }
 
@@ -166,6 +169,7 @@ PROVISIONAL_DER: frozenset[str] = frozenset(
         "battery.model",
         "battery.part_number",
         "battery.serial_number",
+        "battery.software_version",
     }
 )
 """Additions that may not be additions, because the flat reference never sends them.

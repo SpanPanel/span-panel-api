@@ -14,7 +14,7 @@
     "repo": "https://github.com/SpanPanel/panelbench",
     "ref": "feat/adopt-upstream-emitter",
     "role": "publisher",
-    "commit": "c83c56cced43e27eaf1c2e6f436b56239cde0b42",
+    "commit": "0a867c3550b2b9f00a4e2e36bbf39018d7870489",
     "synced_commit": "4254526b0a8c11cab0d40fd700b1fc295c0479c6",
     "firmware_range": "r202633+",
     "fixtures": {

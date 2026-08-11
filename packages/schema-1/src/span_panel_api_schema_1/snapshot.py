@@ -178,7 +178,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         downstream_l2_current_a=fields.downstream_l2_current_a,
         circuits=circuits,
         battery=build_battery(roles.bess, owners),
-        pv=build_pv(roles.pv, feeds),
+        pv=build_pv(roles.pv, feeds, upstream, downstream),
         mid=build_mid(roles.mid, device_names),
         evse={key: build_evse(device, feeds, node_id=key) for device, key in _harmonised_evse_keys(roles.evse).items()},
     )

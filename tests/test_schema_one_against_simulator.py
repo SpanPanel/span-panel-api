@@ -176,7 +176,15 @@ def test_the_ders_still_declare_two_identity_fields_they_never_publish() -> None
             )
 
     assert gaps == {
-        "energy.ebus.device.bess": ["info/firmware-version"],
+        # The BESS pair closed on 2026-08-10: panelbench now supplies a placeholder
+        # `firmware_version`, so the declaration stops being empty and the mapping
+        # downstream stops being untestable. Synthetic, so it attests the mapping and
+        # not what real firmware sends.
+        #
+        # PV keeps both deliberately. This check is doing real work while it is
+        # non-empty, and filling every gap with invented values would retire the signal
+        # without making anything more true -- the BESS one was filled because a
+        # mapping was blocked on it, and these block nothing.
         "energy.ebus.device.pv": ["info/firmware-version", "info/serial-number"],
     }, f"the declared-but-unpublished set moved: {gaps}"
 

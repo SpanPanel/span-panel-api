@@ -122,7 +122,12 @@ def build_battery(bess: DiscoveredDevice | None, owners: list[DiscoveredDevice])
     )
 
 
-def build_pv(pv: DiscoveredDevice | None, feeds: dict[str, str]) -> SpanPVSnapshot:
+def build_pv(
+    pv: DiscoveredDevice | None,
+    feeds: dict[str, str],
+    upstream_lugs: DiscoveredDevice | None = None,
+    downstream_lugs: DiscoveredDevice | None = None,
+) -> SpanPVSnapshot:
     """Build the PV snapshot. An uncommissioned panel yields the empty one."""
     if pv is None:
         return SpanPVSnapshot()
@@ -132,11 +137,10 @@ def build_pv(pv: DiscoveredDevice | None, feeds: dict[str, str]) -> SpanPVSnapsh
         model=_optional(text(pv, NODE_INFO, PROP_MODEL)),
         nameplate_capacity_w=number(pv, NODE_INFO, PROP_NOMINAL_POWER),
         feed_circuit_id=feeds.get(pv.device_id),
-        # `relative-position` is retired in v1.0 and the guide is explicit that
-        # it is only "derivable from connection records (when present)". Left
-        # None rather than guessed: the integration gates control entities on
-        # it, so a wrong value creates or removes a control.
-        relative_position=None,
+        # Retired as a property in v1.0 and derived instead, per the enclosure model's
+        # own replacement rule. `None` where no owner references the DER, because the
+        # integration gates whether a control entity exists on this value.
+        relative_position=resolve_relative_position(pv.device_id, feeds, upstream_lugs, downstream_lugs),
     )
 
 
@@ -193,3 +197,49 @@ def build_mid(mid: DiscoveredDevice | None, device_names: Mapping[str, str]) -> 
         grid_forming_entity=_optional(text(mid, NODE_GRID, PROP_GRID_FORMING_ENTITY)),
         grid_forming_device_name=resolve_grid_forming_device_name(mid, device_names),
     )
+
+
+POSITION_IN_PANEL = "IN_PANEL"
+POSITION_UPSTREAM = "UPSTREAM"
+
+
+def resolve_relative_position(
+    device_id: str,
+    feeds: dict[str, str],
+    upstream_lugs: DiscoveredDevice | None,
+    downstream_lugs: DiscoveredDevice | None,
+) -> str | None:
+    """Where a DER sits relative to the enclosure, from the connection records.
+
+    v1.0 removed `relative-position` as a property deliberately, and the enclosure model
+    says what replaces it: "The position of a DER relative to the enclosure is derivable
+    from which enclosure-side connection-owner references the DER."
+
+    | owner referencing the DER | position |
+    | --- | --- |
+    | a circuit's `connection/feeds-device-id` | `IN_PANEL` |
+    | the downstream lugs' `connection/feeds-device-id` | `IN_PANEL`, via feedthrough |
+    | the upstream lugs' `connection/fed-by-device-id` | `UPSTREAM` |
+    | nothing | `None` — not commissioned to this enclosure, or not yet announced |
+
+    Verified against the paired captures rather than reasoned: flat publishes
+    `pv/relative-position = IN_PANEL` and `bess/relative-position = UPSTREAM`, and this
+    derives exactly those from a circuit feeding the PV and the upstream lugs being fed
+    by the BESS.
+
+    `None`, not a guess. The integration gates whether a *control entity exists at all*
+    on this value, so inventing one creates or removes a control. The guide is explicit
+    that where no owner references the DER, position is not derivable.
+
+    The feedthrough branch is unreachable against every producer available today: no lugs
+    device can publish `connection/feeds-*` at all, which is
+    electrification-bus/distribution-enclosure-simulator#30. It is written because the
+    rule has three cases and omitting one would read as a claim that it cannot happen.
+    """
+    if device_id in feeds:
+        return POSITION_IN_PANEL
+    if downstream_lugs is not None and text(downstream_lugs, NODE_CONNECTION, PROP_FEEDS_DEVICE_ID) == device_id:
+        return POSITION_IN_PANEL
+    if upstream_lugs is not None and text(upstream_lugs, NODE_CONNECTION, PROP_FED_BY_DEVICE_ID) == device_id:
+        return POSITION_UPSTREAM
+    return None

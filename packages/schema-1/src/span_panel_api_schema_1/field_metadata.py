@@ -95,6 +95,7 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     (TYPE_BESS, NODE_INFO, "model", "battery.model"),
     (TYPE_BESS, NODE_INFO, "part-number", "battery.part_number"),
     (TYPE_BESS, NODE_INFO, "serial-number", "battery.serial_number"),
+    (TYPE_BESS, NODE_INFO, "firmware-version", "battery.software_version"),
     (TYPE_BESS, NODE_INFO, "nameplate-capacity", "battery.nameplate_capacity_kwh"),
     # --- PV ------------------------------------------------------------------
     (TYPE_PV, NODE_INFO, "vendor-name", "pv.vendor_name"),

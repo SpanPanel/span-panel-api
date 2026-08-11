@@ -71,9 +71,17 @@ class SpanMidSnapshot:
     is why this is the benign cell of the absorb-or-surface policy: surfacing a new
     device cannot break an automation that never referenced it.
 
-    `panel.grid_state` continues to carry islanding state for the panel entity that has
-    always shown it. This does not replace that; it exposes the device the value comes
-    from, so a consumer can render the MID as hardware in its own right.
+    **Adding this device does not, on its own, fix anything a user sees.** The
+    integration renders no entity from `panel.grid_state` — checked, there is no such
+    sensor. What it does render is `dsm_state`, its `dsm_grid_state` alias,
+    `current_run_config`, `dominant_power_source` and `grid_islandable`, and on v1.0
+    four of those five are currently `UNKNOWN` or absent. The MID is where their inputs
+    moved, so mapping it back into those fields is the work; this type is what makes
+    that possible, plus the option of rendering the MID as hardware in its own right.
+
+    Which raises a design question this type does not settle: if the MID's islanding
+    state is also surfaced directly, a user sees the same fact twice. Duplicating an
+    existing state entity is not the benign cell of the absorb-or-surface policy.
     """
 
     node_id: str

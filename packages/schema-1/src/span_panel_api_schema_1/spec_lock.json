@@ -28,6 +28,7 @@
       "connection": "0.1",
       "door": "0.1",
       "grid": "0.1",
+      "grid-forming": "0.1",
       "info": "0.2",
       "load-shed": "0.3",
       "meter": "0.2",

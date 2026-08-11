@@ -20,13 +20,23 @@ from span_panel_api_schema_1.const import (
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_EVSE,
+    TYPE_INVERTER,
     TYPE_LUGS,
     TYPE_MID,
     TYPE_PV,
-    UNKNOWN,
 )
 from span_panel_api_schema_1.devices import build_battery, build_evse, build_mid, build_pv, feed_circuit_ids
-from span_panel_api_schema_1.panel import PanelFields, build_unmapped_tabs, find_lugs, panel_size_from_model, text
+from span_panel_api_schema_1.panel import (
+    PanelFields,
+    build_unmapped_tabs,
+    find_lugs,
+    panel_size_from_model,
+    resolve_dsm_state,
+    resolve_grid_islandable,
+    resolve_islanding_state,
+    resolve_run_config,
+    text,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -110,6 +120,14 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
     # Owners are every device that can claim a DER through a `connection` node.
     owners = [*roles.lugs, *roles.circuits, panel]
 
+    # Grid answers are read from the MID rather than derived, per the recorded
+    # decision. `device_types` resolves `grid-forming-entity` to a device class, which
+    # is what makes PANEL_BACKUP distinguishable from PANEL_OFF_GRID authoritatively
+    # instead of guessed from a power source the way flat had to.
+    device_types = {device.device_id: device_type(device) for device in children}
+    inverters = [device for device in children if device_type(device) == TYPE_INVERTER]
+    islanding = resolve_islanding_state(roles.mid, panel)
+
     return SpanPanelSnapshot(
         serial_number=fields.serial_number,
         firmware_version=fields.firmware_version,
@@ -120,12 +138,12 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         main_meter_energy_produced_wh=fields.main_meter_energy_produced_wh,
         feedthrough_energy_consumed_wh=fields.feedthrough_energy_consumed_wh,
         feedthrough_energy_produced_wh=fields.feedthrough_energy_produced_wh,
-        # Both are v1 fields the flat adapter derives from multiple v2 signals.
-        # Left UNKNOWN here rather than reproducing that heuristic against a
-        # schema whose inputs moved: `dominant-power-source` and
-        # `grid-islandable` — two of its three inputs — no longer exist.
-        dsm_state=UNKNOWN,
-        current_run_config=UNKNOWN,
+        # Read, not derived. Flat had to infer both from `dominant-power-source`
+        # plus grid power because nothing stated them; v1.0 states them on the MID,
+        # so the multi-signal heuristic is gone and only the no-MID tier remains a
+        # heuristic. The user-visible value set is unchanged.
+        dsm_state=resolve_dsm_state(islanding),
+        current_run_config=resolve_run_config(roles.mid, islanding, device_types),
         door_state=fields.door_state,
         # The panel has no proximity sensor property; the flat adapter reports
         # authenticated-and-ready, and the same holds here.
@@ -137,7 +155,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         panel_size=panel_size,
         dominant_power_source=fields.dominant_power_source,
         grid_state=fields.grid_state,
-        grid_islandable=fields.grid_islandable,
+        grid_islandable=resolve_grid_islandable(inverters),
         l1_voltage=fields.l1_voltage,
         l2_voltage=fields.l2_voltage,
         main_breaker_rating_a=fields.main_breaker_rating_a,

@@ -13,13 +13,16 @@ import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
-from span_panel_api_schema_1.const import NODE_GRID
+from span_panel_api_schema_1.const import NODE_GRID, TYPE_BESS
 from span_panel_api_schema_1.panel import (
     PanelFields,
     build_unmapped_tabs,
     find_lugs,
     panel_model_drift,
     panel_size_from_model,
+    resolve_grid_islandable,
+    resolve_islanding_state,
+    resolve_run_config,
 )
 
 _TREE = json.loads((Path(__file__).parent / "fixtures" / "parent_child_tree.json").read_text(encoding="utf-8"))
@@ -264,3 +267,125 @@ def test_an_unsizable_panel_yields_no_unmapped_positions() -> None:
     """Better nothing than a fabricated set: size 0 is what an unknown model
     reports, and inventing positions would create phantom entities."""
     assert build_unmapped_tabs(panel_size=0, occupied={1}) == {}
+
+
+# ---------------------------------------------------------------------------
+# Grid answers: read, not derived — the 2026-08-10 decision
+# ---------------------------------------------------------------------------
+
+
+def _synthetic(device_id: str, state: str = "ready", **props: str) -> DiscoveredDevice:
+    """A device built from nothing, for the cases no capture contains.
+
+    The tracked producer models a BESS as one device with a MID child and no
+    `inverter`, so `grid-forming/capable` has nowhere to live in any fixture. That is
+    recorded in `_NOT_EXERCISED_BY_SIMULATOR`; this is what stops the mapping being
+    merely untested as well as unexercised.
+    """
+    device = DiscoveredDevice(device_id, "ebus")
+    device.update_state(state)
+    for path, value in props.items():
+        # `node__prop_name` -> node/prop-name, since the wire spells both with hyphens
+        # and a Python keyword cannot.
+        node, _, prop = path.partition("__")
+        device.update_property(node.replace("_", "-"), prop.replace("_", "-"), value)
+    return device
+
+
+def test_islanding_is_sensed_when_the_mid_is_ready() -> None:
+    """Tier 1. The MID is the islanding authority, so its answer wins outright."""
+    mid = _synthetic("mid", grid__islanding_state="OFF_GRID")
+    panel = _synthetic(PANEL, shed__asserted_islanding_state="ON_GRID")
+
+    assert resolve_islanding_state(mid, panel) == "OFF_GRID", "a ready MID outranks the user's assertion"
+
+
+def test_a_stale_mid_falls_back_to_the_users_assertion() -> None:
+    """Tier 2, and the case the assertion control exists for.
+
+    When comms to the BESS or MID are lost and the grid returns, the user asserts the
+    grid is up so the BESS stops discharging. Declining to read it would wire the
+    control and then ignore it at exactly the moment it matters.
+    """
+    mid = _synthetic("mid", state="lost", grid__islanding_state="OFF_GRID")
+    panel = _synthetic(PANEL, shed__asserted_islanding_state="ON_GRID")
+
+    assert resolve_islanding_state(mid, panel) == "ON_GRID"
+
+
+def test_a_stale_mid_with_no_assertion_is_unknown_not_guessed() -> None:
+    """Tier 4. `NONE` is the assertion's idle value, not an answer."""
+    mid = _synthetic("mid", state="lost", grid__islanding_state="ON_GRID")
+    panel = _synthetic(PANEL, shed__asserted_islanding_state="NONE")
+
+    assert resolve_islanding_state(mid, panel) is None
+
+
+def test_no_mid_reads_grid_power_and_never_asserts_off_grid() -> None:
+    """Tier 3, and the error worth keeping a test on.
+
+    An earlier draft reasoned that no MID means no islanding authority means on-grid.
+    A missing MID means *SPAN* is not the authority and says nothing about whether the
+    site is islanded — a generator-fed island is the counterexample. Grid power flowing
+    is positive evidence of being on-grid; its absence is not evidence of the opposite.
+    """
+    assert resolve_islanding_state(None, _synthetic(PANEL, power_flows__grid="2400.0")) == "ON_GRID"
+    assert resolve_islanding_state(None, _synthetic(PANEL, power_flows__grid="0.0")) is None
+    assert resolve_islanding_state(None, _synthetic(PANEL)) is None
+
+
+def test_run_config_names_the_forming_device_rather_than_guessing_it() -> None:
+    """The part that gets better than flat.
+
+    Flat guessed `PANEL_BACKUP` versus `PANEL_OFF_GRID` from `dominant-power-source`.
+    v1.0 names the forming device, and its class is recoverable from the tree.
+    """
+    types = {"bess-1": TYPE_BESS, "gen-1": "energy.ebus.device.generator"}
+
+    on_grid = _synthetic("mid", grid__grid_forming_entity="GRID")
+    backup = _synthetic("mid", grid__grid_forming_entity="bess-1")
+    off_grid = _synthetic("mid", grid__grid_forming_entity="gen-1")
+
+    assert resolve_run_config(on_grid, "ON_GRID", types) == "PANEL_ON_GRID"
+    assert resolve_run_config(backup, "OFF_GRID", types) == "PANEL_BACKUP"
+    assert resolve_run_config(off_grid, "OFF_GRID", types) == "PANEL_OFF_GRID"
+
+
+def test_run_config_degrades_honestly_when_the_forming_entity_is_unusable() -> None:
+    """Unresolvable is not an excuse to pick one.
+
+    Without knowing what is forming the grid, off-grid cannot be split into backup
+    versus off-grid, so it reports unknown. On-grid still answers, because the islanding
+    tier already established it.
+    """
+    unresolvable = _synthetic("mid", grid__grid_forming_entity="a-device-not-in-this-tree")
+
+    assert resolve_run_config(unresolvable, "OFF_GRID", {}) == "UNKNOWN"
+    assert resolve_run_config(unresolvable, "ON_GRID", {}) == "PANEL_ON_GRID"
+    assert resolve_run_config(None, None, {}) == "UNKNOWN"
+
+
+def test_grid_islandable_is_the_disjunction_over_inverters() -> None:
+    """Flat's `grid_islandable`, relocated to where the capability actually lives.
+
+    A panel does not island, its DER does; flat expressed a property of the DER as a
+    property of the enclosure. BESS model 0.14 puts grid-forming on the `inverter`
+    child, so the panel-level answer is "can any inverter here form a grid".
+    """
+    capable = _synthetic("inv-1", grid_forming__capable="true")
+    incapable = _synthetic("inv-2", grid_forming__capable="false")
+
+    assert resolve_grid_islandable([capable]) is True
+    assert resolve_grid_islandable([incapable]) is False
+    assert resolve_grid_islandable([incapable, capable]) is True, "one grid-forming inverter is enough"
+
+
+def test_an_inverter_that_says_nothing_is_unknown_not_incapable() -> None:
+    """`None`, not `False`. Absence means unknown.
+
+    Reporting "cannot island" for a panel that has not told us turns a gap into a claim,
+    and the integration declines to create the entity on `None` — an absent entity is
+    the honest outcome, a confidently wrong one is not.
+    """
+    assert resolve_grid_islandable([_synthetic("inv-1")]) is None
+    assert resolve_grid_islandable([]) is None

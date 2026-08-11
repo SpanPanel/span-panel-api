@@ -127,16 +127,17 @@ EXPECTED_ORPHANS: dict[str, str] = {
     ),
 }
 
-EXPECTED_DEGRADED: dict[str, str] = {
-    "panel.dsm_state": (
-        "reads UNKNOWN on v1.0 where flat answered. Its authoritative input survives as "
-        "the MID's grid/islanding-state and its fallback as grid power, so the UNKNOWN is "
-        "more conservative than the data requires — reconstruction is an open item"
-    ),
-    "panel.current_run_config": (
-        "reads UNKNOWN on v1.0 where flat answered; no v1.0 source identified yet. Severity 2 in the delta document"
-    ),
-}
+EXPECTED_DEGRADED: dict[str, str] = {}
+"""Empty as of 2026-08-10, and that is a measurement rather than a default.
+
+Both members were `panel.dsm_state` and `panel.current_run_config`, reading UNKNOWN on
+v1.0 where flat answered. Neither was a source that vanished: flat *derives* them, and
+the derivation was simply never ported. v1.0 states the answer on the MID, so they are
+now read rather than derived and carry the same values a user has today —
+`DSM_ON_GRID` / `PANEL_ON_GRID` on the tracked capture.
+
+Zero is the state worth defending, so the dict stays and the check below holds it.
+"""
 """Fields that survive the migration as entities but stop carrying an answer.
 
 Worse for a user than an orphan, because an orphan goes stale and is noticeable

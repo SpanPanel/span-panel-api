@@ -13,7 +13,6 @@ from span_panel_api_schema_0.consumer import HomieDeviceConsumer, _parse_int
 from span_panel_api.auth import _int, download_ca_cert, get_homie_schema
 from span_panel_api.exceptions import SpanPanelConnectionError, SpanPanelTimeoutError
 
-
 # ---------------------------------------------------------------------------
 # auth._int edge cases (lines 29-31)
 # ---------------------------------------------------------------------------

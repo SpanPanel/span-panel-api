@@ -16,6 +16,9 @@ TYPE_BESS = "energy.ebus.device.bess"
 TYPE_PV = "energy.ebus.device.pv"
 TYPE_EVSE = "energy.ebus.device.evse"
 TYPE_MID = "energy.ebus.device.mid"
+# BESS model 0.14 decomposes a BESS into child roles; grid-forming belongs to the
+# inverter, so "can this panel island" becomes "can any inverter here form a grid".
+TYPE_INVERTER = "energy.ebus.device.inverter"
 TYPE_LUGS = "energy.ebus.device.lugs"
 
 # -- Capability nodes -------------------------------------------------------
@@ -30,6 +33,7 @@ NODE_METER = "meter"
 NODE_PCS = "pcs"
 NODE_POWER_FLOWS = "power-flows"
 NODE_SHED = "shed"
+NODE_GRID_FORMING = "grid-forming"
 NODE_SOC = "soc"
 NODE_STATUS = "status"
 NODE_SWITCH = "switch"
@@ -51,6 +55,11 @@ PROP_SPACES = "spaces"
 
 # shed node
 PROP_ASSERTED_ISLANDING_STATE = "asserted-islanding-state"
+# `energy.ebus.capability.grid-forming` 0.1: "Static hardware capability: does this
+# inverter support grid-forming operation at all?" -- the same *kind* of statement
+# flat's `grid-islandable` made, and a MUST on the capability.
+PROP_CAPABLE = "capable"
+PROP_GRID_FORMING_ENTITY = "grid-forming-entity"
 
 # Panel-level
 PROP_DATA_MODEL_VERSION = "data-model-version"

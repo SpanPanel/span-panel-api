@@ -213,9 +213,24 @@ _SPAN_EXTENSIONS: dict[tuple[str, str], str] = {
 # parser reads is now exercised by the capture it is developed against.
 #
 # The mechanism stays for the next gap. An empty dict is the honest state, and it
-# is load-bearing: the coverage check now holds every mapping with nothing
+# is load-bearing: the coverage check holds every other mapping with nothing
 # excused, so a future producer regression fails rather than lands here.
-_NOT_EXERCISED_BY_SIMULATOR: dict[tuple[str, str], str] = {}
+#
+# Non-empty again as of 2026-08-10, with one entry and a different cause than the
+# last: not a config that failed to enable a device, but a device class the
+# producer does not model at all.
+_NOT_EXERCISED_BY_SIMULATOR: dict[tuple[str, str], str] = {
+    ("grid-forming", "capable"): (
+        "BESS model 0.14 decomposes a BESS into `battery` / `inverter` / `mid` child "
+        "roles and puts grid-forming on the inverter. The emitter models the BESS as a "
+        "single device with no children other than the MID, so no inverter exists to "
+        "carry the capability and nothing publishes it. Read anyway, because it is the "
+        "decided successor to flat's `grid_islandable` and the mapping is unit-tested "
+        "against a synthetic inverter -- but with no producer evidence, which is what "
+        "this entry records. `resolve_grid_islandable` returns None rather than False "
+        "on absence, so the gap surfaces as an uncreated entity rather than a claim."
+    ),
+}
 
 
 # ---------------------------------------------------------------------------

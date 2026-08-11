@@ -107,13 +107,25 @@ def test_panel_and_lugs_values_reach_the_snapshot(snapshot: SpanPanelSnapshot) -
     assert snapshot.l1_voltage == 120.0
 
 
-def test_derived_v1_fields_are_unknown_rather_than_reconstructed(snapshot: SpanPanelSnapshot) -> None:
-    """The flat adapter derives these from several v2 signals, two of which
-    (`dominant-power-source`, `grid-islandable`) no longer exist. Reproducing
-    the heuristic against missing inputs would produce a confident wrong
-    answer."""
-    assert snapshot.dsm_state == "UNKNOWN"
-    assert snapshot.current_run_config == "UNKNOWN"
+def test_the_grid_answers_are_read_from_the_mid_not_derived(snapshot: SpanPanelSnapshot) -> None:
+    """Both entities keep the values a user has today, by reading instead of guessing.
+
+    Flat inferred these from `dominant-power-source` plus grid power because nothing
+    stated them. v1.0 states them on the MID, so the multi-signal heuristic is gone and
+    the answer is authoritative -- while the user-visible vocabulary is unchanged, which
+    is the whole point: `dsm_state` and `current_run_config` are existing entities whose
+    history must survive the migration.
+
+    This asserted `UNKNOWN` for both until 2026-08-10, on the reasoning that two of the
+    heuristic's three inputs no longer exist. True of the *inputs*, wrong as a conclusion:
+    v1.0 removed the need to infer rather than the ability to answer.
+
+    `PANEL_BACKUP` versus `PANEL_OFF_GRID` gets strictly better than flat here — flat
+    guessed it from the dominant power source, v1.0 names the forming device and its
+    class is recoverable from the tree.
+    """
+    assert snapshot.dsm_state == "DSM_ON_GRID"
+    assert snapshot.current_run_config == "PANEL_ON_GRID"
 
 
 def test_an_unsizable_panel_yields_no_unmapped_positions() -> None:

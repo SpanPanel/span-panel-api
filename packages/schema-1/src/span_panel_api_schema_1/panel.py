@@ -31,16 +31,21 @@ from span_panel_api_schema_1.const import (
     NODE_BREAKER,
     NODE_DOOR,
     NODE_GRID,
+    NODE_GRID_FORMING,
     NODE_INFO,
     NODE_METER,
     NODE_POWER_FLOWS,
+    NODE_SHED,
     NODE_STATUS,
     PANEL_SIZE_BY_MODEL,
     PROP_ACTIVE_POWER,
+    PROP_ASSERTED_ISLANDING_STATE,
+    PROP_CAPABLE,
     PROP_CLOUD_CONNECTION,
     PROP_ETHERNET,
     PROP_EXPORTED_ENERGY,
     PROP_FIRMWARE_VERSION,
+    PROP_GRID_FORMING_ENTITY,
     PROP_IMPORTED_ENERGY,
     PROP_MODEL,
     PROP_RATING,
@@ -50,11 +55,14 @@ from span_panel_api_schema_1.const import (
     PROP_VOLTAGE_A,
     PROP_VOLTAGE_B,
     PROP_WIFI,
+    TYPE_BESS,
     UNKNOWN,
     UNMAPPED_TAB_PREFIX,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from ebus_sdk.homie import DiscoveredDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -96,6 +104,19 @@ def number(device: DiscoveredDevice | None, node: str, prop: str) -> float | Non
 
 def flag(device: DiscoveredDevice | None, node: str, prop: str) -> bool:
     return text(device, node, prop).strip().lower() == "true"
+
+
+def optional_flag(device: DiscoveredDevice | None, node: str, prop: str) -> bool | None:
+    """`flag`, but distinguishing "published false" from "not published".
+
+    `flag` collapses both to `False`, which is right for link-state properties where a
+    missing value means down. It is wrong for a static capability: reporting "cannot form
+    a grid" for a device that has not said would turn a gap into a claim.
+    """
+    raw = text(device, node, prop).strip().lower()
+    if raw == "":
+        return None
+    return raw == "true"
 
 
 def panel_size_from_model(model: str) -> int:
@@ -280,12 +301,141 @@ class PanelFields:
         # stops being true.
         self.grid_state = text(mid, NODE_GRID, PROP_ISLANDING_STATE) or None
 
-        # Retired in v1.0 with no drop-in successor, and deliberately left
-        # None rather than substituted: `dominant-power-source` split into
-        # grid-forming-entity plus asserted-islanding-state, and
-        # `grid-islandable` was removed outright. Both are product decisions,
-        # tracked in the entity and config deltas write-up.
+        # `dominant-power-source` split into grid-forming-entity plus
+        # asserted-islanding-state — two controls on two devices, not one field
+        # moved — so there is no drop-in successor and this stays None until the
+        # decided replacement lands.
         self.dominant_power_source: str | None = None
+        # `grid_islandable` is answered by `resolve_grid_islandable` over the BESS's
+        # inverter children, not from the panel, so it is not a PanelFields concern.
+        # Kept as an attribute only so nothing that reads it breaks; the snapshot
+        # takes the resolver's answer.
         self.grid_islandable: bool | None = None
         # Not published by v1.0 firmware.
         self.wifi_ssid: str | None = None
+
+
+# Matches `schema_0`'s epsilon so the no-MID heuristic answers identically on the two
+# adapters — the tier exists precisely for panels where nothing authoritative is
+# published, and disagreeing about the threshold would make it schema-dependent.
+_GRID_POWER_EPSILON_W = 1.0
+
+ISLANDING_ON_GRID = "ON_GRID"
+ISLANDING_OFF_GRID = "OFF_GRID"
+ASSERTION_NONE = "NONE"
+
+
+def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevice) -> str | None:
+    """Islanding state by the recorded precedence, or `None` when nothing can say.
+
+    | tier | condition | source |
+    | --- | --- | --- |
+    | 1 | MID `$state` is `ready` and `islanding-state` present | sensed |
+    | 2 | MID not `ready` | `shed/asserted-islanding-state`, when not `NONE` |
+    | 3 | no MID at all | `power-flows/grid` heuristic |
+    | 4 | none of the above | unknown |
+
+    **Tier 2 is the reason the assertion control exists.** When comms to the BESS or MID
+    are lost and the grid returns, the user asserts the grid is up so the BESS stops
+    discharging. Declining to read it here would wire the control and then ignore it at
+    exactly the moment it matters. Nothing is hidden by doing so: the MID is a device, so
+    it goes *unavailable* in Home Assistant when it stops publishing, and the assertion is
+    itself visible as the control the user set.
+
+    **Tier 3 never answers `OFF_GRID`, and never asserts on-grid from a missing MID.** An
+    earlier draft reasoned that no MID means no islanding authority means on-grid. That is
+    wrong: a missing MID means *SPAN* is not the islanding authority, and says nothing
+    about whether the site is islanded — a generator-fed island is the plain
+    counterexample. Grid power flowing is positive evidence of being on-grid; its absence
+    is not evidence of the opposite.
+    """
+    if mid is not None:
+        if mid.state == "ready":
+            sensed = text(mid, NODE_GRID, PROP_ISLANDING_STATE)
+            if sensed:
+                return sensed
+        asserted = text(panel, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
+        if asserted and asserted != ASSERTION_NONE:
+            return asserted
+        return None
+
+    grid_power = number(panel, NODE_POWER_FLOWS, "grid")
+    if grid_power is not None and abs(grid_power) > _GRID_POWER_EPSILON_W:
+        return ISLANDING_ON_GRID
+    return None
+
+
+def resolve_dsm_state(islanding: str | None) -> str:
+    """`dsm_state` in flat's vocabulary, read rather than derived.
+
+    Flat inferred this from `bess/grid-state`, then `dominant-power-source`, then grid
+    power. v1.0 states it, so the heuristic tiers collapse into whatever
+    `resolve_islanding_state` could establish. Kept for entity stability: it adds nothing
+    over the MID's own value, and it is the entity a user already has.
+    """
+    if islanding == ISLANDING_ON_GRID:
+        return "DSM_ON_GRID"
+    if islanding == ISLANDING_OFF_GRID:
+        return "DSM_OFF_GRID"
+    return UNKNOWN
+
+
+def resolve_run_config(
+    mid: DiscoveredDevice | None,
+    islanding: str | None,
+    device_types: Mapping[str, str],
+) -> str:
+    """`current_run_config`, from the grid-forming entity where one is published.
+
+    | condition | result |
+    | --- | --- |
+    | `grid-forming-entity == "GRID"` | `PANEL_ON_GRID` |
+    | resolves to a device of class `bess` | `PANEL_BACKUP` |
+    | resolves to any other device | `PANEL_OFF_GRID` |
+    | absent, empty, or unresolvable | falls through below |
+
+    This is the part that gets *better* than flat. Flat guessed `PANEL_BACKUP` versus
+    `PANEL_OFF_GRID` from `dominant-power-source`; v1.0 names the forming device and its
+    class is recoverable from the tree, so the distinction becomes authoritative.
+
+    Falling through, the answer degrades honestly rather than guessing: an on-grid
+    islanding answer still gives `PANEL_ON_GRID`, but off-grid cannot be split into
+    backup versus off-grid without knowing what is forming the grid, so it reports
+    unknown rather than picking one.
+    """
+    forming = text(mid, NODE_GRID, PROP_GRID_FORMING_ENTITY).strip()
+    if forming:
+        if forming.upper() == "GRID":
+            return "PANEL_ON_GRID"
+        resolved = device_types.get(forming)
+        if resolved == TYPE_BESS:
+            return "PANEL_BACKUP"
+        if resolved is not None:
+            return "PANEL_OFF_GRID"
+
+    if islanding == ISLANDING_ON_GRID:
+        return "PANEL_ON_GRID"
+    return UNKNOWN
+
+
+def resolve_grid_islandable(inverters: Sequence[DiscoveredDevice]) -> bool | None:
+    """Whether any inverter can form a grid — flat's `grid-islandable`, relocated.
+
+    `grid-forming/capable` is *"Static hardware capability: does this inverter support
+    grid-forming operation at all?"*, the same kind of permanent statement flat made with
+    *"Capable of operating with power while disconnected from the grid."* BESS model 0.14
+    puts it on the `inverter` child, so the panel-level answer is the disjunction: a panel
+    does not island, its DER does, and flat expressed a property of the DER as a property
+    of the enclosure.
+
+    `None`, not `False`, when nothing publishes it. Absence means unknown — reporting
+    "cannot island" for a panel that simply has not told us would turn a gap into a claim,
+    and the integration declines to create the entity on `None`, which is the honest
+    outcome. No producer publishes this today: the emitter does not model the BESS child
+    roles, so this reads `None` against every capture we have.
+    """
+    answers = [optional_flag(inverter, NODE_GRID_FORMING, PROP_CAPABLE) for inverter in inverters]
+    known = [answer for answer in answers if answer is not None]
+    if not known:
+        return None
+    return any(known)

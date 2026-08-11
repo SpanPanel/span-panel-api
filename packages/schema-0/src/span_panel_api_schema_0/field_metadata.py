@@ -82,8 +82,12 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
     (TYPE_BESS, "soc", "battery.soe_percentage"),
     (TYPE_BESS, "soe", "battery.soe_kwh"),
     (TYPE_BESS, "vendor-name", "battery.vendor_name"),
-    (TYPE_BESS, "product-name", "battery.product_name"),
-    (TYPE_BESS, "model", "battery.model"),
+    # Flat's irregularity, translated rather than mirrored: it puts the designation in
+    # `product-name` and the SKU in `model` on the BESS, where the EVSE puts the SKU in
+    # `part-number`. The snapshot speaks v1.0's vocabulary, so both land on the field
+    # that matches the concept.
+    (TYPE_BESS, "product-name", "battery.model"),
+    (TYPE_BESS, "model", "battery.part_number"),
     (TYPE_BESS, "serial-number", "battery.serial_number"),
     (TYPE_BESS, "software-version", "battery.software_version"),
     (TYPE_BESS, "nameplate-capacity", "battery.nameplate_capacity_kwh"),
@@ -91,7 +95,7 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
     (TYPE_BESS, "grid-state", "panel.grid_state"),
     # --- PV → pv.* -----------------------------------------------------------
     (TYPE_PV, "vendor-name", "pv.vendor_name"),
-    (TYPE_PV, "product-name", "pv.product_name"),
+    (TYPE_PV, "product-name", "pv.model"),
     (TYPE_PV, "nameplate-capacity", "pv.nameplate_capacity_w"),
     (TYPE_PV, "feed", "pv.feed_circuit_id"),
     (TYPE_PV, "relative-position", "pv.relative_position"),  # IN_PANEL | UPSTREAM | DOWNSTREAM
@@ -100,7 +104,7 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
     (TYPE_EVSE, "lock-state", "evse.lock_state"),
     (TYPE_EVSE, "advertised-current", "evse.advertised_current_a"),
     (TYPE_EVSE, "vendor-name", "evse.vendor_name"),
-    (TYPE_EVSE, "product-name", "evse.product_name"),
+    (TYPE_EVSE, "product-name", "evse.model"),
     (TYPE_EVSE, "part-number", "evse.part_number"),
     (TYPE_EVSE, "serial-number", "evse.serial_number"),
     (TYPE_EVSE, "software-version", "evse.software_version"),

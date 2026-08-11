@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0b3] - 08/2026
+
+Pre-release. Normalises DER identity onto v1.0's vocabulary, and stops deriving the grid answers that v1.0 states outright.
+
+### Changed
+
+- **BREAKING — DER identity speaks v1.0's vocabulary on every device class.** `model` is the human designation and `part_number` the SKU, on `battery`, `evse` and `pv` alike. `product_name` is retired on all three. Flat is the inconsistent side, not v1.0:
+  it puts the SKU in `bess/model` and in `evse/part-number`, the same concept under two names, and gives PV neither. `schema_1` used to cross over (`info/part-number` → `battery.model`) to hold each entity's displayed meaning still, which worked and
+  permanently encoded flat's irregularity in the snapshot. `schema_0` now translates flat into the normalised shape instead of mirroring it. Measured: every EVSE identity field reads identically on both adapters, so for that device class identity stops
+  being a migration delta at all. **`battery.model` changes value for existing flat users at this upgrade** — it gains the designation where it carried the SKU. That is the deliberate trade: a change we schedule in a library release beats the same change
+  arriving unplanned during a firmware upgrade a user did not choose the timing of.
+- **Consumers reading `product_name` must move to `model` in the same release.** The Home Assistant integration builds its device-registry model from it; left unchanged, device cards go blank.
+
+### Added
+
+- **`SpanMidSnapshot`, and `SpanPanelSnapshot.mid`.** v1.0 publishes a Microgrid Interconnect Device and the enclosure model puts the `grid` capability on it rather than on the enclosure, so islanding state, grid state and the grid-forming entity live
+  there. Previously one of its five properties was read and the device discarded. Purely additive: no flat panel publishes a MID, so nothing existing changes. Presence is `snapshot.mid is not None` rather than a sentinel field, and identity is
+  `info/serial-number` rather than the Homie device id, which the proxy model warns is not stable across a proxy-to-native transition.
+
+### Fixed
+
+- **`dsm_state` and `current_run_config` are read from the MID instead of reading `UNKNOWN`.** Both are existing entities that had degraded on v1.0 — not because a source vanished, but because `schema_0` _derives_ them and the derivation was never ported.
+  v1.0 states the answer, so the multi-signal heuristic is gone: sensed from a ready MID, falling back to the user's `shed/asserted-islanding-state` when it is not ready, then to a `power-flows/grid` heuristic when there is no MID at all, and unknown
+  otherwise. A missing MID never reports on-grid — it means SPAN is not the islanding authority, not that the site is on grid, and a generator-fed island is the counterexample. `PANEL_BACKUP` versus `PANEL_OFF_GRID` becomes authoritative rather than
+  guessed, because v1.0 names the forming device and its class is recoverable from the tree.
+- **`grid_islandable` is mapped to `grid-forming/capable`** over the BESS's inverter children, as the disjunction — a panel does not island, its DER does, and flat expressed a property of the DER as a property of the enclosure. It returns `None` rather
+  than `False` when nothing publishes it, so absence stays a gap instead of becoming a claim. No producer publishes it today, which is recorded rather than worked around.
+- **EVSE identity survives the migration.** The snapshot key and `node_id` — which a consumer builds a `unique_id` and a device-registry identifier from — were the v1.0 device id on `schema_1` and firmware's node name on `schema_0`, so every charger would
+  have orphaned and reappeared as a duplicate. Both are the Drive's serial now, which is what real flat firmware keys by.
+
 ## [3.0.0b2] - 08/2026
 
 Pre-release. Releases the reshaped `SchemaAdapter` protocol that `3.0.0b1` predates, and makes the mismatch between the two detectable rather than fatal at construction.

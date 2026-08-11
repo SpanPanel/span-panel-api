@@ -51,7 +51,7 @@ class SpanPVSnapshot:
     """PV inverter metadata — populated only when a PV node is commissioned."""
 
     vendor_name: str | None = None  # pv/vendor-name
-    product_name: str | None = None  # pv/product-name
+    model: str | None = None  # human designation (v1.0 info/model; flat pv/product-name)
     nameplate_capacity_w: float | None = None  # pv/nameplate-capacity (W)
     feed_circuit_id: str | None = None  # pv/feed (normalized circuit ID)
     relative_position: str | None = None  # pv/relative-position (IN_PANEL | UPSTREAM | DOWNSTREAM)
@@ -115,8 +115,8 @@ class SpanEvseSnapshot:
     advertised_current_a: float | None = None  # Amps offered to EV
     # Device metadata — flows into HA DeviceInfo, not separate entities
     vendor_name: str | None = None
-    product_name: str | None = None
-    part_number: str | None = None
+    model: str | None = None  # human designation (v1.0 info/model; flat evse/product-name)
+    part_number: str | None = None  # SKU
     serial_number: str | None = None
     software_version: str | None = None
 
@@ -132,8 +132,8 @@ class SpanBatterySnapshot:
 
     # BESS metadata
     vendor_name: str | None = None  # bess/vendor-name
-    product_name: str | None = None  # bess/product-name
-    model: str | None = None  # bess/model
+    model: str | None = None  # human designation (v1.0 info/model; flat bess/product-name)
+    part_number: str | None = None  # SKU (v1.0 info/part-number; flat bess/model)
     serial_number: str | None = None  # bess/serial-number
     software_version: str | None = None  # bess/software-version
     nameplate_capacity_kwh: float | None = None  # bess/nameplate-capacity (kWh)

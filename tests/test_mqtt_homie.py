@@ -635,7 +635,7 @@ class TestHomieBattery:
 
         snapshot = consumer.build_snapshot()
         assert snapshot.battery.vendor_name == "Tesla"
-        assert snapshot.battery.product_name == "Powerwall 3"
+        assert snapshot.battery.model == "Powerwall 3"  # flat product-name is the designation
         assert snapshot.battery.nameplate_capacity_kwh == 13.5
 
     def test_battery_metadata_absent(self):
@@ -646,7 +646,7 @@ class TestHomieBattery:
         snapshot = consumer.build_snapshot()
         assert snapshot.battery.soe_percentage == 50.0
         assert snapshot.battery.vendor_name is None
-        assert snapshot.battery.product_name is None
+        assert snapshot.battery.model is None
         assert snapshot.battery.nameplate_capacity_kwh is None
 
 
@@ -677,7 +677,7 @@ class TestHomiePVMetadata:
 
         snapshot = consumer.build_snapshot()
         assert snapshot.pv.vendor_name == "Enphase"
-        assert snapshot.pv.product_name == "IQ8+"
+        assert snapshot.pv.model == "IQ8+"
         assert snapshot.pv.nameplate_capacity_w == 3960.0
         assert snapshot.pv.feed_circuit_id == "aabbccdd112233445566778899001122"
         assert snapshot.pv.relative_position == "IN_PANEL"
@@ -687,7 +687,7 @@ class TestHomiePVMetadata:
         acc, consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
         snapshot = consumer.build_snapshot()
         assert snapshot.pv.vendor_name is None
-        assert snapshot.pv.product_name is None
+        assert snapshot.pv.model is None
         assert snapshot.pv.nameplate_capacity_w is None
         assert snapshot.pv.feed_circuit_id is None
         assert snapshot.pv.relative_position is None
@@ -704,7 +704,7 @@ class TestHomiePVMetadata:
 
         snapshot = consumer.build_snapshot()
         assert snapshot.pv.vendor_name == "Other"
-        assert snapshot.pv.product_name is None
+        assert snapshot.pv.model is None
         assert snapshot.pv.nameplate_capacity_w is None
         assert snapshot.pv.feed_circuit_id is None
         assert snapshot.pv.relative_position is None
@@ -1487,7 +1487,7 @@ class TestHomieEVSEMetadata:
         assert evse.lock_state == "LOCKED"
         assert evse.advertised_current_a == 32.0
         assert evse.vendor_name == "SPAN"
-        assert evse.product_name == "SPAN Drive"
+        assert evse.model == "SPAN Drive"
         assert evse.part_number == "SPN-DRV-001"
         assert evse.serial_number == "SN12345"
         assert evse.software_version == "2.1.0"
@@ -1540,7 +1540,7 @@ class TestHomieEVSEMetadata:
         assert evse.lock_state == "UNKNOWN"
         assert evse.advertised_current_a is None
         assert evse.vendor_name is None
-        assert evse.product_name is None
+        assert evse.model is None
         assert evse.part_number is None
         assert evse.serial_number is None
         assert evse.software_version is None

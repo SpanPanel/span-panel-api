@@ -107,9 +107,11 @@ def build_battery(bess: DiscoveredDevice | None, owners: list[DiscoveredDevice])
         soe_percentage=number(bess, NODE_SOC, PROP_SOC),
         soe_kwh=number(bess, NODE_SOC, PROP_SOE),
         vendor_name=_optional(text(bess, NODE_INFO, PROP_VENDOR_NAME)),
-        # The swap: designation to product_name, SKU to model.
-        product_name=_optional(text(bess, NODE_INFO, PROP_MODEL)),
-        model=_optional(text(bess, NODE_INFO, PROP_PART_NUMBER)),
+        # No crossover any more. The snapshot speaks v1.0's vocabulary, so
+        # `info/model` is the designation and `info/part-number` is the SKU, on every
+        # device class. `schema_0` translates flat's irregular naming into this shape.
+        model=_optional(text(bess, NODE_INFO, PROP_MODEL)),
+        part_number=_optional(text(bess, NODE_INFO, PROP_PART_NUMBER)),
         serial_number=_optional(text(bess, NODE_INFO, PROP_SERIAL_NUMBER)),
         software_version=_optional(text(bess, NODE_INFO, PROP_FIRMWARE_VERSION)),
         nameplate_capacity_kwh=number(bess, NODE_INFO, PROP_NAMEPLATE_CAPACITY),
@@ -125,7 +127,7 @@ def build_pv(pv: DiscoveredDevice | None, feeds: dict[str, str]) -> SpanPVSnapsh
 
     return SpanPVSnapshot(
         vendor_name=_optional(text(pv, NODE_INFO, PROP_VENDOR_NAME)),
-        product_name=_optional(text(pv, NODE_INFO, PROP_MODEL)),
+        model=_optional(text(pv, NODE_INFO, PROP_MODEL)),
         nameplate_capacity_w=number(pv, NODE_INFO, PROP_NOMINAL_POWER),
         feed_circuit_id=feeds.get(pv.device_id),
         # `relative-position` is retired in v1.0 and the guide is explicit that
@@ -150,7 +152,7 @@ def build_evse(evse: DiscoveredDevice, feeds: dict[str, str], *, node_id: str) -
         lock_state=text(evse, NODE_SWITCH, PROP_LOCK_STATE, UNKNOWN),
         advertised_current_a=number(evse, NODE_METER, PROP_ADVERTISED_CURRENT),
         vendor_name=_optional(text(evse, NODE_INFO, PROP_VENDOR_NAME)),
-        product_name=_optional(text(evse, NODE_INFO, PROP_MODEL)),
+        model=_optional(text(evse, NODE_INFO, PROP_MODEL)),
         part_number=_optional(text(evse, NODE_INFO, PROP_PART_NUMBER)),
         serial_number=_optional(text(evse, NODE_INFO, PROP_SERIAL_NUMBER)),
         software_version=_optional(text(evse, NODE_INFO, PROP_FIRMWARE_VERSION)),

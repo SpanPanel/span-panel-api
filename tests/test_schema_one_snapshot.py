@@ -90,7 +90,7 @@ def test_a_circuit_feeding_a_der_reports_the_der_type(snapshot: SpanPanelSnapsho
 def test_der_snapshots_are_populated(snapshot: SpanPanelSnapshot) -> None:
     assert snapshot.battery.soe_percentage == pytest.approx(50.4104, rel=1e-4)
     assert snapshot.battery.connected is True
-    assert snapshot.pv.product_name == "IQ8PLUS-72-2-US"
+    assert snapshot.pv.model == "IQ8PLUS-72-2-US"
     assert snapshot.pv.feed_circuit_id == SOLAR_CIRCUIT
     # Keyed by serial, not by device id: on real flat firmware the EVSE node id is
     # the Drive's serial (SpanPanel/span#214), so this is what keeps a charger's

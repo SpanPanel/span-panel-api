@@ -54,18 +54,18 @@ EVSE surface, all of which it publishes.
 generally. Some members are probably misclassified, but **in the benign
 direction**, and the reason is worth understanding because it generalises.
 
-A user does not see which property a value came from; they see the value. So the
-adapter is free to re-source a field as long as the *meaning* survives, and for
-BESS identity it deliberately does:
+A user does not see which property a value came from; they see the value. Until
+2026-08-10 this adapter used that latitude to *cross over* — `info/part-number` onto
+`battery.model`, `info/model` onto `battery.product_name` — holding each entity's
+displayed meaning still against flat, which irregularly puts the SKU in `bess/model`
+where the EVSE puts it in `part-number`.
 
-    info/part-number  ->  battery.model         (the SKU stays in `model`)
-    info/model        ->  battery.product_name  (the designation gets a new field)
-
-Flat firmware publishes `bess/model` as the SKU. v1.0's `battery.model` is also
-the SKU, by that mapping. So on a flat capture that carried BESS identity,
-`battery.model` would reclassify as **identity** — not as a semantic change — and
-`battery.serial_number` likewise. Only the two `product_name` fields look like
-genuine additions, because the designation had no flat home at all.
+That worked and permanently encoded flat's irregularity. The snapshot now speaks
+v1.0's vocabulary on every device class, and `schema_0` translates flat into it:
+`bess/model` becomes `part_number`, `product-name` becomes `model`. So on a flat
+capture that carried BESS identity, all three provisional rows would reclassify as
+**identity** rather than as semantic change — including the designation, which under
+flat's own names looked like it had no home.
 
 The general point: a re-sourced field is a migration risk only when the mapper
 passes the change through. Where it absorbs the change, the delta is real in the
@@ -79,9 +79,10 @@ statistics, metadata renders on a device card and essentially nothing hinges on
 it. And adding a field is not the same act as changing one: a new field cannot
 break an automation that never referenced it.
 
-So `battery.product_name` is a free win rather than a hazard, and the delta
-document treats "keep the SKU in `battery.model`" as a product call worth
-revisiting rather than a default. `EXPECTED_ORPHANS` and `PROVISIONAL_DER` are
+"Keep the SKU in `battery.model`" was exactly such a product call, and it was
+revisited: the delta document's DER identity decision retired it in favour of
+speaking v1.0's vocabulary, on the reasoning that a change we schedule in a library
+release beats the same change arriving unplanned during a firmware upgrade. `EXPECTED_ORPHANS` and `PROVISIONAL_DER` are
 about entities that would *stop* arriving; nothing here argues against surfacing
 new ones.
 
@@ -136,21 +137,19 @@ the derivation was simply never ported. v1.0 states the answer on the MID, so th
 now read rather than derived and carry the same values a user has today —
 `DSM_ON_GRID` / `PANEL_ON_GRID` on the tracked capture.
 
-Zero is the state worth defending, so the dict stays and the check below holds it.
-"""
-"""Fields that survive the migration as entities but stop carrying an answer.
-
-Worse for a user than an orphan, because an orphan goes stale and is noticeable
-while `UNKNOWN` reads as a working sensor that does not know. Both members are
-already documented; the test exists so a third cannot appear quietly.
+A degraded field is worse for a user than an orphan: an orphan goes stale and is
+noticeable, while `UNKNOWN` reads as a working sensor that does not know. Zero is the
+state worth defending, so the dict stays and the check below holds it.
 """
 
 ATTESTED_AGAINST_FIRMWARE: dict[str, str] = {
-    "pv.product_name": (
+    "pv.model": (
         "classified an addition here only because the frozen simulator never sends "
         "pv/product-name. A capture from real flat firmware does send it, so this is an "
         "IDENTITY — the entity exists today and survives the migration. Measured by "
-        "test_live_flat_differential.py; the simulator gap is recorded there as KNOWN_GAPS"
+        "test_live_flat_differential.py; the simulator gap is recorded there as KNOWN_GAPS. "
+        "Was pv.product_name until the 2026-08-10 identity normalisation; the field it "
+        "names is the same one, reached by the same flat property"
     ),
 }
 """Rows the mechanical diff gets wrong, corrected by a capture from real firmware.
@@ -164,7 +163,7 @@ matters — a field we thought was new turns out to be one users already have.
 PROVISIONAL_DER: frozenset[str] = frozenset(
     {
         "battery.model",
-        "battery.product_name",
+        "battery.part_number",
         "battery.serial_number",
     }
 )
@@ -177,12 +176,13 @@ their telemetry correctly against it, so `soc`, `soe`, `connected` and the rest
 are attested. These four are the fields nothing sends and therefore nothing can
 vouch for.
 
-Expect this set to shrink toward **identity**, not toward semantic change. The
-mapper re-sources `battery.model` from `info/part-number`, which is the SKU that
-flat's `bess/model` also carried, so a flat capture with BESS identity would move
-`battery.model` and `battery.serial_number` into the identity bucket. The two
-`product_name` entries are likely genuine additions: the designation had no flat
-home.
+Expect this set to shrink toward **identity**, not toward semantic change, and after
+the 2026-08-10 identity normalisation that is now true of every member. Both adapters
+speak v1.0's vocabulary — `schema_0` translates flat's `bess/model` to `part_number`
+and its `product-name` to `model` — so a flat capture carrying BESS identity would
+move all three into the identity bucket at once. Before the normalisation the two
+`product_name` entries looked like genuine additions, because the designation had no
+flat home under flat's own names; it does under these.
 
 Resolving this needs a capture from flat firmware with a BESS attached, which no
 available panel has.
@@ -333,6 +333,35 @@ def test_evse_identity_survives_the_migration(flat: Any, parent_child: Any) -> N
     assert {evse.feed_circuit_id for evse in flat.evse.values()} == {
         evse.feed_circuit_id for evse in parent_child.evse.values()
     }, "the two captures feed their EVSEs from different circuits, so they are not the same panel"
+
+
+def test_der_identity_reads_the_same_on_both_adapters(flat: Any, parent_child: Any) -> None:
+    """The point of the identity normalisation, measured on the one DER that can show it.
+
+    Both adapters now speak v1.0's vocabulary -- `model` is the human designation and
+    `part_number` the SKU, on every device class -- with `schema_0` translating flat's
+    irregular naming rather than mirroring it. When both produce the same field *and* the
+    same value, DER identity stops being a migration delta at all.
+
+    The EVSE is the only device class that can demonstrate it: flat publishes full
+    identity for it, none at all for the BESS, and `vendor-name` alone for PV. Those gaps
+    are the frozen simulator's, recorded in `PROVISIONAL_DER`, not the mapping's.
+
+    Worth being explicit that this is the *library upgrade* being made a no-op, not the
+    firmware migration. `battery.model` does change value for existing flat users when
+    they take this release -- it gains the designation where it carried the SKU. That is
+    the deliberate trade: one change we schedule beats the same change arriving unplanned
+    during a firmware upgrade.
+    """
+    flat_evse = sorted(flat.evse.values(), key=lambda e: e.serial_number or "")
+    pc_evse = sorted(parent_child.evse.values(), key=lambda e: e.serial_number or "")
+    assert len(flat_evse) == len(pc_evse) > 0
+
+    for before, after in zip(flat_evse, pc_evse, strict=True):
+        for field in ("model", "part_number", "vendor_name", "serial_number", "software_version"):
+            assert getattr(before, field) == getattr(after, field), (
+                f"evse.{field} differs across the migration: " f"{getattr(before, field)!r} -> {getattr(after, field)!r}"
+            )
 
 
 def test_no_circuit_field_is_orphaned(flat: Any, parent_child: Any) -> None:

@@ -78,17 +78,28 @@ def test_battery_state_of_charge_and_energy() -> None:
     assert battery.vendor_name == "Span"
 
 
-def test_battery_model_and_product_name_are_swapped_not_copied() -> None:
-    """Flat `bess/model` was the SKU; v1.0 `info/model` is the designation and
-    the SKU moved to `info/part-number`. Mapping info/model onto `model` would
-    keep the entity and change what it displays."""
+def test_battery_identity_is_read_straight_through_without_a_swap() -> None:
+    """The crossover is gone: the snapshot speaks v1.0's vocabulary directly.
+
+    This asserted the opposite until 2026-08-10 -- `info/model` onto `product_name` and
+    `info/part-number` onto `model` -- to hold each entity's displayed meaning still
+    against flat, which puts the SKU in `bess/model`. It worked, and it permanently
+    encoded flat's irregularity in the snapshot, so every reader had to be told why
+    `battery.model` was not a model.
+
+    Flat is the inconsistent side, not v1.0: it puts the SKU in `model` on the BESS and
+    in `part-number` on the EVSE, for the same concept. v1.0 normalises all three. So the
+    snapshot adopts v1.0's names and `schema_0` translates flat into them -- which also
+    moves the change off the firmware migration, where a user meets it unplanned, and
+    onto a library release we schedule.
+    """
     bess = _device("bess")
     bess.update_property("info", "part-number", "1232100-00-E")
 
     battery = build_battery(bess, [])
 
-    assert battery.product_name == "Example BESS"  # designation
-    assert battery.model == "1232100-00-E"  # SKU
+    assert battery.model == "Example BESS"  # designation, from info/model
+    assert battery.part_number == "1232100-00-E"  # SKU, from info/part-number
 
 
 def test_battery_connected_comes_from_the_owner_not_the_bess() -> None:
@@ -130,7 +141,7 @@ def test_pv_metadata_and_feed() -> None:
     pv = build_pv(_device("pv"), feed_circuit_ids(_circuits()))
 
     assert pv.vendor_name == "Enphase"
-    assert pv.product_name == "IQ8PLUS-72-2-US"
+    assert pv.model == "IQ8PLUS-72-2-US"
     assert pv.nameplate_capacity_w == 10000.0
     assert pv.feed_circuit_id == SOLAR_CIRCUIT
 
@@ -159,7 +170,7 @@ def test_evse_state_and_metadata() -> None:
     assert evse.lock_state == "LOCKED"
     assert evse.advertised_current_a == 32.0
     assert evse.vendor_name == "SPAN"
-    assert evse.product_name == "SPAN Drive"
+    assert evse.model == "SPAN Drive"
     assert evse.part_number == "SPN-DRV-001"
     assert evse.serial_number == "SIM-EVSE-example-40t-001"
 

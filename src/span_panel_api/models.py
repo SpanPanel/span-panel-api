@@ -58,6 +58,45 @@ class SpanPVSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class SpanMidSnapshot:
+    """Microgrid Interconnect Device — the islanding authority. v1.0 only.
+
+    The MID is the device that decides whether the enclosure is islanded, and the
+    enclosure model puts `grid` on it deliberately: "Grid connection state, islanding
+    state, and grid-forming-entity identity, published on the enclosure-integrated MID
+    (the enclosure device itself does not publish them)."
+
+    **Purely additive.** No flat panel publishes a MID node — not the frozen simulator,
+    not the live panel — so nothing here can orphan an entity a user already has. That
+    is why this is the benign cell of the absorb-or-surface policy: surfacing a new
+    device cannot break an automation that never referenced it.
+
+    `panel.grid_state` continues to carry islanding state for the panel entity that has
+    always shown it. This does not replace that; it exposes the device the value comes
+    from, so a consumer can render the MID as hardware in its own right.
+    """
+
+    node_id: str
+    """Stable identity, and the device-registry identifier a consumer builds from.
+
+    The serial where published, falling back to the Homie device id — the same choice
+    as `SpanEvseSnapshot`, for the reason `devices/proxy.md` gives: a proxied device id
+    is not stable across the proxy-to-native transition, so identity belongs on
+    `info/serial-number`.
+    """
+
+    serial_number: str | None = None
+    vendor_name: str | None = None
+    model: str | None = None
+    islanding_state: str | None = None
+    """`grid/islanding-state` — ON_GRID / OFF_GRID. MUST on a MID, per the enclosure model."""
+    grid_state: str | None = None
+    """`grid/grid-state` — whether utility power is present, distinct from islanding."""
+    grid_forming_entity: str | None = None
+    """`grid/grid-forming-entity` — which device is currently forming the grid."""
+
+
+@dataclass(frozen=True, slots=True)
 class SpanEvseSnapshot:
     """EV Charger (EVSE) state — populated when EVSE node is commissioned."""
 
@@ -236,4 +275,13 @@ class SpanPanelSnapshot:
     circuits: dict[str, SpanCircuitSnapshot] = field(default_factory=dict)
     battery: SpanBatterySnapshot = field(default_factory=SpanBatterySnapshot)
     pv: SpanPVSnapshot = field(default_factory=SpanPVSnapshot)
-    evse: dict[str, SpanEvseSnapshot] = field(default_factory=dict)  # keyed by node_id
+    evse: dict[str, SpanEvseSnapshot] = field(default_factory=dict)  # keyed by serial (see SpanEvseSnapshot.node_id)
+    mid: SpanMidSnapshot | None = None
+    """The islanding authority, when the panel publishes one. v1.0 only.
+
+    `None` rather than an empty instance, deliberately. `has_bess` has to guess
+    presence from `soe_percentage is not None` because the battery field is always
+    there, and its own docstring records that only that one field is a reliable
+    signal. A new optional device should not inherit that: presence is
+    `snapshot.mid is not None`, with nothing to infer.
+    """

@@ -31,6 +31,9 @@ EXPECTED_PUBLIC_API = {
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",
     "SpanEvseSnapshot",
+    # Added 2026-08-10: v1.0 surfaces the islanding authority as its own device.
+    # Purely additive -- no flat panel publishes a MID, so nothing existing changes.
+    "SpanMidSnapshot",
     "SpanPVSnapshot",
     "SpanPanelSnapshot",
     # Factory

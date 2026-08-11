@@ -228,3 +228,22 @@ def test_grid_state_is_read_from_the_mid(adapter: SchemaOneAdapter) -> None:
         "the reader has drifted onto grid/grid-state; None means the producer stopped "
         "publishing a MID and the mapping is unexercised again."
     )
+
+
+def test_the_mid_identity_is_its_serial(adapter: SchemaOneAdapter) -> None:
+    """The path that decides whether a consumer can keep the MID device still.
+
+    Its Homie device id is `<bess-id>-mid`, so it inherits the BESS's proxied form --
+    `<panel>-<bess-serial>-mid` -- and with it the instability `devices/proxy.md`
+    describes: a proxied id changes if the device is ever published natively, and moves
+    with the panel serial besides. `info/serial-number` is what survives, and it is what
+    a device-registry identifier should be built from. Same reasoning as EVSE, applied
+    before there are any users to break rather than after.
+    """
+    mid = adapter.build_snapshot().mid
+
+    assert mid is not None, "the SPAN capture publishes a MID; the snapshot should carry it"
+    assert mid.serial_number is not None
+    assert mid.node_id == mid.serial_number, "identity must be the serial, not the proxied device id"
+    assert not mid.node_id.startswith(_PANEL), f"the panel prefix is the proxied form, got {mid.node_id!r}"
+    assert mid.islanding_state == "ON_GRID"

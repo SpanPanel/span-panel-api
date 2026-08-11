@@ -25,7 +25,7 @@ from span_panel_api_schema_1.const import (
     TYPE_PV,
     UNKNOWN,
 )
-from span_panel_api_schema_1.devices import build_battery, build_evse, build_pv, feed_circuit_ids
+from span_panel_api_schema_1.devices import build_battery, build_evse, build_mid, build_pv, feed_circuit_ids
 from span_panel_api_schema_1.panel import PanelFields, build_unmapped_tabs, find_lugs, panel_size_from_model, text
 
 if TYPE_CHECKING:
@@ -154,6 +154,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         circuits=circuits,
         battery=build_battery(roles.bess, owners),
         pv=build_pv(roles.pv, feeds),
+        mid=build_mid(roles.mid),
         evse={key: build_evse(device, feeds, node_id=key) for device, key in _harmonised_evse_keys(roles.evse).items()},
     )
 

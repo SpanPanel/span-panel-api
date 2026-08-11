@@ -10,6 +10,7 @@ import pytest
 from ebus_sdk.homie import DiscoveredDevice
 
 from span_panel_api_schema_1.devices import (
+    build_mid,
     build_battery,
     build_evse,
     build_pv,
@@ -167,3 +168,36 @@ def test_evse_without_a_feeding_circuit_reports_empty_not_none() -> None:
     """`feed_circuit_id` is non-optional on the dataclass, so an unclaimed EVSE
     gets the empty string rather than breaking construction."""
     assert build_evse(_device("evse"), {}, node_id="evse").feed_circuit_id == ""
+
+
+def test_the_mid_is_surfaced_as_its_own_device() -> None:
+    """v1.0's islanding authority, exposed so a consumer can render it as hardware.
+
+    The enclosure model puts `grid` on the MID rather than on the enclosure -- "the
+    enclosure device itself does not publish them" -- so this is where islanding state,
+    grid state and the grid-forming entity actually live.
+
+    The reference tree's MID publishes no serial, because upstream's example config
+    declares no BESS serial for it to derive one from. That exercises the fallback:
+    identity drops to the Homie device id. `test_the_mid_identity_is_its_serial` covers
+    the path that matters more, against a capture that has one.
+    """
+    mid = build_mid(_device("bess-mid"))
+
+    assert mid is not None
+    assert mid.islanding_state == "ON_GRID"
+    assert mid.grid_state == "UP"
+    assert mid.grid_forming_entity == "GRID"
+    assert mid.vendor_name == "Span"
+    assert mid.node_id == "bess-mid", "with no serial published, identity falls back to the device id"
+    assert mid.serial_number is None
+
+
+def test_a_panel_with_no_mid_reports_none_rather_than_an_empty_device() -> None:
+    """Presence is `snapshot.mid is not None`, with nothing to infer.
+
+    `has_bess` has to guess from `soe_percentage is not None` because the battery field
+    is always present; its own docstring records that only that one field is reliable.
+    A new optional device should not inherit that guessing game.
+    """
+    assert build_mid(None) is None

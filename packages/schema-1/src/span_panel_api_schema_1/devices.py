@@ -22,8 +22,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from span_panel_api.models import SpanBatterySnapshot, SpanEvseSnapshot, SpanPVSnapshot
-from span_panel_api_schema_1.const import NODE_CONNECTION, NODE_INFO, NODE_METER, NODE_SOC, NODE_STATUS, NODE_SWITCH, UNKNOWN
+from span_panel_api.models import SpanBatterySnapshot, SpanEvseSnapshot, SpanMidSnapshot, SpanPVSnapshot
+from span_panel_api_schema_1.const import (
+    NODE_CONNECTION,
+    NODE_GRID,
+    NODE_INFO,
+    NODE_METER,
+    NODE_SOC,
+    NODE_STATUS,
+    NODE_SWITCH,
+    UNKNOWN,
+)
 from span_panel_api_schema_1.panel import number, text
 
 if TYPE_CHECKING:
@@ -145,4 +154,37 @@ def build_evse(evse: DiscoveredDevice, feeds: dict[str, str], *, node_id: str) -
         part_number=_optional(text(evse, NODE_INFO, PROP_PART_NUMBER)),
         serial_number=_optional(text(evse, NODE_INFO, PROP_SERIAL_NUMBER)),
         software_version=_optional(text(evse, NODE_INFO, PROP_FIRMWARE_VERSION)),
+    )
+
+
+PROP_ISLANDING_STATE = "islanding-state"
+PROP_GRID_STATE = "grid-state"
+PROP_GRID_FORMING_ENTITY = "grid-forming-entity"
+
+
+def build_mid(mid: DiscoveredDevice | None) -> SpanMidSnapshot | None:
+    """Build the MID snapshot, or `None` when the panel publishes no MID.
+
+    `None` is the presence signal, so there is nothing for a consumer to infer from a
+    sentinel field. Every value is optional except identity: the enclosure model makes
+    `islanding-state` MUST on a MID, but a device mid-discovery has a description and
+    no values yet, and reporting that as `ON_GRID` would be worse than reporting it as
+    unknown.
+
+    Identity follows `SpanEvseSnapshot`: the serial where published, the Homie device
+    id otherwise. Here the device id is `<bess-id>-mid`, so it inherits the BESS's
+    proxied form and the instability `devices/proxy.md` warns about — the serial is the
+    part that survives a proxy-to-native transition.
+    """
+    if mid is None:
+        return None
+    serial = _optional(text(mid, NODE_INFO, PROP_SERIAL_NUMBER))
+    return SpanMidSnapshot(
+        node_id=serial or mid.device_id,
+        serial_number=serial,
+        vendor_name=_optional(text(mid, NODE_INFO, PROP_VENDOR_NAME)),
+        model=_optional(text(mid, NODE_INFO, PROP_MODEL)),
+        islanding_state=_optional(text(mid, NODE_GRID, PROP_ISLANDING_STATE)),
+        grid_state=_optional(text(mid, NODE_GRID, PROP_GRID_STATE)),
+        grid_forming_entity=_optional(text(mid, NODE_GRID, PROP_GRID_FORMING_ENTITY)),
     )

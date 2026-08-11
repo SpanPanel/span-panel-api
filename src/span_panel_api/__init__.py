@@ -36,6 +36,7 @@ from .models import (
     SpanBatterySnapshot,
     SpanCircuitSnapshot,
     SpanEvseSnapshot,
+    SpanMidSnapshot,
     SpanPanelSnapshot,
     SpanPVSnapshot,
     V2AuthResponse,
@@ -75,6 +76,7 @@ __all__ = [  # noqa: RUF022
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",
     "SpanEvseSnapshot",
+    "SpanMidSnapshot",
     "SpanPVSnapshot",
     "SpanPanelSnapshot",
     # Factory

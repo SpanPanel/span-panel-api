@@ -90,7 +90,7 @@ def _peer_fixtures() -> dict[str, str]:
     return {str(kind): str(path) for kind, path in fixtures.items()}
 
 
-def _checkout(variable: str, what: str) -> Path:
+def _checkout(variable: str, what: str, expect: str | None = None) -> Path:
     """A sibling checkout named by an environment variable, or skip.
 
     A variable that is unset and one pointing at a directory that is gone are the
@@ -98,6 +98,13 @@ def _checkout(variable: str, what: str) -> Path:
     a stale path through instead produces a FileNotFoundError from somewhere deep
     in a comparison, which reads as a broken test rather than an unconfigured one.
     Set them in `.env`; see `.env.example`.
+
+    "Gone" includes *emptied*, which is the form this actually takes. A checkout under
+    a temp directory keeps its `.git` and its directory tree while the reaper removes
+    the files, so `is_dir()` was true at every level and the comparison still raised.
+    Presence of a directory proves nothing here; the caller names one that must hold
+    at least one `.json`, which is what distinguishes a populated checkout from the
+    skeleton of a reaped one.
     """
     configured = os.environ.get(variable)
     if not configured:
@@ -105,6 +112,8 @@ def _checkout(variable: str, what: str) -> Path:
     path = Path(configured)
     if not path.is_dir():
         pytest.skip(f"{variable}={configured} does not exist; point it at {what}")
+    if expect is not None and not any((path / expect).glob("*.json")):
+        pytest.skip(f"{variable}={configured} has no files under {expect}/ — the checkout is empty or is not {what}")
     return path
 
 
@@ -444,7 +453,11 @@ def test_vendored_catalogs_are_byte_identical_to_the_specification() -> None:
     that must run everywhere, and making them depend on a second repository would
     mean they stop running.
     """
-    spec = _checkout("EBUS_SPEC_DIR", "a specification checkout to verify vendored bytes")
+    spec = _checkout(
+        "EBUS_SPEC_DIR",
+        "a specification checkout to verify vendored bytes",
+        expect="capabilities",
+    )
     differing = [
         path.name
         for path in sorted(_CATALOGS.glob("*.json"))
@@ -471,9 +484,9 @@ def test_the_vendored_captures_match_the_simulator() -> None:
 
     tree_source = sim_dir / fixtures["tree"]
     assert tree_source.exists(), f"{tree_source} is missing; is {sim_dir} on {ref}?"
-    assert tree_source.read_bytes() == _SIMULATOR_TREE.read_bytes(), (
-        f"the captured tree differs from {tree_source}. Re-capture it and update peer.commit " f"(recorded: {commit})."
-    )
+    assert (
+        tree_source.read_bytes() == _SIMULATOR_TREE.read_bytes()
+    ), f"the captured tree differs from {tree_source}. Re-capture it and update peer.commit (recorded: {commit})."
 
     wire_source = sim_dir / fixtures["wire"]
     assert wire_source.exists(), f"{wire_source} is missing; is {sim_dir} on {ref}?"

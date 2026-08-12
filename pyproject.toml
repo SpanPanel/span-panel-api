@@ -215,6 +215,10 @@ disable = [
     "missing-class-docstring",
     "missing-function-docstring",
     "too-few-public-methods",
+    # The transport implements four protocols, so its public surface is set by
+    # how many the composition asks for rather than by anything a split would
+    # improve. Every sibling in this family is already off for the same reason.
+    "too-many-public-methods",
     "too-many-arguments",
     "too-many-instance-attributes",
     "too-many-locals",

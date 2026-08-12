@@ -19,7 +19,13 @@ from span_panel_api.schema_drift import log_schema_drift
 from ..adapters import discover_adapters, resolve_adapter
 from ..auth import get_homie_schema
 from ..dispatch import select_adapter_key
-from ..exceptions import SpanPanelConnectionError, SpanPanelServerError, SpanPanelStaleDataError
+from ..exceptions import (
+    SpanPanelConnectionError,
+    SpanPanelSchemaVersionError,
+    SpanPanelServerError,
+    SpanPanelStaleDataError,
+    SpanPanelTimeoutError,
+)
 from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot, V2HomieSchema
 from ..protocol import PanelCapability, SchemaAdapter
 from .connection import AsyncMqttBridge
@@ -32,6 +38,13 @@ _LOGGER = logging.getLogger(__name__)
 # Retained messages typically arrive within 1-2s, but allow headroom.
 _CIRCUIT_NAMES_TIMEOUT_S = 10.0
 _CIRCUIT_NAMES_POLL_INTERVAL_S = 0.25
+
+# Re-reading the schema after a suspected generation change. Bounded because the
+# caller is a fire-and-forget task on a live connection, and generous enough to
+# outlast a panel that is still binding its HTTP port after a restart.
+_REDISPATCH_RETRY_ATTEMPTS = 5
+_REDISPATCH_RETRY_INITIAL_S = 1.0
+_REDISPATCH_RETRY_MAX_S = 8.0
 
 
 class SpanMqttClient:
@@ -61,6 +74,7 @@ class SpanMqttClient:
         self._streaming = False
         self._snapshot_callbacks: list[Callable[[SpanPanelSnapshot], Awaitable[None]]] = []
         self._connection_callbacks: list[Callable[[bool], None]] = []
+        self._schema_change_callbacks: list[Callable[[str | None, str | None], None]] = []
         self._live = False
         self._ready_event: asyncio.Event | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -72,8 +86,14 @@ class SpanMqttClient:
         # Supplied by create_span_client, which already fetched it to dispatch
         # on; None when constructed directly, in which case connect() fetches.
         # Either way it is cached for the pre-rebuild hook, which rebuilds the
-        # parser after a transport-level rebuild. A panel cannot change schema
-        # within a session, so caching is safe.
+        # parser after a transport-level rebuild.
+        #
+        # The cache used to be justified as "a panel cannot change schema within a
+        # session". A firmware upgrade does exactly that: the panel disconnects and
+        # returns as a different generation with the consumer's session still open.
+        # `_redispatch_if_generation_changed` re-reads it on every reconnect edge and
+        # replaces this, so the cache is now a per-connection value rather than a
+        # per-session one.
         self._schema = schema
         # Diagnostics. create_span_client passes these so they are true from the
         # first moment the object exists; constructing directly leaves them
@@ -81,6 +101,13 @@ class SpanMqttClient:
         # fills in once it has a schema to dispatch on.
         self._data_model_version = data_model_version
         self._schema_dispatch_reason = schema_dispatch_reason or "not dispatched"
+        # The MQTT half of the same signal, filled in as the retained tree arrives and
+        # checked against the REST half once the tree is complete. `None` means the
+        # panel published no such property, which is itself the flat answer.
+        self._observed_data_model_version: str | None = None
+        # One reconsideration at a time. The MQTT trigger can fire repeatedly while a
+        # fetch is retrying, and each would otherwise start its own retry loop.
+        self._redispatch_in_flight = False
 
     def _build_adapter(self, schema: V2HomieSchema) -> SchemaAdapter:
         """Construct the parser for this session.
@@ -285,7 +312,58 @@ class SpanMqttClient:
         # may arrive after $state=ready). Without this, the first snapshot
         # has empty circuit names and entities are created without labels.
         await self._wait_for_circuit_names(timeout=_CIRCUIT_NAMES_TIMEOUT_S)
+
+        self._assert_transports_agree_on_schema_generation()
         _LOGGER.debug("MQTT: Connection fully established")
+
+    def _assert_transports_agree_on_schema_generation(self) -> None:
+        """Refuse a panel whose two schema-generation signals disagree.
+
+        The migration guide's "Schema-generation detection" carries one rule on two
+        transports: MQTT ``info/data-model-version`` absent = flat, present =
+        parent/child; REST ``dataModelVersion`` absent = flat, exactly mirroring the
+        MQTT signal. Dispatch reads REST, because the adapter decides which topics to
+        subscribe to and so must exist before the first SUBSCRIBE. That makes the MQTT
+        value a free second opinion, and until now nothing looked at it.
+
+        Nothing looking at it is how a v1.0 panel gets parsed by the flat adapter in
+        silence: a producer that publishes the MQTT property but omits the REST one
+        dispatches to ``schema_0``, every value in the tree is read against the wrong
+        vocabulary, and the connection reports success. Wrong numbers, no error.
+
+        Raising rather than warning follows the rule dispatch already applies to an
+        unparseable version: an unknown schema generation means every value in the
+        tree may be misread, and the blast radius is the whole panel. A disagreement
+        is that same situation with a second witness.
+
+        Compared by the adapter each value *selects*, not by string equality --
+        ``'1.0'`` and ``'1.0.3'`` are both parsed by ``schema_1``, and failing that
+        pair would be a false alarm about a patch release.
+        """
+        observed = self._observed_data_model_version
+        reported = self._data_model_version
+        try:
+            observed_key, _ = select_adapter_key(observed)
+            reported_key, _ = select_adapter_key(reported)
+        except SpanPanelSchemaVersionError:
+            # One of them is present but unparseable. Dispatch already refused on the
+            # REST value before we got here, so this is the MQTT one -- report it as
+            # the disagreement it is rather than re-raising a message about REST.
+            raise SpanPanelSchemaVersionError(
+                f"Panel {self._serial_number} publishes MQTT info/data-model-version="
+                f"{observed!r}, which no adapter major can be read from, while REST "
+                f"reports dataModelVersion={reported!r}"
+            ) from None
+
+        if observed_key != reported_key:
+            raise SpanPanelSchemaVersionError(
+                f"Panel {self._serial_number} disagrees with itself about its schema "
+                f"generation: REST dataModelVersion={reported!r} selects "
+                f"{reported_key!r}, MQTT info/data-model-version={observed!r} selects "
+                f"{observed_key!r}. The migration guide requires the two to mirror each "
+                f"other; parsing the tree with either parser would misread values the "
+                f"other owns."
+            )
 
     async def close(self) -> None:
         """Disconnect from broker and clean up."""
@@ -321,6 +399,29 @@ class SpanMqttClient:
         def unregister() -> None:
             with contextlib.suppress(ValueError):
                 self._connection_callbacks.remove(callback)
+
+        return unregister
+
+    def register_schema_change_callback(self, callback: Callable[[str | None, str | None], None]) -> Callable[[], None]:
+        """Subscribe to the panel changing schema generation mid-session.
+
+        Fires with ``(previous_version, new_version)`` after the parser has been
+        rebuilt, so a consumer reading the client inside the callback sees the new
+        generation rather than the one being replaced.
+
+        This exists because swapping the parser is not the whole job. It fixes
+        *reading* — values resolve again immediately — but a consumer that built
+        devices and entities from the old tree still has the old topology: v1.0 adds
+        a MID that the flat tree has no equivalent for, and re-keys EVSEs. Only the
+        consumer knows how to rebuild that, so it is told rather than guessed at.
+
+        Returns an unregister function. Calling it twice is safe.
+        """
+        self._schema_change_callbacks.append(callback)
+
+        def unregister() -> None:
+            with contextlib.suppress(ValueError):
+                self._schema_change_callbacks.remove(callback)
 
         return unregister
 
@@ -424,9 +525,30 @@ class SpanMqttClient:
 
     def _on_message(self, topic: str, payload: str) -> None:
         """Handle incoming MQTT message (called from asyncio loop)."""
+        # The bootstrap signal, observed rather than parsed, and deliberately ahead of
+        # the adapter guard: reading it is what tells the generations apart, so it
+        # cannot be something only a chosen parser can do.
+        #
+        # Matched on suffix so no Homie domain constant has to exist in the transport.
+        # Only the root device's copy counts -- under parent/child every device has an
+        # `info` node, and a child's copy would otherwise overwrite the panel's answer
+        # depending on retained-message ordering.
+        if topic.endswith(f"/{self._serial_number}/info/data-model-version"):
+            self._observed_data_model_version = payload or None
+            # This is the trigger for a mid-session generation change, not the
+            # reconnect edge. The edge fires the instant the broker accepts a
+            # connection, which on a real upgrade is *before* the panel has bound
+            # its HTTP port -- observed as `Cannot reach panel` roughly 25ms after
+            # reconnect, with no further edge to retry on because MQTT had already
+            # succeeded. The retained tree arrives only once the new panel is
+            # actually publishing, which makes this the first moment the answer
+            # exists at all.
+            self._schedule_redispatch()
+
         adapter = self._adapter
         if adapter is None:
             return
+
         was_ready = adapter.is_ready()
         adapter.handle_message(topic, payload)
 
@@ -463,6 +585,12 @@ class SpanMqttClient:
             if self._bridge is not None and self._adapter is not None:
                 for topic in self._adapter.topics_to_subscribe():
                     self._bridge.subscribe(topic, qos=0)
+            # A reconnect can be a different panel generation than the one we
+            # dispatched on. Checked only on a real edge, because paho re-emits
+            # connected=True after session restoration and refetching the schema
+            # on each of those would be a HTTP round trip per duplicate.
+            if not self._live:
+                self._schedule_redispatch()
         else:
             _LOGGER.debug("MQTT connection lost")
             # Cancel any pending snapshot-debounce timer so it cannot
@@ -480,6 +608,160 @@ class SpanMqttClient:
                 cb(connected)
             except Exception:  # pylint: disable=broad-exception-caught
                 _LOGGER.warning("Connection callback raised", exc_info=True)
+
+    def _schedule_redispatch(self) -> None:
+        """Reconsider the panel's schema generation, off the calling callback.
+
+        Both callers are synchronous — the connection-change handler and the message
+        handler — and the work is a HTTP round trip, so it is handed to the loop.
+
+        Cheap to call often: the MQTT trigger fires on every retained
+        `info/data-model-version`, and the common case is that it agrees with the
+        active adapter. That is answered here without scheduling anything, so a
+        steady-state panel costs one string comparison per republish.
+        """
+        if self._loop is None or self._adapter is None:
+            # No loop means connect() never ran, so there is nothing dispatched to
+            # reconsider and no loop to schedule the reconsideration on.
+            return
+        if self._redispatch_in_flight:
+            return
+        if not self._generation_appears_changed():
+            return
+        self._redispatch_in_flight = True
+        task = self._loop.create_task(self._redispatch_if_generation_changed())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    def _generation_appears_changed(self) -> bool:
+        """Whether any signal we hold suggests a parser other than the active one.
+
+        Deliberately permissive: it gates scheduling, not the swap itself. The
+        authoritative comparison happens in `_redispatch_if_generation_changed`
+        against a freshly fetched REST schema, so a false positive here costs one
+        HTTP request and a false negative costs a missed upgrade.
+        """
+        try:
+            active, _ = select_adapter_key(self._data_model_version)
+            observed, _ = select_adapter_key(self._observed_data_model_version)
+        except SpanPanelSchemaVersionError:
+            # Unreadable version. Let the full path report it properly.
+            return True
+        return active != observed
+
+    async def _fetch_schema_with_retry(self) -> V2HomieSchema | None:
+        """Read the panel's REST schema, allowing for HTTP trailing the broker.
+
+        A panel that has just restarted accepts MQTT before it serves HTTP — the
+        broker is listening while the application is still binding its port. The
+        first attempt at a real upgrade failed 25ms after reconnect with
+        `Cannot reach panel`, and because MQTT had reconnected successfully there
+        was no further edge to retry on, leaving the wrong parser in place for the
+        rest of the session.
+
+        So this waits, briefly and boundedly. Returning None rather than raising
+        because the caller's job is to reconsider the parser, and being unable to
+        is not a reason to disturb a connection that is otherwise working.
+        """
+        delay = _REDISPATCH_RETRY_INITIAL_S
+        last: Exception | None = None
+        for _ in range(_REDISPATCH_RETRY_ATTEMPTS):
+            try:
+                return await get_homie_schema(self._host, port=self._panel_http_port)
+            except (SpanPanelConnectionError, SpanPanelTimeoutError) as exc:
+                last = exc
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, _REDISPATCH_RETRY_MAX_S)
+        _LOGGER.warning(
+            "Could not re-read the panel schema after %d attempts (%s). The active "
+            "parser is unchanged; if the panel's schema generation did change, its "
+            "data will read as missing until the next reconnect.",
+            _REDISPATCH_RETRY_ATTEMPTS,
+            last,
+        )
+        return None
+
+    async def _redispatch_if_generation_changed(self) -> None:
+        """Swap the parser when the panel comes back as a different schema generation.
+
+        The adapter is chosen once, at connect, from the REST `dataModelVersion`.
+        Everything after that reuses it: `connect()` short-circuits on the cached
+        `self._schema`, the reconnect path re-subscribes with the existing adapter's
+        topics, and `_on_pre_rebuild` rebuilds from the cached schema on the stated
+        assumption that "the Homie schema cannot change within a session".
+
+        A firmware upgrade breaks that assumption exactly. The panel disconnects and
+        returns as a different generation while the consumer's session is still open
+        — no reload, no new `connect()`, so nothing ever reconsiders. Observed as a
+        flat panel upgrading to v1.0 underneath a live client: the client reconnected,
+        kept the flat parser, and read the v1.0 tree with it. It logged one
+        `Invalid $description JSON` and then reported every circuit as missing, which
+        is a wrong answer rather than an error.
+
+        Failure here is deliberately non-fatal. The panel is reachable over MQTT or
+        this callback would not be running, and its HTTP endpoint may lag that by
+        seconds while it finishes booting; treating a refused fetch as fatal would
+        turn a slow boot into a dead integration. The generation is re-read on the
+        next reconnect, and a stale parser reports missing data rather than wrong
+        data, because the two schemas do not share a topic shape.
+        """
+        try:
+            schema = await self._fetch_schema_with_retry()
+        finally:
+            self._redispatch_in_flight = False
+        if schema is None:
+            return
+
+        before = self._data_model_version
+        try:
+            new_key, _ = select_adapter_key(schema.data_model_version)
+            old_key, _ = select_adapter_key(before)
+        except SpanPanelSchemaVersionError:
+            _LOGGER.warning(
+                "Panel reports data-model-version %r after reconnect, which no adapter "
+                "major can be read from; keeping the %r parser",
+                schema.data_model_version,
+                before,
+            )
+            return
+
+        if new_key == old_key:
+            return
+
+        _LOGGER.warning(
+            "Panel changed schema generation while connected: data-model-version %r -> "
+            "%r (%s -> %s). Rebuilding the parser; entities will repopulate from the "
+            "new tree.",
+            before,
+            schema.data_model_version,
+            old_key,
+            new_key,
+        )
+        self._schema = schema
+        # Set here rather than relying on `_build_adapter`, which only records it on
+        # the dispatching path. A client constructed with an injected `adapter_factory`
+        # skips that branch, and would go on reporting the generation it started with
+        # after having been rebuilt for a different one.
+        self._data_model_version = schema.data_model_version
+        adapter = self._build_adapter(schema)
+        self._field_metadata = adapter.build_field_metadata()
+        # Ready is a property of the tree, and this is a different tree. Leaving the
+        # old event set would let `is_ready()` answer for a parser that has not seen
+        # a single message yet.
+        self._ready_event = asyncio.Event()
+        if self._bridge is not None:
+            for topic in adapter.topics_to_subscribe():
+                self._bridge.subscribe(topic, qos=0)
+
+        # Announced after the swap, so a consumer inspecting the client from inside
+        # the callback sees the generation it is being told about. Iterate a copy —
+        # a subscriber may unregister while handling this, and reloading a config
+        # entry (the expected response) tears down the very object that registered.
+        for cb in list(self._schema_change_callbacks):
+            try:
+                cb(before, schema.data_model_version)
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.warning("Schema-change callback raised", exc_info=True)
 
     def _on_pre_rebuild(self) -> None:
         """Reset Homie accumulator state before the bridge rebuilds its paho client.

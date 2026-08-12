@@ -321,21 +321,26 @@ class TestSpanMqttClientConnect:
         mqtt_client_mock.subscribe.assert_called()
 
     @pytest.mark.asyncio
-    async def test_adapter_discovery_never_touches_the_event_loop(self, mqtt_client_mock: MagicMock) -> None:
-        """Both halves of discovery do blocking file I/O, and connect() drives both.
+    async def test_no_package_metadata_is_read_on_the_event_loop(self, mqtt_client_mock: MagicMock) -> None:
+        """connect() reads packaging metadata three ways, and all of it is file I/O.
 
-        Enumeration reads distribution metadata; resolution imports the adapter
-        package, which for `schema_1` means the eBus SDK and jsonschema. Home
-        Assistant reported all of it — `listdir`, `read_text`, `open`, `scandir`
-        — as blocking calls in the event loop and asked for a bug report, with
-        the entry-point scan alone stalling setup for two seconds on a cold
-        import cache.
+        Entry-point enumeration and `version()` both open dist-info off disk;
+        resolution imports the adapter package, which for `schema_1` means the
+        eBus SDK and jsonschema. Home Assistant reported the lot — `listdir`,
+        `read_text`, `open`, `scandir` — as blocking calls in the event loop and
+        asked for a bug report, with the entry-point scan alone stalling setup
+        for two seconds on a cold import cache.
 
-        Asserted on the two operations rather than on `resolve_adapter` being
-        called off-thread, because it is deliberately called twice: once in a
-        thread to warm the cache, then again by `_build_adapter` on the loop,
-        where a cache hit costs nothing. Watching the call would fail a correct
-        implementation; watching the I/O is the actual property.
+        `version()` is watched because it was missed. Moving discovery off the
+        loop left it behind in the same log statement, and Home Assistant kept
+        reporting three blocking calls for a defect that read as fixed. A test
+        naming only the operations already known about would have agreed.
+
+        Asserted on the operations rather than on `resolve_adapter` running
+        off-thread, because it is deliberately called twice: once in a thread to
+        warm the cache, then again by `_build_adapter` on the loop, where a cache
+        hit costs nothing. Watching the call would fail a correct implementation;
+        watching the I/O is the actual property.
         """
         import threading
 
@@ -356,10 +361,17 @@ class TestSpanMqttClientConnect:
             ran_on["enumerate"] = threading.get_ident()
             return [_RecordingEntryPoint()]
 
+        def _version(name: str) -> str:
+            ran_on["version"] = threading.get_ident()
+            return "0.0.0-test"
+
         client = _make_span_client()
         _reset_adapter_cache()
         try:
-            with patch("span_panel_api.adapters.entry_points", side_effect=_enumerate):
+            with (
+                patch("span_panel_api.adapters.entry_points", side_effect=_enumerate),
+                patch("span_panel_api.mqtt.client.version", side_effect=_version),
+            ):
                 connect_task = asyncio.create_task(client.connect())
                 await asyncio.sleep(0.05)
                 client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
@@ -370,8 +382,8 @@ class TestSpanMqttClientConnect:
             # every later test a single-entry-point environment.
             _reset_adapter_cache()
 
-        assert set(ran_on) == {"enumerate", "load"}, f"discovery did not run at all: {ran_on}"
-        assert loop_thread not in ran_on.values(), f"discovery ran on the event loop: {ran_on}"
+        assert set(ran_on) == {"enumerate", "load", "version"}, f"not all of it ran: {ran_on}"
+        assert loop_thread not in ran_on.values(), f"metadata read on the event loop: {ran_on}"
 
     @pytest.mark.asyncio
     async def test_close(self, mqtt_client_mock: MagicMock) -> None:

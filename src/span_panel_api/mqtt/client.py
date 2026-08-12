@@ -49,6 +49,17 @@ _REDISPATCH_RETRY_INITIAL_S = 1.0
 _REDISPATCH_RETRY_MAX_S = 8.0
 
 
+def _metadata_for_the_log() -> tuple[list[str], str]:
+    """Every distribution-metadata read connect() needs, in one place.
+
+    Grouped so there is a single thing to run in a thread rather than two calls
+    that look unrelated and drift apart — which is exactly what happened once
+    already, when the adapter keys were moved off the event loop and the version
+    lookup beside them was not.
+    """
+    return installed_adapter_keys(), version("span-panel-api")
+
+
 class SpanMqttClient:
     """MQTT transport — implements all span-panel-api protocols."""
 
@@ -269,14 +280,19 @@ class SpanMqttClient:
         await self._preload_adapter(schema)
         adapter = self._build_adapter(schema)
 
-        # Threaded on its own account: the preload above skips discovery entirely
-        # when a factory was injected, and this line would then be the first thing
-        # to read distribution metadata — on the loop.
-        installed = await asyncio.to_thread(installed_adapter_keys)
+        # Both halves of this line read distribution metadata off disk, and both
+        # have to be gathered before it is logged. `version()` is the less obvious
+        # one — it opens this package's own dist-info METADATA — and it was left
+        # on the loop when its sibling was moved off, which Home Assistant went on
+        # reporting as three blocking calls after the rest was fixed.
+        #
+        # Threaded on their own account rather than relying on the preload above,
+        # which skips discovery entirely when a factory was injected.
+        installed, library_version = await asyncio.to_thread(_metadata_for_the_log)
         _LOGGER.info(
             "MQTT adapter selected: %s (span-panel-api %s)\n  data-model-version: %r\n  reason: %s\n  installed: %s",
             adapter.schema_major,
-            version("span-panel-api"),
+            library_version,
             self._data_model_version,
             self._schema_dispatch_reason,
             installed,

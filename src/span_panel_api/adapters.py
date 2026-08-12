@@ -1,13 +1,32 @@
 """Adapter discovery via the `span_panel_api.schema_adapters` entry-point group.
 
-Called once per process on the first create_span_client(). A venv change needs a
-process restart regardless, so a process-lifetime cache is correct.
+Two steps, deliberately separate, because they cost very different things:
+
+*Enumeration* reads distribution metadata and answers "which adapter keys does
+this environment register". *Resolution* imports one of those packages and
+checks it implements the contract. Enumeration is a couple of file reads;
+resolution of ``schema_1`` drags in the eBus SDK and jsonschema — measured at
+two seconds on a cold import cache.
+
+So only the key the panel actually reports is ever imported. An earlier version
+resolved the whole group up front to build one registry, which meant every flat
+panel paid for the parent/child parser it would never call — undoing the
+containment schema-1's own packaging sets up, where the SDK dependency is
+isolated to that distribution precisely so a flat install stays clear of it.
+Under redispatch both adapters are the normal install, so "installed" stopped
+implying "used" and eager resolution stopped being defensible.
+
+Both steps cache for the life of the process. A venv change needs a restart
+regardless, so nothing here can go stale while it matters.
+
+**Everything in this module does blocking file I/O**, both the metadata reads
+and the imports. Callers on an event loop must keep it off theirs; the async
+transport does that with ``asyncio.to_thread``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from importlib.metadata import entry_points
+from importlib.metadata import EntryPoint, entry_points
 import logging
 from typing import TypeGuard
 
@@ -17,23 +36,16 @@ from span_panel_api.protocol import ADAPTER_CONTRACT_VERSION, SchemaAdapter
 _LOGGER = logging.getLogger(__name__)
 _ENTRY_POINT_GROUP = "span_panel_api.schema_adapters"
 
-
-@dataclass(frozen=True)
-class _Discovery:
-    """One scan of the entry-point group: what was usable, and why the rest was not.
-
-    Rejections are kept rather than only logged. A rejected adapter and an
-    absent one are the same absence from ``adapters``, but they are opposite
-    problems for whoever hits them — install something, versus upgrade what is
-    already installed. Keeping the reason is what lets ``resolve_adapter`` tell
-    them apart at the point the distinction matters, without re-scanning.
-    """
-
-    adapters: dict[str, type[SchemaAdapter]]
-    rejected: dict[str, str]
-
-
-_DISCOVERY: _Discovery | None = None
+# Every entry point in the group, by name, unloaded. None means "not scanned".
+_ENTRY_POINTS: dict[str, EntryPoint] | None = None
+# Resolution verdicts, filled one key at a time. A key appears in exactly one:
+# usable adapters here, and the reason for the rest in _REJECTED. Kept apart
+# rather than as one nullable map because a rejected adapter and an absent one
+# are opposite problems for whoever hits them — upgrade what is already
+# installed, versus install something — and resolve_adapter can only tell them
+# apart if the reason survives the scan that produced it.
+_ADAPTERS: dict[str, type[SchemaAdapter]] = {}
+_REJECTED: dict[str, str] = {}
 
 
 def _derive_required_members(protocol: type) -> tuple[str, ...]:
@@ -131,71 +143,90 @@ def _contract_defect(adapter_cls: type[SchemaAdapter]) -> str | None:
     return None
 
 
-def _discover() -> _Discovery:
-    """Scan and cache the entry-point group, keeping rejections alongside adapters.
+def _enumerate() -> dict[str, EntryPoint]:
+    """Scan the entry-point group by name, importing nothing.
 
-    A bad entry point is skipped with a logged reason, never raised: one broken
-    third-party adapter must not take down a panel whose own adapter is fine.
-    Whether a skip matters is decided later, by whoever asks for that key.
+    Names only, because a name is all it takes to answer the two questions asked
+    before a panel has reported anything: what is installed, and does the key
+    this panel needs appear at all. Loading is deferred to whoever asks for a
+    specific key.
     """
-    global _DISCOVERY  # pylint: disable=global-statement  # process-lifetime cache by design
-    if _DISCOVERY is None:
-        adapters: dict[str, type[SchemaAdapter]] = {}
-        rejected: dict[str, str] = {}
+    global _ENTRY_POINTS  # pylint: disable=global-statement  # process-lifetime cache by design
+    if _ENTRY_POINTS is None:
+        found: dict[str, EntryPoint] = {}
         for ep in entry_points(group=_ENTRY_POINT_GROUP):
-            if ep.name in adapters or ep.name in rejected:
+            if ep.name in found:
                 _LOGGER.warning("Duplicate schema adapter entry point %r; keeping the first found", ep.name)
                 continue
-            try:
-                loaded: object = ep.load()
-            except Exception:  # pylint: disable=broad-exception-caught
-                _LOGGER.exception("Failed to load schema adapter entry point %r", ep.name)
-                rejected[ep.name] = "the package raised on import; see the logged traceback."
-                continue
-            if not _is_adapter_class(loaded):
-                shape_defect = _describe_defect(loaded)
-                _LOGGER.error("Ignoring schema adapter entry point %r: %s", ep.name, shape_defect)
-                rejected[ep.name] = shape_defect
-                continue
-            if (contract_defect := _contract_defect(loaded)) is not None:
-                _LOGGER.error("Ignoring schema adapter entry point %r: %s", ep.name, contract_defect)
-                rejected[ep.name] = contract_defect
-                continue
-            adapters[ep.name] = loaded
-        _DISCOVERY = _Discovery(adapters=adapters, rejected=rejected)
-    return _DISCOVERY
+            found[ep.name] = ep
+        _ENTRY_POINTS = found
+    return _ENTRY_POINTS
 
 
-def discover_adapters() -> dict[str, type[SchemaAdapter]]:
-    """Every adapter class this package can actually drive, by entry-point name.
+def _load_and_check(ep: EntryPoint) -> type[SchemaAdapter] | str:
+    """Import one adapter and vet it, returning the class or the reason it is unusable.
 
-    Rejected entry points are deliberately absent rather than present-but-broken:
-    a caller iterating this should never have to re-check what discovery already
-    decided.
+    A defect is returned rather than raised so the caller decides what it means.
+    Discovery has no standing to fail a connection: whether an unusable adapter
+    matters depends entirely on whether the panel needs that key.
     """
-    return _discover().adapters
+    try:
+        loaded: object = ep.load()
+    except Exception:  # pylint: disable=broad-exception-caught
+        _LOGGER.exception("Failed to load schema adapter entry point %r", ep.name)
+        return "the package raised on import; see the logged traceback."
+    if not _is_adapter_class(loaded):
+        shape_defect = _describe_defect(loaded)
+        _LOGGER.error("Ignoring schema adapter entry point %r: %s", ep.name, shape_defect)
+        return shape_defect
+    if (contract_defect := _contract_defect(loaded)) is not None:
+        _LOGGER.error("Ignoring schema adapter entry point %r: %s", ep.name, contract_defect)
+        return contract_defect
+    return loaded
+
+
+def installed_adapter_keys() -> list[str]:
+    """Every adapter key this environment registers, sorted.
+
+    Registered, not verified: naming a key here says a package claims it, not
+    that the package loads or implements the current contract. Verifying would
+    mean importing all of them, which is the cost this split exists to avoid,
+    and the distinction only ever matters for one key — the one the panel needs,
+    which ``resolve_adapter`` imports and vets on the spot.
+    """
+    return sorted(_enumerate())
 
 
 def resolve_adapter(key: str, reason: str) -> type[SchemaAdapter]:
-    """Return the discovered adapter class for `key`, or raise saying why not.
+    """Return the adapter class for `key`, importing it on first use, or raise saying why not.
 
     The one place an unavailable adapter turns into a named error. Both the
     factory's Tier 1 dispatch and the transport's default path go through here so
     a user whose panel outruns their install sees the same message either way.
 
-    Absent and rejected are separated here rather than at discovery, because
-    only here is it known that this particular key is the one the panel needs.
+    Absent and rejected stay distinct: nothing registers the key at all, versus
+    something does and cannot be driven. Same absence, opposite remedies.
     """
-    discovery = _discover()
-    adapter_cls = discovery.adapters.get(key)
-    if adapter_cls is not None:
-        return adapter_cls
-    if (defect := discovery.rejected.get(key)) is not None:
-        raise SpanPanelAdapterIncompatibleError(needed=key, reason=reason, defect=defect)
-    raise SpanPanelAdapterMissingError(needed=key, reason=reason, available=sorted(discovery.adapters))
+    if (cached := _ADAPTERS.get(key)) is not None:
+        return cached
+    if (cached_defect := _REJECTED.get(key)) is not None:
+        raise SpanPanelAdapterIncompatibleError(needed=key, reason=reason, defect=cached_defect)
+
+    ep = _enumerate().get(key)
+    if ep is None:
+        raise SpanPanelAdapterMissingError(needed=key, reason=reason, available=installed_adapter_keys())
+
+    outcome = _load_and_check(ep)
+    if isinstance(outcome, str):
+        _REJECTED[key] = outcome
+        raise SpanPanelAdapterIncompatibleError(needed=key, reason=reason, defect=outcome)
+    _ADAPTERS[key] = outcome
+    return outcome
 
 
 def _reset_adapter_cache() -> None:
     """Test hook. Not public API."""
-    global _DISCOVERY  # pylint: disable=global-statement  # test hook for the cache above
-    _DISCOVERY = None
+    global _ENTRY_POINTS  # pylint: disable=global-statement  # test hook for the cache above
+    _ENTRY_POINTS = None
+    _ADAPTERS.clear()
+    _REJECTED.clear()

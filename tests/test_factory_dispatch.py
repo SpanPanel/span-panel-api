@@ -162,7 +162,7 @@ async def test_diagnostics_properties_before_and_after_connect(mqtt_client_mock:
     assert client.schema_major is None
     assert client.data_model_version is None
     assert client.schema_dispatch_reason == "not dispatched"
-    assert "schema_0" in client.available_adapters
+    assert "schema_0" in client.installed_adapters
 
     # Simulate what create_span_client does after adapter selection, ahead of connect().
     client._data_model_version = None  # pylint: disable=protected-access

@@ -6,6 +6,7 @@ Handles v2 registration when only a passphrase is provided.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from .adapters import resolve_adapter
@@ -81,7 +82,10 @@ async def create_span_client(
     # a wrong parser being discovered by its output.
     schema = await get_homie_schema(host, port=port)
     adapter_key, dispatch_reason = select_adapter_key(schema.data_model_version)
-    adapter_cls = resolve_adapter(adapter_key, dispatch_reason)
+    # In a thread: resolution reads distribution metadata and imports the adapter
+    # package, and this is the first call in the process to do either. See
+    # `adapters` — none of it is safe to run on an event loop.
+    adapter_cls = await asyncio.to_thread(resolve_adapter, adapter_key, dispatch_reason)
 
     client = SpanMqttClient(
         host,

@@ -7,9 +7,8 @@ import pytest
 
 from span_panel_api.adapters import (
     DEFAULT_ADAPTER_KEY,
-    _Discovery,
     _reset_adapter_cache,
-    discover_adapters,
+    installed_adapter_keys,
     resolve_adapter,
 )
 from span_panel_api.exceptions import SpanPanelAdapterIncompatibleError, SpanPanelAdapterMissingError
@@ -22,15 +21,16 @@ from conftest import MOCK_SCHEMA
 
 def test_discovers_the_self_registered_schema_zero_adapter() -> None:
     _reset_adapter_cache()
-    registry = discover_adapters()
 
-    assert "schema_0" in registry
-    assert registry["schema_0"].__name__ == "SchemaZeroAdapter"
+    assert "schema_0" in installed_adapter_keys()
+    assert resolve_adapter("schema_0", "test").__name__ == "SchemaZeroAdapter"
 
 
-def test_registry_is_cached_across_calls() -> None:
+def test_resolution_is_cached_across_calls() -> None:
+    """Per key, and it has to be: `_on_pre_rebuild` resolves from a synchronous
+    bridge callback and relies on there being no import left to do."""
     _reset_adapter_cache()
-    assert discover_adapters() is discover_adapters()
+    assert resolve_adapter("schema_0", "test") is resolve_adapter("schema_0", "test")
 
 
 # ---------------------------------------------------------------------------
@@ -45,12 +45,12 @@ def _client(adapter_factory: object = None) -> SpanMqttClient:
 
 
 def _nothing_installed() -> Any:
-    """Patch discovery to a completed scan that found nothing.
+    """Patch enumeration to a completed scan that found nothing.
 
     A completed empty scan, not a missing one: `None` would make the next call
     re-scan and pick up this environment's real adapters.
     """
-    return patch("span_panel_api.adapters._DISCOVERY", _Discovery(adapters={}, rejected={}))
+    return patch("span_panel_api.adapters._ENTRY_POINTS", {})
 
 
 def test_default_factory_resolves_the_flat_adapter_through_discovery() -> None:
@@ -61,7 +61,7 @@ def test_default_factory_resolves_the_flat_adapter_through_discovery() -> None:
     adapter = client._build_adapter(MOCK_SCHEMA)
 
     assert adapter.schema_major == DEFAULT_ADAPTER_KEY
-    assert type(adapter) is discover_adapters()[DEFAULT_ADAPTER_KEY]
+    assert type(adapter) is resolve_adapter(DEFAULT_ADAPTER_KEY, "test")
 
 
 def test_constructing_a_client_does_not_require_an_installed_adapter() -> None:
@@ -86,12 +86,17 @@ def test_building_a_parser_without_any_adapter_raises_by_name() -> None:
 
 
 def test_an_explicit_factory_bypasses_discovery_entirely() -> None:
-    """Injection still wins — used by the factory's Tier 1 dispatch and by tests."""
+    """Injection still wins — used by the factory's Tier 1 dispatch and by tests.
+
+    Patched where the client looks it up rather than where it is defined: the
+    module imports the name, so patching `adapters.resolve_adapter` rebinds a
+    reference `_build_adapter` never reads, and the assertion could not fire.
+    """
     _reset_adapter_cache()
-    real_cls = discover_adapters()[DEFAULT_ADAPTER_KEY]
+    real_cls = resolve_adapter(DEFAULT_ADAPTER_KEY, "test")
     client = _client(adapter_factory=real_cls)
 
-    with patch("span_panel_api.adapters.discover_adapters", side_effect=AssertionError("must not be consulted")):
+    with patch("span_panel_api.mqtt.client.resolve_adapter", side_effect=AssertionError("must not be consulted")):
         adapter = client._build_adapter(MOCK_SCHEMA)
 
     assert type(adapter) is real_cls
@@ -116,15 +121,58 @@ class _FakeEntryPoint:
     def __init__(self, name: str, value: object) -> None:
         self.name = name
         self._value = value
+        self.loads = 0
 
     def load(self) -> object:
+        self.loads += 1
         return self._value
 
 
 def _discover_with(*eps: _FakeEntryPoint) -> dict[str, object]:
+    """Every entry point that survives vetting, resolved one key at a time.
+
+    This is what the eager registry used to be, rebuilt by the test rather than
+    by the module — discovery no longer produces such a map, because producing
+    one is exactly the import-everything cost the split removed. The vetting
+    rules below are unchanged and still deserve asserting individually, so the
+    map is reconstructed here instead of rewriting each of them into a
+    try/except around a single resolve.
+    """
     _reset_adapter_cache()
+    usable: dict[str, object] = {}
     with patch("span_panel_api.adapters.entry_points", return_value=list(eps)):
-        return dict(discover_adapters())
+        for name in installed_adapter_keys():
+            try:
+                usable[name] = resolve_adapter(name, "test")
+            except (SpanPanelAdapterMissingError, SpanPanelAdapterIncompatibleError):
+                continue
+    return usable
+
+
+def test_resolving_one_key_leaves_the_others_unimported() -> None:
+    """The property the split exists for: a flat panel must not import schema_1.
+
+    That package pulls in the eBus SDK and jsonschema — two seconds on a cold
+    import cache, and a dependency its own packaging confines to that
+    distribution precisely so a flat install stays clear of it. Eager discovery
+    imported it on every flat connection, and redispatch made installing both
+    adapters the normal setup, so "installed" stopped implying "used".
+
+    Asserted on `load()` rather than on `sys.modules`, which by this point in a
+    test session has every adapter in it for unrelated reasons.
+    """
+    from span_panel_api_schema_0 import SchemaZeroAdapter
+
+    wanted = _FakeEntryPoint("schema_0", SchemaZeroAdapter)
+    other = _FakeEntryPoint("schema_9", SchemaZeroAdapter)
+
+    _reset_adapter_cache()
+    with patch("span_panel_api.adapters.entry_points", return_value=[wanted, other]):
+        assert installed_adapter_keys() == ["schema_0", "schema_9"], "both must still be reported installed"
+        resolve_adapter("schema_0", "test")
+
+    assert wanted.loads == 1
+    assert other.loads == 0, "resolving one key must not import the rest"
 
 
 def _conforming_members(contract: object = ADAPTER_CONTRACT_VERSION) -> dict[str, object]:

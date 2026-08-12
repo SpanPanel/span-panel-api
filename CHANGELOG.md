@@ -25,6 +25,13 @@ Pre-release. Normalises DER identity onto v1.0's vocabulary, and stops deriving 
 
 ### Fixed
 
+- **Adapter discovery no longer blocks the caller's event loop, and no longer imports adapters the panel will never use.** Two defects with one cause: discovery resolved the whole entry-point group up front, on the calling thread. A flat panel therefore
+  imported `schema_1` — and with it the eBus SDK and jsonschema — on every connection, for a parser it would not call. Home Assistant reported the whole sequence (`listdir`, `read_text`, `open`, `scandir`) as blocking calls inside the event loop and asked
+  for a bug report, with setup stalled 2.0s on a cold import cache. Enumeration and resolution are now separate: `installed_adapter_keys()` reads distribution metadata only, and an adapter is imported the first time a panel asks for that key. The async
+  paths run both in a thread. Resolution stays cached per key, which is what keeps the synchronous pre-rebuild callback free of I/O. **`discover_adapters()` is replaced by `installed_adapter_keys()`**, which returns registered names rather than a registry
+  of loaded classes — verifying every name would mean importing every package, which is the cost being removed. `SpanMqttClient.available_adapters` becomes `installed_adapters` for the same reason.
+- **A firmware upgrade to a schema generation this install cannot parse is reported instead of raised into a background task.** The redispatch path resolves the new adapter before touching any state, so a flat-only install that meets a v1.0 panel logs
+  which package is missing and keeps the parser it has. Previously `SpanPanelAdapterMissingError` escaped a fire-and-forget task as a bare traceback.
 - **`dsm_state` and `current_run_config` are read from the MID instead of reading `UNKNOWN`.** Both are existing entities that had degraded on v1.0 — not because a source vanished, but because `schema_0` _derives_ them and the derivation was never ported.
   v1.0 states the answer, so the multi-signal heuristic is gone: sensed from a ready MID, falling back to the user's `shed/asserted-islanding-state` when it is not ready, then to a `power-flows/grid` heuristic when there is no MID at all, and unknown
   otherwise. A missing MID never reports on-grid — it means SPAN is not the islanding authority, not that the site is on grid, and a generator-fed island is the counterexample. `PANEL_BACKUP` versus `PANEL_OFF_GRID` becomes authoritative rather than

@@ -37,13 +37,12 @@ def main() -> None:
     except ModuleNotFoundError as exc:
         _fail(f"bootstrap import reaches an adapter package: {exc}")
 
-    # 2. No adapter should be discoverable. If one is, the bootstrap wheel is
+    # 2. No adapter should be registered. If one is, the bootstrap wheel is
     #    still carrying the entry point and the split did not actually happen.
-    from span_panel_api.adapters import DEFAULT_ADAPTER_KEY, discover_adapters
+    from span_panel_api.adapters import DEFAULT_ADAPTER_KEY, installed_adapter_keys
 
-    registry = discover_adapters()
-    if registry:
-        _fail(f"bootstrap-only install discovered adapters {sorted(registry)}; the entry point did not move")
+    if keys := installed_adapter_keys():
+        _fail(f"bootstrap-only install registers adapters {keys}; the entry point did not move")
 
     # 3. Constructing a client must still work — only building a parser needs an
     #    adapter. This is what keeps the failure at an actionable point.

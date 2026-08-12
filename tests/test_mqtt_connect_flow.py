@@ -321,6 +321,59 @@ class TestSpanMqttClientConnect:
         mqtt_client_mock.subscribe.assert_called()
 
     @pytest.mark.asyncio
+    async def test_adapter_discovery_never_touches_the_event_loop(self, mqtt_client_mock: MagicMock) -> None:
+        """Both halves of discovery do blocking file I/O, and connect() drives both.
+
+        Enumeration reads distribution metadata; resolution imports the adapter
+        package, which for `schema_1` means the eBus SDK and jsonschema. Home
+        Assistant reported all of it — `listdir`, `read_text`, `open`, `scandir`
+        — as blocking calls in the event loop and asked for a bug report, with
+        the entry-point scan alone stalling setup for two seconds on a cold
+        import cache.
+
+        Asserted on the two operations rather than on `resolve_adapter` being
+        called off-thread, because it is deliberately called twice: once in a
+        thread to warm the cache, then again by `_build_adapter` on the loop,
+        where a cache hit costs nothing. Watching the call would fail a correct
+        implementation; watching the I/O is the actual property.
+        """
+        import threading
+
+        from span_panel_api.adapters import _reset_adapter_cache
+        from span_panel_api_schema_0 import SchemaZeroAdapter
+
+        loop_thread = threading.get_ident()
+        ran_on: dict[str, int] = {}
+
+        class _RecordingEntryPoint:
+            name = "schema_0"
+
+            def load(self) -> object:
+                ran_on["load"] = threading.get_ident()
+                return SchemaZeroAdapter
+
+        def _enumerate(group: str) -> list[_RecordingEntryPoint]:
+            ran_on["enumerate"] = threading.get_ident()
+            return [_RecordingEntryPoint()]
+
+        client = _make_span_client()
+        _reset_adapter_cache()
+        try:
+            with patch("span_panel_api.adapters.entry_points", side_effect=_enumerate):
+                connect_task = asyncio.create_task(client.connect())
+                await asyncio.sleep(0.05)
+                client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
+                client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
+                await asyncio.wait_for(connect_task, timeout=5.0)
+        finally:
+            # The fake registry is process-wide; leaving it cached would hand
+            # every later test a single-entry-point environment.
+            _reset_adapter_cache()
+
+        assert set(ran_on) == {"enumerate", "load"}, f"discovery did not run at all: {ran_on}"
+        assert loop_thread not in ran_on.values(), f"discovery ran on the event loop: {ran_on}"
+
+    @pytest.mark.asyncio
     async def test_close(self, mqtt_client_mock: MagicMock) -> None:
         client = _make_span_client()
 

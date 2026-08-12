@@ -162,9 +162,9 @@ CI going green proves the build, not the install. The seam this repository is bu
 # 1. The bootstrap alone must fail by name, not with ModuleNotFoundError
 python3 -m venv .solo && ./.solo/bin/pip install --pre span-panel-api
 ./.solo/bin/python -c "
-from span_panel_api.adapters import discover_adapters, resolve_adapter, DEFAULT_ADAPTER_KEY
+from span_panel_api.adapters import installed_adapter_keys, resolve_adapter, DEFAULT_ADAPTER_KEY
 from span_panel_api.exceptions import SpanPanelAdapterMissingError
-print('adapters:', sorted(discover_adapters()))
+print('adapters:', installed_adapter_keys())
 try:
     resolve_adapter(DEFAULT_ADAPTER_KEY, 'release check')
 except SpanPanelAdapterMissingError as exc:
@@ -174,8 +174,8 @@ except SpanPanelAdapterMissingError as exc:
 # 2. Both packages: the adapter resolves through discovery
 python3 -m venv .both && ./.both/bin/pip install --pre span-panel-api span-panel-api-schema-0
 ./.both/bin/python -c "
-from span_panel_api.adapters import discover_adapters
-print('adapters:', sorted(discover_adapters()))
+from span_panel_api.adapters import installed_adapter_keys
+print('adapters:', installed_adapter_keys())
 "
 ```
 

@@ -16,10 +16,12 @@ import time
 
 from span_panel_api.schema_drift import log_schema_drift
 
-from ..adapters import discover_adapters, resolve_adapter
+from ..adapters import installed_adapter_keys, resolve_adapter
 from ..auth import get_homie_schema
 from ..dispatch import select_adapter_key
 from ..exceptions import (
+    SpanPanelAdapterIncompatibleError,
+    SpanPanelAdapterMissingError,
     SpanPanelConnectionError,
     SpanPanelSchemaVersionError,
     SpanPanelServerError,
@@ -109,11 +111,40 @@ class SpanMqttClient:
         # fetch is retrying, and each would otherwise start its own retry loop.
         self._redispatch_in_flight = False
 
+    async def _preload_adapter(self, schema: V2HomieSchema) -> None:
+        """Resolve this schema's adapter in a thread, ahead of building it.
+
+        Everything in ``adapters`` does blocking file I/O: entry-point
+        enumeration reads distribution metadata, and resolving ``schema_1``
+        imports the eBus SDK and jsonschema. Done on the event loop that is a
+        two-second stall on a cold import cache, which Home Assistant reports as
+        a blocking call and asks for a bug report about.
+
+        Resolution caches per key for the life of the process, so this leaves
+        ``_build_adapter``'s own resolve a dict lookup on every path that
+        follows — including ``_on_pre_rebuild``, which runs from a synchronous
+        bridge callback with no thread to defer to and depends on exactly that.
+
+        Nothing to do when a factory was injected: that path never consults
+        discovery, which is what lets an adapter-less install run one.
+
+        Raises:
+            SpanPanelSchemaVersionError: The version reads as no schema major.
+            SpanPanelAdapterMissingError: Nothing registers the key it selects.
+            SpanPanelAdapterIncompatibleError: Something does, and cannot be driven.
+        """
+        if self._adapter_factory is not None:
+            return
+        adapter_key, dispatch_reason = select_adapter_key(schema.data_model_version)
+        await asyncio.to_thread(resolve_adapter, adapter_key, dispatch_reason)
+
     def _build_adapter(self, schema: V2HomieSchema) -> SchemaAdapter:
         """Construct the parser for this session.
 
         Called from connect() and from the reconnect path — the only two
-        places a parser is built today.
+        places a parser is built today. Both await ``_preload_adapter`` first,
+        so the resolve below is a cache hit and this stays safe to call from a
+        synchronous context.
 
         With no injected factory this dispatches on the schema rather than
         assuming the flat adapter. That matters because a client can be built
@@ -171,9 +202,14 @@ class SpanMqttClient:
         return self._schema_dispatch_reason
 
     @property
-    def available_adapters(self) -> list[str]:
-        """Return the sorted keys of every schema adapter discovered in this process."""
-        return sorted(discover_adapters())
+    def installed_adapters(self) -> list[str]:
+        """Return the sorted keys every installed package registers an adapter for.
+
+        Registered, not vetted — see ``installed_adapter_keys``. Reads
+        distribution metadata off disk on first call, so an event loop should
+        reach it through a thread.
+        """
+        return installed_adapter_keys()
 
     def _require_adapter(self) -> SchemaAdapter:
         """Return the SchemaAdapter, raising if not yet connected."""
@@ -230,15 +266,20 @@ class SpanMqttClient:
         # schema yet, so it fetches here and dispatches in _build_adapter.
         schema = self._schema if self._schema is not None else await get_homie_schema(self._host, port=self._panel_http_port)
         self._schema = schema
+        await self._preload_adapter(schema)
         adapter = self._build_adapter(schema)
 
+        # Threaded on its own account: the preload above skips discovery entirely
+        # when a factory was injected, and this line would then be the first thing
+        # to read distribution metadata — on the loop.
+        installed = await asyncio.to_thread(installed_adapter_keys)
         _LOGGER.info(
-            "MQTT adapter selected: %s (span-panel-api %s)\n  data-model-version: %r\n  reason: %s\n  available: %s",
+            "MQTT adapter selected: %s (span-panel-api %s)\n  data-model-version: %r\n  reason: %s\n  installed: %s",
             adapter.schema_major,
             version("span-panel-api"),
             self._data_model_version,
             self._schema_dispatch_reason,
-            sorted(discover_adapters()),
+            installed,
         )
 
         # Detect schema drift from previous connection
@@ -726,6 +767,26 @@ class SpanMqttClient:
             return
 
         if new_key == old_key:
+            return
+
+        # Before anything is mutated, because this is where the upgrade can turn
+        # out to be one this install cannot follow: a flat panel that becomes
+        # v1.0 needs a package a flat-only install has no reason to have. The
+        # caller is a fire-and-forget task, so an escaping error would surface as
+        # a bare traceback; naming the missing package and keeping the parser we
+        # have is the same non-fatal stance the fetch retry takes above.
+        try:
+            await self._preload_adapter(schema)
+        except (SpanPanelAdapterMissingError, SpanPanelAdapterIncompatibleError) as exc:
+            _LOGGER.error(
+                "Panel upgraded from schema generation %s to %s, but this install cannot "
+                "parse the new one: %s. Keeping the %s parser, which will report missing "
+                "data rather than wrong data until the adapter is installed.",
+                old_key,
+                new_key,
+                exc,
+                old_key,
+            )
             return
 
         _LOGGER.warning(

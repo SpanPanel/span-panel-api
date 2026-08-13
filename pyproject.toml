@@ -45,7 +45,12 @@ dev = [
     "mypy",
     "pylint",
     "radon",
-    "twine",
+    # 7.0 or newer: hatchling emits `Metadata-Version: 2.5` and twine 6.2 rejects
+    # it as invalid. The build backend is resolved fresh at build time from an
+    # unpinned `[build-system] requires`, so the metadata version moves without
+    # anything in this repository changing -- which is how a green CI turned red
+    # on a commit that touched two changelogs and a dependency floor.
+    "twine>=7.0",
     "vulture>=2.14",
     "types-pyyaml>=6.0.12.20250915",
     "coverage",

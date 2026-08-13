@@ -7,7 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is the parent/child device tree SPAN firmware `r202633+` publishes, identified by `SUPPORTS_DATA_MODEL_VERSIONS` rather than by this version
 number. A release here means this parser changed, never that the panel did.
 
-## [Unreleased]
+## [0.1.0b3] - 08/2026
+
+Pre-release. **Requires `span-panel-api` 3.0.0b3 or newer** — see Fixed.
 
 ### Added
 
@@ -45,6 +47,8 @@ shape rather than bytes for the same reason its values are not asserted. Provena
 - **The conformance check was reading the wrong set of names.** Built from `_PROPERTY_FIELD_MAP` alone, it covered only properties that carry field metadata and silently skipped everything the snapshot mapper reads directly — the MID, `connection`
   feeds/fed-by, `info/direction`. `grid_state`, the most recently corrected mapping in this package, was among them. The read set is now derived from the source itself, so it cannot fall behind the code; that immediately surfaced `info/direction` as a
   fifteenth undeclared extension.
+- **The bootstrap floor is raised to 3.0.0b3**, which is where it should always have been: this parser imports `SpanMidSnapshot`, and 3.0.0b2 does not define it. The declared `>=3.0.0b2` let a resolver pair this wheel with 3.0.0b2 and fail on import.
+  Caught before the first release that would have shipped it. `schema-0` keeps its b2 floor; every name it imports is present there, checked rather than assumed.
 
 ## [0.1.0b2] - 08/2026
 

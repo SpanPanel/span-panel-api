@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is fixed — the flat single-device schema, SPAN firmware `r202603` through `r202627` — and is identified by `SUPPORTS_DATA_MODEL_VERSIONS`
 rather than by this version number. A release here means this parser changed, never that the panel did.
 
+## [1.0.0b3] - 08/2026
+
+Pre-release. Requires `span-panel-api` 3.0.0b2 or newer — unchanged, because nothing added here reaches for anything newer.
+
+### Changed
+
+- **BREAKING — DER identity is translated into v1.0's vocabulary rather than mirroring flat's names.** `model` is the human designation and `part_number` the SKU, on `battery`, `evse` and `pv` alike; `product_name` is retired on all three. Flat is the
+  irregular side: it puts the SKU in `bess/model` and in `evse/part-number` — the same concept under two names — and gives PV neither. `schema_1` used to cross over to preserve each entity's displayed meaning, which worked and permanently encoded flat's
+  irregularity in the snapshot. This adapter now normalises instead: `bess/model` → `part_number`, `bess/product-name` → `model`. **`battery.model` changes value for existing flat users at this upgrade.** Measured: every EVSE identity field now reads
+  identically on both adapters, so for that device class identity stops being a migration delta at all.
+
+### Added
+
+- **`dominant_power_source_payload`.** Flat already speaks this vocabulary, so the value passes through — the method exists because `schema_1` must translate, and a caller should not have to know which schema is underneath. Validated rather than passed
+  blindly: an unrecognised value returns `None` and the transport refuses the command, matching `schema_1` rather than putting a string outside the enum on the wire.
+
 ## [1.0.0b2] - 08/2026
 
 Pre-release. Follows the reshaped `SchemaAdapter` protocol released in `span-panel-api` 3.0.0b2.

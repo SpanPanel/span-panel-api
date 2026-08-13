@@ -9,7 +9,12 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10,<4.0"
 dependencies = [
-    "span-panel-api>=3.0.0b2,<4.0",
+    # b3, not b2: this parser imports `SpanMidSnapshot`, which 3.0.0b2 does not
+    # define. A `>=3.0.0b2` floor lets a resolver pair this wheel with 3.0.0b2 and
+    # fail on import -- the precise hazard RELEASE.md warns about under "Releasing
+    # every distribution". schema-0 keeps its b2 floor; every name it imports is
+    # present there, checked rather than assumed.
+    "span-panel-api>=3.0.0b3,<4.0",
     # Only this distribution depends on the eBus SDK. The bootstrap and
     # schema-0 stay clean, so a flat-panel install never pulls it in — which is
     # what bounds the release coupling this dependency introduces to panels on

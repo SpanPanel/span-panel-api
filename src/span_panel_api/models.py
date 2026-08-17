@@ -55,6 +55,13 @@ class SpanPVSnapshot:
     nameplate_capacity_w: float | None = None  # pv/nameplate-capacity (W)
     feed_circuit_id: str | None = None  # pv/feed (normalized circuit ID)
     relative_position: str | None = None  # pv/relative-position (IN_PANEL | UPSTREAM | DOWNSTREAM)
+    software_version: str | None = None
+    """`info/firmware-version`, named as on `SpanBatterySnapshot` and `SpanEvseSnapshot`.
+
+    Sub-devices share a spelling because a consumer builds all of them the same way —
+    into `DeviceInfo(sw_version=...)`. Only the enclosure calls it `firmware_version`,
+    where it is the panel's own and predates the sub-device types.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +107,15 @@ class SpanMidSnapshot:
     """`grid/islanding-state` — ON_GRID / OFF_GRID. MUST on a MID, per the enclosure model."""
     grid_state: str | None = None
     """`grid/grid-state` — whether utility power is present, distinct from islanding."""
+    software_version: str | None = None
+    """`info/firmware-version`, spelled as on the other sub-devices — see `SpanPVSnapshot`."""
+    hardware_version: str | None = None
+    """`info/hardware-version`. The MID is the first device to carry one into a snapshot.
+
+    r202633 documents it on the MID's `info` node, and a consumer has a field for it
+    (`DeviceInfo(hw_version=...)`). Without it the MID's device card shows a model and a
+    serial and nothing else, beside a battery showing all three.
+    """
     grid_forming_entity: str | None = None
     """`grid/grid-forming-entity` — the raw wire value: `GRID`, or a Homie device id."""
     grid_forming_device_name: str | None = None

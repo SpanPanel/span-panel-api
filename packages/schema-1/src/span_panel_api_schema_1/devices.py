@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
 
 PROP_FIRMWARE_VERSION = "firmware-version"
+PROP_HARDWARE_VERSION = "hardware-version"
 PROP_MODEL = "model"
 PROP_NAMEPLATE_CAPACITY = "nameplate-capacity"
 PROP_NOMINAL_POWER = "nominal-power"
@@ -135,6 +136,7 @@ def build_pv(
     return SpanPVSnapshot(
         vendor_name=_optional(text(pv, NODE_INFO, PROP_VENDOR_NAME)),
         model=_optional(text(pv, NODE_INFO, PROP_MODEL)),
+        software_version=_optional(text(pv, NODE_INFO, PROP_FIRMWARE_VERSION)),
         nameplate_capacity_w=number(pv, NODE_INFO, PROP_NOMINAL_POWER),
         feed_circuit_id=feeds.get(pv.device_id),
         # Retired as a property in v1.0 and derived instead, per the enclosure model's
@@ -192,6 +194,8 @@ def build_mid(mid: DiscoveredDevice | None, device_names: Mapping[str, str]) -> 
         serial_number=serial,
         vendor_name=_optional(text(mid, NODE_INFO, PROP_VENDOR_NAME)),
         model=_optional(text(mid, NODE_INFO, PROP_MODEL)),
+        software_version=_optional(text(mid, NODE_INFO, PROP_FIRMWARE_VERSION)),
+        hardware_version=_optional(text(mid, NODE_INFO, PROP_HARDWARE_VERSION)),
         islanding_state=_optional(text(mid, NODE_GRID, PROP_ISLANDING_STATE)),
         grid_state=_optional(text(mid, NODE_GRID, PROP_GRID_STATE)),
         grid_forming_entity=_optional(text(mid, NODE_GRID, PROP_GRID_FORMING_ENTITY)),

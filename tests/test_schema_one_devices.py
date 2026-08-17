@@ -212,3 +212,56 @@ def test_a_panel_with_no_mid_reports_none_rather_than_an_empty_device() -> None:
     A new optional device should not inherit that guessing game.
     """
     assert build_mid(None, {}) is None
+
+
+def test_the_mid_carries_its_own_firmware_and_hardware_revision() -> None:
+    """`info/firmware-version` and `info/hardware-version` reach the snapshot.
+
+    r202633 documents both on the MID's `info` node, and a consumer has fields for
+    them (`DeviceInfo(sw_version=..., hw_version=...)`). Until these were mapped the
+    MID's device card showed a model and a serial and nothing else, beside a battery
+    showing all three — the battery's identical property having been mapped from the
+    start. Found by valuing them in the simulator, which had never published them
+    either, so nothing downstream had ever been asked for them.
+
+    `software_version` rather than `firmware_version`: the sub-devices share a
+    spelling because a consumer builds all of them the same way. Only the enclosure
+    calls it `firmware_version`.
+    """
+    device = _device("bess-mid")
+    device.update_property("info", "firmware-version", "sim-mid/v0.1.0")
+    device.update_property("info", "hardware-version", "rev1")
+
+    mid = build_mid(device, {})
+
+    assert mid is not None
+    assert mid.software_version == "sim-mid/v0.1.0"
+    assert mid.hardware_version == "rev1"
+
+
+def test_the_pv_carries_its_firmware_version() -> None:
+    """The other half of the same gap: `info/firmware-version` on the PV.
+
+    Documented by r202633, published by the simulator, and dropped on the floor until
+    now. Unlike the MID there is no `hardware-version` to carry — the topic reference
+    documents five properties on the PV and that is not one of them.
+    """
+    device = _device("pv")
+    device.update_property("info", "firmware-version", "sim-pv/v0.1.0")
+
+    assert build_pv(device, {}).software_version == "sim-pv/v0.1.0"
+
+
+def test_a_device_publishing_no_revision_reports_none_rather_than_empty_string() -> None:
+    """Absent stays absent, so a consumer can tell "not published" from "published blank".
+
+    `DeviceInfo` renders an empty string as a present-but-blank row; `None` omits the
+    row. The reference tree publishes neither property, which is what makes it the
+    right fixture for this.
+    """
+    mid = build_mid(_device("bess-mid"), {})
+
+    assert mid is not None
+    assert mid.software_version is None
+    assert mid.hardware_version is None
+    assert build_pv(_device("pv"), {}).software_version is None

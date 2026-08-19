@@ -68,13 +68,9 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     (TYPE_PANEL, NODE_POWER_FLOWS, "grid", "panel.power_flow_grid"),
     (TYPE_PANEL, NODE_POWER_FLOWS, "site", "panel.power_flow_site"),
     # --- Lugs → panel.* ------------------------------------------------------
-    # One row per property, not per direction: both lugs devices declare the
-    # same type, and which is which comes from `info/direction` at read time.
-    (TYPE_LUGS, NODE_METER, "active-power", "panel.instant_grid_power_w"),
-    (TYPE_LUGS, NODE_METER, "imported-energy", "panel.main_meter_energy_consumed_wh"),
-    (TYPE_LUGS, NODE_METER, "exported-energy", "panel.main_meter_energy_produced_wh"),
-    (TYPE_LUGS, NODE_METER, "current-a", "panel.upstream_l1_current_a"),
-    (TYPE_LUGS, NODE_METER, "current-b", "panel.upstream_l2_current_a"),
+    # Deliberately absent. Which device a lugs property belongs to comes from
+    # `info/direction` at read time, and a table keyed on (type, node, property)
+    # cannot express that — see `_DOWNSTREAM_LUGS_FIELDS` and `_lugs_metadata`.
     # --- Circuit -------------------------------------------------------------
     (TYPE_CIRCUIT, NODE_INFO, "name", "circuit.name"),
     (TYPE_CIRCUIT, NODE_INFO, "spaces", "circuit.tabs"),
@@ -149,22 +145,56 @@ def build_field_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMeta
             # The node is here and does not declare the property: a real gap,
             # distinct from the hardware simply not being installed.
             metadata[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
-    metadata.update(_downstream_lugs_metadata(devices))
+    metadata.update(_lugs_metadata(devices, upstream=True, fields=_UPSTREAM_LUGS_FIELDS))
+    metadata.update(_lugs_metadata(devices, upstream=False, fields=_DOWNSTREAM_LUGS_FIELDS))
     return metadata
 
 
 def _node_declared(present_type_nodes: set[tuple[str, str]], device_type: str, node_id: str) -> bool:
     """Whether any present device of this type declares this node.
 
-    Mirrors `_lookup`'s subtype rule: a map row for `...lugs` matches a device
-    typed `...lugs.upstream`. Without this, typed-lugs firmware that dropped a
-    property would misclassify as absent hardware.
+    Mirrors `_lookup`'s subtype rule, and has to: presence and lookup must
+    agree about which devices answer for a row, or a subtyped device that
+    dropped a property would resolve through one and misclassify through the
+    other. Both are now exercised on non-lugs types, lugs having moved to a
+    direction-resolved lookup of their own.
     """
     return any(
         node == node_id and (declared_device_type == device_type or declared_device_type.startswith(f"{device_type}."))
         for declared_device_type, node in present_type_nodes
     )
 
+
+# The ten fields `_PROPERTY_FIELD_MAP` cannot address, and why it cannot.
+#
+# The table is keyed `(device type, node, property)`, and the two lugs devices
+# match on all three — same `energy.ebus.device.lugs`, same `meter` node, same
+# property names — differing only in the `info/direction` value they publish. A
+# table keyed that way cannot hold two different answers, so it cannot describe
+# these ten fields at all: it can only describe *a* lugs device and label the
+# result with one direction's field paths.
+#
+# Doing that was wrong in both directions at once. Whichever device `_lookup`
+# reached first answered for the `upstream_*` paths, so a property the upstream
+# device had dropped came back `resolved=True`, with a real unit, on the strength
+# of the downstream device declaring it — and with no upstream device present at
+# all, the downstream one described the whole main meter as working hardware that
+# was not installed. Both are the false `resolved=True` this metadata exists to
+# make impossible, and the silent kind: the integration validates against a unit
+# for a reading that never arrives, and nothing anywhere reports a fault.
+#
+# The snapshot mapper never had the problem, because it resolves the pair by
+# direction and reads each (`panel.py`, `PanelFields.__init__`). Resolving the
+# metadata the same way is what keeps the two from disagreeing about which device
+# is which — the property a field's unit describes is now the same property whose
+# value fills it.
+_UPSTREAM_LUGS_FIELDS: tuple[tuple[str, str], ...] = (
+    (PROP_ACTIVE_POWER, "panel.instant_grid_power_w"),
+    (PROP_IMPORTED_ENERGY, "panel.main_meter_energy_consumed_wh"),
+    (PROP_EXPORTED_ENERGY, "panel.main_meter_energy_produced_wh"),
+    (PROP_CURRENT_A, "panel.upstream_l1_current_a"),
+    (PROP_CURRENT_B, "panel.upstream_l2_current_a"),
+)
 
 _DOWNSTREAM_LUGS_FIELDS: tuple[tuple[str, str], ...] = (
     (PROP_ACTIVE_POWER, "panel.feedthrough_power_w"),
@@ -173,46 +203,37 @@ _DOWNSTREAM_LUGS_FIELDS: tuple[tuple[str, str], ...] = (
     (PROP_CURRENT_A, "panel.downstream_l1_current_a"),
     (PROP_CURRENT_B, "panel.downstream_l2_current_a"),
 )
-"""The five fields the table above cannot address, and why it cannot.
-
-`_PROPERTY_FIELD_MAP` is keyed `(device type, node, property)`, and the two lugs
-devices share all three — same `energy.ebus.device.lugs`, same `meter` node, same
-properties — differing only in the `info/direction` value. So one row per property
-is all the table can hold, and those rows go to the `upstream_*` paths.
-
-The snapshot mapper has never had this problem, because it resolves the two
-devices by direction and reads each. That is why these five fields are *populated*
-and yet carry no metadata: the values were right, and `schema_validation.py` had
-nothing to check their units against — five sensors with no guard against a silent
-unit change, in exactly the region the lugs fidelity gap makes least testable.
-"""
 
 
-def _downstream_lugs_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMetadata]:
-    """Metadata for the downstream lugs, resolved by direction rather than by type.
+def _lugs_metadata(
+    devices: list[DiscoveredDevice], *, upstream: bool, fields: tuple[tuple[str, str], ...]
+) -> dict[str, FieldMetadata]:
+    """Metadata for one lugs device, resolved by direction rather than by type.
 
     Uses the same `find_lugs` the snapshot mapper uses, so the metadata and the
     value can never disagree about which device is which.
 
     Carries the same three-way contract as the table-driven loop, on the same
-    (device, node) granularity: no downstream device or no `meter` node on it
-    means no entry, while a `meter` node that omits a property is a declared
-    gap. Without that arm these five paths would report absent hardware for a
-    device already resolving its siblings from the same node — and the upstream
-    and downstream halves of `panel.*` would answer to different rules.
+    (device, node) granularity: no lugs device in this direction, or no `meter`
+    node on it, means no entry, while a `meter` node that omits a property is a
+    declared gap. Both directions run through here so the two halves of
+    `panel.*` cannot drift into answering to different rules.
+
+    A lugs device that publishes no `info/direction` is invisible to `find_lugs`
+    and so yields no entry, which is deliberate: the mapper reads its values
+    through the same call, so nothing would populate those fields either.
     """
-    downstream = find_lugs([d for d in devices if declared_type(d).startswith(TYPE_LUGS)], upstream=False)
-    if downstream is None:
+    lugs = find_lugs([d for d in devices if declared_type(d).startswith(TYPE_LUGS)], upstream=upstream)
+    if lugs is None:
         return {}
 
-    nodes = _nodes(downstream.description or {})
-    meter = nodes.get(NODE_METER)
+    meter = _nodes(lugs.description or {}).get(NODE_METER)
     if meter is None:
         return {}
 
     declared = _properties(meter)
     found: dict[str, FieldMetadata] = {}
-    for property_id, field_path in _DOWNSTREAM_LUGS_FIELDS:
+    for property_id, field_path in fields:
         definition = declared.get(property_id)
         if definition is None:
             found[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
@@ -229,8 +250,15 @@ def _lookup(
 ) -> tuple[str | None, str] | None:
     """Find a declaration, allowing a device type to be a subtype of the mapped one.
 
-    Lugs are the reason: firmware may declare `…device.lugs` or a subtyped
-    `…device.lugs.upstream`, and both carry the same properties.
+    eBus device types are hierarchical and a subtype carries its parent's
+    properties, so a device typed `X.Y` satisfies a row written for `X`.
+
+    Lugs were the observed instance — `…device.lugs` versus a subtyped
+    `…device.lugs.upstream` — and they no longer come through here, because
+    which lugs device a property belongs to is a direction question the table
+    cannot ask. The rule is kept for every other mapped type rather than
+    retired with its first user: the same subtyping applies to all of them, and
+    `_LUGS_FALLBACK` in the flat adapter is evidence SPAN does ship it.
     """
     exact = declared.get(f"{device_type}|{node_id}|{property_id}")
     if exact is not None:

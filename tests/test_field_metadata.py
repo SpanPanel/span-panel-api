@@ -407,24 +407,60 @@ def test_absent_node_on_present_device_yields_no_entry() -> None:
 
 
 def test_present_node_missing_property_on_a_subtyped_device_is_unresolved() -> None:
-    """Presence must follow `_lookup`'s subtype rule.
+    """The subtype rule, which survived the move to a direction-resolved lookup.
 
-    Firmware may declare `…device.lugs.upstream` where the map row says
-    `…device.lugs`. An exact-match presence test would read a dropped property
-    on typed-lugs firmware as absent hardware, which is the misclassification
-    this whole field exists to prevent.
+    Firmware may declare `…device.lugs.upstream` where the code says
+    `…device.lugs`. That used to be `_lookup`'s prefix fallback; the lugs paths
+    no longer go through the table, so the rule now lives in the
+    `startswith(TYPE_LUGS)` filter that feeds `find_lugs`. Either way an
+    exact-match test would read a dropped property on typed-lugs firmware as
+    absent hardware, which is the misclassification this field exists to
+    prevent — so the expectation is unchanged and only its mechanism moved.
     """
     from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
 
     lugs = _device(
         device_id="lugs-upstream",
         type_="energy.ebus.device.lugs.upstream",
-        nodes={"meter": {"properties": {"active-power": {"datatype": "float", "unit": "W"}}}},
+        nodes={
+            "info": {"properties": {"direction": {"datatype": "string"}}},
+            "meter": {"properties": {"active-power": {"datatype": "float", "unit": "W"}}},
+        },
+        values={"info": {"direction": "UPSTREAM"}},
     )
     metadata = build_schema_one([lugs])
 
     assert metadata["panel.instant_grid_power_w"] == FieldMetadata(unit="W", datatype="float")
     assert metadata["panel.upstream_l1_current_a"].resolved is False
+
+
+def test_the_subtype_rule_holds_for_both_lugs_directions() -> None:
+    """Both halves, since each resolves its own device through the filter."""
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    def _typed(device_id: str, type_: str, direction: str) -> object:
+        return _device(
+            device_id,
+            type_,
+            {
+                "info": {"properties": {"direction": {"datatype": "string"}}},
+                "meter": {"properties": {"current-a": {"datatype": "float", "unit": "A"}}},
+            },
+            values={"info": {"direction": direction}},
+        )
+
+    metadata = build_schema_one(
+        [
+            _typed("u", "energy.ebus.device.lugs.upstream", "UPSTREAM"),
+            _typed("d", "energy.ebus.device.lugs.downstream", "DOWNSTREAM"),
+        ]
+    )
+
+    assert metadata["panel.upstream_l1_current_a"] == FieldMetadata(unit="A", datatype="float")
+    assert metadata["panel.downstream_l1_current_a"] == FieldMetadata(unit="A", datatype="float")
+    # And the drop classification still reaches subtyped devices.
+    assert metadata["panel.instant_grid_power_w"].resolved is False
+    assert metadata["panel.feedthrough_power_w"].resolved is False
 
 
 def test_resolved_defaults_true() -> None:
@@ -521,3 +557,119 @@ def test_downstream_lugs_without_a_meter_node_yields_no_entry() -> None:
         assert absent not in metadata, f"{absent} was described with no meter node to describe"
 
     assert metadata["panel.upstream_l1_current_a"] == FieldMetadata(unit="A", datatype="float")
+
+
+def test_an_upstream_drop_is_not_masked_by_the_downstream_device() -> None:
+    """The failure mode `resolved` exists to prevent, in the one place the
+    lookup could not see it.
+
+    `_lookup` keys on (type, node, property) and the two lugs devices match on
+    all three, so a property the *upstream* device dropped was still answered —
+    with a real unit — by the downstream device that still declared it. A gap
+    reported as fine, which is strictly worse than the inverse: a false
+    `resolved=False` shows up as a repair someone can see, while a false
+    `resolved=True` lets the sensor die silently with nothing to flag it.
+    """
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    upstream = _lugs(
+        "lugs-upstream",
+        "UPSTREAM",
+        {
+            "properties": {
+                "active-power": {"datatype": "float", "unit": "W"},
+                "imported-energy": {"datatype": "float", "unit": "Wh"},
+                "exported-energy": {"datatype": "float", "unit": "Wh"},
+                "current-b": {"datatype": "float", "unit": "A"},
+            }
+        },
+    )
+    downstream = _lugs("lugs-downstream", "DOWNSTREAM", _FULL_LUGS_METER)
+    metadata = build_schema_one([upstream, downstream])
+
+    assert metadata["panel.upstream_l1_current_a"] == FieldMetadata(unit=None, datatype="unknown", resolved=False)
+    # The downstream device still declares it, and still resolves it — the point
+    # is that its declaration must not answer for the other device.
+    assert metadata["panel.downstream_l1_current_a"] == FieldMetadata(unit="A", datatype="float")
+    # Everything the upstream device does declare is untouched.
+    assert metadata["panel.upstream_l2_current_a"] == FieldMetadata(unit="A", datatype="float")
+    assert metadata["panel.instant_grid_power_w"] == FieldMetadata(unit="W", datatype="float")
+
+
+def test_a_downstream_drop_is_not_masked_by_the_upstream_device() -> None:
+    """The mirror, held separately because the two directions reach their
+    metadata through the same helper only after this change — and a later edit
+    that re-tables one direction would break exactly one of the pair."""
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    upstream = _lugs("lugs-upstream", "UPSTREAM", _FULL_LUGS_METER)
+    downstream = _lugs(
+        "lugs-downstream",
+        "DOWNSTREAM",
+        {
+            "properties": {
+                "active-power": {"datatype": "float", "unit": "W"},
+                "imported-energy": {"datatype": "float", "unit": "Wh"},
+                "exported-energy": {"datatype": "float", "unit": "Wh"},
+                "current-b": {"datatype": "float", "unit": "A"},
+            }
+        },
+    )
+    metadata = build_schema_one([upstream, downstream])
+
+    assert metadata["panel.downstream_l1_current_a"] == FieldMetadata(unit=None, datatype="unknown", resolved=False)
+    assert metadata["panel.upstream_l1_current_a"] == FieldMetadata(unit="A", datatype="float")
+
+
+def test_no_upstream_device_yields_no_entry() -> None:
+    """The upstream half of the contract's third case, matching the downstream
+    one: absent hardware is absent, not degraded."""
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    metadata = build_schema_one([_lugs("lugs-downstream", "DOWNSTREAM", _FULL_LUGS_METER)])
+
+    for absent in (
+        "panel.instant_grid_power_w",
+        "panel.main_meter_energy_consumed_wh",
+        "panel.main_meter_energy_produced_wh",
+        "panel.upstream_l1_current_a",
+        "panel.upstream_l2_current_a",
+    ):
+        assert absent not in metadata, f"{absent} was described with no upstream device to describe"
+
+    assert metadata["panel.downstream_l1_current_a"] == FieldMetadata(unit="A", datatype="float")
+
+
+def test_the_subtype_rule_applies_beyond_lugs() -> None:
+    """`_lookup` and `_node_declared` keep a general subtype rule, so cover it
+    generally.
+
+    A device typed `X.Y` satisfies a row written for `X`, because eBus types are
+    hierarchical and a subtype carries its parent's properties. Lugs were the
+    only instance exercising it until they moved to a direction-resolved
+    lookup; without a non-lugs case the rule would now be both untested and
+    invisible, and the next reader would be entitled to delete it.
+
+    Both halves are asserted together on purpose: resolution and presence have
+    to agree about which devices answer for a row, or a subtyped device that
+    dropped a property resolves through one and misclassifies through the other.
+    """
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    subtyped_circuit = _device(
+        device_id="c1",
+        type_="energy.ebus.device.circuit.branch",
+        nodes={
+            "meter": {"properties": {"active-power": {"datatype": "float", "unit": "W"}}},
+            "breaker": {"properties": {}},
+        },
+    )
+    metadata = build_schema_one([subtyped_circuit])
+
+    # Resolution reaches the subtype.
+    assert metadata["circuit.instant_power_w"] == FieldMetadata(unit="W", datatype="float")
+    # Presence reaches it too: declared nodes that omit a property are gaps...
+    assert metadata["circuit.current_a"].resolved is False
+    assert metadata["circuit.breaker_rating_a"].resolved is False
+    # ...while a node the subtype never declares stays absent.
+    assert "circuit.relay_state" not in metadata

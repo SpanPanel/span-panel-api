@@ -291,9 +291,20 @@ class TestLogSchemaDrift:
 # ---------------------------------------------------------------------------
 
 
-def _device(device_id: str, type_: str, nodes: dict[str, object]) -> object:
-    """Minimal stand-in for ebus_sdk.DiscoveredDevice, which build_field_metadata
-    reads only via `.description`."""
+def _device(
+    device_id: str,
+    type_: str,
+    nodes: dict[str, object],
+    values: dict[str, dict[str, str]] | None = None,
+) -> object:
+    """Minimal stand-in for ebus_sdk.DiscoveredDevice.
+
+    `build_field_metadata` reads declarations via `.description`, but the
+    downstream-lugs path resolves the device by its published `info/direction`
+    *value*, which is a different thing from declaring the property. `values`
+    supplies those readings, keyed node → property; anything unlisted reads as
+    unpublished.
+    """
 
     class _D:
         def __init__(self) -> None:
@@ -301,12 +312,32 @@ def _device(device_id: str, type_: str, nodes: dict[str, object]) -> object:
             self.description = {"type": type_, "nodes": nodes}
 
         def get_property(self, node: str, prop: str) -> str | None:
-            """No published values: a description declares properties, it does
-            not carry readings. `find_lugs` reads `info/direction` through this,
-            so it must exist and must answer "unpublished"."""
-            return None
+            return (values or {}).get(node, {}).get(prop)
 
     return _D()
+
+
+_FULL_LUGS_METER: dict[str, object] = {
+    "properties": {
+        "active-power": {"datatype": "float", "unit": "W"},
+        "imported-energy": {"datatype": "float", "unit": "Wh"},
+        "exported-energy": {"datatype": "float", "unit": "Wh"},
+        "current-a": {"datatype": "float", "unit": "A"},
+        "current-b": {"datatype": "float", "unit": "A"},
+    }
+}
+
+
+def _lugs(device_id: str, direction: str, meter: dict[str, object] | None) -> object:
+    """A lugs device that publishes its direction, with `meter` as given.
+
+    `meter=None` means the device declares no meter node at all — which is a
+    different claim from declaring one that lists nothing.
+    """
+    nodes: dict[str, object] = {"info": {"properties": {"direction": {"datatype": "string"}}}}
+    if meter is not None:
+        nodes["meter"] = meter
+    return _device(device_id, "energy.ebus.device.lugs", nodes, values={"info": {"direction": direction}})
 
 
 def test_present_device_missing_property_is_unresolved() -> None:
@@ -399,3 +430,94 @@ def test_present_node_missing_property_on_a_subtyped_device_is_unresolved() -> N
 def test_resolved_defaults_true() -> None:
     """Existing construction sites keep working unchanged."""
     assert FieldMetadata(unit="W", datatype="float").resolved is True
+
+
+def test_downstream_lugs_missing_properties_are_unresolved_not_absent() -> None:
+    """The downstream lugs answer to the same contract as everything else.
+
+    These five paths bypass `_PROPERTY_FIELD_MAP` — both lugs devices share
+    type, node and properties, so the table can only address one of them — and
+    resolve through a direction-matched lookup instead. That second path had
+    kept the pre-change `continue`, so a downstream device that was plainly in
+    the tree, and already resolving `feedthrough_power_w` from the very same
+    `meter` node, reported its dropped properties as absent hardware.
+
+    The asymmetry is the sharper half of the defect: in this one tree the
+    upstream paths report a dropped property as `resolved=False` while the
+    downstream paths reported nothing, so a consumer applying one rule to
+    `panel.*` lugs fields got different semantics by direction.
+    """
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    upstream = _lugs("lugs-upstream", "UPSTREAM", _FULL_LUGS_METER)
+    downstream = _lugs(
+        "lugs-downstream",
+        "DOWNSTREAM",
+        {
+            "properties": {
+                "active-power": {"datatype": "float", "unit": "W"},
+                "exported-energy": {"datatype": "float", "unit": "Wh"},
+            }
+        },
+    )
+    metadata = build_schema_one([upstream, downstream])
+
+    # Present on both devices: unchanged, and still carrying real units.
+    assert metadata["panel.instant_grid_power_w"] == FieldMetadata(unit="W", datatype="float")
+    assert metadata["panel.upstream_l1_current_a"] == FieldMetadata(unit="A", datatype="float")
+    assert metadata["panel.feedthrough_power_w"] == FieldMetadata(unit="W", datatype="float")
+    assert metadata["panel.feedthrough_energy_produced_wh"] == FieldMetadata(unit="Wh", datatype="float")
+
+    # Dropped by a device that is present and declares the node: degradation.
+    for degraded in (
+        "panel.feedthrough_energy_consumed_wh",
+        "panel.downstream_l1_current_a",
+        "panel.downstream_l2_current_a",
+    ):
+        assert degraded in metadata, f"{degraded} read as absent hardware for a device in the tree"
+        assert metadata[degraded] == FieldMetadata(unit=None, datatype="unknown", resolved=False)
+
+
+def test_the_two_lugs_directions_classify_the_same_drop_the_same_way() -> None:
+    """Stated as an equality rather than two separate expectations.
+
+    The two halves reach their metadata through different code — the table for
+    upstream, a direction-matched lookup for downstream — so nothing structural
+    keeps them agreeing. This fails if either side drifts.
+    """
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    bare_meter: dict[str, object] = {"properties": {}}
+    metadata = build_schema_one(
+        [_lugs("lugs-upstream", "UPSTREAM", bare_meter), _lugs("lugs-downstream", "DOWNSTREAM", bare_meter)]
+    )
+
+    assert metadata["panel.upstream_l1_current_a"] == metadata["panel.downstream_l1_current_a"]
+    assert metadata["panel.upstream_l1_current_a"].resolved is False
+
+
+def test_downstream_lugs_without_a_meter_node_yields_no_entry() -> None:
+    """The other side of the boundary, and the reason the node is fetched
+    rather than defaulted.
+
+    A device with no `meter` node does not meter, so its paths are absent
+    hardware. Reading properties out of a `.get(NODE_METER, {})` default would
+    make that indistinguishable from a `meter` node listing nothing, and this
+    whole distinction turns on telling those apart.
+    """
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    metadata = build_schema_one(
+        [_lugs("lugs-upstream", "UPSTREAM", _FULL_LUGS_METER), _lugs("lugs-downstream", "DOWNSTREAM", None)]
+    )
+
+    for absent in (
+        "panel.feedthrough_power_w",
+        "panel.feedthrough_energy_consumed_wh",
+        "panel.feedthrough_energy_produced_wh",
+        "panel.downstream_l1_current_a",
+        "panel.downstream_l2_current_a",
+    ):
+        assert absent not in metadata, f"{absent} was described with no meter node to describe"
+
+    assert metadata["panel.upstream_l1_current_a"] == FieldMetadata(unit="A", datatype="float")

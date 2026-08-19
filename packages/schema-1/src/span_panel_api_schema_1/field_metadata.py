@@ -193,16 +193,29 @@ def _downstream_lugs_metadata(devices: list[DiscoveredDevice]) -> dict[str, Fiel
 
     Uses the same `find_lugs` the snapshot mapper uses, so the metadata and the
     value can never disagree about which device is which.
+
+    Carries the same three-way contract as the table-driven loop, on the same
+    (device, node) granularity: no downstream device or no `meter` node on it
+    means no entry, while a `meter` node that omits a property is a declared
+    gap. Without that arm these five paths would report absent hardware for a
+    device already resolving its siblings from the same node — and the upstream
+    and downstream halves of `panel.*` would answer to different rules.
     """
     downstream = find_lugs([d for d in devices if declared_type(d).startswith(TYPE_LUGS)], upstream=False)
     if downstream is None:
         return {}
 
-    declared = _properties(_nodes(downstream.description or {}).get(NODE_METER, {}))
+    nodes = _nodes(downstream.description or {})
+    meter = nodes.get(NODE_METER)
+    if meter is None:
+        return {}
+
+    declared = _properties(meter)
     found: dict[str, FieldMetadata] = {}
     for property_id, field_path in _DOWNSTREAM_LUGS_FIELDS:
         definition = declared.get(property_id)
         if definition is None:
+            found[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
             continue
         found[field_path] = FieldMetadata(
             unit=_optional_str(definition.get("unit")),

@@ -175,6 +175,30 @@ class FieldMetadata:
 
     unit: str | None  # "W", "A", "V", "%", "kWh", None
     datatype: str  # "float", "integer", "enum", "string", "boolean"
+    resolved: bool = True
+    """Whether a device declaring this field was actually found.
+
+    Three-way contract with consumers:
+
+    - entry present, ``resolved=True`` — the field is produced; ``unit`` is meaningful
+    - entry present, ``resolved=False`` — a device of the mapped type is in the
+      tree but does not declare the property. A real gap; ``unit`` is None.
+    - **no entry** — no device of that type, or none identifiable for that role.
+      Nothing will populate the field.
+
+    The second half of that last case is the lugs pair. Both devices declare the
+    same type and the same ``meter`` node, so which one feeds ``panel.upstream_*``
+    and which feeds ``panel.feedthrough_*`` / ``panel.downstream_*`` is decided by
+    the ``info/direction`` value they publish. A lugs device that publishes no
+    direction fills neither role, and gets no entry rather than an unresolved one
+    — deliberately, because the snapshot mapper resolves the pair through the same
+    call and populates nothing for it either. An unresolved entry would promise a
+    field that is degraded; there is no such field to degrade.
+
+    Defaulted so existing construction sites are unaffected. This is a
+    bootstrap dataclass, not a ``SchemaAdapter`` member, so adding it does not
+    invalidate built adapter wheels or bump ``ADAPTER_CONTRACT_VERSION``.
+    """
 
 
 @dataclass(frozen=True, slots=True)

@@ -828,15 +828,24 @@ class TestSpanMqttClientAccumulatorReset:
 
         schema_hash_before = client._schema_hash
         schema_types_before = client._previous_schema_types
-        field_metadata_before = client._field_metadata
         schema_before = client._schema
+        field_metadata_before = client.field_metadata
+        assert field_metadata_before is not None
 
         client._on_pre_rebuild()
 
         assert client._schema_hash == schema_hash_before
         assert client._previous_schema_types == schema_types_before
-        assert client._field_metadata == field_metadata_before
         assert client._schema == schema_before
+
+        # `field_metadata` reads the live adapter rather than a cache, so the
+        # fresh accumulator legitimately reads None until the new subscription's
+        # retained messages repopulate the tree. What survives the rebuild is the
+        # schema-derived *input*, observable as the same mapping once ready again.
+        assert client.field_metadata is None
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
+        assert client.field_metadata == field_metadata_before
 
         await client.close()
 

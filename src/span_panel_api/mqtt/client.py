@@ -93,7 +93,6 @@ class SpanMqttClient:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._snapshot_timer: asyncio.TimerHandle | None = None
-        self._field_metadata: dict[str, FieldMetadata] | None = None
         self._schema_hash: str | None = None
         self._previous_schema_types: HomieSchemaTypes | None = None
         # Supplied by create_span_client, which already fetched it to dispatch
@@ -247,12 +246,25 @@ class SpanMqttClient:
 
     @property
     def field_metadata(self) -> dict[str, FieldMetadata] | None:
-        """Schema-derived metadata for snapshot fields, or None before connect().
+        """Schema-derived metadata for snapshot fields, or None before ready.
 
         Keyed by snapshot field path (e.g. ``"panel.instant_grid_power_w"``).
-        Built once during ``connect()`` from the Homie schema.
+
+        Computed from the adapter's current view at access time rather than
+        cached during connect(). Under the parent/child schema the adapter reads
+        each device's `$description`, which has not arrived when connect() runs
+        its setup — a value captured there is permanently empty. Returning None
+        until the adapter is ready keeps the documented none-before-connect
+        sentinel and keeps "not ready" distinguishable from "ready with nothing".
+
+        Cost: the schema_1 walk is devices x nodes x properties — under a
+        thousand dict operations for a 40-circuit panel — against an access rate
+        of once per connect-session.
         """
-        return self._field_metadata
+        adapter = self._adapter
+        if adapter is None or not adapter.is_ready():
+            return None
+        return adapter.build_field_metadata()
 
     async def connect(self) -> None:
         """Connect to MQTT broker and wait for Homie device ready.
@@ -310,11 +322,6 @@ class SpanMqttClient:
                 log_schema_drift(self._previous_schema_types, schema.types)
         self._schema_hash = new_hash
         self._previous_schema_types = schema.types
-
-        # Build transport-agnostic field metadata. The adapter holds the schema
-        # it was constructed with, so the transport no longer has to pick out
-        # the block a particular wire format keeps its type definitions in.
-        self._field_metadata = self._require_adapter().build_field_metadata()
 
         _LOGGER.debug(
             "MQTT: Creating bridge to %s:%s (serial=%s)",
@@ -821,7 +828,6 @@ class SpanMqttClient:
         # after having been rebuilt for a different one.
         self._data_model_version = schema.data_model_version
         adapter = self._build_adapter(schema)
-        self._field_metadata = adapter.build_field_metadata()
         # Ready is a property of the tree, and this is a different tree. Leaving the
         # old event set would let `is_ready()` answer for a parser that has not seen
         # a single message yet.
@@ -848,12 +854,14 @@ class SpanMqttClient:
         any stale `$state=disconnected` cached during the outage so the
         new subscription's retained messages repopulate from a clean slate.
 
-        Schema-derived state (`_field_metadata`, `_schema_hash`,
+        Schema-derived state (`_schema`, `_schema_hash`,
         `_previous_schema_types`) is intentionally preserved — the Homie
         schema cannot change within a session, so the cache remains valid
         and a refetch would just add cost. If the panel reboots and the
         schema actually changed, the existing drift-detection log fires on
-        the next session's `connect()`.
+        the next session's `connect()`. `field_metadata` needs no preserving:
+        it reads the live adapter, so it re-derives itself from the rebuilt
+        tree once that tree is ready again.
 
         A cached schema is also what makes the rebuild safe to run from a
         synchronous callback. ``_build_adapter`` can raise — on an unreadable

@@ -501,3 +501,39 @@ def test_injected_factory_receives_serial_and_schema() -> None:
     assert seen == [("sim-40t-001", schema)]
     assert seen[0][1].panel_size == 40
     assert isinstance(client.adapter, SchemaZeroAdapter)
+
+
+def test_field_metadata_is_live_after_ready() -> None:
+    """field_metadata must reflect devices discovered AFTER connect() ran.
+
+    Regression for the pre-discovery cache: the adapter is constructed with an
+    empty tree, so anything captured during connect() is permanently {}.
+    """
+    from span_panel_api.models import FieldMetadata
+
+    class FakeAdapter:
+        schema_major = "1"
+        ADAPTER_CONTRACT = 1
+        SUPPORTS_DATA_MODEL_VERSIONS = ("1.0", "1.99")
+
+        def __init__(self) -> None:
+            self.discovered = False
+
+        def is_ready(self) -> bool:
+            return self.discovered
+
+        def build_field_metadata(self) -> dict[str, FieldMetadata]:
+            if not self.discovered:
+                return {}
+            return {"circuit.instant_power_w": FieldMetadata(unit="W", datatype="float")}
+
+    client = SpanMqttClient.__new__(SpanMqttClient)
+    adapter = FakeAdapter()
+    client._adapter = adapter
+
+    # Before discovery: no metadata, and specifically not an empty dict, so
+    # callers can distinguish "not ready" from "ready with nothing".
+    assert client.field_metadata is None
+
+    adapter.discovered = True
+    assert client.field_metadata == {"circuit.instant_power_w": FieldMetadata(unit="W", datatype="float")}

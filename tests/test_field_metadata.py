@@ -673,3 +673,54 @@ def test_the_subtype_rule_applies_beyond_lugs() -> None:
     assert metadata["circuit.breaker_rating_a"].resolved is False
     # ...while a node the subtype never declares stays absent.
     assert "circuit.relay_state" not in metadata
+
+
+def test_a_lugs_device_without_a_published_direction_yields_no_entry() -> None:
+    """A deliberate behaviour change from the move to direction-resolved lugs,
+    pinned so a later edit trips over the decision rather than the report.
+
+    `find_lugs` identifies the pair by the `info/direction` value each device
+    publishes, and skips a device that publishes none. Such a device therefore
+    fills neither role and gets no entry at all — not an unresolved one.
+
+    This is the contract's "or none identifiable for that role", and it is
+    right rather than merely tolerable: the snapshot mapper resolves the pair
+    through the same call, so nothing populates these ten fields either. Before
+    the lugs paths left `_PROPERTY_FIELD_MAP` the five `upstream_*` paths came
+    back `resolved=True` with real units here, which was the worst available
+    answer — a unit advertised for a reading that provably never arrives, with
+    nothing anywhere to flag it.
+
+    An unresolved entry would be the wrong repair, and that is the edit this
+    test exists to catch: `resolved=False` promises a field that exists and is
+    degraded, and there is no such field to degrade until the device says which
+    one it is.
+    """
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    directionless = _device(
+        device_id="lugs-1",
+        type_="energy.ebus.device.lugs",
+        nodes={
+            "info": {"properties": {"direction": {"datatype": "string"}}},
+            "meter": _FULL_LUGS_METER,
+        },
+    )
+    metadata = build_schema_one([directionless])
+
+    for absent in (
+        "panel.instant_grid_power_w",
+        "panel.main_meter_energy_consumed_wh",
+        "panel.main_meter_energy_produced_wh",
+        "panel.upstream_l1_current_a",
+        "panel.upstream_l2_current_a",
+        "panel.feedthrough_power_w",
+        "panel.feedthrough_energy_consumed_wh",
+        "panel.feedthrough_energy_produced_wh",
+        "panel.downstream_l1_current_a",
+        "panel.downstream_l2_current_a",
+    ):
+        assert absent not in metadata, (
+            f"{absent} was described for a lugs device that publishes no direction. "
+            "No entry is the contract here: the mapper cannot populate it either."
+        )

@@ -279,3 +279,123 @@ class TestLogSchemaDrift:
         with caplog.at_level(logging.DEBUG):
             log_schema_drift(previous, current)
         assert "Schema drift" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Resolved vs. absent — the three-way contract
+#
+# A field path missing from the metadata used to be ambiguous: it could mean
+# "this panel has no such hardware" or "the mapping dropped the property".
+# `FieldMetadata.resolved` splits the two so consumers stop reconstructing the
+# difference from telemetry.
+# ---------------------------------------------------------------------------
+
+
+def _device(device_id: str, type_: str, nodes: dict[str, object]) -> object:
+    """Minimal stand-in for ebus_sdk.DiscoveredDevice, which build_field_metadata
+    reads only via `.description`."""
+
+    class _D:
+        def __init__(self) -> None:
+            self.id = device_id
+            self.description = {"type": type_, "nodes": nodes}
+
+        def get_property(self, node: str, prop: str) -> str | None:
+            """No published values: a description declares properties, it does
+            not carry readings. `find_lugs` reads `info/direction` through this,
+            so it must exist and must answer "unpublished"."""
+            return None
+
+    return _D()
+
+
+def test_present_device_missing_property_is_unresolved() -> None:
+    """A circuit device that declares no `meter` power property is a real gap,
+    not absent hardware — the integration must be able to tell them apart."""
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    circuit = _device(
+        device_id="c1",
+        type_="energy.ebus.device.circuit",
+        nodes={"info": {"properties": {"name": {"datatype": "string"}}}, "meter": {"properties": {}}},
+    )
+    metadata = build_schema_one([circuit])
+
+    entry = metadata["circuit.instant_power_w"]
+    assert entry.resolved is False
+    assert entry.unit is None
+
+
+def test_a_node_declaring_no_properties_at_all_is_still_present() -> None:
+    """The boundary the presence rule has to get right in both directions.
+
+    A `meter` node with an empty property set is the strongest form of the gap
+    — the node is there and declares nothing — while a circuit with no `meter`
+    node at all is a circuit that does not meter. Deriving presence from the
+    declared-property map would collapse the two, since neither contributes a
+    property to read back.
+    """
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    unmetered = _device(
+        device_id="c1",
+        type_="energy.ebus.device.circuit",
+        nodes={"info": {"properties": {"name": {"datatype": "string"}}}},
+    )
+
+    assert "circuit.instant_power_w" not in build_schema_one([unmetered])
+
+
+def test_absent_device_type_yields_no_entry() -> None:
+    """No BESS device means no battery entry at all — not an unresolved one."""
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    circuit = _device(
+        device_id="c1",
+        type_="energy.ebus.device.circuit",
+        nodes={"info": {"properties": {"name": {"datatype": "string"}}}},
+    )
+    metadata = build_schema_one([circuit])
+
+    assert "battery.soe_percentage" not in metadata
+
+
+def test_absent_node_on_present_device_yields_no_entry() -> None:
+    """The panel device is always present, but a panel with no power-flows node
+    has no power-flow hardware — that must not read as degradation."""
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    panel = _device(
+        device_id="p1",
+        type_="energy.ebus.device.distribution-enclosure",
+        nodes={"info": {"properties": {"serial-number": {"datatype": "string"}}}},
+    )
+    metadata = build_schema_one([panel])
+
+    assert "panel.power_flow_pv" not in metadata
+
+
+def test_present_node_missing_property_on_a_subtyped_device_is_unresolved() -> None:
+    """Presence must follow `_lookup`'s subtype rule.
+
+    Firmware may declare `…device.lugs.upstream` where the map row says
+    `…device.lugs`. An exact-match presence test would read a dropped property
+    on typed-lugs firmware as absent hardware, which is the misclassification
+    this whole field exists to prevent.
+    """
+    from span_panel_api_schema_1.field_metadata import build_field_metadata as build_schema_one
+
+    lugs = _device(
+        device_id="lugs-upstream",
+        type_="energy.ebus.device.lugs.upstream",
+        nodes={"meter": {"properties": {"active-power": {"datatype": "float", "unit": "W"}}}},
+    )
+    metadata = build_schema_one([lugs])
+
+    assert metadata["panel.instant_grid_power_w"] == FieldMetadata(unit="W", datatype="float")
+    assert metadata["panel.upstream_l1_current_a"].resolved is False
+
+
+def test_resolved_defaults_true() -> None:
+    """Existing construction sites keep working unchanged."""
+    assert FieldMetadata(unit="W", datatype="float").resolved is True

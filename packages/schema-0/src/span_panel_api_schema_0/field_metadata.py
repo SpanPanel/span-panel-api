@@ -148,6 +148,21 @@ def _lookup_property(
     return None
 
 
+def _type_declared(schema_types: HomieSchemaTypes, node_type: str) -> bool:
+    """Whether the schema carries a type block a property could have come from.
+
+    Presence follows the same path `_lookup_property` does, fallback included:
+    firmware that publishes only the generic `…device.lugs` block still answers
+    for the typed rows, so a property dropped from it is a drop and not absent
+    hardware. There is no node dimension here — schema_0's rows address the
+    type-level REST schema directly — so the type block is the whole question.
+    """
+    if isinstance(schema_types.get(node_type), dict):
+        return True
+    fallback_type = _LUGS_FALLBACK.get(node_type)
+    return fallback_type is not None and isinstance(schema_types.get(fallback_type), dict)
+
+
 def build_field_metadata(
     schema_types: HomieSchemaTypes,
 ) -> dict[str, FieldMetadata]:
@@ -168,6 +183,9 @@ def build_field_metadata(
     for node_type, property_id, field_path in _PROPERTY_FIELD_MAP:
         prop_def = _lookup_property(schema_types, node_type, property_id)
         if prop_def is None:
+            if _type_declared(schema_types, node_type):
+                # The type block exists and omits the property — a genuine drop.
+                result[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
             continue
 
         raw_unit = prop_def.get("unit")

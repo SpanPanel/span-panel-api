@@ -116,12 +116,23 @@ def build_field_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMeta
     invented unit would validate a reading the panel never sends.
     """
     declared: dict[str, tuple[str | None, str]] = {}
+    # Presence is a (device type, node) question, not a device question. The
+    # power-flows rows are (TYPE_PANEL, NODE_POWER_FLOWS, ...) and the panel
+    # device is always present, so a device-level test would mark every
+    # panel.power_flow_* path unresolved on a panel that simply has no
+    # power-flows node.
+    #
+    # Collected from the node structure rather than from `declared`, because a
+    # node that declares no properties at all is exactly the degradation this
+    # is here to catch, and it contributes no `declared` keys to read back.
+    present_type_nodes: set[tuple[str, str]] = set()
     for device in devices:
         description: dict[str, object] = device.description or {}
         device_type = str(description.get("type") or "")
         if not device_type:
             continue
         for node_id, node in _nodes(description).items():
+            present_type_nodes.add((device_type, node_id))
             for property_id, definition in _properties(node).items():
                 declared[f"{device_type}|{node_id}|{property_id}"] = (
                     _optional_str(definition.get("unit")),
@@ -134,8 +145,25 @@ def build_field_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMeta
         if found is not None:
             unit, datatype = found
             metadata[field_path] = FieldMetadata(unit=unit, datatype=datatype)
+        elif _node_declared(present_type_nodes, device_type, node_id):
+            # The node is here and does not declare the property: a real gap,
+            # distinct from the hardware simply not being installed.
+            metadata[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
     metadata.update(_downstream_lugs_metadata(devices))
     return metadata
+
+
+def _node_declared(present_type_nodes: set[tuple[str, str]], device_type: str, node_id: str) -> bool:
+    """Whether any present device of this type declares this node.
+
+    Mirrors `_lookup`'s subtype rule: a map row for `...lugs` matches a device
+    typed `...lugs.upstream`. Without this, typed-lugs firmware that dropped a
+    property would misclassify as absent hardware.
+    """
+    return any(
+        node == node_id and (declared_device_type == device_type or declared_device_type.startswith(f"{device_type}."))
+        for declared_device_type, node in present_type_nodes
+    )
 
 
 _DOWNSTREAM_LUGS_FIELDS: tuple[tuple[str, str], ...] = (

@@ -175,6 +175,20 @@ class FieldMetadata:
 
     unit: str | None  # "W", "A", "V", "%", "kWh", None
     datatype: str  # "float", "integer", "enum", "string", "boolean"
+    resolved: bool = True
+    """Whether a device declaring this field was actually found.
+
+    Three-way contract with consumers:
+
+    - entry present, ``resolved=True`` — the field is produced; ``unit`` is meaningful
+    - entry present, ``resolved=False`` — a device of the mapped type is in the
+      tree but does not declare the property. A real gap; ``unit`` is None.
+    - **no entry** — no device of that type. The hardware is not present.
+
+    Defaulted so existing construction sites are unaffected. This is a
+    bootstrap dataclass, not a ``SchemaAdapter`` member, so adding it does not
+    invalidate built adapter wheels or bump ``ADAPTER_CONTRACT_VERSION``.
+    """
 
 
 @dataclass(frozen=True, slots=True)

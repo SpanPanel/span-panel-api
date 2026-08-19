@@ -53,3 +53,35 @@ def test_dominant_power_source_topic_is_none_before_the_core_node_is_known(
 
 def test_is_not_ready_before_any_message(adapter: SchemaZeroAdapter) -> None:
     assert adapter.is_ready() is False
+
+
+def test_schema_zero_marks_missing_property_unresolved() -> None:
+    """A type block that exists but drops a property is degradation, and must
+    not read the same as a type that is absent entirely."""
+    from span_panel_api_schema_0.field_metadata import build_field_metadata
+
+    types = {"energy.ebus.device.circuit": {"name": {"datatype": "string"}}}
+    metadata = build_field_metadata(types)
+
+    assert metadata["circuit.instant_power_w"].resolved is False
+    assert metadata["circuit.instant_power_w"].unit is None
+    assert "battery.soe_percentage" not in metadata
+
+
+def test_schema_zero_presence_follows_the_lugs_fallback() -> None:
+    """The lugs fallback is schema_0's equivalent of schema_1's subtype rule.
+
+    Rows are keyed on the typed lugs variants, but firmware that publishes only
+    the generic `…device.lugs` block resolves through `_LUGS_FALLBACK`. Presence
+    has to use the same path, or a property dropped from a generic-lugs block
+    reads as absent hardware rather than as the drop it is.
+    """
+    from span_panel_api_schema_0.field_metadata import build_field_metadata
+
+    types = {"energy.ebus.device.lugs": {"active-power": {"datatype": "float", "unit": "W"}}}
+    metadata = build_field_metadata(types)
+
+    assert metadata["panel.instant_grid_power_w"].resolved is True
+    assert metadata["panel.upstream_l1_current_a"].resolved is False
+    assert metadata["panel.downstream_l2_current_a"].resolved is False
+    assert "circuit.instant_power_w" not in metadata

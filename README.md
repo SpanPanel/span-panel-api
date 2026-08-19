@@ -377,6 +377,29 @@ The `PanelCapability` flag enum advertises transport features at runtime:
 | `CIRCUIT_CONTROL` | Can set relay state and shed priority |
 | `BATTERY_SOE`     | Battery state-of-energy available     |
 
+## Reference Payloads
+
+Captures of what a panel actually serves, shipped as package data so a consumer can check its own assumptions against real bytes without vendoring a copy that silently goes stale:
+
+```python
+from span_panel_api.reference_payloads import homie_schema, homie_schema_types
+
+document = homie_schema()        # the captured GET /api/v2/homie/schema response
+types = homie_schema_types()     # its `types` map, typed as HomieSchemaTypes
+```
+
+`homie_schema_types()` returns exactly what `span_panel_api_schema_0.field_metadata.build_field_metadata` accepts, so building real adapter metadata to compare against is two lines and no file handling.
+
+The parent/child device tree is the schema_1 counterpart and ships from that adapter, with the parser that can interpret it:
+
+```python
+from span_panel_api_schema_1.reference_payloads import devices_from_tree, parent_child_tree
+
+devices = devices_from_tree(parent_child_tree())
+```
+
+Each payload carries the version of the release it shipped in. Pin a version and you read the bytes that version was written against.
+
 ## Project Structure
 
 ```text
@@ -390,6 +413,7 @@ src/span_panel_api/
 ├── models.py            # Snapshot dataclasses (panel, circuit, battery, PV)
 ├── phase_validation.py  # Electrical phase utilities
 ├── protocol.py          # PEP 544 protocols + PanelCapability flags
+├── reference_payloads/  # Captured wire payloads shipped as package data
 └── mqtt/
     ├── __init__.py
     ├── accumulator.py   # HomiePropertyAccumulator (Homie v5 protocol layer)

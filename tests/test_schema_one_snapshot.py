@@ -2,34 +2,22 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
 from span_panel_api.models import SpanPanelSnapshot
+from span_panel_api_schema_1.reference_payloads import device_from_topics, parent_child_tree
 from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot
 
-_TREE = json.loads((Path(__file__).parent / "fixtures" / "parent_child_tree.json").read_text(encoding="utf-8"))
+_TREE = parent_child_tree()
 
 PANEL = "example-40t-001"
 SOLAR_CIRCUIT = "573066aaddd7b75114c4563ce3af18c4"
 
 
 def _device(device_id: str) -> DiscoveredDevice:
-    topics = _TREE[device_id]
-    device = DiscoveredDevice(device_id, "ebus")
-    device.update_description(topics["$description"])
-    device.update_state(topics["$state"])
-    for topic, value in topics.items():
-        if topic.startswith("$"):
-            continue
-        node, _, prop = topic.partition("/")
-        if prop:
-            device.update_property(node, prop, value)
-    return device
+    return device_from_topics(device_id, _TREE[device_id])
 
 
 def _children() -> list[DiscoveredDevice]:

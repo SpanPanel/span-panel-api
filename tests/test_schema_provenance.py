@@ -18,24 +18,24 @@ and the check only becomes meaningful with a second adapter.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 import pytest
 
+from span_panel_api.reference_payloads import homie_schema
 from span_panel_api_schema_0 import const
 from span_panel_api_schema_0.field_metadata import _LUGS_FALLBACK, _PROPERTY_FIELD_MAP, _lookup_property
-
-_FIXTURE = Path(__file__).parent / "fixtures" / "v2" / "homie_schema.json"
 
 
 @pytest.fixture(name="schema")
 def _schema() -> dict[str, Any]:
-    """The captured `GET /api/v2/homie/schema` response — our stand-in for the panel."""
-    with _FIXTURE.open() as handle:
-        loaded: dict[str, Any] = json.load(handle)
-    return loaded
+    """The captured `GET /api/v2/homie/schema` response — our stand-in for the panel.
+
+    Read through the shipped accessor, so the anchor below is checked against
+    the bytes a consumer installing this release gets rather than against a
+    file that only exists in this checkout.
+    """
+    return dict(homie_schema())
 
 
 # ---------------------------------------------------------------------------

@@ -1,22 +1,22 @@
 """Mapping a v1.0 circuit device onto SpanCircuitSnapshot.
 
-Driven from `fixtures/parent_child_tree.json`, captured off a real
-`panel_sim` parent/child tree rather than hand-written, so the shapes are the
-firmware's rather than my idea of them.
+Driven from the tree this distribution ships as package data, captured off a
+real `panel_sim` parent/child tree rather than hand-written, so the shapes are
+the firmware's rather than my idea of them.
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
+from span_panel_api_schema_1.reference_payloads import device_from_topics, parent_child_tree
 from span_panel_api_schema_1.circuits import build_circuit
 
-_TREE = json.loads((Path(__file__).parent / "fixtures" / "parent_child_tree.json").read_text(encoding="utf-8"))
+_TREE = parent_child_tree()
 
 # From the fixture: a 1-pole load, and a 2-pole backfeeding PV breaker.
 KITCHEN_LIGHTS = "0ab966b95f92a6a51ec548485aa85f54"
@@ -24,18 +24,7 @@ SOLAR_INVERTER = "573066aaddd7b75114c4563ce3af18c4"
 
 
 def _device(device_id: str) -> DiscoveredDevice:
-    """Rebuild a DiscoveredDevice from the captured retained topics."""
-    topics = _TREE[device_id]
-    device = DiscoveredDevice(device_id, "ebus")
-    device.update_description(topics["$description"])
-    device.update_state(topics["$state"])
-    for topic, value in topics.items():
-        if topic.startswith("$"):
-            continue
-        node, _, prop = topic.partition("/")
-        if prop:
-            device.update_property(node, prop, value)
-    return device
+    return device_from_topics(device_id, _TREE[device_id])
 
 
 @pytest.fixture(name="kitchen")

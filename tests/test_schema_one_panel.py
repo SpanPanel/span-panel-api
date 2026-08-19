@@ -1,19 +1,19 @@
 """Panel-level mapping from the v1.0 tree.
 
-Driven from `fixtures/parent_child_tree.json`, captured off a real `panel_sim`
-parent/child tree.
+Driven from the tree this distribution ships as package data, captured off a
+real `panel_sim` parent/child tree.
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
 from span_panel_api_schema_1.const import NODE_GRID, TYPE_BESS, TYPE_PV
+from span_panel_api_schema_1.reference_payloads import device_from_topics, parent_child_tree
 from span_panel_api_schema_1.panel import (
     PanelFields,
     build_unmapped_tabs,
@@ -27,24 +27,14 @@ from span_panel_api_schema_1.panel import (
     resolve_run_config,
 )
 
-_TREE = json.loads((Path(__file__).parent / "fixtures" / "parent_child_tree.json").read_text(encoding="utf-8"))
+_TREE = parent_child_tree()
 
 PANEL = "example-40t-001"
 MID = "bess-mid"
 
 
 def _device(device_id: str) -> DiscoveredDevice:
-    topics = _TREE[device_id]
-    device = DiscoveredDevice(device_id, "ebus")
-    device.update_description(topics["$description"])
-    device.update_state(topics["$state"])
-    for topic, value in topics.items():
-        if topic.startswith("$"):
-            continue
-        node, _, prop = topic.partition("/")
-        if prop:
-            device.update_property(node, prop, value)
-    return device
+    return device_from_topics(device_id, _TREE[device_id])
 
 
 @pytest.fixture(name="fields")

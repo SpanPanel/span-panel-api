@@ -8,7 +8,6 @@ how the transport feeds it — so these exercise the SDK's real discovery path
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -16,8 +15,9 @@ from span_panel_api.adapters import _derive_required_members
 from span_panel_api.models import V2HomieSchema
 from span_panel_api.protocol import SchemaAdapter
 from span_panel_api_schema_1 import SchemaOneAdapter
+from span_panel_api_schema_1.reference_payloads import parent_child_tree
 
-_TREE = json.loads((Path(__file__).parent / "fixtures" / "parent_child_tree.json").read_text(encoding="utf-8"))
+_TREE = parent_child_tree()
 
 PANEL = "example-40t-001"
 SOLAR_CIRCUIT = "573066aaddd7b75114c4563ce3af18c4"

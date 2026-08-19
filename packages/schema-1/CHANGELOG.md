@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is the parent/child device tree SPAN firmware `r202633+` publishes, identified by `SUPPORTS_DATA_MODEL_VERSIONS` rather than by this version
 number. A release here means this parser changed, never that the panel did.
 
+## [0.1.0b5] - 08/2026
+
+Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged, because nothing added here reaches for anything newer.
+
+### Added
+
+- **`span_panel_api_schema_1.reference_payloads`, shipping `parent_child_tree.json` as package data.** The captured retained-topic tree of a full 40-space panel moves out of the repository's `tests/fixtures/` and into the wheel, reached by
+  `parent_child_tree()` rather than by path. The reason is the same one that put the schema document in the bootstrap's wheel: consumers outside this repository need a real capture to check an adapter's output against, and the only alternative to shipping
+  one is vendoring a byte copy that has no version and goes stale in silence. It ships from _this_ distribution rather than the bootstrap because a retained topic tree is only interpretable by the parser that speaks its vocabulary — and the eBus SDK that
+  turns it back into devices is this distribution's dependency alone.
+- **`devices_from_tree` and `device_from_topics`.** A tree is not directly usable: every consumer has to replay the retained topics through `DiscoveredDevice` first, and that replay is this parser's own knowledge of how the transport feeds it. Shipping the
+  capture without the replay would just move a copy of that logic into every consumer, which is the burden the package data exists to remove — four test modules here held the same twelve lines, and the Home Assistant integration held a fifth copy with a
+  comment naming the test it was mirrored from. `devices_from_tree` takes the tree rather than reading it, so a consumer can filter the capture first — dropping the BESS to model a panel that has none — and still build devices the same way.
+
 ## [0.1.0b3] - 08/2026
 
 Pre-release. **Requires `span-panel-api` 3.0.0b3 or newer** — see Fixed.

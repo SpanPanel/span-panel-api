@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0b5] - 08/2026
+
+Pre-release. Publishes the captured schema document consumers were copying by hand.
+
+### Added
+
+- **`span_panel_api.reference_payloads`, shipping `homie_schema.json` as package data.** The captured `GET /api/v2/homie/schema` response moves out of `tests/fixtures/v2/` and into the wheel, reached by `homie_schema()` and `homie_schema_types()` rather
+  than by path. It was already being consumed outside this repository: the Home Assistant integration checks the field paths it declares against what an adapter can actually produce, which needs a real schema document, so it vendored a byte copy with a
+  README explaining where the copy came from. A copy has no version — it goes stale in silence, and a stale one turns the integration's conformance gate into a check against a schema no panel runs. Shipped, the payload carries the version of the release it
+  came with: pin `span-panel-api==3.0.0b5` and you read the bytes that release was written against, with nothing left to keep in sync. `homie_schema_types()` returns `HomieSchemaTypes` — precisely what
+  `span_panel_api_schema_0.field_metadata.build_field_metadata` accepts — so a caller building metadata never reaches into an untyped document to get it. This distribution owns the schema document rather than an adapter one because it is the response of
+  `get_homie_schema()` here, modelled by `V2HomieSchema` here, and dispatch reads its `data_model_version` to decide which adapter parses the panel at all. The parent/child device tree is the other half and ships from `span-panel-api-schema-1`, with the
+  parser that can interpret it.
+- **This suite reads the payload through the same accessor.** `test_schema_provenance.py` and `test_detection_auth.py` no longer open a path, so the schema anchor is checked against the bytes a consumer installs rather than against a file that exists only
+  in a checkout.
+
 ## [3.0.0b3] - 08/2026
 
 Pre-release. Normalises DER identity onto v1.0's vocabulary, and stops deriving the grid answers that v1.0 states outright.

@@ -524,15 +524,12 @@ class TestGetHomieSchema:
 
     def test_panel_size_from_live_fixture(self):
         """panel_size works with the real panel schema fixture."""
-        import json
-        from pathlib import Path
+        from span_panel_api.reference_payloads import homie_schema, homie_schema_types
 
-        fixture = Path(__file__).parent / "fixtures" / "v2" / "homie_schema.json"
-        data = json.loads(fixture.read_text())
         schema = V2HomieSchema(
-            firmware_version=data["firmwareVersion"],
+            firmware_version=homie_schema()["firmwareVersion"],
             types_schema_hash="sha256:test",
-            types=data["types"],
+            types=homie_schema_types(),
         )
         assert schema.panel_size == 32
 

@@ -62,6 +62,28 @@ PROP_SPACES = "spaces"
 # shed node
 PROP_ASSERTED_ISLANDING_STATE = "asserted-islanding-state"
 
+# pcs node. `energy.ebus.capability.pcs` 0.3 publishes two disjoint property
+# sets under one node type: the enclosure runs the arbitration and publishes the
+# *system* surface, while a circuit publishes only its *participation*. Same
+# capability, different publishers — the same split `meter` makes between the
+# panel, a circuit and a lugs device.
+PROP_ENABLED = "enabled"
+PROP_ACTIVE = "active"
+PROP_IMPORT_LIMIT = "import-limit"
+PROP_BINDING_CONSTRAINT = "binding-constraint"
+PROP_MANAGED = "managed"
+
+# The amps-native constraint classes the enclosure reconciles, in the catalog's
+# order. Each publishes the same `{<source>-import-limit, -enablement, -active}`
+# triplet, and the catalog is explicit that "the number and naming of sources is
+# not fixed by this spec": a vendor may publish further sources using the same
+# shape. A tuple of prefixes rather than twelve constants is what lets the
+# reader below be written once per triplet member instead of once per source.
+PCS_LIMIT_SOURCES: tuple[str, ...] = ("feed", "operator", "off-grid", "requested")
+PCS_LIMIT_SUFFIX = "-import-limit"
+PCS_ENABLEMENT_SUFFIX = "-enablement"
+PCS_ACTIVE_SUFFIX = "-active"
+
 # shed-forecast node. All four times are `integer` minutes; `confidence` is the
 # enum LOW/MEDIUM/HIGH qualifying them. The `full-charge-*` pair answers the
 # hypothetical "if the BESS were full", so it is a capability figure rather than

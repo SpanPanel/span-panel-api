@@ -38,6 +38,7 @@ from .models import (
     SpanEvseSnapshot,
     SpanMidSnapshot,
     SpanPanelSnapshot,
+    SpanPcsSnapshot,
     SpanPVSnapshot,
     V2AuthResponse,
     V2HomieSchema,
@@ -79,6 +80,7 @@ __all__ = [  # noqa: RUF022
     "SpanMidSnapshot",
     "SpanPVSnapshot",
     "SpanPanelSnapshot",
+    "SpanPcsSnapshot",
     # Factory
     "create_span_client",
     # Detection

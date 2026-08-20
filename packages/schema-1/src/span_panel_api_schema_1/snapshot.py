@@ -28,6 +28,7 @@ from span_panel_api_schema_1.const import (
 from span_panel_api_schema_1.devices import build_battery, build_evse, build_mid, build_pv, feed_circuit_ids
 from span_panel_api_schema_1.panel import (
     PanelFields,
+    build_pcs,
     build_unmapped_tabs,
     find_lugs,
     panel_size_from_model,
@@ -185,6 +186,10 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         battery=build_battery(roles.bess, owners),
         pv=build_pv(roles.pv, feeds, upstream, downstream),
         mid=build_mid(roles.mid, device_names),
+        # Gated on the node being declared, not on any value: every limit this
+        # capability publishes is legally `0.0`, so there is no reading that can
+        # distinguish a switched-off PCS from an absent one. See `build_pcs`.
+        pcs=build_pcs(panel),
         evse={key: build_evse(device, feeds, node_id=key) for device, key in _harmonised_evse_keys(roles.evse).items()},
     )
 

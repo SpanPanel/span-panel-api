@@ -36,6 +36,12 @@ EXPECTED_PUBLIC_API = {
     "SpanMidSnapshot",
     "SpanPVSnapshot",
     "SpanPanelSnapshot",
+    # Added 2026-08-19: the enclosure's Power Control System (UL 3141 import
+    # limiting). Purely additive for the same reason as the MID -- no flat panel
+    # publishes `energy.ebus.capability.pcs`, so `SpanPanelSnapshot.pcs` is
+    # `None` on every existing consumer's data and nothing that reads the
+    # snapshot today changes.
+    "SpanPcsSnapshot",
     # Factory
     "create_span_client",
     # Detection

@@ -45,6 +45,23 @@ class SpanCircuitSnapshot:
     relay_state_target: str | None = None  # v2: $target for relay (desired state)
     priority_target: str | None = None  # v2: $target for shed-priority (desired state)
 
+    # This circuit's *participation* in the enclosure's Power Control System —
+    # `energy.ebus.capability.pcs` 0.3, the half a circuit publishes. The
+    # system half (the effective limit and its arbitration) is on the enclosure
+    # and lands on `SpanPanelSnapshot.pcs`; a circuit says only whether the PCS
+    # manages it and where it sits in the shed order.
+    #
+    # `None` on both, never `False`/`0`, because both are `MAY` and a circuit
+    # that says nothing is not the same as one that says no: priority `0` is a
+    # legal ranking, and "unmanaged" is a claim the panel has to make.
+    #
+    # Distinct from `priority`/`is_sheddable`, which are `load-shed` — a
+    # different policy on the same relay. The catalog keeps them apart because
+    # they answer different questions (limit site import versus preserve backup
+    # runtime) and a circuit may participate in one, both, or neither.
+    pcs_managed: bool | None = None  # v2: circuit pcs/managed
+    pcs_priority: int | None = None  # v2: circuit pcs/priority
+
 
 @dataclass(frozen=True, slots=True)
 class SpanPVSnapshot:
@@ -126,6 +143,117 @@ class SpanMidSnapshot:
     device's own `$description.name` (`Battery`, `Solar`, `SPAN Drive - Garage`), which
     is the part a person can read. The literal stays available beside it.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class SpanPcsSnapshot:
+    """The enclosure's Power Control System — UL 3141 import limiting. v1.0 only.
+
+    A `pcs` node runs one physical actuator and two roles, per
+    `capabilities/pcs.md` 0.3: it is the premises-equipment protection (the Firm
+    Service Rating), and it is the arbitrator that reconciles *every* active
+    import constraint to one enforced current limit. The constraints arrive in
+    different native units on different capabilities — amps here, watts on
+    `doe`, volts on `voltage-response` — and `pcs` does not re-publish them as
+    amps copies. **What it publishes is the result**: the effective
+    `import-limit` and the `binding-constraint` naming which class won the
+    `min()`.
+
+    That sentence is the shape of this type. `import_limit_a` and
+    `binding_constraint` are the answer; the four `{feed,operator,off_grid,
+    requested}_import_limit_*` families are the inputs that produced it, kept
+    beside the answer so a consumer can explain a number rather than only show
+    it.
+
+    **A nested type rather than sixteen optional fields on the panel**, for the
+    reason `SpanMidSnapshot` is one: presence is `snapshot.pcs is not None`,
+    with nothing to infer from a sentinel. `capabilities/pcs.md` states the
+    absence rule outright — "absence of the `pcs` node means the device does not
+    run (or participate in) a Power Control System" — so there is a real
+    distinction between a panel with no PCS and a PCS reporting zeros, and
+    sixteen `None`s on the enclosure could not carry it.
+
+    **Flat is the absence case, not a translation problem.** No flat panel
+    publishes `energy.ebus.capability.pcs` at all, so nothing here can orphan an
+    entity a user already has.
+
+    Every member is optional because every property in the catalog is `SHOULD`
+    or `MAY`: a conformant publisher populates whichever constraint classes
+    apply to its equipment and omits the rest. `None` therefore means "this
+    panel does not report it", which is a different statement from a limit of
+    `0.0` — and `0.0` is a legal, meaningful reading (no import permitted), so
+    no field may default to it.
+    """
+
+    enabled: bool | None = None
+    """`pcs/enabled` — is the PCS enabled on this enclosure at all?"""
+    active: bool | None = None
+    """`pcs/active` — is it limiting import *right now*?
+
+    Distinct from `enabled`: a configured PCS spends most of its life enabled
+    and inactive, and this is the transition an automation triggers on.
+    """
+    import_limit_a: float | None = None
+    """`pcs/import-limit` (A) — the effective enforced limit, the `min()` result.
+
+    The single number that summarises the capability, and the only one that
+    reflects the reconciled `doe` and `voltage-response` constraints as well as
+    the amps-native families below.
+    """
+    binding_constraint: str | None = None
+    """`pcs/binding-constraint` — which class currently sets `import_limit_a`.
+
+    The catalog enum is `FSR`, `DOE`, `VOLTAGE`, `OFF_GRID`, `REQUESTED`,
+    `OPERATOR`, `NONE`, `UNKNOWN`, and publishers **MAY extend it** through the
+    property's Homie `$format`. Kept as the raw wire string for that reason: a
+    re-encoding onto a closed set defined here would drop a vendor's extension
+    on the floor, and this is the property whose whole job is naming a source.
+    """
+
+    feed_import_limit_a: float | None = None
+    """`pcs/feed-import-limit` (A) — the FSR: the commissioned, always-on floor.
+
+    May be below the main-breaker rating where the service feed is smaller than
+    the panel; the catalog's example is a 200 A panel on a 100 A feed.
+    """
+    feed_import_limit_enablement: str | None = None
+    """`pcs/feed-import-limit-enablement` — `UNSPECIFIED`, `UNCONFIGURED`, `DISABLED`, `ENABLED`."""
+    feed_import_limit_active: bool | None = None
+    """`pcs/feed-import-limit-active` — is this constraint enforcing?
+
+    Distinct from `binding_constraint`, and deliberately: several constraints
+    can be active at once, and only the most restrictive is binding.
+    """
+
+    operator_import_limit_a: float | None = None
+    """`pcs/operator-import-limit` (A) — an externally imposed fleet/aggregator cap.
+
+    Set over the vendor's management API and persisting until the operator
+    changes it — not the standardised IEEE 2030.5 watts envelope, which lives
+    on `doe`.
+    """
+    operator_import_limit_enablement: str | None = None
+    """`pcs/operator-import-limit-enablement` — same enum domain as the feed family."""
+    operator_import_limit_active: bool | None = None
+    """`pcs/operator-import-limit-active` — is the operator cap enforcing?"""
+
+    off_grid_import_limit_a: float | None = None
+    """`pcs/off-grid-import-limit` (A) — the import cap while islanded."""
+    off_grid_import_limit_enablement: str | None = None
+    """`pcs/off-grid-import-limit-enablement` — same enum domain as the feed family."""
+    off_grid_import_limit_active: bool | None = None
+    """`pcs/off-grid-import-limit-active` — typically true only while islanded."""
+
+    requested_import_limit_a: float | None = None
+    """`pcs/requested-import-limit` (A) — a voluntary, self-revocable user limit.
+
+    Requested by the homeowner or installer through the vendor's app. Distinct
+    from the operator cap, which the site cannot revoke.
+    """
+    requested_import_limit_enablement: str | None = None
+    """`pcs/requested-import-limit-enablement` — same enum domain as the feed family."""
+    requested_import_limit_active: bool | None = None
+    """`pcs/requested-import-limit-active` — is the voluntary limit enforcing?"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,4 +518,13 @@ class SpanPanelSnapshot:
     there, and its own docstring records that only that one field is a reliable
     signal. A new optional device should not inherit that: presence is
     `snapshot.mid is not None`, with nothing to infer.
+    """
+    pcs: SpanPcsSnapshot | None = None
+    """The enclosure's Power Control System, when it publishes a `pcs` node. v1.0 only.
+
+    `None` follows `mid` for the same reason, and here the capability states the
+    rule itself: "absence of the `pcs` node means the device does not run (or
+    participate in) a Power Control System". A panel with no PCS and a PCS
+    holding zeros are different facts, and only a nullable member can tell them
+    apart — every limit in this capture is a legal `0.0`.
     """

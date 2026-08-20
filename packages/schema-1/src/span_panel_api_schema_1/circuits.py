@@ -32,12 +32,14 @@ from span_panel_api_schema_1.const import (
     NODE_INFO,
     NODE_LOAD_SHED,
     NODE_METER,
+    NODE_PCS,
     NODE_SWITCH,
     PRIORITY_NEVER,
     PROP_ACTIVE_POWER,
     PROP_CURRENT,
     PROP_EXPORTED_ENERGY,
     PROP_IMPORTED_ENERGY,
+    PROP_MANAGED,
     PROP_NAME,
     PROP_POLES,
     PROP_PRIORITY,
@@ -86,6 +88,32 @@ def _flag(device: DiscoveredDevice, node: str, prop: str, *, default: bool) -> b
     if raw is None or raw == "":
         return default
     return str(raw).strip().lower() == "true"
+
+
+def _optional_flag(device: DiscoveredDevice, node: str, prop: str) -> bool | None:
+    """A boolean that distinguishes "published false" from "not published".
+
+    `_flag` above collapses the two onto a caller-chosen default, which is right
+    for the relay properties where absence has a defined meaning. It is wrong
+    for `pcs/managed`, which the capability marks `MAY`: a circuit that says
+    nothing about PCS participation has not said it is unmanaged, and reporting
+    `False` would put that claim on a dashboard.
+    """
+    raw = device.get_property(node, prop)
+    if raw is None or raw == "":
+        return None
+    return str(raw).strip().lower() == "true"
+
+
+def _optional_integer(device: DiscoveredDevice, node: str, prop: str) -> int | None:
+    """An `integer` property, or `None` when it is absent or unparseable.
+
+    Parsed through `_number` for the reason `panel.integer` gives: a publisher
+    sending `1.0` for an integer property has made a formatting choice, not
+    withheld a reading.
+    """
+    raw = _number(device, node, prop)
+    return None if raw is None else int(raw)
 
 
 def _tabs(device: DiscoveredDevice) -> list[int]:
@@ -174,4 +202,15 @@ def build_circuit(
         relay_requester=_text(device, NODE_SWITCH, PROP_RELAY_REQUESTER, UNKNOWN),
         relay_state_target=device.get_property_target(NODE_SWITCH, PROP_RELAY),
         priority_target=device.get_property_target(NODE_LOAD_SHED, PROP_PRIORITY),
+        # The circuit half of `energy.ebus.capability.pcs`: participation only.
+        # The arbitration that decides the enforced limit is the enclosure's,
+        # and lands on `SpanPanelSnapshot.pcs`.
+        #
+        # `pcs/priority` is *not* `load-shed/priority` above, and the two share
+        # neither a value space nor a purpose: this one is an integer shed
+        # ordering under an import limit, that one is the backup tier
+        # (`MUST_HAVE` / `NON_ESSENTIAL` / …). A circuit may participate in one
+        # policy, both, or neither, so they are read separately and named apart.
+        pcs_managed=_optional_flag(device, NODE_PCS, PROP_MANAGED),
+        pcs_priority=_optional_integer(device, NODE_PCS, PROP_PRIORITY),
     )

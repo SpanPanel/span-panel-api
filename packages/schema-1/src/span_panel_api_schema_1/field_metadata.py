@@ -25,6 +25,7 @@ from span_panel_api_schema_1.const import (
     NODE_INFO,
     NODE_LOAD_SHED,
     NODE_METER,
+    NODE_PCS,
     NODE_POWER_FLOWS,
     NODE_SHED_FORECAST,
     NODE_SOC,
@@ -76,6 +77,22 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     # these reports it as degradation rather than as absent hardware.
     (TYPE_PANEL, NODE_SHED_FORECAST, "time-to-priority-shed", "panel.shed_time_to_priority_shed_min"),
     (TYPE_PANEL, NODE_SHED_FORECAST, "total-time-remaining", "panel.shed_total_time_remaining_min"),
+    # --- Panel `pcs` → pcs.* -------------------------------------------------
+    # Only the three the capability calls "the result", plus the state that
+    # decides whether there is a result at all. `capabilities/pcs.md` is
+    # explicit that `pcs` does not re-publish the other regimes' constraints:
+    # "what `pcs` publishes is the **result**: the effective `import-limit` and
+    # the `binding-constraint`". Those are what a consumer renders as readings,
+    # so those are what carry a unit row — `import-limit` in particular, whose
+    # `A` is validated against the sensor's declared unit.
+    #
+    # The four constraint families and `enabled` are read into the snapshot too
+    # and deliberately have no row: they qualify the effective limit rather than
+    # standing as readings, exactly as the `shed-forecast` full-charge pair
+    # does, and a unit row for them would advertise a surface that is not there.
+    (TYPE_PANEL, NODE_PCS, "import-limit", "pcs.import_limit_a"),
+    (TYPE_PANEL, NODE_PCS, "binding-constraint", "pcs.binding_constraint"),
+    (TYPE_PANEL, NODE_PCS, "active", "pcs.active"),
     # --- Lugs → panel.* ------------------------------------------------------
     # Deliberately absent. Which device a lugs property belongs to comes from
     # `info/direction` at read time, and a table keyed on (type, node, property)

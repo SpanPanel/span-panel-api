@@ -23,9 +23,9 @@ sharing a helper.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
-from span_panel_api.models import SpanCircuitSnapshot
+from span_panel_api.models import SpanCircuitSnapshot, SpanPcsSnapshot
 from span_panel_api_schema_1.const import (
     CLOUD_CONNECTED,
     NODE_BREAKER,
@@ -34,22 +34,30 @@ from span_panel_api_schema_1.const import (
     NODE_GRID_FORMING,
     NODE_INFO,
     NODE_METER,
+    NODE_PCS,
     NODE_POWER_FLOWS,
     NODE_SHED,
     NODE_SHED_FORECAST,
     NODE_STATUS,
     PANEL_SIZE_BY_MODEL,
+    PCS_ACTIVE_SUFFIX,
+    PCS_ENABLEMENT_SUFFIX,
+    PCS_LIMIT_SUFFIX,
+    PROP_ACTIVE,
     PROP_ACTIVE_POWER,
     PROP_ASSERTED_ISLANDING_STATE,
+    PROP_BINDING_CONSTRAINT,
     PROP_CAPABLE,
     PROP_CLOUD_CONNECTION,
     PROP_CONFIDENCE,
+    PROP_ENABLED,
     PROP_ETHERNET,
     PROP_EXPORTED_ENERGY,
     PROP_FIRMWARE_VERSION,
     PROP_FULL_CHARGE_TIME_TO_PRIORITY_SHED,
     PROP_FULL_CHARGE_TOTAL_TIME_REMAINING,
     PROP_GRID_FORMING_ENTITY,
+    PROP_IMPORT_LIMIT,
     PROP_IMPORTED_ENERGY,
     PROP_MODEL,
     PROP_RATING,
@@ -143,6 +151,28 @@ def optional_flag(device: DiscoveredDevice | None, node: str, prop: str) -> bool
     if raw == "":
         return None
     return raw == "true"
+
+
+def declares_node(device: DiscoveredDevice | None, node: str) -> bool:
+    """Whether a device's `$description` declares a capability node at all.
+
+    The presence question a value cannot answer. A capability whose properties
+    are every one of them legally zero — `pcs` is the worked example — cannot be
+    detected by reading them, and a consumer that gates entity creation on a
+    value would delete a switched-off PCS's entities rather than showing it
+    switched off.
+
+    The `$description` is the right place to ask, per the migration guide's rule
+    that "the authoritative property set for any capability node is always
+    declared in that device's `$description`". A node declared with no
+    properties still counts as declared: that is a degraded publisher, which
+    `build_field_metadata` reports as `resolved=False`, not absent hardware.
+    """
+    if device is None:
+        return False
+    description: dict[str, object] = device.description or {}
+    nodes = description.get("nodes")
+    return isinstance(nodes, dict) and node in nodes
 
 
 def panel_size_from_model(model: str) -> int:
@@ -352,6 +382,90 @@ class PanelFields:
             panel, NODE_SHED_FORECAST, PROP_FULL_CHARGE_TOTAL_TIME_REMAINING
         )
         self.shed_forecast_confidence = text(panel, NODE_SHED_FORECAST, PROP_CONFIDENCE) or None
+
+
+class _LimitTriplet(NamedTuple):
+    """One constraint class's `{limit, enablement, active}` triplet, as published.
+
+    Named rather than a bare tuple because the three members are a float, a
+    string and a boolean read from three sibling properties, and positional
+    unpacking at four call sites is how an enablement ends up in an active flag.
+    """
+
+    limit_a: float | None
+    enablement: str | None
+    active: bool | None
+
+
+def _limit_triplet(panel: DiscoveredDevice, source: str) -> _LimitTriplet:
+    """Read one amps-native constraint class off the enclosure's `pcs` node.
+
+    Every source in `PCS_LIMIT_SOURCES` publishes the identical
+    `{<source>-import-limit, -enablement, -active}` shape, which the capability
+    states as a rule rather than as a coincidence: a vendor "MAY publish further
+    amps-native limits using the same triplet". Reading them through one
+    function is what makes a fifth source a one-line addition instead of three.
+
+    All three are optional independently. A publisher that reports a limit and
+    no enablement is conformant, and reporting `UNCONFIGURED` on its behalf
+    would invent a configuration state it never claimed.
+    """
+    prefix = f"{source}{PCS_LIMIT_SUFFIX}"
+    return _LimitTriplet(
+        limit_a=number(panel, NODE_PCS, prefix),
+        enablement=text(panel, NODE_PCS, f"{prefix}{PCS_ENABLEMENT_SUFFIX}") or None,
+        active=optional_flag(panel, NODE_PCS, f"{prefix}{PCS_ACTIVE_SUFFIX}"),
+    )
+
+
+def build_pcs(panel: DiscoveredDevice) -> SpanPcsSnapshot | None:
+    """The enclosure's Power Control System, or `None` when it publishes no `pcs` node.
+
+    Gated on the **declaration**, not on any value, because the capability
+    defines absence that way: "absence of the `pcs` node means the device does
+    not run (or participate in) a Power Control System". Every limit in the
+    reference capture is `0.0` with `UNCONFIGURED` enablement — a PCS that
+    exists and is switched off — and a value-based gate could not tell that from
+    a panel with no PCS at all. One is a capability reporting its state; the
+    other is hardware that is not there.
+
+    Every field stays `None` where the node omits the property. The catalog
+    marks the system surface `SHOULD` and three of the four constraint classes
+    `MAY`, so a partial node is conformant firmware rather than a fault, and a
+    limit defaulted to `0.0` would read as "no import permitted" — the most
+    alarming reading the property has.
+
+    Enablement and `binding-constraint` are kept as raw wire strings. Both are
+    enums the publisher may extend through its Homie `$format`, and
+    `binding-constraint` exists precisely to name a source, so normalising it
+    onto a set fixed here would discard the extension it was designed to carry.
+    """
+    if not declares_node(panel, NODE_PCS):
+        return None
+
+    feed = _limit_triplet(panel, "feed")
+    operator = _limit_triplet(panel, "operator")
+    off_grid = _limit_triplet(panel, "off-grid")
+    requested = _limit_triplet(panel, "requested")
+
+    return SpanPcsSnapshot(
+        enabled=optional_flag(panel, NODE_PCS, PROP_ENABLED),
+        active=optional_flag(panel, NODE_PCS, PROP_ACTIVE),
+        import_limit_a=number(panel, NODE_PCS, PROP_IMPORT_LIMIT),
+        binding_constraint=text(panel, NODE_PCS, PROP_BINDING_CONSTRAINT) or None,
+        feed_import_limit_a=feed.limit_a,
+        feed_import_limit_enablement=feed.enablement,
+        feed_import_limit_active=feed.active,
+        operator_import_limit_a=operator.limit_a,
+        operator_import_limit_enablement=operator.enablement,
+        operator_import_limit_active=operator.active,
+        off_grid_import_limit_a=off_grid.limit_a,
+        off_grid_import_limit_enablement=off_grid.enablement,
+        off_grid_import_limit_active=off_grid.active,
+        requested_import_limit_a=requested.limit_a,
+        requested_import_limit_enablement=requested.enablement,
+        requested_import_limit_active=requested.active,
+    )
 
 
 # Matches `schema_0`'s epsilon so the no-MID heuristic answers identically on the two

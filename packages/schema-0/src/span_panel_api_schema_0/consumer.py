@@ -342,6 +342,7 @@ class HomieDeviceConsumer:
 
         vn = self._acc.get_prop(pv_node, "vendor-name")
         pn = self._acc.get_prop(pv_node, "product-name")
+        sw = self._acc.get_prop(pv_node, "software-version")
         nc = self._acc.get_prop(pv_node, "nameplate-capacity")
         feed = self._acc.get_prop(pv_node, "feed")
         rel_pos = self._acc.get_prop(pv_node, "relative-position")
@@ -349,6 +350,7 @@ class HomieDeviceConsumer:
         return SpanPVSnapshot(
             vendor_name=vn if vn else None,
             model=pn if pn else None,
+            software_version=sw if sw else None,
             nameplate_capacity_w=_parse_float(nc) if nc else None,
             feed_circuit_id=normalize_circuit_id(feed) if feed else None,
             relative_position=rel_pos.upper() if rel_pos else None,

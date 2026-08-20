@@ -4172,8 +4172,8 @@
       "1bfdc7ecebb0547bbe87a3696cddb0c0",
       "6fcb352679ad5bfb8c8a8eab06829b9f",
       "b9fa08f1eaaf5d129bd5c78e1d5d937f",
-      "sim-40t-001-SIM-EVSE-sim-40t-001",
-      "sim-40t-001-SIM-EVSE-sim-40t-001-2",
+      "sim-40t-001-sim-evse-sim-40t-001",
+      "sim-40t-001-sim-evse-sim-40t-001-2",
       "sim-40t-001-lugs-up",
       "sim-40t-001-lugs-dn",
       "sim-40t-001-pv-1"
@@ -4586,7 +4586,7 @@
     "type": "energy.ebus.device.mid",
     "version": 1786424627515
   },
-  "sim-40t-001-SIM-EVSE-sim-40t-001": {
+  "sim-40t-001-sim-evse-sim-40t-001": {
     "children": [],
     "extensions": [],
     "homie": "5.0",
@@ -4674,7 +4674,7 @@
     "type": "energy.ebus.device.evse",
     "version": 1786424627514
   },
-  "sim-40t-001-SIM-EVSE-sim-40t-001-2": {
+  "sim-40t-001-sim-evse-sim-40t-001-2": {
     "children": [],
     "extensions": [],
     "homie": "5.0",

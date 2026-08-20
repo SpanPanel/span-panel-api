@@ -32,9 +32,17 @@ regression that reached a user.
 
 **What this cannot tell you, which matters as much as what it can.**
 
-The flat side is the frozen simulator, a proxy for flat firmware rather than
-firmware itself. The gap is narrower than "DER is unverified", and worth stating
-precisely, because the two halves have very different support.
+The flat side is the flat simulator, a proxy for flat firmware rather than firmware
+itself. The gap is narrower than "DER is unverified", and worth stating precisely,
+because the two halves have very different support.
+
+"Frozen" is the word this file used until 2026-08-20, and it was wrong in a way that
+cost something: flat is a schema no longer being extended, not a producer no longer
+being fixed. 1.0.16 corrected an EVSE's node id to be its drive serial, the capture
+was not re-taken because it was believed it never needed to be, and the two vendored
+captures spent nine days naming the same charger differently. `tests/fixtures/
+flat_wire.json` now records the simulator commit it came from, the way the v1.0
+capture records panelbench's — see `scripts/capture_flat_reference.py`.
 
 *Telemetry is attested.* The simulator models the BESS and the Drives, and the
 integration renders their entities correctly against it — which is real evidence
@@ -207,6 +215,7 @@ PROVISIONAL_DER: frozenset[str] = frozenset(
         "battery.part_number",
         "battery.serial_number",
         "battery.software_version",
+        "pv.software_version",
     }
 )
 """Additions that may not be additions, because the flat reference never sends them.
@@ -215,14 +224,24 @@ Each is classified `addition` only because the frozen flat simulator publishes n
 BESS identity and no PV identity beyond `vendor-name`. This is narrower than "DER
 is unverified": the simulator models both devices and the integration renders
 their telemetry correctly against it, so `soc`, `soe`, `connected` and the rest
-are attested. These four are the fields nothing sends and therefore nothing can
+are attested. These five are the fields nothing sends and therefore nothing can
 vouch for.
+
+`pv.software_version` joined on 2026-08-20, when panelbench started valuing the PV's
+`info/firmware-version`. It belongs here rather than in `NEW_IN_V1_0` on a fact, not
+a judgement: flat's `energy.ebus.device.pv` type declares `software-version` — the
+captured `GET /api/v2/homie/schema` response says so, and `test_schema_provenance.py`
+holds that against the panel — so a flat panel whose inverter reports its firmware
+would publish it and this would be identity. Neither the frozen simulator nor the one
+live panel available values it, so nothing here can vouch for it yet. `schema_0` had
+no mapping row for the property at all until then, which is the gap
+`test_the_two_addition_buckets_are_told_apart_mechanically` exists to expose.
 
 Expect this set to shrink toward **identity**, not toward semantic change, and after
 the 2026-08-10 identity normalisation that is now true of every member. Both adapters
 speak v1.0's vocabulary — `schema_0` translates flat's `bess/model` to `part_number`
 and its `product-name` to `model` — so a flat capture carrying BESS identity would
-move all three into the identity bucket at once. Before the normalisation the two
+move all four battery rows into the identity bucket at once. Before the normalisation the two
 `product_name` entries looked like genuine additions, because the designation had no
 flat home under flat's own names; it does under these.
 
@@ -319,10 +338,9 @@ def test_both_captures_describe_the_same_logical_panel(flat: Any, parent_child: 
     migration delta and two simulators being configured differently."""
     assert flat.serial_number == parent_child.serial_number == _SERIAL
     assert len(flat.circuits) == len(parent_child.circuits)
-    # Count, not keys. The EVSE keys legitimately differ across the migration —
-    # that is a delta, not a configuration difference, and asserting sameness here
-    # would put a real finding in the premise where it reads as a broken fixture.
-    # `test_evse_identity_does_not_survive_the_migration` holds it instead.
+    # Count, not keys. Whether the EVSE keys match across the migration is a finding,
+    # not a premise — putting it here would make a real regression read as a broken
+    # fixture. `test_evse_identity_survives_the_migration` holds it instead.
     assert len(flat.evse) == len(parent_child.evse)
 
 
@@ -346,20 +364,35 @@ def test_evse_identity_survives_the_migration(flat: Any, parent_child: Any) -> N
     from what this library hands over -- the snapshot key and `node_id` -- so if those
     move between schemas, a user's charger orphans and a duplicate appears beside it.
 
-    **The comparison is against firmware, not against the flat simulator.** On a real
-    panel the EVSE node id *is* the Drive's serial: SpanPanel/span#214 has the topic
-    `ebus/5/<panel-serial>/<drive-serial>`, diagnostics keyed
+    **The comparison is against firmware, not against a simulator convention.** On a
+    real panel the EVSE node id *is* the Drive's serial: SpanPanel/span#214 has the
+    topic `ebus/5/<panel-serial>/<drive-serial>`, diagnostics keyed
     `"evse": {"<drive-serial>": ...}`, and a maintainer confirming that node id is what
-    the `unique_id` is built from. The frozen flat simulator instead names its nodes
-    `evse` / `evse-2`, positional slots no panel publishes -- so `set(flat.evse)` is
-    the wrong thing to assert against, and asserting it is what previously produced an
-    elaborate reconstruction of a naming scheme that does not exist.
+    the `unique_id` is built from.
 
-    So flat's *serials* stand in for flat's keys, which is what firmware would have
-    published. The simulator gap is recorded in the delta document.
+    The flat simulator used to name those nodes `evse` / `evse-2`, positional slots no
+    panel publishes, so this test had to compare flat's *serials* against v1.0's keys
+    and take on faith that firmware would key on the same string. Flat 1.0.16 closed
+    that gap -- an EVSE's node id is now its drive serial there too -- so the first
+    assertion below states the fact rather than assuming it, and the second compares
+    the two key sets directly. Both sides now name the drive the way firmware does.
+
+    The same change forced the serial lower-case, because a node id is a topic level
+    and Homie 5 allows only `a`-`z`, `0`-`9` and `-` there. `SIM-EVSE-...` was legal as
+    a property value and illegal as an id. Both producers followed; the capture on this
+    side was re-taken from flat 1.0.16 to match, which is what makes the comparison
+    below one between two current producers rather than between a current one and a
+    stale byte copy.
     """
     flat_identity = {evse.serial_number for evse in flat.evse.values()}
-    assert flat_identity == {None} or None not in flat_identity, "a flat EVSE published no serial to key on"
+    assert None not in flat_identity, "a flat EVSE published no serial to key on"
+
+    assert set(flat.evse) == flat_identity, (
+        f"flat keys its EVSEs {sorted(flat.evse)} and serials them {sorted(flat_identity)}. "
+        "Since flat 1.0.16 the node id is the drive serial, as it is on firmware; if these "
+        "have come apart the flat capture predates that and the comparison below is "
+        "measuring a simulator convention rather than an identity."
+    )
 
     assert set(parent_child.evse) == flat_identity, (
         "v1.0 EVSE keys do not match the serials flat publishes. On real firmware the "

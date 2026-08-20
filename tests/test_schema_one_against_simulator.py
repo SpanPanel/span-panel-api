@@ -99,7 +99,7 @@ def test_no_der_declares_a_model_it_never_publishes(adapter: SchemaOneAdapter) -
     Scope is exactly `model`, because that is what `circuit_nodes_missing_names()`
     measures for a DER — `PROP_MODEL` declared with no value, alongside circuits
     missing `PROP_NAME`. The wider declared-but-unpublished question is
-    `test_the_ders_still_declare_two_identity_fields_they_never_publish` below,
+    `test_the_pv_still_declares_an_identity_field_it_never_publishes` below,
     which is not empty.
 
     The consumer symptom is specific: an entity is created from the declaration,
@@ -129,22 +129,21 @@ _DER_TYPES = frozenset(
 """The proxied DER classes, which are what the over-declaration check covers."""
 
 
-def test_the_ders_still_declare_two_identity_fields_they_never_publish() -> None:
+def test_the_pv_still_declares_an_identity_field_it_never_publishes() -> None:
     """The rest of §5.2, which adopting the upstream emitter did *not* close.
 
     `circuit_nodes_missing_names()` looks only at `info/model`, so it reports
-    clean while three declared properties still arrive with no value. Reading the
+    clean while declared properties still arrive with no value. Reading the
     capture directly is the only way to see the whole class, and leaving it
     unmeasured would let "the model gap closed" read as "the gap closed".
 
-    `battery.software_version` in the delta analysis's Class B depends on the BESS
-    firmware-version below, so that mapping stays untestable until this moves —
-    `battery.serial_number`, its Class B twin, is now unblocked because the BESS
-    does publish `info/serial-number`.
+    It has done that job twice now, and both times the expectation shrank rather
+    than grew: the BESS pair closed on 2026-08-10, and PV `info/firmware-version`
+    on 2026-08-20. One declaration is left.
 
     Pinned as an exact set so it fails in either direction: a new over-declaration
-    appears, or one of these is finally published and the expectation should
-    shrink.
+    appears, or the last one is finally published and the expectation should
+    shrink again.
 
     **Keyed by device type, not device id.** The ids are `<proxier>-<identifier>`
     and move with the panel serial and the DER's own serial, so keying on them
@@ -176,16 +175,20 @@ def test_the_ders_still_declare_two_identity_fields_they_never_publish() -> None
             )
 
     assert gaps == {
-        # The BESS pair closed on 2026-08-10: panelbench now supplies a placeholder
-        # `firmware_version`, so the declaration stops being empty and the mapping
-        # downstream stops being untestable. Synthetic, so it attests the mapping and
-        # not what real firmware sends.
+        # The BESS pair closed on 2026-08-10 and PV `info/firmware-version` on
+        # 2026-08-20, both because panelbench supplied a value where the declaration
+        # had been empty. Synthetic values, so they attest the mapping and not what
+        # real firmware sends.
         #
-        # PV keeps both deliberately. This check is doing real work while it is
-        # non-empty, and filling every gap with invented values would retire the signal
-        # without making anything more true -- the BESS one was filled because a
-        # mapping was blocked on it, and these block nothing.
-        "energy.ebus.device.pv": ["info/firmware-version", "info/serial-number"],
+        # PV `info/serial-number` is the one left, and it is unpublished on purpose
+        # rather than overlooked. Valuing it moves the PV's device id from
+        # `<panel>-pv-1` to `<panel>-<serial>`, because the producer's identifier
+        # derivation prefers a serial over an instance id -- and that id is what a
+        # consumer's device-registry entry is built from, so the upgrade rehearsal
+        # would stop comparing one PV and start comparing two. Closing it means
+        # settling the flat side's PV id first, which is a question about the upgrade
+        # path rather than about a config value.
+        "energy.ebus.device.pv": ["info/serial-number"],
     }, f"the declared-but-unpublished set moved: {gaps}"
 
 

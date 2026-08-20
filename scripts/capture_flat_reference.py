@@ -25,8 +25,18 @@ path finding no paho client. Harmless: the lifecycle publishes `$state` and
 `$description` through the injected transport, and both land in the capture. The
 run asserts that rather than trusting it.
 
-The flat simulator is frozen at `v1.0.15 — the locked flat schema release`, so the
-output is stable and vendored rather than re-taken. Re-run only if that changes.
+**Where the vendored bytes came from.** SpanPanel/simulator
+`826be47d123137e63dfa232e411e868721f92f6d` (main, 2026-08-19, version 1.0.16).
+Recorded as a commit rather than as "the frozen simulator", because that phrase is
+what let this go stale: the capture was taken at v1.0.15 and read as permanent, and
+1.0.16 then made an EVSE's node id its drive serial and forced that serial
+lower-case — the flat half of a change panelbench made on the v1.0 side the same
+week. For nine days the two vendored captures named the same charger differently,
+and the test that compares them was the only thing that could say so.
+
+So: re-run this whenever the flat simulator publishes something new, and update the
+commit above in the same change. A capture without a commit records where the bytes
+came from as a guess.
 
 **Shape-stable, not byte-stable.** `noise_factor` and an advancing clock move 53
 of the 559 topics on every run; the device set and the topic set do not move at

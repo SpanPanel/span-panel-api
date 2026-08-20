@@ -96,6 +96,13 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
     # --- PV → pv.* -----------------------------------------------------------
     (TYPE_PV, "vendor-name", "pv.vendor_name"),
     (TYPE_PV, "product-name", "pv.model"),
+    # Declared by the flat schema's `energy.ebus.device.pv` type and read here even
+    # though no capture we hold values it — neither the frozen simulator nor the live
+    # panel. The row is about what flat *can* say, not what one panel happened to send:
+    # `test_der_additions_are_provisional_or_attested_but_never_unexamined` classifies
+    # a v1.0-only field by whether flat has a property behind it, and without this row
+    # `pv.software_version` would be filed as introduced by v1.0 when flat declares it.
+    (TYPE_PV, "software-version", "pv.software_version"),
     (TYPE_PV, "nameplate-capacity", "pv.nameplate_capacity_w"),
     (TYPE_PV, "feed", "pv.feed_circuit_id"),
     (TYPE_PV, "relative-position", "pv.relative_position"),  # IN_PANEL | UPSTREAM | DOWNSTREAM

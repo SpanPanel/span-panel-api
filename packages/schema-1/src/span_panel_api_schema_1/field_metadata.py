@@ -102,6 +102,13 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     (TYPE_BESS, NODE_INFO, "serial-number", "battery.serial_number"),
     (TYPE_BESS, NODE_INFO, "firmware-version", "battery.software_version"),
     (TYPE_BESS, NODE_INFO, "nameplate-capacity", "battery.nameplate_capacity_kwh"),
+    # The BESS's own meter and its own link health. `battery.power_w` carries a
+    # sign flip (`build_battery` reports charge-positive, the wire is
+    # charge-negative), which does not affect the unit or the datatype this row
+    # describes — a row states what the property *is*, not what the mapper does
+    # with it.
+    (TYPE_BESS, NODE_METER, "active-power", "battery.power_w"),
+    (TYPE_BESS, NODE_STATUS, "communication-state", "battery.communication_state"),
     # --- PV ------------------------------------------------------------------
     (TYPE_PV, NODE_INFO, "vendor-name", "pv.vendor_name"),
     (TYPE_PV, NODE_INFO, "model", "pv.model"),

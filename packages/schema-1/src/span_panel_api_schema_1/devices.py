@@ -15,7 +15,20 @@ displays, so the SKU is taken from ``part-number`` and the designation from
 panel-side owner's ``connection/*-device-status``, not anything the BESS
 publishes about itself. The BESS's own ``status/communication-state`` looks like
 the right property and is a different signal — the migration guide warns
-against conflating them.
+against conflating them. Both are now carried, in separate fields
+(``connected`` and ``communication_state``), because they answer different
+questions: the panel's view of the link, and the publisher's view of its own.
+
+**Battery power is charge-positive, and the wire is not.** The enclosure meters
+the BESS the way it meters a circuit — a device it feeds — so a charging battery
+publishes a *negative* ``meter/active-power``. ``build_circuit`` negates for
+exactly this reason, and ``build_battery`` does the same, so the snapshot's rule
+holds everywhere: positive means power flowing into the metered device.
+
+Note the enclosure's own ``power-flows/battery`` uses the opposite convention
+(the capability catalog defines it as discharge-positive) and is passed through
+untouched into ``panel.power_flow_battery``. Same physical power, opposite
+frames; ``battery.power_w`` is the one already in the snapshot's frame.
 """
 
 from __future__ import annotations
@@ -31,6 +44,8 @@ from span_panel_api_schema_1.const import (
     NODE_SOC,
     NODE_STATUS,
     NODE_SWITCH,
+    PROP_ACTIVE_POWER,
+    PROP_COMMUNICATION_STATE,
     UNKNOWN,
 )
 from span_panel_api_schema_1.panel import number, resolve_grid_forming_device_name, text
@@ -96,6 +111,19 @@ def connection_status_for(device_id: str, owners: list[DiscoveredDevice]) -> str
     return None
 
 
+def _charge_positive(raw_power_w: float | None) -> float | None:
+    """Flip the enclosure's meter frame to the snapshot's charge-positive one.
+
+    `None` stays `None`: a BESS that publishes no `meter` node has no power
+    reading, which is not the same as zero. The `0.0` guard is `build_circuit`'s,
+    for the same reason — negating `0.0` yields `-0.0`, which compares equal to
+    `0.0` and formats as `"-0.0"`.
+    """
+    if raw_power_w is None:
+        return None
+    return 0.0 if raw_power_w == 0.0 else -raw_power_w
+
+
 def build_battery(bess: DiscoveredDevice | None, owners: list[DiscoveredDevice]) -> SpanBatterySnapshot:
     """Build the battery snapshot. An uncommissioned panel yields the empty one."""
     if bess is None:
@@ -120,6 +148,11 @@ def build_battery(bess: DiscoveredDevice | None, owners: list[DiscoveredDevice])
         nameplate_capacity_kwh=number(bess, NODE_INFO, PROP_NAMEPLATE_CAPACITY),
         # None when unclaimed, so "nobody has said" stays distinct from "not OK".
         connected=None if status is None else status == STATUS_OK,
+        power_w=_charge_positive(number(bess, NODE_METER, PROP_ACTIVE_POWER)),
+        # The BESS's own link health, kept as the published enum string rather
+        # than collapsed to a bool: DEGRADED is neither OK nor LOST, and a bool
+        # would have to pick one.
+        communication_state=_optional(text(bess, NODE_STATUS, PROP_COMMUNICATION_STATE)),
     )
 
 

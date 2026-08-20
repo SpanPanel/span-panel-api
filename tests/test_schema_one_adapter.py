@@ -232,6 +232,13 @@ def test_field_metadata_takes_units_from_the_tree(adapter: SchemaOneAdapter) -> 
     assert metadata["circuit.current_a"].unit == "A"
     assert metadata["panel.l1_voltage"].unit == "V"
     assert metadata["battery.soe_percentage"].unit == "%"
+    # The BESS's own meter and status nodes, mapped so the pair gets unit and
+    # datatype validation and the resolved/unresolved signal. The row describes
+    # the property; the sign flip `build_battery` applies is not a unit change.
+    assert metadata["battery.power_w"].unit == "W"
+    assert metadata["battery.power_w"].datatype == "float"
+    assert metadata["battery.communication_state"].unit is None
+    assert metadata["battery.communication_state"].datatype == "enum"
 
 
 def test_no_property_declares_an_abstract_unit() -> None:

@@ -89,6 +89,12 @@ PROP_VOLTAGE_B = "voltage-b"
 PROP_CLOUD_CONNECTION = "cloud-connection"
 PROP_ETHERNET = "ethernet"
 PROP_WIFI = "wifi"
+# `energy.ebus.capability.status` 0.1: the publisher's view of its own link to
+# the device it represents (proxy) or to its backhaul (native). Enum
+# OK/DEGRADED/LOST/UNKNOWN. Orthogonal to whether the eBus publisher is reporting
+# to *its* consumers, and orthogonal to the enclosure's `connection/*` view of
+# the same device -- see `devices.py`'s module docstring.
+PROP_COMMUNICATION_STATE = "communication-state"
 
 # -- Values -----------------------------------------------------------------
 

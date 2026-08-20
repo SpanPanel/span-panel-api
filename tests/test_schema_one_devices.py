@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+import json
+
 import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
@@ -27,6 +30,53 @@ def _device(device_id: str) -> DiscoveredDevice:
 
 def _circuits() -> list[DiscoveredDevice]:
     return [_device(SOLAR_CIRCUIT), _device("0ab966b95f92a6a51ec548485aa85f54")]
+
+
+BESS_POWER_TOPIC = "meter/active-power"
+BESS_COMMS_TOPIC = "status/communication-state"
+
+
+def _published(device_id: str, topic: str) -> str:
+    """What the capture publishes on this topic, or fail saying it does not.
+
+    Every expectation below is computed from this rather than written as a
+    literal, so a test cannot keep passing against a fixture that stopped
+    carrying the value it is about.
+    """
+    value = _TREE[device_id].get(topic)
+    assert value is not None, f"{device_id} publishes no {topic} in the capture"
+    return value
+
+
+def _bess_with(overrides: Mapping[str, str | None]) -> DiscoveredDevice:
+    """The captured BESS with topics rewritten, or removed where the value is `None`.
+
+    Removal is the point of the `None` case: a panel that stops publishing a
+    property retains nothing, which is a different event from publishing `""`
+    and has to produce a different answer.
+    """
+    topics = dict(_TREE["bess"])
+    for topic, value in overrides.items():
+        if value is None:
+            topics.pop(topic, None)
+        else:
+            topics[topic] = value
+    return device_from_topics("bess", topics)
+
+
+def _bess_without_node(node_id: str) -> DiscoveredDevice:
+    """The captured BESS with one capability node gone from its `$description`.
+
+    The third shape of absence, and the one a fixture edit alone cannot reach:
+    hardware that never had the capability, as opposed to hardware that has it
+    and is not reporting. The `$description` is the authoritative property set,
+    so removing the node is what "this BESS has no meter" actually looks like.
+    """
+    description = json.loads(_TREE["bess"]["$description"])
+    del description["nodes"][node_id]
+    topics = {topic: value for topic, value in _TREE["bess"].items() if not topic.startswith(f"{node_id}/")}
+    topics["$description"] = json.dumps(description)
+    return device_from_topics("bess", topics)
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +168,136 @@ def test_no_bess_yields_the_empty_battery_snapshot() -> None:
 
     assert battery.soe_percentage is None
     assert battery.connected is None
+
+
+# ---------------------------------------------------------------------------
+# Battery power — the sign is the whole content of these
+# ---------------------------------------------------------------------------
+
+
+def test_the_capture_is_a_charging_battery() -> None:
+    """The premise of every sign assertion below, stated once and checked.
+
+    A sign convention can only be tested against a known physical state. This
+    capture has the BESS charging: the enclosure meters it the way it meters a
+    circuit it feeds, so a battery drawing power reads *negative* there. Were the
+    capture ever recaptured with the battery discharging, this fails first and
+    says so, rather than the negation tests failing and reading as a mapper bug.
+    """
+    assert float(_published("bess", BESS_POWER_TOPIC)) < 0
+
+
+def test_battery_power_is_charge_positive() -> None:
+    """The snapshot's frame: positive means power flowing into the metered device.
+
+    Same rule as `SpanCircuitSnapshot.instant_power_w`, and reached the same way
+    -- `build_circuit` negates the enclosure's meter for a load, and a charging
+    BESS is a load. Asserting the magnitude and the sign separately is deliberate:
+    dropping the negation keeps the magnitude and fails here on the sign, which is
+    the mistake worth catching.
+    """
+    raw = float(_published("bess", BESS_POWER_TOPIC))
+
+    battery = build_battery(_device("bess"), [])
+
+    assert battery.power_w == -raw
+    assert battery.power_w is not None and battery.power_w > 0
+
+
+def test_battery_power_follows_a_republished_value() -> None:
+    """Proof the value is read off the wire and not defaulted into place."""
+    raw = float(_published("bess", BESS_POWER_TOPIC))
+    discharging = -raw / 2
+
+    battery = build_battery(_bess_with({BESS_POWER_TOPIC: str(discharging)}), [])
+
+    # Charging became discharging, so the snapshot's sign flips with it.
+    assert battery.power_w == -discharging
+    assert battery.power_w is not None and battery.power_w < 0
+
+
+def test_a_battery_at_rest_reports_zero_and_not_negative_zero() -> None:
+    """`-0.0` compares equal to `0.0` and renders as "-0.0" beside it.
+
+    `build_circuit` carries the same guard for the same reason; a negation added
+    without it produces a reading that looks broken exactly when nothing is
+    happening.
+    """
+    battery = build_battery(_bess_with({BESS_POWER_TOPIC: "0.0"}), [])
+
+    assert battery.power_w == 0.0
+    assert str(battery.power_w) == "0.0"
+
+
+def test_an_unpublished_battery_power_is_none_rather_than_zero() -> None:
+    """Zero is a reading — "the battery is idle" — and absence is not one."""
+    assert build_battery(_bess_with({BESS_POWER_TOPIC: None}), []).power_w is None
+
+
+def test_a_bess_with_no_meter_node_has_no_power() -> None:
+    assert build_battery(_bess_without_node("meter"), []).power_w is None
+
+
+def test_the_bess_meter_and_the_enclosure_flow_agree_about_direction() -> None:
+    """The two properties describing this battery's power must not disagree.
+
+    `panel.power_flow_battery` is the enclosure's own arbitrated figure and is
+    passed through untouched; `battery.power_w` is the BESS's own meter and is
+    negated. That is only coherent because the two properties are published in
+    the *same* frame on the wire -- asserted here rather than assumed, because a
+    consumer rendering both beside each other has to negate exactly one of them,
+    and which one is a fact about the capture rather than a preference.
+    """
+    bess_meter = float(_published("bess", BESS_POWER_TOPIC))
+    enclosure_flow = float(_published("example-40t-001", "power-flows/battery"))
+
+    assert (bess_meter < 0) == (enclosure_flow < 0)
+
+
+# ---------------------------------------------------------------------------
+# Battery communication state
+# ---------------------------------------------------------------------------
+
+
+def test_communication_state_is_the_published_enum() -> None:
+    """Kept as the published string: DEGRADED is neither OK nor LOST, so a bool
+    would have to pick one, and `connected` is already the bool answer to the
+    other question."""
+    published = _published("bess", BESS_COMMS_TOPIC)
+
+    assert build_battery(_device("bess"), []).communication_state == published
+
+
+def test_communication_state_follows_a_republished_value() -> None:
+    published = _published("bess", BESS_COMMS_TOPIC)
+    declared = json.loads(_TREE["bess"]["$description"])["nodes"]["status"]["properties"]
+    options = declared[BESS_COMMS_TOPIC.split("/", 1)[1]]["format"].split(",")
+    other = next(option for option in options if option != published)
+
+    assert build_battery(_bess_with({BESS_COMMS_TOPIC: other}), []).communication_state == other
+
+
+def test_an_unpublished_communication_state_is_none() -> None:
+    """`""` would read as a device reporting an empty answer; it reported nothing."""
+    assert build_battery(_bess_with({BESS_COMMS_TOPIC: None}), []).communication_state is None
+
+
+def test_a_bess_with_no_status_node_has_no_communication_state() -> None:
+    assert build_battery(_bess_without_node("status"), []).communication_state is None
+
+
+def test_communication_state_and_connected_are_independent() -> None:
+    """The two link facts this task deliberately keeps apart.
+
+    The BESS reports its own link `LOST` while the enclosure still claims it as
+    `OK`: one is the device speaking about itself, the other the panel speaking
+    about it, and a mapping that conflated them would make this impossible to
+    express.
+    """
+    battery = build_battery(_bess_with({BESS_COMMS_TOPIC: "LOST"}), [_device("lugs-upstream")])
+
+    assert battery.communication_state == "LOST"
+    assert battery.connected is True
 
 
 # ---------------------------------------------------------------------------

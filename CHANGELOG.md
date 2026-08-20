@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- **The BESS's own meter and link health reach the snapshot: `SpanBatterySnapshot.power_w` and `SpanBatterySnapshot.communication_state`.** The battery device has published `meter/active-power` and `status/communication-state` all along and neither reached
+  a field, so a consumer could show the enclosure's arbitrated `power_flow_battery` and nothing the BESS itself reports. Both are `None` on a BESS that publishes no such node, and on every flat panel — the flat schema's BESS device class declares neither
+  property, so this is new surface rather than a re-sourcing, and nothing that exists today changes.
+- **`power_w` is charge-positive, and the wire is not.** The enclosure meters the BESS the way it meters a circuit it feeds, so a charging battery publishes a _negative_ `meter/active-power`; `build_battery` negates it, exactly as `build_circuit` does for
+  a load, so the snapshot's rule holds on every power field: positive means power flowing into the metered device. Note the deliberate asymmetry with `panel.power_flow_battery`, which the capability catalog defines as discharge-positive and which both
+  adapters pass through untouched. The two describe the same physical power in opposite frames; `battery.power_w` is the one already in the snapshot's frame, so a consumer rendering both negates the other.
+- **`communication_state` stays the published enum string** (`OK`/`DEGRADED`/`LOST`/`UNKNOWN`) rather than collapsing to a bool: `DEGRADED` is neither `OK` nor `LOST`, and a bool would have to pick one. It is deliberately not merged into
+  `battery.connected`, which is the _enclosure's_ `connection/fed-by-device-status` view of the same link. One is the device speaking about itself and the other the panel speaking about it, and the migration guide warns against conflating them.
+- **`_PROPERTY_FIELD_MAP` rows for both**, which buys them the unit and datatype the BESS's own `$description` declares plus the three-way resolution contract — a BESS that publishes the node while omitting the property reports degradation rather than
+  absent hardware. The row describes the property; the sign flip the mapper applies is not a unit change.
+
 - **`shed-forecast` reaches the snapshot: five new `SpanPanelSnapshot` fields.** `shed_time_to_priority_shed_min`, `shed_total_time_remaining_min`, `shed_full_charge_time_to_priority_shed_min`, `shed_full_charge_total_time_remaining_min` and
   `shed_forecast_confidence`. The enclosure has published `energy.ebus.capability.shed-forecast` 0.1 since r202633 and nothing read it — the backup-planning numbers ("how long before my battery starts shedding circuits", "how long before it is exhausted")
   were on the wire and stopped at the transport. All four times are `integer` minutes as the capability declares, parsed through `panel.integer` so a publisher that serialises a whole number with a decimal point still resolves; `confidence` stays the raw

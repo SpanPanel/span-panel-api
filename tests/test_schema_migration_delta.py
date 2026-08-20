@@ -164,6 +164,36 @@ from *addition* to *identity* on evidence, and it moved in the direction that
 matters — a field we thought was new turns out to be one users already have.
 """
 
+NEW_IN_V1_0: dict[str, str] = {
+    "battery.power_w": (
+        "the BESS's own charge/discharge meter. `energy.ebus.capability.meter` on a "
+        "BESS device is new in v1.0 -- flat's `energy.ebus.device.bess` type declares no "
+        "`active-power` at all -- so nothing can orphan and no entity changes meaning. "
+        "The nearest flat figure is the enclosure's `power-flows/battery`, which both "
+        "schemas carry unchanged as `panel.power_flow_battery` and which is a different "
+        "property in the opposite sign frame"
+    ),
+    "battery.communication_state": (
+        "the BESS publisher's report of its own link health. Flat's BESS type declares "
+        "`connected` and nothing else about the link, and `battery.connected` still "
+        "carries that -- from the enclosure's `connection/fed-by-device-status`, the "
+        "panel's view rather than the device's. Two views of one link, and v1.0 is the "
+        "first schema to publish the second"
+    ),
+}
+"""Additions with no flat property to have been re-sourced from.
+
+The bucket `PROVISIONAL_DER` is *not*: its members each have a flat property that
+the frozen simulator happens not to send, so a real flat capture could reclassify
+them as identity. These have no flat property in the schema at all, so no capture
+can. `test_the_two_addition_buckets_are_told_apart_mechanically` asserts exactly
+that distinction against `schema_0`'s field map rather than trusting this prose.
+
+A genuine addition is the benign kind of delta -- a new field cannot break an
+automation that never referenced it -- but it still has to be *named*, or the
+addition bucket becomes the place a surviving entity hides.
+"""
+
 PROVISIONAL_DER: frozenset[str] = frozenset(
     {
         "battery.model",
@@ -448,11 +478,45 @@ def test_der_additions_are_provisional_or_attested_but_never_unexamined(flat: An
         found, _ = _classify(scope, before, after)
         additions |= found
 
-    accounted = set(PROVISIONAL_DER) | set(ATTESTED_AGAINST_FIRMWARE)
+    accounted = set(PROVISIONAL_DER) | set(ATTESTED_AGAINST_FIRMWARE) | set(NEW_IN_V1_0)
     assert additions == accounted, (
         f"the DER addition set moved: {sorted(additions)}. Each member is either a field "
-        "the frozen simulator cannot vouch for or one real firmware has settled; a new one "
-        "needs deciding which, because 'addition' is the bucket that hides a surviving entity."
+        "the frozen simulator cannot vouch for, one real firmware has settled, or one v1.0 "
+        "introduces with no flat property behind it; a new one needs deciding which, "
+        "because 'addition' is the bucket that hides a surviving entity."
+    )
+
+
+def test_the_two_addition_buckets_are_told_apart_mechanically() -> None:
+    """`PROVISIONAL_DER` and `NEW_IN_V1_0` differ by a fact, not by a judgement.
+
+    A provisional addition has a flat property behind it that the frozen simulator
+    does not publish, so a capture from real flat firmware could still move it to
+    *identity*. A v1.0 addition has no flat property at all, so no capture ever
+    will. `schema_0`'s `_PROPERTY_FIELD_MAP` is where that difference is recorded:
+    it holds a row for every flat property the mapper reads, whatever any given
+    capture contains.
+
+    Asserted rather than described, because the whole value of splitting the
+    bucket is that membership is checkable. Put a genuinely new field in
+    `PROVISIONAL_DER` and this fails, which is the direction that matters --
+    provisional means "expect this to become identity", and a field flat cannot
+    express is never going to.
+    """
+    from span_panel_api_schema_0.field_metadata import _PROPERTY_FIELD_MAP
+
+    flat_fields = {field_path for _, _, field_path in _PROPERTY_FIELD_MAP}
+
+    unreachable = sorted(path for path in PROVISIONAL_DER if path not in flat_fields)
+    assert not unreachable, (
+        f"provisional additions with no flat property behind them: {unreachable}. "
+        "Nothing can reclassify these as identity; they belong in NEW_IN_V1_0."
+    )
+
+    reachable = sorted(path for path in NEW_IN_V1_0 if path in flat_fields)
+    assert not reachable, (
+        f"v1.0 additions that flat does have a property for: {reachable}. A flat "
+        "capture carrying it would make this an identity, so it is provisional, not new."
     )
 
 

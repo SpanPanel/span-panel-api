@@ -163,6 +163,27 @@ class SpanBatterySnapshot:
     nameplate_capacity_kwh: float | None = None  # bess/nameplate-capacity (kWh)
     connected: bool | None = None  # bess/connected
 
+    # The BESS's own `meter/active-power`, v1.0 only. **Charge-positive**, which
+    # is a sign flip away from the wire: the enclosure meters the BESS the way it
+    # meters a circuit, so a charging battery reads negative there and positive
+    # here, exactly as `SpanCircuitSnapshot.instant_power_w` reports a load's
+    # consumption positive. The snapshot's rule across every power field is that
+    # positive means power flowing *into* the metered device.
+    #
+    # Distinct from `SpanPanelSnapshot.power_flow_battery`, which is the
+    # enclosure's own arbitrated flow figure and is passed through in the
+    # publisher's discharge-positive frame. The two describe the same physical
+    # power in opposite frames, so a consumer rendering both must negate one of
+    # them; this one is already negated.
+    power_w: float | None = None  # v2: bess meter/active-power (W), charge-positive
+
+    # `status/communication-state`, v1.0 only: the BESS publisher's report of its
+    # own link health (OK/DEGRADED/LOST/UNKNOWN). **Not** `connected`, which is
+    # the enclosure's `connection/fed-by-device-status` view of the same device.
+    # One is the device speaking about itself, the other the panel speaking about
+    # it, and the migration guide warns against conflating them.
+    communication_state: str | None = None  # v2: bess status/communication-state
+
 
 @dataclass(frozen=True, slots=True)
 class FieldMetadata:

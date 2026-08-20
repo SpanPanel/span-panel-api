@@ -127,6 +127,49 @@ report, and a smaller report looks exactly like a panel with nothing new on it.
 a snapshot field, and every reported property moves none. `_CONSUMED_OFF_SNAPSHOT` holds the three declarations consumed by a route no snapshot field can show (tier-1 dispatch, the shadowed islanding tier, the unreached feedthrough branch); each names the
 code that reads it, and each fails the day its property does move a field.
 
+## Devices this library models nothing for
+
+`TreeRoles` sorts a v1.0 tree into the roles a snapshot needs. Anything matching none of them used to fall off the end silently — a panel publishing a device type nobody modelled produced no field, no metadata row and no sign it was there. The eBus schema
+is explicitly vendor-extensible, so that is an expected arrival rather than a hypothetical.
+
+`span_panel_api_schema_1.adoption` builds an `AdoptedDevice` for each such child, and `build_snapshot` puts them on `SpanPanelSnapshot.adopted_devices`.
+
+### The two rules that keep it from being a firehose
+
+**The unit is a device, never a property.** A new property on a device this adapter already models is a curation task with a short turnaround, and surfacing it automatically would spend a consumer's entity identity permanently on a shape a human would
+likely have chosen differently. An unmodelled _type_ is the opposite case: no curation is coming, so the alternative is silence.
+
+**Extra instances of a modelled type are not adopted.** `TreeRoles` keeps the first BESS and ignores the rest, which is a real gap — but adopting the extra one would stand a machine-named record beside a curated one describing the same hardware. The gap
+stays visible as a gap.
+
+`MODELLED_TYPES` states the modelled set once, and `tests/test_adoption.py` parametrises over it through `build_snapshot` rather than through the classifier. That is what stops the tuple drifting from the builder: a type dropped from `TreeRoles` while left
+in the tuple would make its devices invisible to both paths at once.
+
+### `info` and `connection` resolve away from readings
+
+`ADOPTION_IDENTITY_NODE` (`info`) becomes the device's card fields; `ADOPTION_TOPOLOGY_NODE` (`connection`) is dropped, because it is a device-tree question rather than a reading.
+
+Keyed on the **node**, not on property names. The catalogs carry no marker for "this string is a device reference", so a name list is the only alternative — and it goes stale silently: `ebus-sdk`'s own `topology.py` covers `feeds-device-id` and
+`fed-by-device-id` and omits `grid-forming-entity`, which lives on the `grid` capability. A node is what the vocabulary defines.
+
+### `AdoptedProperty` carries the value; `DiscoveredMetadata` must not
+
+The two answer opposite questions and are separate types so that conflating them is a type error rather than a leak:
+
+| Type                 | Question                                     | Destination                       | Carries a value |
+| -------------------- | -------------------------------------------- | --------------------------------- | --------------- |
+| `DiscoveredMetadata` | "we model this device and read nothing here" | consumer diagnostics, which leave | **no**          |
+| `AdoptedProperty`    | "nothing here models this device at all"     | an entity on the same machine     | **yes**         |
+
+`AdoptedProperty` also carries the declared `format` and `settable` flag, which together are the value domain a consumer needs to build a control rather than a reading.
+
+### Additive by construction
+
+`adopted_devices` defaults to `()`. schema_0 never populates it — flat has no device tree to find an unmodelled device in, and panels upgrade to v1.0 and stay there, so adoption operates in the schema that is the terminus.
+
+A defaulted snapshot field rather than a `SchemaAdapter` member, deliberately: the protocol derives its required members from itself, so a member there would be required of every adapter package and would invalidate built adapter wheels.
+`ADAPTER_CONTRACT_VERSION` does not move.
+
 ## Linting and Formatting
 
 Pre-commit hooks run automatically on commit. To run all hooks manually:

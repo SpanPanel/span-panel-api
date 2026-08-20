@@ -52,6 +52,7 @@ def _device(
     name: str = "Backup Generator",
     nodes: dict[str, dict[str, dict[str, object]]] | None = None,
     values: dict[str, str] | None = None,
+    parent: str = PANEL,
 ) -> dict[str, str]:
     """One device's retained topics, as the broker hands them back.
 
@@ -64,6 +65,8 @@ def _device(
         "type": device_type,
         "name": name,
         "nodes": nodes or {},
+        "parent": parent,
+        "root": PANEL,
     }
     topics = {"$description": json.dumps(description), "$state": "ready"}
     topics.update(values or {})
@@ -353,3 +356,59 @@ def test_a_settable_property_on_a_modelled_device_is_never_adopted_and_so_never_
     """
     snapshot = _snapshot(_tree())
     assert snapshot.adopted_devices == ()
+
+
+# -- The proxy link is carried, not acted on ---------------------------------
+
+
+def test_a_device_the_enclosure_itself_declares_is_not_proxied() -> None:
+    """The ordinary case: a child of the tree root."""
+    tree = _with(_tree(), "generator-1", _device(UNMODELLED_TYPE))
+
+    device = _adopted(_snapshot(tree))["generator-1"]
+    assert device.parent == PANEL
+    assert device.proxied is False
+
+
+def test_a_device_proxied_by_a_peer_says_so() -> None:
+    """The shape the specification names, and the reason the field exists.
+
+    The reference tree's own `bess-mid` declares `parent: bess` -- the
+    `{proxier-id}-{proxied-id}` naming of `devices/proxy.md`. A vendor gateway
+    proxying its own sub-devices arrives the same way, and the parent link is the
+    only structural information about how they relate.
+    """
+    tree = _with(_tree(), "gateway-1", _device(UNMODELLED_TYPE, name="Vendor Gateway"))
+    tree = _with(tree, "gateway-1-sensor", _device(UNMODELLED_TYPE, name="Gateway Sensor", parent="gateway-1"))
+
+    adopted = _adopted(_snapshot(tree))
+    assert adopted["gateway-1"].proxied is False
+    assert adopted["gateway-1-sensor"].parent == "gateway-1"
+    assert adopted["gateway-1-sensor"].proxied is True
+
+
+def test_the_parent_link_changes_no_topology_here() -> None:
+    """Carried, not acted on -- see `AdoptedDevice.parent`.
+
+    Both devices are adopted as peers; nothing in this library nests one under
+    the other. Pinned so that if nesting is built later it is a deliberate change
+    with a test to update, rather than something that drifts in.
+    """
+    tree = _with(_tree(), "gateway-1", _device(UNMODELLED_TYPE))
+    tree = _with(tree, "gateway-1-sensor", _device(UNMODELLED_TYPE, parent="gateway-1"))
+
+    assert {d.device_id for d in _snapshot(tree).adopted_devices} == {"gateway-1", "gateway-1-sensor"}
+
+
+def test_a_description_declaring_no_parent_is_not_proxied() -> None:
+    """Absence is not a proxy claim.
+
+    `proxied` requires both a parent and a root to compare it against, so a
+    partial description answers False rather than guessing.
+    """
+    untyped = json.dumps({"homie": "5.0", "version": 1, "type": UNMODELLED_TYPE, "name": "Orphan", "nodes": {}})
+    tree = _with(_tree(), "orphan-1", {"$description": untyped, "$state": "ready"})
+
+    device = _adopted(_snapshot(tree))["orphan-1"]
+    assert device.parent is None
+    assert device.proxied is False

@@ -176,6 +176,26 @@ The alternative — a `set_property_topic(device, node, property)` member on `Sc
 
 No translation and no bounds check on the way out. Both exist on curated controls because this library knows what those properties mean; it knows nothing about an adopted one beyond its declaration.
 
+### The proxy link is carried, not acted on
+
+`AdoptedDevice.parent` holds the device id the device declares as its parent, and `AdoptedDevice.proxied` says whether that parent is a peer rather than the tree root. Neither changes topology: an adopted device is registered under the enclosure like every
+other sub-device.
+
+They exist because a _proxied_ unmodelled device is a real shape and we would otherwise flatten it away without noticing. The reference tree already contains one — `bess-mid` declares `parent: bess`, which is the `{proxier-id}-{proxied-id}` naming of the
+specification's `devices/proxy.md`. A vendor gateway proxying its own sub-devices arrives the same way, and the parent link is the only structural information about how they relate.
+
+`proxied` is computed here rather than left to the consumer because `root` is in hand here and is deliberately not carried onto the record: device ids are opaque, so a consumer holding one device cannot tell the enclosure's id from a sibling's.
+
+**Why the nesting is not built.** [python-sdk#49](https://github.com/electrification-bus/python-sdk/issues/49#issuecomment-5359203067) settled two things that bear on it. Proxied ids differ by design — the prefix is the proxier's own id, so several
+enclosures on a shared broker each proxying the same physical device produce different ids on purpose, and consumers are told to correlate by `info/serial-number` and never by device id. And `ebus-sdk` 0.21.0 shipped `DeviceSpec` and `DeviceTreeBuilder`
+([python-sdk#57](https://github.com/electrification-bus/python-sdk/issues/57)), with the maintainer's stated next step being to reconcile the existing graph builder against it rather than land both.
+
+So the tree model is under active reconciliation upstream. Carrying the two fields costs nothing and captures the evidence; building nesting semantics against a shape being reshaped this week would be building against a moving target.
+
+That same comment strengthens two choices already made here. Its deferral mechanism — `device_id` accepts a callable, `None` defers the device, and `resolve_deferred()` resumes when the identifier arrives — is the producer-side form of resolving identity
+_before_ a device exists, which is what a consumer's freeze-at-first-sighting does from the other end. And "there is deliberately no existence predicate … expressing it by not calling `add()` is right" is the rule `TreeRoles` and the capability gates
+already follow: presence in the tree is the signal, and there is no flag to consult.
+
 ### Additive by construction
 
 `adopted_devices` defaults to `()`. schema_0 never populates it — flat has no device tree to find an unmodelled device in, and panels upgrade to v1.0 and stay there, so adoption operates in the schema that is the terminus.

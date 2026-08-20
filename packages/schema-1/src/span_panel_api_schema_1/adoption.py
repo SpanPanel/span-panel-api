@@ -110,10 +110,18 @@ def _adopt(device: DiscoveredDevice, declared: str) -> AdoptedDevice:
             return None
         return optional_str(device.get_property(ADOPTION_IDENTITY_NODE, property_id))
 
+    parent = optional_str(description.get("parent"))
+    root = optional_str(description.get("root"))
     return AdoptedDevice(
         device_id=device.device_id,
         device_type=declared,
         name=optional_str(description.get("name")),
+        parent=parent,
+        # A peer proxies this device when its declared parent is something other
+        # than the tree root. Compared here because `root` is in hand here and is
+        # not carried onto the record: a consumer holding one device could not
+        # otherwise tell the enclosure's id from a sibling's, ids being opaque.
+        proxied=parent is not None and root is not None and parent != root,
         vendor_name=card(PROP_VENDOR_NAME),
         model=card(PROP_MODEL),
         serial_number=card(PROP_SERIAL_NUMBER),

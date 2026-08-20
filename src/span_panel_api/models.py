@@ -732,6 +732,41 @@ class AdoptedDevice:
     hardware_version: str | None = None
     """`info/hardware-version` -- for the device card."""
 
+    parent: str | None = None
+    """The device id this device declares as its parent, verbatim.
+
+    Carried rather than acted on. An adopted device is registered under the
+    enclosure like every other sub-device this library's consumers build, so this
+    field changes no topology today -- it exists so that the first real panel
+    carrying a *proxied* unmodelled device tells us its shape instead of having
+    it flattened away.
+
+    That case is not hypothetical: the reference tree's own `bess-mid` declares
+    `parent: bess`, which is the specification's `{proxier-id}-{proxied-id}`
+    naming (`devices/proxy.md`). A vendor gateway proxying its own sub-devices
+    would arrive the same way, and the parent link is the only structural
+    information about how they relate.
+
+    Not acted on *yet*, deliberately. `ebus-sdk` 0.21.0 introduced `DeviceSpec`
+    and `DeviceTreeBuilder` (python-sdk#57) and the maintainer's stated next step
+    is reconciling the existing graph builder against it rather than landing
+    both, so the tree model is being reshaped upstream. Building nesting
+    semantics against a shape under active reconciliation would be building
+    against a moving target; carrying the field costs nothing and captures the
+    evidence for when it settles.
+    """
+
+    proxied: bool = False
+    """Whether this device is proxied by a peer rather than by the enclosure.
+
+    True when the declared `parent` is a device other than the tree root. The
+    distinction the raw `parent` cannot express on its own, because a consumer
+    holding one device has no way to tell the enclosure's id from a sibling's --
+    ids are opaque by design, and per python-sdk#49 a proxied id's prefix is the
+    *proxier's* id, so the same physical device carries different ids under
+    different enclosures.
+    """
+
     properties: tuple[AdoptedProperty, ...] = ()
     """Everything outside `info` and `connection`, in declaration order."""
 

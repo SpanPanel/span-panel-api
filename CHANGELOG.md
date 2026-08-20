@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- **An adopted device carries the proxy link it declares: `AdoptedDevice.parent` and `AdoptedDevice.proxied`.** Carried rather than acted on — an adopted device is still registered under the enclosure — because a _proxied_ unmodelled device is a real shape
+  that would otherwise be flattened away unrecorded. The reference tree already contains one: `bess-mid` declares `parent: bess`, the `{proxier-id}-{proxied-id}` naming of `devices/proxy.md`. `proxied` is derived against the tree `root` in the adapter,
+  because device ids are opaque and a consumer holding one device cannot tell the enclosure's id from a sibling's.
+- **The nesting is deliberately not built yet.** [python-sdk#49](https://github.com/electrification-bus/python-sdk/issues/49#issuecomment-5359203067) records that proxied ids differ by design and that consumers correlate by `info/serial-number` rather than
+  by device id, and `ebus-sdk` 0.21.0 shipped `DeviceSpec`/`DeviceTreeBuilder` ([python-sdk#57](https://github.com/electrification-bus/python-sdk/issues/57)) with the graph builder still to be reconciled against it. The tree model is being reshaped
+  upstream, so the fields capture the evidence and the topology waits.
+
 - **A settable property on an adopted device can be written, and the write cannot reach anything else: `AdoptedProperty.set_topic` and `SpanMqttClient.set_adopted_property`.** The topic is populated only for a settable property on a device `is_modelled`
   rejects, so it is the scoping that authorises the write rather than a check a caller has to remember. The transport resolves the property against the current snapshot's `adopted_devices` and publishes to the topic that property carries; no topic is
   accepted from the caller, and a device this library models produces no `AdoptedDevice` to find.

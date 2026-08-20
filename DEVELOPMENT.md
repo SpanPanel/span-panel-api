@@ -108,6 +108,25 @@ Two rules keep it from producing false findings:
   echoing the token back is not. Membership is enumerated in `catalog.py`'s `UNIT_FAMILIES`, and a catalog unit token that is neither a known family nor a known concrete unit fails until a human classifies it.
 - **An absence is terminal.** A property no catalog defines — the EVSE's `config` node, which is not an eBus capability at all — is reported once as absent and never as a unit or datatype mismatch against a definition that does not exist.
 
+### What a panel declares that this library reads nothing from
+
+`schema_1`'s `build_field_metadata` returns a second kind of row alongside the curated ones: for every property a device's `$description` declares that the adapter addresses nowhere, a row under the `discovered.` namespace carrying the declared `datatype`,
+the declared `unit`, and whether a value has been published for it. Never the value — these rows exist to be forwarded in a consumer's diagnostics, which leave the machine they were generated on.
+
+It is additive by construction. There is no new `SchemaAdapter` member and no `ADAPTER_CONTRACT` bump: `_derive_required_members` makes every public protocol member required of every adapter distribution, so adding one would reject every built wheel. An
+adapter that emits no such rows is indistinguishable from one built before the namespace existed.
+
+The flat adapter emits none, deliberately. Its metadata comes from the REST `types` document, which the migration guide describes as the superset across all hardware rather than what one panel has — so "declared and unaddressed" there would describe the
+schema document and could not answer the question this exists to ask.
+
+**The report is only as good as the enumerations behind it, so they are proved rather than trusted.** The adapter decides "addressed" from four tables: `_PROPERTY_FIELD_MAP`, the lugs direction tables, the charge-limit resolution, and
+`_CONSUMED_WITHOUT_A_ROW` — the properties the snapshot mapper reads that carry no metadata row because they are identity, topology, or a qualifier rather than a reading. A stale entry in the last of those fails _silently_, by keeping a property out of the
+report, and a smaller report looks exactly like a panel with nothing new on it.
+
+`test_schema_one_discovery.py` closes that by experiment: it republishes every property the reference tree declares with a legal different value, rebuilds the snapshot through the real mapper, and asserts both directions — every claimed-read property moves
+a snapshot field, and every reported property moves none. `_CONSUMED_OFF_SNAPSHOT` holds the three declarations consumed by a route no snapshot field can show (tier-1 dispatch, the shadowed islanding tier, the unreached feedthrough branch); each names the
+code that reads it, and each fails the day its property does move a field.
+
 ## Linting and Formatting
 
 Pre-commit hooks run automatically on commit. To run all hooks manually:

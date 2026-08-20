@@ -12,23 +12,31 @@ the same capability type exposes different properties on different device
 classes — ``meter`` on the panel is voltage, on a circuit is power and energy,
 on a lugs device is both currents. The REST ``deviceClasses`` document is the
 superset across all hardware; the description is what *this* panel actually has.
+
+**Two kinds of row, one map.** Alongside the curated rows this builds a
+discovery row for every property the tree declares that this adapter addresses
+nowhere, namespaced so a consumer can partition the two before it reads either.
+See `build_discovery`.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from span_panel_api.models import FieldMetadata
+from span_panel_api.models import DiscoveredMetadata, FieldMetadata, discovery_path
 from span_panel_api_schema_1.charge_limit import ChargeLimitProperty, resolve_charge_limit
 from span_panel_api_schema_1.const import (
+    DEVICE_TYPE_PREFIX,
     NODE_BREAKER,
     NODE_CONNECTION,
     NODE_DOOR,
+    NODE_GRID,
     NODE_INFO,
     NODE_LOAD_SHED,
     NODE_METER,
     NODE_PCS,
     NODE_POWER_FLOWS,
+    NODE_SHED,
     NODE_SHED_FORECAST,
     NODE_SOC,
     NODE_STATUS,
@@ -40,6 +48,7 @@ from span_panel_api_schema_1.const import (
     TYPE_CIRCUIT,
     TYPE_EVSE,
     TYPE_LUGS,
+    TYPE_MID,
     TYPE_PANEL,
     TYPE_PV,
 )
@@ -210,6 +219,9 @@ def build_field_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMeta
     metadata.update(_lugs_metadata(devices, upstream=True, fields=_UPSTREAM_LUGS_FIELDS))
     metadata.update(_lugs_metadata(devices, upstream=False, fields=_DOWNSTREAM_LUGS_FIELDS))
     metadata.update(_charge_limit_metadata(devices))
+    # Namespaced, so a consumer partitions them out before it reads the map as
+    # an inventory of produced fields. See `build_discovery`.
+    metadata.update(build_discovery(devices))
     return metadata
 
 
@@ -371,3 +383,209 @@ def _lookup(
         if key.endswith(suffix) and key[: -len(suffix)].startswith(device_type):
             return value
     return None
+
+
+_CONSUMED_WITHOUT_A_ROW: tuple[tuple[str, str, str], ...] = (
+    # Properties the snapshot mapper reads that carry no `_PROPERTY_FIELD_MAP`
+    # row, and never will: a row exists to state a *reading's* unit and
+    # datatype, and none of these is a reading. They are build identity, the
+    # topology the mapper resolves roles from, and the qualifiers a consumer
+    # renders beside a reading rather than as one.
+    #
+    # Without this table `build_discovery` would report all of them as
+    # unaddressed, because the only enumeration of what schema_1 reads was the
+    # metadata map — which is a third of it. Every entry is proved by
+    # experiment: `test_schema_one_discovery` republishes each one against the
+    # reference tree and fails if the snapshot does not move, so an entry that
+    # stops being true is a red build rather than a property that quietly
+    # disappears from discovery.
+    #
+    # --- Panel identity, read by the snapshot's panel fields -----------------
+    (TYPE_PANEL, NODE_INFO, "hardware-version"),
+    (TYPE_PANEL, NODE_INFO, "model"),
+    (TYPE_PANEL, NODE_INFO, "serial-number"),
+    (TYPE_PANEL, NODE_INFO, "vendor-name"),
+    # --- The PCS arbitration's inputs ---------------------------------------
+    # `import-limit`, `binding-constraint` and `active` are the result and carry
+    # rows; these thirteen explain the result. See the `pcs` rows above.
+    (TYPE_PANEL, NODE_PCS, "enabled"),
+    (TYPE_PANEL, NODE_PCS, "feed-import-limit"),
+    (TYPE_PANEL, NODE_PCS, "feed-import-limit-active"),
+    (TYPE_PANEL, NODE_PCS, "feed-import-limit-enablement"),
+    (TYPE_PANEL, NODE_PCS, "off-grid-import-limit"),
+    (TYPE_PANEL, NODE_PCS, "off-grid-import-limit-active"),
+    (TYPE_PANEL, NODE_PCS, "off-grid-import-limit-enablement"),
+    (TYPE_PANEL, NODE_PCS, "operator-import-limit"),
+    (TYPE_PANEL, NODE_PCS, "operator-import-limit-active"),
+    (TYPE_PANEL, NODE_PCS, "operator-import-limit-enablement"),
+    (TYPE_PANEL, NODE_PCS, "requested-import-limit"),
+    (TYPE_PANEL, NODE_PCS, "requested-import-limit-active"),
+    (TYPE_PANEL, NODE_PCS, "requested-import-limit-enablement"),
+    # --- The shed policy document and the forecast's refinements -------------
+    (TYPE_PANEL, NODE_SHED, "policy"),
+    (TYPE_PANEL, NODE_SHED_FORECAST, "confidence"),
+    (TYPE_PANEL, NODE_SHED_FORECAST, "full-charge-time-to-priority-shed"),
+    (TYPE_PANEL, NODE_SHED_FORECAST, "full-charge-total-time-remaining"),
+    # --- Circuit topology and PCS membership --------------------------------
+    (TYPE_CIRCUIT, NODE_CONNECTION, "feeds-device-id"),
+    (TYPE_CIRCUIT, NODE_PCS, "managed"),
+    (TYPE_CIRCUIT, NODE_PCS, "priority"),
+    # --- Lugs direction and the upstream device's link -----------------------
+    # `info/direction` decides which lugs device is the main meter and which is
+    # the feedthrough, so it moves ten panel fields without being one.
+    (TYPE_LUGS, NODE_CONNECTION, "fed-by-device-id"),
+    (TYPE_LUGS, NODE_CONNECTION, "fed-by-device-status"),
+    (TYPE_LUGS, NODE_INFO, "direction"),
+    # --- MID ------------------------------------------------------------------
+    # The islanding authority. Every field it feeds is device-card identity or
+    # a state string, so the whole device is here rather than in the map.
+    (TYPE_MID, NODE_GRID, "grid-forming-entity"),
+    (TYPE_MID, NODE_GRID, "grid-state"),
+    (TYPE_MID, NODE_GRID, "islanding-state"),
+    (TYPE_MID, NODE_INFO, "firmware-version"),
+    (TYPE_MID, NODE_INFO, "hardware-version"),
+    (TYPE_MID, NODE_INFO, "model"),
+    (TYPE_MID, NODE_INFO, "serial-number"),
+    (TYPE_MID, NODE_INFO, "vendor-name"),
+    # --- DER identity ---------------------------------------------------------
+    (TYPE_EVSE, NODE_INFO, "firmware-version"),
+    (TYPE_EVSE, NODE_INFO, "model"),
+    (TYPE_EVSE, NODE_INFO, "serial-number"),
+    (TYPE_EVSE, NODE_INFO, "vendor-name"),
+    (TYPE_PV, NODE_INFO, "firmware-version"),
+)
+"""Declarations the mapper reads into the snapshot without a metadata row.
+
+The charge-current pair is deliberately absent: which node and which property
+carry it is the charger's choice, so `build_discovery` resolves it through
+`resolve_charge_limit` exactly as `_charge_limit_metadata` does, rather than
+naming one spelling here and leaving the other reported as unaddressed.
+"""
+
+_CONSUMED_OFF_SNAPSHOT: dict[tuple[str, str, str], str] = {
+    (TYPE_PANEL, NODE_INFO, "data-model-version"): (
+        "tier-1 adapter dispatch (span_panel_api.dispatch) — it chooses which adapter "
+        "parses the tree, so it is consumed before any snapshot exists"
+    ),
+    (TYPE_PANEL, NODE_SHED, "asserted-islanding-state"): (
+        "tier 2 of resolve_islanding_state (panel.py), shadowed wherever a MID answers "
+        "at tier 1, and the write target of set_dominant_power_source_topic"
+    ),
+    (TYPE_LUGS, NODE_CONNECTION, "feeds-device-id"): (
+        "the downstream-lugs feedthrough branch of resolve_relative_position "
+        "(devices.py), which no producer currently reaches"
+    ),
+}
+"""Declarations this library reads by a route no snapshot field can show.
+
+The category the republish experiment cannot measure, and therefore the one at
+risk of becoming an allowlist. It is held to the opposite assertion instead:
+`test_an_off_snapshot_route_that_became_observable_must_be_retired` fails the
+moment one of these does move a snapshot field, because at that point the route
+is no longer the only thing consuming it and the entry is hiding a real reader.
+
+Three, and each names the code that reads it. The consumer-side mirror is
+`_INTERNAL_ROUTES` in the integration's `test_declared_but_unread`; they agree
+because they are answering the same question of the same tree, not because
+either copies the other.
+"""
+
+_ADDRESSED: frozenset[tuple[str, str, str]] = (
+    frozenset((device_type, node_id, property_id) for device_type, node_id, property_id, _ in _PROPERTY_FIELD_MAP)
+    | frozenset(
+        (TYPE_LUGS, NODE_METER, property_id) for property_id, _ in (*_UPSTREAM_LUGS_FIELDS, *_DOWNSTREAM_LUGS_FIELDS)
+    )
+    | frozenset(_CONSUMED_WITHOUT_A_ROW)
+    | frozenset(_CONSUMED_OFF_SNAPSHOT)
+)
+"""Every ``(device type, node, property)`` this library addresses, from all four tables.
+
+Derived rather than restated, so a new `_PROPERTY_FIELD_MAP` row leaves
+discovery without anyone remembering to. The charge-current pair is added per
+charger at build time; see `build_discovery`.
+"""
+
+
+def build_discovery(devices: list[DiscoveredDevice]) -> dict[str, DiscoveredMetadata]:
+    """Metadata rows for every property this tree declares that nothing here reads.
+
+    The runtime half of the declared-but-unread question. A vendored capture can
+    only answer it for the panel that was captured; a panel in the field that
+    starts publishing a property fails nothing and tells nobody until someone
+    recaptures. These rows put the same answer in front of a maintainer for the
+    panel actually in front of the user.
+
+    Keyed under `DISCOVERY_NAMESPACE`, never as a snapshot field path, because a
+    consumer's curated inventories are keyed by field path and a discovered row
+    reaching one of them would read as a produced field nothing renders — which
+    is the shape of a real defect. The namespace makes the partition one string
+    test applied once.
+
+    **Declarations only.** A row carries the property's declared unit and
+    datatype and whether a value has arrived. It never carries the value: these
+    rows are built to be forwarded in consumer diagnostics, which leave the
+    machine they were generated on.
+
+    Emitted by this adapter alone. schema_0 builds its metadata from the REST
+    ``types`` document, which the migration guide describes as the superset
+    across all hardware rather than what one panel has — so "declared and
+    unaddressed" there would describe the schema document and could not answer
+    the question this exists to ask.
+    """
+    addressed = set(_ADDRESSED)
+    for device in devices:
+        evse_type = declared_type(device)
+        if not evse_type.startswith(TYPE_EVSE):
+            continue
+        surface = resolve_charge_limit(device)
+        if surface is None:
+            continue
+        for declaration in (surface.limit, surface.ceiling):
+            if declaration is not None:
+                addressed.add((evse_type, surface.node, declaration.property_id))
+
+    declarations: dict[str, tuple[str | None, str]] = {}
+    valued: set[str] = set()
+    for device in devices:
+        device_type = declared_type(device)
+        if not device_type:
+            continue
+        for node_id, node in declared_nodes(device.description or {}).items():
+            for property_id, definition in declared_properties(node).items():
+                if _addressed_by(addressed, device_type, node_id, property_id):
+                    continue
+                path = discovery_path(_short_type(device_type), node_id, property_id)
+                declarations.setdefault(
+                    path,
+                    (optional_str(definition.get("unit")), str(definition.get("datatype") or "string")),
+                )
+                if device.get_property(node_id, property_id) is not None:
+                    valued.add(path)
+
+    return {
+        path: DiscoveredMetadata(unit=unit, datatype=datatype, retained=path in valued)
+        for path, (unit, datatype) in declarations.items()
+    }
+
+
+def _short_type(device_type: str) -> str:
+    """The device type as the capability catalog and the gap inventories spell it."""
+    if device_type.startswith(DEVICE_TYPE_PREFIX):
+        return device_type[len(DEVICE_TYPE_PREFIX) :]
+    return device_type
+
+
+def _addressed_by(addressed: set[tuple[str, str, str]], device_type: str, node_id: str, property_id: str) -> bool:
+    """Whether any addressed row covers this declaration, subtypes included.
+
+    Carries `_lookup`'s subtype rule for the same reason it exists there: eBus
+    device types are hierarchical and a subtype carries its parent's properties,
+    so a device typed ``X.Y`` is served by a row written for ``X``. Without it a
+    panel that subtypes its lugs devices would report every mapped lugs property
+    as newly discovered — which is the false positive that would teach a
+    maintainer to stop reading this.
+    """
+    return any(
+        node == node_id and prop == property_id and (device_type == mapped_type or device_type.startswith(f"{mapped_type}."))
+        for mapped_type, node, prop in addressed
+    )

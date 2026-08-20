@@ -31,6 +31,8 @@ from .exceptions import (
 )
 from .factory import create_span_client
 from .models import (
+    DISCOVERY_NAMESPACE,
+    DiscoveredMetadata,
     FieldMetadata,
     HomieSchemaTypes,
     SpanBatterySnapshot,
@@ -43,6 +45,7 @@ from .models import (
     V2AuthResponse,
     V2HomieSchema,
     V2StatusInfo,
+    is_discovery_path,
 )
 from .mqtt import MqttClientConfig, SpanMqttClient
 from .phase_validation import (
@@ -80,6 +83,13 @@ __all__ = [  # noqa: RUF022
     # Metadata
     "FieldMetadata",
     "HomieSchemaTypes",
+    # Added 2026-08-20: runtime discovery. Purely additive -- an adapter that
+    # emits no discovered rows is indistinguishable from one built before the
+    # namespace existed, and a consumer that never partitions on the namespace
+    # sees exactly the curated rows it saw before.
+    "DISCOVERY_NAMESPACE",
+    "DiscoveredMetadata",
+    "is_discovery_path",
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",

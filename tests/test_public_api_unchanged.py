@@ -31,6 +31,15 @@ EXPECTED_PUBLIC_API = {
     # Metadata
     "FieldMetadata",
     "HomieSchemaTypes",
+    # Added 2026-08-20: runtime discovery -- the namespace an adapter puts
+    # declared-but-unaddressed properties under, the row type it puts there, and
+    # the predicate a consumer partitions with. Purely additive: an adapter that
+    # emits none of these rows is indistinguishable from one built before the
+    # namespace existed, and a consumer that never partitions sees exactly the
+    # curated rows it saw before.
+    "DISCOVERY_NAMESPACE",
+    "DiscoveredMetadata",
+    "is_discovery_path",
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",

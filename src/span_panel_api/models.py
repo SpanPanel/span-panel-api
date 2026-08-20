@@ -429,6 +429,74 @@ class FieldMetadata:
     """
 
 
+DISCOVERY_NAMESPACE = "discovered"
+"""Field-path namespace for properties an adapter declares and does not address.
+
+Rows under this namespace are **not** curated fields. They name a wire property
+the panel's own ``$description`` declares and that the running adapter maps to
+no snapshot field and reads nowhere — the runtime half of the
+declared-but-unread question, asked of the panel in front of the user rather
+than of a vendored capture.
+
+Namespaced rather than flagged because the failure this prevents is a *silent*
+one. A consumer's curated inventories are keyed by snapshot field path
+(``panel.``, ``circuit.``, ``battery.``, …), and a discovered row that reached
+one of them would be read as a produced field nothing renders, which is the
+shape of a real defect. A distinct prefix means the partition is a string test
+any consumer can apply once, before any other question is asked of the map, and
+that a discovered row landing in a curated set is a visible error rather than an
+extra entry nobody notices.
+
+The path body is ``{device type}/{node}/{property}``, the same rendering the
+capability catalogs and the consumer-side gap inventories use, so a maintainer
+reading a row can look it up without translating it.
+"""
+
+_DISCOVERY_PREFIX = f"{DISCOVERY_NAMESPACE}."
+
+
+def discovery_path(device_type: str, node_id: str, property_id: str) -> str:
+    """The namespaced field path for one declared-but-unaddressed property.
+
+    `device_type` is the eBus type with its common ``energy.ebus.device.``
+    prefix already stripped by the caller — the adapter owns that vocabulary,
+    and this function owns only the namespace.
+    """
+    return f"{_DISCOVERY_PREFIX}{device_type}/{node_id}/{property_id}"
+
+
+def is_discovery_path(field_path: str) -> bool:
+    """Whether `field_path` names a discovered property rather than a curated field."""
+    return field_path.startswith(_DISCOVERY_PREFIX)
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveredMetadata(FieldMetadata):
+    """A metadata row for a property the panel declares and the adapter does not read.
+
+    Only ever appears under `DISCOVERY_NAMESPACE`. Carries the declaration and
+    nothing else: the property's declared ``unit`` and ``datatype``, and whether
+    the panel has published a value for it — never the value. These rows exist
+    to be forwarded to a maintainer through consumer diagnostics, which leave
+    the machine they were generated on, so the type deliberately has no member a
+    reading could be put in.
+
+    ``resolved`` is always True here and says nothing new: a discovered row
+    exists *because* a device declared the property, so the device is found by
+    construction. `retained` is the question that has an answer.
+    """
+
+    retained: bool = False
+    """Whether any device declaring this property has published a value for it.
+
+    False is the declared-but-never-valued case panelbench's
+    ``test_declared_but_unvalued`` looks for from the producer side — a property
+    the firmware advertises and never fills. Distinguishing it matters for the
+    only decision these rows inform: a declaration with no traffic behind it is
+    not a surface worth curating yet.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class V2AuthResponse:
     """Response from POST /api/v2/auth/register."""

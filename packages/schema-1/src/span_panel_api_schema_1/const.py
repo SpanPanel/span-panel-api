@@ -10,6 +10,16 @@ from __future__ import annotations
 
 # -- Device classes ---------------------------------------------------------
 
+DEVICE_TYPE_PREFIX = "energy.ebus.device."
+"""The common stem every eBus device type in this vocabulary carries.
+
+Stripped when a type has to be *named* rather than matched — the discovery
+namespace's ``{device type}/{node}/{property}`` rows, which a maintainer reads
+beside a capability catalog and a gap inventory that both spell the type short.
+Matching still uses the full strings below, because a subtype check has to see
+the whole type.
+"""
+
 TYPE_PANEL = "energy.ebus.device.distribution-enclosure"
 TYPE_CIRCUIT = "energy.ebus.device.circuit"
 TYPE_BESS = "energy.ebus.device.bess"

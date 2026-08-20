@@ -89,6 +89,25 @@ A failure means the vendored capture and panelbench have diverged. That is infor
 `spec_lock.json` records `synced_commit`, not a specification version. That is deliberate: the 2026-07-31 spec changelog changed circuit sign-frame semantics **in place** with no version bump and stated no re-pin was required. A version pin would not have
 noticed.
 
+### The acknowledged-divergence register
+
+`test_schema_one_conformance.py` asks whether the names this adapter reads exist in the catalogs. `test_catalog_divergence.py` asks the next question, and it is the one that corrupts readings when the answer is wrong: **does the `unit` and `datatype` a
+producer declares for a property agree with the catalog's definition of it?** Agreement is silence. Disagreement is a finding, and it is never resolved silently in either direction — do not change a wire reader to agree with the catalog, and do not assume
+the catalog is right. Both have been wrong.
+
+Four producers are surveyed: the two vendored simulator captures, the reference parent/child tree, and the flat schema document captured from a live panel. The flat document has no capability nodes, so its properties reach the catalogued vocabulary through
+the snapshot field path both adapters' metadata tables name — and only where the two spell the property identically, so a pre-catalog **rename** (`dipole` for `breaker/poles`) is left out rather than reported as a divergence.
+
+When a finding is real, record it in `_REGISTER` with what the wire says, what the catalog says, which producers show it, a reason, and a date. That is a human saying "SPAN ships this and we compensate", and it fails in both directions like every other
+baseline here: a new divergence fails until somebody records it, and a **recorded divergence that has disappeared fails until its line is removed**. The second direction is what makes the register self-cleaning when a firmware or a catalog is fixed, and it
+is why the register is not a suppression list.
+
+Two rules keep it from producing false findings:
+
+- **An abstract unit is a dimension, not a unit.** The catalog gives `soc/soe` and `info/nameplate-capacity` as `unit: "energy"` and requires the publisher to substitute a real one — a BESS in kWh, a water heater in Wh. A member of the family is silent;
+  echoing the token back is not. Membership is enumerated in `catalog.py`'s `UNIT_FAMILIES`, and a catalog unit token that is neither a known family nor a known concrete unit fails until a human classifies it.
+- **An absence is terminal.** A property no catalog defines — the EVSE's `config` node, which is not an eBus capability at all — is reported once as absent and never as a unit or datatype mismatch against a definition that does not exist.
+
 ## Linting and Formatting
 
 Pre-commit hooks run automatically on commit. To run all hooks manually:

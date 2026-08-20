@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- **The capability catalogs are used as a validator, not just as a vocabulary list: `span_panel_api_schema_1.catalog`.** Sixteen catalogs have been vendored since v1.0 landed and were read only to assert that a catalog _exists_ for every node the adapter
+  addresses. Nothing compared a declared `unit` or `datatype` against the catalog's definition of the same property, which is the comparison that catches a mislabel — and the one mislabel this repository has met (`meter/active-power` declared `kW` while
+  the values are watts, a 1000x error) was found because a person noticed a sibling device declaring the same quantity differently. The new module compares one declaration against one catalog definition and classifies the result;
+  `tests/test_catalog_divergence.py` runs it across all four vendored producer captures and holds the outcome against an acknowledged-divergence register.
+- **Agreement is silence; disagreement is surfaced, never silently resolved.** A finding is not a licence to change a wire reader to match the catalog, nor to assume the catalog is right — both sides have been wrong. It is recorded in `_REGISTER` with what
+  the wire says, what the catalog says, which producers show it, a reason and a date, and the baseline fails in both directions: a new divergence fails until somebody records it, and a recorded divergence that has **disappeared** fails until its line is
+  removed. That second direction is what keeps the register self-cleaning rather than a suppression list.
+- **An abstract unit is a dimension, and comparing it as a string would report conformance as the defect.** `soc/soe`, `soc/total-energy-storage`, `soc/loadup-headroom` and `info/nameplate-capacity` are all `unit: "energy"`, which the specification
+  requires a publisher to substitute a real unit for — a BESS in kWh, a water heater in Wh. `UNIT_FAMILIES` enumerates membership rather than deriving it from an SI-prefix rule, so a member is silent, echoing the placeholder back is a finding, and an
+  energy unit nobody enumerated is a question for a human. A catalog unit token that is neither a known family nor a known concrete unit fails until it is classified, so a new abstract family upstream cannot arrive as sixty false findings.
+- **An absence is terminal and is reported once.** A property no catalog defines — the EVSE's `config` node, which is not an eBus capability at all, and the `status`/`meter`/`info` extensions SPAN publishes — has no definition to disagree with, so it is
+  reported as absent rather than as every field mismatching against nothing. That keeps `_SPAN_EXTENSIONS` the single home for the read-set half of that question instead of duplicating its judgements here.
+- **The flat schema document is surveyed too, and it is where the known mislabel lives.** It declares properties per device type with no capability node to look a catalog up by, so its properties reach the catalogued vocabulary through the snapshot field
+  path both adapters' metadata tables already name — derived from those tables rather than restated, so the join cannot outlive them. The join is admitted only where the two sides spell the property identically: fifteen flat properties reach a catalogued
+  property under a different name (`dipole` for `breaker/poles`, `software-version` for `info/firmware-version`), and comparing across a rename would invent divergences out of the pre-catalog spelling that having two adapters already handles.
+
 - **Per-DER connection health reaches the snapshot: `SpanEvseSnapshot.connected` and `SpanPVSnapshot.connected`.** `battery.connected` has carried the enclosure's view of the link to the BESS since v1.0 landed, from the upstream lugs'
   `connection/fed-by-device-status`. The other half of the same capability — a circuit's `connection/feeds-device-status`, which is how the enclosure reports the link to a PV or a charger — reached nothing, so only one of a panel's three DER classes had a
   link-health field. Both new fields are `bool | None` and mirror `battery.connected` exactly, read by `build_pv` and `build_evse` through the new `feed_connection_statuses`.

@@ -176,14 +176,31 @@ def test_no_bess_yields_the_empty_battery_snapshot() -> None:
 
 
 def test_the_capture_is_a_charging_battery() -> None:
-    """The premise of every sign assertion below, stated once and checked.
+    """The premise of every sign assertion below, derived rather than assumed.
 
-    A sign convention can only be tested against a known physical state. This
-    capture has the BESS charging: the enclosure meters it the way it meters a
-    circuit it feeds, so a battery drawing power reads *negative* there. Were the
-    capture ever recaptured with the battery discharging, this fails first and
-    says so, rather than the negation tests failing and reading as a mapper bug.
+    A sign convention can only be tested against a known physical state, and
+    "negative means charging" is the claim under test, so reading the state off
+    the sign would be circular. The enclosure's four power flows balance instead
+    -- ``pv + battery + grid == site``, with ``grid`` positive when importing --
+    and solving that identity says which way the battery is going without
+    appealing to any convention this library chose.
+
+    In this capture 8500 W of PV meets 2653 W of site load and exports 2347 W;
+    the 3500 W left over is going into the battery. So the battery is charging,
+    and both the enclosure and the BESS publish that as a negative number.
+
+    Were the capture ever retaken with the battery discharging, this fails first
+    and says so, rather than the negation tests failing and reading as a mapper
+    bug.
     """
+    flows = {name: float(_published("example-40t-001", f"power-flows/{name}")) for name in ("pv", "battery", "grid", "site")}
+
+    assert flows["pv"] + flows["battery"] + flows["grid"] == pytest.approx(flows["site"])
+    # PV alone exceeds the site load, so the surplus has nowhere to go but the
+    # battery and the grid -- and the grid term is an export.
+    assert flows["pv"] > flows["site"]
+    assert flows["grid"] < 0
+    assert flows["battery"] < 0
     assert float(_published("bess", BESS_POWER_TOPIC)) < 0
 
 

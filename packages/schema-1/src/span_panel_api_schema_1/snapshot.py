@@ -210,13 +210,18 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         pcs=build_pcs(panel),
         evse={
             key: build_evse(device, feeds, node_id=key, feed_statuses=feed_statuses)
-            for device, key in _harmonised_evse_keys(roles.evse).items()
+            for device, key in harmonised_evse_keys(roles.evse).items()
         },
     )
 
 
-def _harmonised_evse_keys(evse_devices: Sequence[DiscoveredDevice]) -> dict[DiscoveredDevice, str]:
+def harmonised_evse_keys(evse_devices: Sequence[DiscoveredDevice]) -> dict[DiscoveredDevice, str]:
     """Key each EVSE by its serial, which is what flat firmware keys it by.
+
+    Public because the command topics need the inverse of it: a caller holds a
+    snapshot key and the wire is addressed by device id, and rebuilding that
+    correspondence anywhere else is how a control ends up writing to the wrong
+    charger.
 
     **This library is the harmonisation layer.** The integration builds an EVSE
     entity's `unique_id` and its device-registry `identifiers` from what it finds

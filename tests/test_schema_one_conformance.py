@@ -41,6 +41,7 @@ import re
 import pytest
 
 from span_panel_api_schema_1 import const
+from span_panel_api_schema_1.charge_limit import SPELLINGS
 from span_panel_api_schema_1.field_metadata import _PROPERTY_FIELD_MAP
 
 # Defined in panel.py rather than const.py, which is itself the point: the read
@@ -124,6 +125,16 @@ def _catalog(node: str) -> dict[str, object]:
 
 
 def _catalog_properties(node: str) -> set[str]:
+    """The property set a catalog defines, or an empty one where no catalog exists.
+
+    Empty rather than an error, because "no catalog defines this node" is a real
+    and legal state — `config` is one — and the checks below already have the
+    vocabulary to say what it means. Raising here instead would take the two
+    tests that ask the interesting question (is every name either catalogued or
+    a declared extension?) and turn them into a FileNotFoundError from a helper.
+    """
+    if not (_CATALOGS / f"{node}.json").exists():
+        return set()
     properties = _catalog(node).get("properties", {})
     assert isinstance(properties, dict)
     return set(properties)
@@ -147,6 +158,16 @@ def _read_pairs() -> set[tuple[str, str]]:
     `const`, because not all of them live there.
     """
     pairs = {(node, property_id) for _, node, property_id, _ in _PROPERTY_FIELD_MAP}
+
+    # The EVSE charge-current surface, which neither source above can express.
+    # It is addressed through neither a metadata row nor a `NODE_*`/`PROP_*`
+    # call: the node and property are chosen at runtime from whichever spelling
+    # the charger's own `$description` declares, so the adapter's read set for
+    # it *is* the spelling table. Derived from that table rather than restated,
+    # for the same reason as everything else here.
+    pairs.update(
+        (spelling.node, property_id) for spelling in SPELLINGS for property_id in (spelling.ceiling, spelling.limit)
+    )
 
     for path in sorted(_SOURCE.glob("*.py")):
         if path.stem == "__init__":
@@ -212,6 +233,19 @@ _SPAN_EXTENSIONS: dict[tuple[str, str], str] = {
         "which is stored energy with an abstract unit — a different quantity with a confusable name."
     ),
     (const.NODE_SWITCH, "lock-state"): "EVSE connector lock",
+    ("config", "max-charge-current"): (
+        "the EVSE's commissioned charge-current ceiling, in SPAN's pre-catalog spelling. "
+        "No `config` capability exists upstream at all; the catalogued surface is "
+        "`charge-limit` 0.1, whose `installer-max` this adapter also reads. Both are read "
+        "because the charger's `$description` is the authority on which it publishes, and "
+        "the panels we can reach carry no EVSE to settle it."
+    ),
+    ("config", "user-max-charge-current"): (
+        "the settable half of the same extension node, `charge-limit/owner-limit` in the "
+        "catalogued spelling. The only settable property this adapter writes outside the "
+        "panel and its circuits, which is why it is read from the declaration -- including "
+        "its `$settable` flag -- rather than from a constant."
+    ),
 }
 
 
@@ -245,6 +279,18 @@ _NOT_EXERCISED_BY_SIMULATOR: dict[tuple[str, str], str] = {
         "this entry records. `resolve_grid_islandable` returns None rather than False "
         "on absence, so the gap surfaces as an uncreated entity rather than a claim."
     ),
+    ("charge-limit", "installer-max"): (
+        "the catalogued spelling of the EVSE charge-current ceiling. The producer publishes "
+        "the `config/max-charge-current` spelling instead, and both are read because the "
+        "charger's `$description` decides. No producer we have declares this one, and no "
+        "capture can: the panel we expect access to has no SPAN Drive."
+    ),
+    ("charge-limit", "owner-limit"): (
+        "the catalogued spelling of the settable charge-current limit, unexercised for the "
+        "same reason as `installer-max` above. `test_the_entity_reads_the_catalogued_spelling` "
+        "in test_schema_one_charge_limit.py drives it from a synthetic description, which is "
+        "evidence of a parser and not of a producer -- which is what this entry records."
+    ),
 }
 
 
@@ -270,13 +316,52 @@ def test_every_pinned_capability_is_vendored_at_the_pinned_version() -> None:
     assert not mismatched, "lockfile disagrees with the vendored catalogs:\n  " + "\n  ".join(mismatched)
 
 
+def _fully_excused_nodes() -> set[str]:
+    """Nodes every one of whose read properties is a declared extension.
+
+    The node-level counterpart of `_SPAN_EXTENSIONS`, derived from it rather
+    than listed beside it. `config` is the case: the specification has no
+    capability of that name, so there is no catalog to vendor and no version to
+    pin, and the only honest description of the node is the two per-property
+    claims already written above.
+
+    Derived, so the tolerance cannot outlive the claim. A node stops being
+    excused the moment it is read for a property nobody declared an extension
+    for, which is exactly the "unvendored node looks checked" failure the test
+    below exists to prevent.
+    """
+    read: dict[str, set[str]] = {}
+    for node, property_id in _read_pairs():
+        read.setdefault(node, set()).add(property_id)
+    return {node for node, properties in read.items() if all((node, p) in _SPAN_EXTENSIONS for p in properties)}
+
+
 def test_every_capability_node_this_adapter_reads_has_a_vendored_catalog() -> None:
     """Adding a NODE_* to const.py without vendoring its catalog would leave that
     node's properties unchecked while looking checked."""
     read = {node for node, _ in _read_pairs()}
     vendored = {path.stem for path in _CATALOGS.glob("*.json")}
+    missing = read - vendored - _fully_excused_nodes()
 
-    assert read <= vendored, f"capability nodes read but not vendored: {sorted(read - vendored)}"
+    assert not missing, f"capability nodes read but not vendored: {sorted(missing)}"
+
+
+def test_an_unvendored_node_is_one_the_specification_really_does_not_define() -> None:
+    """The claim behind an excused node, checked against the specification.
+
+    `_fully_excused_nodes` says "no catalog exists to vendor". Nothing else can
+    check that, because the check runs against the files we chose to copy — so
+    a capability adopted upstream under an excused name would stay invisible
+    exactly as long as nobody re-read the spec. Opportunistic, like every other
+    provenance check here.
+    """
+    spec = _checkout("EBUS_SPEC_DIR", "a specification checkout to verify vendored bytes", expect="capabilities")
+    adopted = sorted(node for node in _fully_excused_nodes() if (spec / "capabilities" / f"{node}.json").exists())
+
+    assert not adopted, (
+        f"the specification now defines these capabilities: {adopted}. Vendor the catalog, "
+        "pin it in spec_lock.json, and compare what it specifies against what SPAN publishes."
+    )
 
 
 # ---------------------------------------------------------------------------

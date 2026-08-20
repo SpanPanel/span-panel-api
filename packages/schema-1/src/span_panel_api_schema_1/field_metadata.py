@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from span_panel_api.models import FieldMetadata
+from span_panel_api_schema_1.charge_limit import ChargeLimitProperty, resolve_charge_limit
 from span_panel_api_schema_1.const import (
     NODE_BREAKER,
     NODE_CONNECTION,
@@ -42,6 +43,7 @@ from span_panel_api_schema_1.const import (
     TYPE_PANEL,
     TYPE_PV,
 )
+from span_panel_api_schema_1.description import nodes as declared_nodes, optional_str, properties as declared_properties
 from span_panel_api_schema_1.panel import PROP_CURRENT_A, PROP_CURRENT_B, find_lugs
 from span_panel_api_schema_1.snapshot import device_type as declared_type
 
@@ -187,11 +189,11 @@ def build_field_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMeta
         device_type = str(description.get("type") or "")
         if not device_type:
             continue
-        for node_id, node in _nodes(description).items():
+        for node_id, node in declared_nodes(description).items():
             present_type_nodes.add((device_type, node_id))
-            for property_id, definition in _properties(node).items():
+            for property_id, definition in declared_properties(node).items():
                 declared[f"{device_type}|{node_id}|{property_id}"] = (
-                    _optional_str(definition.get("unit")),
+                    optional_str(definition.get("unit")),
                     str(definition.get("datatype") or "string"),
                 )
 
@@ -207,7 +209,48 @@ def build_field_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMeta
             metadata[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
     metadata.update(_lugs_metadata(devices, upstream=True, fields=_UPSTREAM_LUGS_FIELDS))
     metadata.update(_lugs_metadata(devices, upstream=False, fields=_DOWNSTREAM_LUGS_FIELDS))
+    metadata.update(_charge_limit_metadata(devices))
     return metadata
+
+
+def _charge_limit_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMetadata]:
+    """Metadata for the EVSE charge-current pair, resolved the way the value is.
+
+    The table above cannot describe these, for the same reason it cannot
+    describe the lugs meter: it is keyed `(device type, node, property)`, and
+    the node and the property are precisely what a charger gets to choose here.
+    A row would have to name one spelling, which is the guess `charge_limit`
+    exists to avoid — and naming both would let a charger that declares neither
+    resolve through a row written for the other.
+
+    So it goes through `resolve_charge_limit`, the same call `build_evse` makes,
+    which is what keeps the unit a field advertises and the value that fills it
+    describing the same property.
+
+    The first charger declaring a surface answers for the path, matching
+    `_lookup`'s rule for every other type-keyed row: a field path is per snapshot
+    field, not per device, and two chargers on one panel declare one property
+    set each. A surface that declares only one of the pair leaves the other
+    `resolved=False` — the node is there and the property is not, which is a gap
+    rather than absent hardware.
+    """
+    for device in devices:
+        if not declared_type(device).startswith(TYPE_EVSE):
+            continue
+        surface = resolve_charge_limit(device)
+        if surface is None:
+            continue
+        return {
+            "evse.charge_current_limit_a": _charge_limit_entry(surface.limit),
+            "evse.charge_current_ceiling_a": _charge_limit_entry(surface.ceiling),
+        }
+    return {}
+
+
+def _charge_limit_entry(declaration: ChargeLimitProperty | None) -> FieldMetadata:
+    if declaration is None:
+        return FieldMetadata(unit=None, datatype="unknown", resolved=False)
+    return FieldMetadata(unit=declaration.unit, datatype=declaration.datatype)
 
 
 def _node_declared(present_type_nodes: set[tuple[str, str]], device_type: str, node_id: str) -> bool:
@@ -287,11 +330,11 @@ def _lugs_metadata(
     if lugs is None:
         return {}
 
-    meter = _nodes(lugs.description or {}).get(NODE_METER)
+    meter = declared_nodes(lugs.description or {}).get(NODE_METER)
     if meter is None:
         return {}
 
-    declared = _properties(meter)
+    declared = declared_properties(meter)
     found: dict[str, FieldMetadata] = {}
     for property_id, field_path in fields:
         definition = declared.get(property_id)
@@ -299,7 +342,7 @@ def _lugs_metadata(
             found[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
             continue
         found[field_path] = FieldMetadata(
-            unit=_optional_str(definition.get("unit")),
+            unit=optional_str(definition.get("unit")),
             datatype=str(definition.get("datatype") or "string"),
         )
     return found
@@ -328,24 +371,3 @@ def _lookup(
         if key.endswith(suffix) and key[: -len(suffix)].startswith(device_type):
             return value
     return None
-
-
-def _nodes(description: dict[str, object]) -> dict[str, dict[str, object]]:
-    nodes = description.get("nodes")
-    if not isinstance(nodes, dict):
-        return {}
-    return {str(k): v for k, v in nodes.items() if isinstance(v, dict)}
-
-
-def _properties(node: dict[str, object]) -> dict[str, dict[str, object]]:
-    properties = node.get("properties")
-    if not isinstance(properties, dict):
-        return {}
-    return {str(k): v for k, v in properties.items() if isinstance(v, dict)}
-
-
-def _optional_str(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value)
-    return text or None

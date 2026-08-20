@@ -289,6 +289,53 @@ class SpanEvseSnapshot:
     serial_number: str | None = None
     software_version: str | None = None
 
+    charge_current_limit_a: int | None = None
+    """The charge-current ceiling a user may lower, in amps. v1.0 only.
+
+    The only settable property the v1.0 surface carries, and the one whose wire
+    name is not settled: the reference tree declares it
+    `config/user-max-charge-current`, the eBus catalog specifies
+    `charge-limit/owner-limit`. The adapter reads whichever the charger's own
+    `$description` declares (`schema_1.charge_limit`), so this field is named
+    for the concept and no consumer has to know which spelling arrived.
+
+    `None` means the charger declares no such property — `charge-limit.md` reads
+    that as "no adjustable charge-current ceiling; it charges at a fixed rate" —
+    or that it has not published a value yet.
+
+    **Not `advertised_current_a`.** That is the current actually being offered
+    to the vehicle, which the capability defines as the `min()` of this, the
+    installer ceiling, any external controller's limit, and any PCS import limit
+    on the feeding circuit. This is one input to that; that is the result.
+    """
+
+    charge_current_ceiling_a: int | None = None
+    """The commissioned maximum `charge_current_limit_a` may not exceed, in amps.
+
+    `config/max-charge-current` or `charge-limit/installer-max`, by the same
+    resolution. Set at commissioning from the breaker rating and J1772 derating,
+    and not settable — which is the single Homie attribute distinguishing it
+    from the property above, so a consumer must never write it.
+    """
+
+    charge_current_limit_target_a: int | None = None
+    """Homie `$target` for the charge-current limit — a command in flight, not a reading.
+
+    Present between a write being accepted and the charger republishing the
+    value, exactly as `SpanCircuitSnapshot.priority_target` is for a priority
+    change. A consumer shows it as pending rather than treating it as state.
+    """
+
+    charge_current_limit_settable: bool = False
+    """Whether the charger declares its charge-current limit writable.
+
+    Read from `$settable` on the declaration, defaulting to **False**: absence
+    means read-only here, the opposite of `load-shed/priority`, because the
+    limit and the installer ceiling differ by this attribute alone. A consumer
+    creates a control only where this is true, and the adapter refuses to name a
+    set topic when it is not.
+    """
+
     connected: bool | None = None
     """The enclosure's view of the link to this charger, v1.0 only.
 

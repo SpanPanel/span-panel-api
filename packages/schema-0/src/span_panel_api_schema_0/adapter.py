@@ -91,5 +91,25 @@ class SchemaZeroAdapter:
         candidate = value.strip().upper()
         return candidate if candidate in allowed else None
 
+    def set_evse_charge_limit_topic(self, node_id: str) -> str | None:  # pylint: disable=unused-argument
+        """None: flat firmware publishes no charge-current ceiling to write.
+
+        The flat `energy.ebus.device.evse` type carries `advertised-current` —
+        what the charger is offering the vehicle, read-only — and nothing that
+        sets it. There is no property to aim a set topic at, so the transport
+        refuses the command rather than publishing to a topic no panel of this
+        generation subscribes to.
+
+        `node_id` is accepted and unused for the same reason
+        `set_dominant_power_source_topic` takes no arguments and still returns
+        None on a panel with no core node: the answer does not depend on which
+        charger is asked.
+        """
+        return None
+
+    def evse_charge_limit_payload(self, node_id: str, amps: int) -> str | None:  # pylint: disable=unused-argument
+        """None, for the same reason: no property, so no representable value."""
+        return None
+
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
         return self._consumer.register_property_callback(callback)

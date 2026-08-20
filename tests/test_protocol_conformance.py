@@ -13,6 +13,7 @@ from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.models import MqttClientConfig
 from span_panel_api.protocol import (
     CircuitControlProtocol,
+    EvseControlProtocol,
     PanelControlProtocol,
     SpanPanelClientProtocol,
     StreamingCapableProtocol,
@@ -43,6 +44,10 @@ class TestMqttProtocolConformance:
         if not issubclass(SpanMqttClient, PanelControlProtocol):
             raise TypeError("SpanMqttClient does not satisfy PanelControlProtocol")
 
+    def test_satisfies_evse_control_protocol(self) -> None:
+        if not issubclass(SpanMqttClient, EvseControlProtocol):
+            raise TypeError("SpanMqttClient does not satisfy EvseControlProtocol")
+
     def test_satisfies_streaming_protocol(self) -> None:
         if not issubclass(SpanMqttClient, StreamingCapableProtocol):
             raise TypeError("SpanMqttClient does not satisfy StreamingCapableProtocol")
@@ -64,6 +69,8 @@ def test_schema_adapter_declares_its_methods() -> None:
         "set_circuit_priority_topic",
         "set_dominant_power_source_topic",
         "dominant_power_source_payload",
+        "set_evse_charge_limit_topic",
+        "evse_charge_limit_payload",
         "register_property_callback",
     ):
         assert hasattr(SchemaAdapter, name), f"SchemaAdapter is missing method {name}"

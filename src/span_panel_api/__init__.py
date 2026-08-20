@@ -55,6 +55,7 @@ from .phase_validation import (
 )
 from .protocol import (
     CircuitControlProtocol,
+    EvseControlProtocol,
     PanelCapability,
     PanelControlProtocol,
     SpanPanelClientProtocol,
@@ -66,6 +67,12 @@ __version__ = _pkg_version("span-panel-api")
 __all__ = [  # noqa: RUF022
     # Protocols
     "CircuitControlProtocol",
+    # Added 2026-08-19: the charge-current ceiling on a commissioned EV charger,
+    # the first settable property outside the panel and its circuits. Purely
+    # additive -- a consumer that never asks for it is unaffected, and flat
+    # firmware publishes no such property, so the flat adapter answers None and
+    # the transport refuses.
+    "EvseControlProtocol",
     "PanelCapability",
     "PanelControlProtocol",
     "SpanPanelClientProtocol",

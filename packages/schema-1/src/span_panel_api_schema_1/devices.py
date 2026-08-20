@@ -36,6 +36,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from span_panel_api.models import SpanBatterySnapshot, SpanEvseSnapshot, SpanMidSnapshot, SpanPVSnapshot
+from span_panel_api_schema_1.charge_limit import ChargeLimitProperty, ChargeLimitSurface, resolve_charge_limit
 from span_panel_api_schema_1.const import (
     NODE_CONNECTION,
     NODE_GRID,
@@ -53,7 +54,7 @@ from span_panel_api_schema_1.const import (
     PROP_VENDOR_NAME,
     UNKNOWN,
 )
-from span_panel_api_schema_1.panel import number, resolve_grid_forming_device_name, text
+from span_panel_api_schema_1.panel import integer, number, resolve_grid_forming_device_name, text
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -250,7 +251,13 @@ def build_evse(
     panel with two chargers has two records to tell apart. Keying the status on
     the harmonised serial would find nothing on every panel and, worse, would
     find the *wrong* charger the moment two of them harmonised alike.
+
+    The charge-current pair is read through `resolve_charge_limit` rather than
+    from named constants, because which node and properties carry it is a
+    question only this charger's `$description` can answer. See
+    `span_panel_api_schema_1.charge_limit`.
     """
+    limit = resolve_charge_limit(evse)
     return SpanEvseSnapshot(
         node_id=node_id,
         feed_circuit_id=feeds.get(evse.device_id, ""),
@@ -263,7 +270,38 @@ def build_evse(
         part_number=_optional(text(evse, NODE_INFO, PROP_PART_NUMBER)),
         serial_number=_optional(text(evse, NODE_INFO, PROP_SERIAL_NUMBER)),
         software_version=_optional(text(evse, NODE_INFO, PROP_FIRMWARE_VERSION)),
+        charge_current_limit_a=_limit_value(evse, limit, limit.limit) if limit else None,
+        charge_current_ceiling_a=_limit_value(evse, limit, limit.ceiling) if limit else None,
+        charge_current_limit_target_a=_limit_target(evse, limit),
+        charge_current_limit_settable=limit is not None and limit.limit is not None and limit.limit.settable,
     )
+
+
+def _limit_value(evse: DiscoveredDevice, surface: ChargeLimitSurface, declaration: ChargeLimitProperty | None) -> int | None:
+    """One half of the resolved charge-limit pair, or None where it is not declared."""
+    if declaration is None:
+        return None
+    return integer(evse, surface.node, declaration.property_id)
+
+
+def _limit_target(evse: DiscoveredDevice, surface: ChargeLimitSurface | None) -> int | None:
+    """The pending write the charger is echoing on `$target`, if any.
+
+    Parsed to `int` rather than passed through as the string the circuit targets
+    carry, because this one is compared against a number: a consumer showing
+    "pending 24 A" beside a reading of 32 has to know both are amps. A `$target`
+    that is not a number is not a pending amperage, so it reads as no pending
+    command rather than as a value the caller has to re-parse.
+    """
+    if surface is None or surface.limit is None:
+        return None
+    raw = evse.get_property_target(surface.node, surface.limit.property_id)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return None
 
 
 PROP_ISLANDING_STATE = "islanding-state"

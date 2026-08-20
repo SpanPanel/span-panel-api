@@ -556,6 +556,32 @@ class SpanMqttClient:
         if self._bridge is not None:
             self._bridge.publish(topic, payload, qos=1)
 
+    # -- EvseControlProtocol -----------------------------------------------
+
+    async def set_evse_charge_limit(self, node_id: str, amps: int) -> None:
+        """Publish a charge-current limit for one commissioned EV charger.
+
+        Args:
+            node_id: the key this charger has in `SpanPanelSnapshot.evse`
+            amps: the new ceiling, in amps
+
+        Shaped like `set_dominant_power_source` and for the same reason: the
+        adapter names both the topic and the payload, because only it knows
+        which property this panel's charger declares settable and what bounds
+        it. Two refusals rather than one, so the error says which happened —
+        "no such control" and "that value may not be written" are different
+        facts and a user can act on only one of them.
+        """
+        adapter = self._require_adapter()
+        topic = adapter.set_evse_charge_limit_topic(node_id)
+        if topic is None:
+            raise SpanPanelServerError(f"No settable charge-current limit on EVSE {node_id!r}")
+        payload = adapter.evse_charge_limit_payload(node_id, amps)
+        if payload is None:
+            raise SpanPanelServerError(f"{amps} A is outside what EVSE {node_id!r} accepts")
+        if self._bridge is not None:
+            self._bridge.publish(topic, payload, qos=1)
+
     # -- StreamingCapableProtocol ------------------------------------------
 
     def register_snapshot_callback(

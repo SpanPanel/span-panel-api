@@ -66,6 +66,19 @@ class PanelControlProtocol(Protocol):
 
 
 @runtime_checkable
+class EvseControlProtocol(Protocol):
+    """Control protocol for settable properties on a commissioned EV charger.
+
+    Separate from `PanelControlProtocol` because the subject is different: an
+    EVSE is its own device under v1.0, several may be commissioned at once, and
+    every call here names which one. A consumer asks `isinstance` before offering
+    the control, exactly as it does for circuit and panel control.
+    """
+
+    async def set_evse_charge_limit(self, node_id: str, amps: int) -> None: ...
+
+
+@runtime_checkable
 class StreamingCapableProtocol(Protocol):
     """Push-based transport that delivers updates via callbacks."""
 
@@ -151,6 +164,30 @@ class SchemaAdapter(Protocol):
     def set_circuit_priority_topic(self, circuit_id: str) -> str: ...
 
     def set_dominant_power_source_topic(self) -> str | None: ...
+
+    def set_evse_charge_limit_topic(self, node_id: str) -> str | None:
+        """The topic that writes one charger's charge-current limit, or None.
+
+        `node_id` is the key the snapshot's `evse` map uses, so a caller needs
+        nothing but the snapshot it already has. Returning None means this
+        schema, this panel, or this charger offers no such control — no
+        property, or one the charger does not declare `$settable` — and the
+        transport must refuse the command rather than publish to it.
+
+        Named at runtime from the charger's own `$description` under v1.0,
+        because the node carrying the limit is one of two spellings and the
+        `$description` is the specification's authority on which. See
+        `span_panel_api_schema_1.charge_limit`.
+        """
+
+    def evse_charge_limit_payload(self, node_id: str, amps: int) -> str | None:
+        """Translate a requested amperage into what this charger accepts.
+
+        Returning None means the value may not be published — above the
+        commissioned ceiling, or otherwise outside what the declaration allows.
+        The transport refuses rather than clamping: a silently clamped write
+        reports a limit the charger is not enforcing.
+        """
 
     def dominant_power_source_payload(self, value: str) -> str | None:
         """Translate a caller's value into what this schema's wire accepts.

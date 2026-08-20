@@ -20,6 +20,10 @@ import span_panel_api
 EXPECTED_PUBLIC_API = {
     # Protocols
     "CircuitControlProtocol",
+    # Added 2026-08-19: EVSE charge-current control. Purely additive -- the only
+    # settable property the v1.0 catch-up surfaces, and one no flat panel
+    # publishes, so nothing existing changes.
+    "EvseControlProtocol",
     "PanelCapability",
     "PanelControlProtocol",
     "SpanPanelClientProtocol",

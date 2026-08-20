@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from ebus_sdk import Controller
 
+from span_panel_api_schema_1.charge_limit import ChargeLimitProperty, ChargeLimitSurface, resolve_charge_limit
 from span_panel_api_schema_1.const import (
     HOMIE_DOMAIN,
     HOMIE_VERSION,
@@ -37,7 +38,8 @@ from span_panel_api_schema_1.const import (
     STATE_READY,
 )
 from span_panel_api_schema_1.field_metadata import build_field_metadata
-from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot, device_type
+from span_panel_api_schema_1.panel import integer
+from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot, device_type, harmonised_evse_keys
 from span_panel_api_schema_1.transport import ControllerRoutes
 
 if TYPE_CHECKING:
@@ -242,6 +244,57 @@ class SchemaOneAdapter:
             "UNKNOWN": "NONE",
         }.get(value.strip().upper())
 
+    def set_evse_charge_limit_topic(self, node_id: str) -> str | None:
+        """The set topic for one charger's charge-current limit, or None.
+
+        Every part of the topic is resolved at runtime. The device id comes from
+        matching `node_id` — the snapshot's harmonised key, which is the
+        charger's *serial* wherever it publishes one — back to the device the
+        tree actually carries, because the topic is addressed by device id and
+        those two are different strings on every panel that publishes a serial.
+        The node and property come from the charger's own `$description` through
+        `resolve_charge_limit`, so no spelling is baked in here.
+
+        **None where the property is not declared settable**, which is the
+        refusal this control exists to make safe. Absence of `$settable` reads as
+        read-only (see `charge_limit`), so a charger that declares only its
+        commissioned ceiling gets no set topic at all rather than one aimed at a
+        property the panel will reject — or worse, accept.
+        """
+        writable = self._writable_charge_limit(node_id)
+        if writable is None:
+            return None
+        device, surface, limit = writable
+        return self._set_topic(device.device_id, surface.node, limit.property_id)
+
+    def evse_charge_limit_payload(self, node_id: str, amps: int) -> str | None:
+        """The payload to publish for `amps`, or None if it may not be published.
+
+        Refuses above the commissioned ceiling. `charge-limit` 0.1 states it as a
+        MUST — `owner-limit` "MUST be `<= installer-max`" — and the ceiling is
+        derated hardware protection (breaker rating, J1772), so publishing past
+        it is the one write here with a physical consequence. The panel would be
+        entitled to clamp, reject, or fault; a consumer that clamped silently on
+        this side would report a limit the charger is not enforcing.
+
+        Negative amps are refused for the same reason and no other: a
+        charge-only EVSE cannot be told to export by lowering a ceiling, so a
+        negative value is not a smaller limit but a malformed one.
+
+        A charger that declares no ceiling is not second-guessed — the catalog
+        makes `installer-max` a SHOULD, and the value that bounds the write is
+        the one the panel published, not one this library invents.
+        """
+        writable = self._writable_charge_limit(node_id)
+        if writable is None or amps < 0:
+            return None
+        device, surface, _limit = writable
+        ceiling = surface.ceiling
+        commissioned = None if ceiling is None else integer(device, surface.node, ceiling.property_id)
+        if commissioned is not None and amps > commissioned:
+            return None
+        return str(amps)
+
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
         """Subscribe to per-property updates; returns an unregister callable."""
         self._property_callbacks.append(callback)
@@ -253,6 +306,31 @@ class SchemaOneAdapter:
         return _unregister
 
     # -- internals ---------------------------------------------------------
+
+    def _writable_charge_limit(
+        self, node_id: str
+    ) -> tuple[DiscoveredDevice, ChargeLimitSurface, ChargeLimitProperty] | None:
+        """The charger `node_id` names, its charge-limit surface, and the settable half.
+
+        One resolution for both command methods, so the topic a write goes to
+        and the ceiling it is checked against can never come from different
+        chargers or different spellings. `None` means there is nothing to write:
+        no such charger, no charge-limit node on it, or a limit the charger does
+        not declare settable.
+
+        The lookup goes through `harmonised_evse_keys`, the same function the
+        snapshot keys its EVSE map with, because `node_id` is a key out of that
+        map. Rebuilding the rule here is how a control ends up addressing the
+        wrong charger the day the harmonisation changes.
+        """
+        for device, key in harmonised_evse_keys(TreeRoles(self._children()).evse).items():
+            if key != node_id:
+                continue
+            surface = resolve_charge_limit(device)
+            if surface is None or surface.limit is None or not surface.limit.settable:
+                return None
+            return device, surface, surface.limit
+        return None
 
     def _set_topic(self, device_id: str, node: str, prop: str) -> str:
         return f"{HOMIE_DOMAIN}/{HOMIE_VERSION}/{device_id}/{node}/{prop}/set"

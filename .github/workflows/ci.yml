@@ -28,6 +28,22 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    # The schema_1 provenance checks compare vendored bytes against the two
+    # repositories they were copied from, and skip when neither is reachable. They
+    # skipped in every run this workflow has ever done, which reads in the summary
+    # line exactly like passing -- see DEVELOPMENT.md, "A skip here is not a pass".
+    # Cloning both at the commits spec_lock.json pins turns them into a question with
+    # a deterministic answer: do our vendored bytes match the commit we say they came
+    # from? Whether the *producer* has moved past that pin is a different question
+    # with a moving answer, and it lives in peer-drift.yml so it cannot fail a pull
+    # request for something the author did not do.
+    #
+    # CI is set by the runner, and tests/test_schema_one_conformance.py fails rather
+    # than skips when it is -- so removing this step breaks the build instead of
+    # quietly switching the checks back off.
+    - name: Check out the peers the provenance checks verify against
+      uses: ./.github/actions/peer-checkouts
+
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -40,9 +56,12 @@ jobs:
       run: |
         uv run pre-commit run --all-files
 
+    # -rs so a skip that does survive is named in the log rather than counted. The
+    # only ones expected here are test_live_flat_differential.py, which needs a
+    # capture from a real panel that is deliberately gitignored.
     - name: Run tests with pytest
       run: |
-        uv run pytest tests/ -v \
+        uv run pytest tests/ -v -rs \
           --cov=src/span_panel_api \
           --cov=packages/schema-0/src/span_panel_api_schema_0 \
           --cov-report=xml --cov-report=term-missing

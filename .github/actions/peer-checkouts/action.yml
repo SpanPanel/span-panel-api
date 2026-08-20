@@ -1,0 +1,96 @@
+name: Peer checkouts
+description: >
+  Clone the two repositories the schema_1 provenance checks verify against — the eBus
+  specification and SpanPanel/panelbench — and export EBUS_SPEC_DIR / PANELBENCH_DIR
+  for the steps that follow.
+
+  Every value comes out of packages/schema-1/src/span_panel_api_schema_1/spec_lock.json,
+  which is the single home of the pin. A workflow that restated a commit here would
+  give the pin a second home, and the two would agree right up until the day someone
+  re-vendored and updated only one.
+
+inputs:
+  panelbench-ref:
+    description: >
+      Which panelbench to clone, and it decides which question the job asks.
+
+      "pin" clones the exact commit peer.commit records, so the byte comparison asks
+      "do our vendored captures match the commit we claim they came from?" — a
+      deterministic question with a deterministic answer, safe to block a merge on.
+
+      "default" clones peer.ref, the branch the producer develops on, so the same
+      comparison asks "has the producer moved past the pin?". That answer changes
+      because someone else pushed, so it must never gate a pull request.
+    required: false
+    default: pin
+
+outputs:
+  panelbench-pin:
+    description: The commit spec_lock.json pins, whichever ref was cloned.
+    value: ${{ steps.pins.outputs.panelbench-commit }}
+  panelbench-repo:
+    description: The panelbench repository, as owner/name.
+    value: ${{ steps.pins.outputs.panelbench-repo }}
+  panelbench-checkout:
+    description: The ref actually cloned — the pinned commit, or the producer's branch.
+    value: ${{ steps.pins.outputs.panelbench-checkout }}
+
+runs:
+  using: composite
+  steps:
+    - name: Read the peer pins out of spec_lock.json
+      id: pins
+      shell: bash
+      env:
+        PANELBENCH_REF_MODE: ${{ inputs.panelbench-ref }}
+      run: |
+        python3 - <<'PY' >> "$GITHUB_OUTPUT"
+        import json
+        import os
+
+        with open("packages/schema-1/src/span_panel_api_schema_1/spec_lock.json") as handle:
+            lock = json.load(handle)
+        peer = lock["peer"]
+
+        def slug(url: str) -> str:
+            """owner/name, which is what actions/checkout wants."""
+            return url.removeprefix("https://github.com/").removesuffix(".git")
+
+        mode = os.environ["PANELBENCH_REF_MODE"]
+        if mode not in ("pin", "default"):
+            raise SystemExit(f"::error::panelbench-ref must be 'pin' or 'default', got {mode!r}")
+
+        print(f"spec-repo={slug(lock['spec_repo'])}")
+        print(f"spec-commit={lock['synced_commit']}")
+        print(f"panelbench-repo={slug(peer['repo'])}")
+        print(f"panelbench-commit={peer['commit']}")
+        print(f"panelbench-checkout={peer['commit'] if mode == 'pin' else peer['ref']}")
+        PY
+
+    # Both are public, so no token is involved. If either ever goes private this is
+    # the step that starts failing, and the fix is a PAT with read access in `token:`
+    # rather than anything about the pin.
+    - name: Check out the eBus specification at synced_commit
+      uses: actions/checkout@v7
+      with:
+        repository: ${{ steps.pins.outputs.spec-repo }}
+        ref: ${{ steps.pins.outputs.spec-commit }}
+        path: peers/specification
+
+    - name: Check out panelbench
+      uses: actions/checkout@v7
+      with:
+        repository: ${{ steps.pins.outputs.panelbench-repo }}
+        ref: ${{ steps.pins.outputs.panelbench-checkout }}
+        # History only where it is read: the drift job counts commits between the pin
+        # and the branch head, which a shallow clone cannot do.
+        fetch-depth: ${{ inputs.panelbench-ref == 'default' && '0' || '1' }}
+        path: peers/panelbench
+
+    - name: Point the provenance checks at them
+      shell: bash
+      run: |
+        {
+          echo "EBUS_SPEC_DIR=$GITHUB_WORKSPACE/peers/specification"
+          echo "PANELBENCH_DIR=$GITHUB_WORKSPACE/peers/panelbench"
+        } >> "$GITHUB_ENV"

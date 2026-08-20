@@ -17,12 +17,14 @@ capability key outright in favour of `soc`, with no alias. A consumer hardcoding
 
 Three checks with different reach, deliberately:
 
-- **Conformance** — this adapter against the vendored catalogs. Always runs, so
-  CI needs no network and no sibling checkout.
+- **Conformance** — this adapter against the vendored catalogs. Always runs, from
+  a vendored copy, so it needs neither network nor a sibling checkout.
 - **Coverage** — this adapter against a captured tree from the SPAN simulator,
   the producer our development is done against. Always runs, from a vendored copy.
-- **Provenance** — the vendored copies against their sources. Skipped unless
-  `EBUS_SPEC_DIR` / `PANELBENCH_DIR` point at checkouts.
+- **Provenance** — the vendored copies against their sources, which need
+  `EBUS_SPEC_DIR` / `PANELBENCH_DIR` to name checkouts. Skipped without them on a
+  developer machine and **failed** without them under `CI`, where the workflow
+  clones both: see `_unconfigured`, and DEVELOPMENT.md's "A skip here is not a pass".
 
 Provenance proves we copied the right bytes; it cannot prove we understood them.
 The first two are where the understanding gets checked, which is why they are the
@@ -37,6 +39,7 @@ import json
 import os
 from pathlib import Path
 import re
+from typing import NoReturn
 
 import pytest
 
@@ -91,13 +94,40 @@ def _peer_fixtures() -> dict[str, str]:
     return {str(kind): str(path) for kind, path in fixtures.items()}
 
 
+def _unconfigured(reason: str) -> NoReturn:
+    """Not configured: skip on a developer machine, fail in CI.
+
+    Locally, skipping is right — not every developer keeps sibling checkouts, and a
+    provenance check is not what they are running the suite for.
+
+    In CI it is the opposite. The workflow clones both peers and exports both
+    variables, so an unset or wrong path there does not mean "unavailable", it means
+    the wiring that makes these checks run has come undone. Skipping on that reads in
+    the summary line exactly like passing, which is how these checks stayed silent for
+    the nine days it took the vendored capture to go stale. A check that can be
+    switched off by a missing environment variable is a check nobody can rely on.
+
+    `CI` rather than a variable of our own, because it is what GitHub Actions and every
+    other runner already set — an environment that stops supplying a path has to opt
+    *out* of being an environment, which is not something a workflow edit does by
+    accident.
+    """
+    if os.environ.get("CI"):
+        pytest.fail(
+            f"{reason}. CI configures both peer checkouts, so this is the provenance "
+            "wiring being broken rather than a check that is unavailable — and a skip "
+            "here is indistinguishable from a pass."
+        )
+    pytest.skip(reason)
+
+
 def _checkout(variable: str, what: str, expect: str | None = None) -> Path:
-    """A sibling checkout named by an environment variable, or skip.
+    """A sibling checkout named by an environment variable, or unconfigured.
 
     A variable that is unset and one pointing at a directory that is gone are the
-    same situation — the checkout is not available — and both should skip. Letting
-    a stale path through instead produces a FileNotFoundError from somewhere deep
-    in a comparison, which reads as a broken test rather than an unconfigured one.
+    same situation — the checkout is not available — and both take the same exit.
+    Letting a stale path through instead produces a FileNotFoundError from somewhere
+    deep in a comparison, which reads as a broken test rather than an unconfigured one.
     Set them in `.env`; see `.env.example`.
 
     "Gone" includes *emptied*, which is the form this actually takes. A checkout under
@@ -106,15 +136,19 @@ def _checkout(variable: str, what: str, expect: str | None = None) -> Path:
     Presence of a directory proves nothing here; the caller names one that must hold
     at least one `.json`, which is what distinguishes a populated checkout from the
     skeleton of a reaped one.
+
+    Each of the three states keeps its own message, because they call for different
+    actions — set the variable, fix the path, or re-clone — and collapsing them would
+    make the most confusing one, the reaped skeleton, look like the simplest one.
     """
     configured = os.environ.get(variable)
     if not configured:
-        pytest.skip(f"set {variable} to {what}")
+        _unconfigured(f"set {variable} to {what}")
     path = Path(configured)
     if not path.is_dir():
-        pytest.skip(f"{variable}={configured} does not exist; point it at {what}")
+        _unconfigured(f"{variable}={configured} does not exist; point it at {what}")
     if expect is not None and not any((path / expect).glob("*.json")):
-        pytest.skip(f"{variable}={configured} has no files under {expect}/ — the checkout is empty or is not {what}")
+        _unconfigured(f"{variable}={configured} has no files under {expect}/ — the checkout is empty or is not {what}")
     return path
 
 
@@ -556,7 +590,7 @@ def test_vendored_catalogs_are_byte_identical_to_the_specification() -> None:
     ]
 
     assert not differing, (
-        f"vendored catalogs differ from {spec_dir} (lockfile pins {_lock()['synced_commit']}): {differing}. "
+        f"vendored catalogs differ from {spec} (lockfile pins {_lock()['synced_commit']}): {differing}. "
         "Check the checkout is at synced_commit before assuming the copies are wrong."
     )
 
@@ -605,3 +639,49 @@ def test_the_peer_record_matches_the_simulator_lockfile() -> None:
         f"the simulator now pins {theirs['synced_commit']}, we recorded {_peer_str('synced_commit')}. "
         "Re-vendor and update both, or the two sides are reading different vocabularies."
     )
+
+
+def test_an_unconfigured_peer_checkout_fails_in_ci_and_skips_locally(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard on the guard.
+
+    Everything above this line is worth exactly as much as the thing that decides
+    whether it runs, and that thing is one `if`. It has already gone wrong once in the
+    other direction: `PANELBENCH_DIR` named a directory that did not exist, every peer
+    check skipped, and nine days of drift accumulated behind a summary line that read
+    like a pass.
+
+    So the skip and the failure are both asserted, in both environments, for all three
+    of the states `_checkout` distinguishes. Asserting only the CI half would leave the
+    local half free to become a failure, which is the change that makes a developer
+    delete the check rather than configure it.
+
+    `_checkout` is exercised through its public behaviour — the exception it raises —
+    rather than by inspecting `_unconfigured`, so this keeps holding if the branch
+    moves into the callers.
+    """
+    outcomes = (pytest.fail.Exception, pytest.skip.Exception)
+    missing = "/nonexistent/peer/checkout"
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("PANELBENCH_DIR", missing)
+    with pytest.raises(outcomes, match="does not exist") as local:
+        _checkout("PANELBENCH_DIR", "a panelbench checkout")
+    assert local.type is pytest.skip.Exception, (
+        f"off CI an unavailable checkout must skip, got {local.typename}. Failing instead is "
+        "what makes a developer without sibling checkouts delete the check rather than configure it"
+    )
+
+    monkeypatch.setenv("CI", "true")
+    for variable, value, expect, why in (
+        ("PANELBENCH_DIR", "", None, "unset"),
+        ("PANELBENCH_DIR", missing, None, "a path that is gone"),
+        ("EBUS_SPEC_DIR", str(_SPEC), "no-such-directory", "a checkout reaped to an empty skeleton"),
+    ):
+        monkeypatch.setenv(variable, value)
+        with pytest.raises(outcomes) as raised:
+            _checkout(variable, "a peer checkout", expect=expect)
+        assert raised.type is pytest.fail.Exception, (
+            f"under CI, {why} must fail rather than {raised.typename.lower()}: a peer check that "
+            "skips is one an environment can switch off, and the summary line cannot tell the "
+            "difference between that and a pass"
+        )

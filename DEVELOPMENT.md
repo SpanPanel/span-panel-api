@@ -32,7 +32,8 @@ python scripts/coverage.py --full
 ## Conformance against the specification and the producer
 
 Some tests verify this library against two things it does not contain: the eBus **specification** (the capability catalogs vendored under `packages/schema-1/spec/catalogs/`) and **panelbench**, the producer whose captures are vendored as reference
-payloads. Both are reached through a local checkout named by an environment variable, and both **skip when the variable is unset or wrong**.
+payloads. Both are reached through a local checkout named by an environment variable. Locally, both **skip when the variable is unset or wrong** — not every developer keeps sibling checkouts. **Under `CI` they fail instead**, because CI clones both, so an
+absent path there means the wiring came undone rather than that the checkout is unavailable.
 
 Copy `.env.example` to `.env` and point them at real checkouts:
 
@@ -57,6 +58,24 @@ uv run pytest tests/ -q -rs
 
 A correctly configured run has no skips in that file. The only skips you should expect are in `test_live_flat_differential.py`, which needs a live panel capture that is deliberately gitignored (see `scripts/capture_live_flat.py`); those are flat-firmware
 differentials and are not part of schema_1 work.
+
+It cost us a second time on 2026-08-20, in the other vendored capture. `tests/fixtures/flat_wire.json` was taken from the flat simulator at v1.0.15 and described as frozen; 1.0.16 then made an EVSE's node id its drive serial and forced that serial
+lower-case, which is the flat half of a change panelbench made on the v1.0 side the same week. Nothing compared the capture to its source, so for nine days the two vendored captures named the same charger differently. `scripts/capture_flat_reference.py`
+now records the simulator commit its output came from, for the same reason `spec_lock.json` records the other two.
+
+### Two questions, two workflows
+
+The peer checks answer a question whose shape depends on which panelbench you point them at, and the two answers belong in different places.
+
+- **`.github/workflows/ci.yml`** clones both peers at the commits `spec_lock.json` pins, via the `.github/actions/peer-checkouts` composite action, and runs the whole suite against them. The question is _do our vendored bytes match the commit we claim they
+  came from?_ — deterministic, answerable on any commit, and fair to block a merge on. It catches an accidental local edit to a vendored file.
+- **`.github/workflows/peer-drift.yml`** runs on a schedule, never on a pull request, and clones panelbench at `peer.ref` — the branch the producer develops on. The question is _has the producer moved past the pin?_ Its answer changes because someone else
+  pushed, so it must not fail an author's unrelated change. It reports the distance from the pin in the job summary either way, and goes red only when the comparison itself fails, so panelbench advancing with a change we do not vendor stays green.
+
+Both repositories are public, so neither checkout needs a token. If either ever goes private, the checkout step in the composite action is what starts failing, and the fix is a read-scoped PAT in its `token:` — the pin is not involved.
+
+The commits come out of `packages/schema-1/src/span_panel_api_schema_1/spec_lock.json` at run time rather than being written into the workflows, so the pin keeps exactly one home. A workflow that restated a commit would agree with the lock file right up
+until the day someone re-vendored and updated only one of them.
 
 ### When the peer check fails
 

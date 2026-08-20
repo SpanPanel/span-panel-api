@@ -80,6 +80,23 @@ class SpanPVSnapshot:
     where it is the panel's own and predates the sub-device types.
     """
 
+    connected: bool | None = None
+    """The enclosure's view of the link to this PV, v1.0 only.
+
+    The same fact `SpanBatterySnapshot.connected` carries and read the same way —
+    from the enclosure-side owner's `connection` record, never from anything the
+    inverter says about itself. Only the half of the record differs: a BESS is
+    named by the upstream lugs' `fed-by-device-*`, a circuit-fed DER by its
+    circuit's `feeds-device-*`.
+
+    `None` means no owner has claimed this device, or the claiming owner
+    published no status — which is the specification's own "unknown" signal
+    (`capabilities/connection.md`: an unpublished property *is* how a panel says
+    it does not know) and is deliberately distinct from `False`. The enum has
+    three members, `OK,LOST,DEGRADED`, and no UNKNOWN, so absence is the only
+    way to say it.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class SpanMidSnapshot:
@@ -271,6 +288,21 @@ class SpanEvseSnapshot:
     part_number: str | None = None  # SKU
     serial_number: str | None = None
     software_version: str | None = None
+
+    connected: bool | None = None
+    """The enclosure's view of the link to this charger, v1.0 only.
+
+    Documented on `SpanPVSnapshot.connected`, which carries the identical fact
+    for the other circuit-fed DER class.
+
+    **Not `status`.** That is the OCPP-style session state — whether a vehicle is
+    plugged in and what it is doing — reported by the charger about the cable in
+    front of it. This is the enclosure reporting whether it can talk to the
+    charger at all. A charger with a car plugged in and a dead link publishes
+    `status="CHARGING"` and `connected=False` at the same time, and a consumer
+    that renders them as one entity is answering the wrong question in half the
+    cases.
+    """
 
 
 @dataclass(frozen=True, slots=True)

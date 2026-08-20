@@ -72,6 +72,7 @@ PROP_LOCK_STATE = "lock-state"
 PROP_STATUS = "status"
 
 PROP_FEEDS_DEVICE_ID = "feeds-device-id"
+PROP_FEEDS_DEVICE_STATUS = "feeds-device-status"
 PROP_FED_BY_DEVICE_ID = "fed-by-device-id"
 PROP_FED_BY_DEVICE_STATUS = "fed-by-device-status"
 
@@ -111,6 +112,54 @@ def connection_status_for(device_id: str, owners: list[DiscoveredDevice]) -> str
     return None
 
 
+def feed_connection_statuses(circuits: list[DiscoveredDevice]) -> dict[str, str]:
+    """The enclosure's view of the link to each circuit-fed device, by device id.
+
+    The other half of the record ``feed_circuit_ids`` reads, and read alongside
+    it for the same reason: v1.0 states the relationship on the *circuit*, so a
+    DER's link health is published by whichever circuit feeds it rather than by
+    the DER. Same fact as ``connection_status_for``, opposite direction — that
+    one scans owners for a ``fed-by-*`` record naming the device, this one
+    indexes every ``feeds-*`` record a circuit publishes.
+
+    A circuit is absent from the result unless it publishes *both* halves. An
+    id with no status cannot say anything about the link, and a status with no
+    id names no device to say it about; the enclosure model
+    (``distribution-enclosure.md``) makes an unpublished property the panel's
+    way of saying it does not know, so absence here is what a caller turns into
+    `None` rather than into a fault.
+
+    Most circuits publish neither. A mixed-load or unsurveyed circuit feeds no
+    commissioned DER, so it has no connection record to publish — the spec calls
+    that normal, which is why nothing here treats a missing record as an error.
+    """
+    statuses: dict[str, str] = {}
+    for circuit in circuits:
+        fed = text(circuit, NODE_CONNECTION, PROP_FEEDS_DEVICE_ID)
+        status = text(circuit, NODE_CONNECTION, PROP_FEEDS_DEVICE_STATUS)
+        if fed and status:
+            statuses[fed] = status
+    return statuses
+
+
+def _connected(status: str | None) -> bool | None:
+    """Collapse a ``connection`` status enum to the snapshot's boolean.
+
+    `None` stays `None`, so "nobody has said" remains distinct from "not OK".
+    The enum is ``OK,LOST,DEGRADED`` with no UNKNOWN member, so absence of the
+    property is the only unknown the wire can express and this is the one place
+    that decides what it means.
+
+    DEGRADED collapses to `False` deliberately: the question a consumer asks of
+    this field is "can the enclosure talk to the device", and a degraded link is
+    not a working one. The distinction survives where it is a device's own
+    report — `battery.communication_state` keeps the enum string — but here it
+    is the panel's view, and the panel publishes no richer field for a consumer
+    to fall back on.
+    """
+    return None if status is None else status == STATUS_OK
+
+
 def _charge_positive(raw_power_w: float | None) -> float | None:
     """Flip the enclosure's meter frame to the snapshot's charge-positive one.
 
@@ -147,7 +196,7 @@ def build_battery(bess: DiscoveredDevice | None, owners: list[DiscoveredDevice])
         software_version=_optional(text(bess, NODE_INFO, PROP_FIRMWARE_VERSION)),
         nameplate_capacity_kwh=number(bess, NODE_INFO, PROP_NAMEPLATE_CAPACITY),
         # None when unclaimed, so "nobody has said" stays distinct from "not OK".
-        connected=None if status is None else status == STATUS_OK,
+        connected=_connected(status),
         power_w=_charge_positive(number(bess, NODE_METER, PROP_ACTIVE_POWER)),
         # The BESS's own link health, kept as the published enum string rather
         # than collapsed to a bool: DEGRADED is neither OK nor LOST, and a bool
@@ -161,12 +210,15 @@ def build_pv(
     feeds: dict[str, str],
     upstream_lugs: DiscoveredDevice | None = None,
     downstream_lugs: DiscoveredDevice | None = None,
+    *,
+    feed_statuses: dict[str, str],
 ) -> SpanPVSnapshot:
     """Build the PV snapshot. An uncommissioned panel yields the empty one."""
     if pv is None:
         return SpanPVSnapshot()
 
     return SpanPVSnapshot(
+        connected=_connected(feed_statuses.get(pv.device_id)),
         vendor_name=_optional(text(pv, NODE_INFO, PROP_VENDOR_NAME)),
         model=_optional(text(pv, NODE_INFO, PROP_MODEL)),
         software_version=_optional(text(pv, NODE_INFO, PROP_FIRMWARE_VERSION)),
@@ -179,16 +231,25 @@ def build_pv(
     )
 
 
-def build_evse(evse: DiscoveredDevice, feeds: dict[str, str], *, node_id: str) -> SpanEvseSnapshot:
+def build_evse(
+    evse: DiscoveredDevice, feeds: dict[str, str], *, node_id: str, feed_statuses: dict[str, str]
+) -> SpanEvseSnapshot:
     """Build one EVSE snapshot.
 
     `node_id` is supplied rather than taken from `evse.device_id`: it feeds the
     integration's device-registry `identifiers`, so it has to be the harmonised
     key, not the v1.0 device id. See `_harmonised_evse_keys`.
+
+    Both lookups are keyed on `evse.device_id`, the v1.0 id, and not on
+    `node_id`: a connection record names the device the way the tree does, and a
+    panel with two chargers has two records to tell apart. Keying the status on
+    the harmonised serial would find nothing on every panel and, worse, would
+    find the *wrong* charger the moment two of them harmonised alike.
     """
     return SpanEvseSnapshot(
         node_id=node_id,
         feed_circuit_id=feeds.get(evse.device_id, ""),
+        connected=_connected(feed_statuses.get(evse.device_id)),
         status=text(evse, NODE_STATUS, PROP_STATUS, UNKNOWN),
         lock_state=text(evse, NODE_SWITCH, PROP_LOCK_STATE, UNKNOWN),
         advertised_current_a=number(evse, NODE_METER, PROP_ADVERTISED_CURRENT),

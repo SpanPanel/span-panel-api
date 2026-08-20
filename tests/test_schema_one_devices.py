@@ -323,7 +323,7 @@ def test_communication_state_and_connected_are_independent() -> None:
 
 
 def test_pv_metadata_and_feed() -> None:
-    pv = build_pv(_device("pv"), feed_circuit_ids(_circuits()))
+    pv = build_pv(_device("pv"), feed_circuit_ids(_circuits()), feed_statuses={})
 
     assert pv.vendor_name == "Enphase"
     assert pv.model == "IQ8PLUS-72-2-US"
@@ -335,11 +335,11 @@ def test_pv_relative_position_is_not_guessed() -> None:
     """Retired in v1.0 and only "derivable from connection records (when
     present)". The integration gates control entities on it, so a wrong value
     creates or removes a control."""
-    assert build_pv(_device("pv"), {}).relative_position is None
+    assert build_pv(_device("pv"), {}, feed_statuses={}).relative_position is None
 
 
 def test_no_pv_yields_the_empty_snapshot() -> None:
-    assert build_pv(None, {}).vendor_name is None
+    assert build_pv(None, {}, feed_statuses={}).vendor_name is None
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +348,7 @@ def test_no_pv_yields_the_empty_snapshot() -> None:
 
 
 def test_evse_state_and_metadata() -> None:
-    evse = build_evse(_device("evse"), {}, node_id="evse")
+    evse = build_evse(_device("evse"), {}, node_id="evse", feed_statuses={})
 
     assert evse.node_id == "evse"
     assert evse.status == "CHARGING"
@@ -363,7 +363,7 @@ def test_evse_state_and_metadata() -> None:
 def test_evse_without_a_feeding_circuit_reports_empty_not_none() -> None:
     """`feed_circuit_id` is non-optional on the dataclass, so an unclaimed EVSE
     gets the empty string rather than breaking construction."""
-    assert build_evse(_device("evse"), {}, node_id="evse").feed_circuit_id == ""
+    assert build_evse(_device("evse"), {}, node_id="evse", feed_statuses={}).feed_circuit_id == ""
 
 
 def test_the_mid_is_surfaced_as_its_own_device() -> None:
@@ -434,7 +434,7 @@ def test_the_pv_carries_its_firmware_version() -> None:
     device = _device("pv")
     device.update_property("info", "firmware-version", "sim-pv/v0.1.0")
 
-    assert build_pv(device, {}).software_version == "sim-pv/v0.1.0"
+    assert build_pv(device, {}, feed_statuses={}).software_version == "sim-pv/v0.1.0"
 
 
 def test_a_device_publishing_no_revision_reports_none_rather_than_empty_string() -> None:
@@ -449,4 +449,4 @@ def test_a_device_publishing_no_revision_reports_none_rather_than_empty_string()
     assert mid is not None
     assert mid.software_version is None
     assert mid.hardware_version is None
-    assert build_pv(_device("pv"), {}).software_version is None
+    assert build_pv(_device("pv"), {}, feed_statuses={}).software_version is None

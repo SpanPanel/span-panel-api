@@ -25,7 +25,14 @@ from span_panel_api_schema_1.const import (
     TYPE_MID,
     TYPE_PV,
 )
-from span_panel_api_schema_1.devices import build_battery, build_evse, build_mid, build_pv, feed_circuit_ids
+from span_panel_api_schema_1.devices import (
+    build_battery,
+    build_evse,
+    build_mid,
+    build_pv,
+    feed_circuit_ids,
+    feed_connection_statuses,
+)
 from span_panel_api_schema_1.panel import (
     PanelFields,
     build_pcs,
@@ -98,6 +105,10 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
     fields = PanelFields(panel=panel, upstream_lugs=upstream, downstream_lugs=downstream, mid=roles.mid)
 
     feeds = feed_circuit_ids(roles.circuits)
+    # The other half of the same circuit-side records: which DER each circuit
+    # feeds, and what the enclosure says about the link to it. Read once here
+    # and handed to whichever DER it names, exactly as `feeds` is.
+    feed_statuses = feed_connection_statuses(roles.circuits)
     # A DER's device type decides how its feeding circuit is labelled, so the
     # circuit inherits it — matching the flat adapter, where the same circuit
     # reports device_type "pv" rather than "circuit".
@@ -184,13 +195,16 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         downstream_l2_current_a=fields.downstream_l2_current_a,
         circuits=circuits,
         battery=build_battery(roles.bess, owners),
-        pv=build_pv(roles.pv, feeds, upstream, downstream),
+        pv=build_pv(roles.pv, feeds, upstream, downstream, feed_statuses=feed_statuses),
         mid=build_mid(roles.mid, device_names),
         # Gated on the node being declared, not on any value: every limit this
         # capability publishes is legally `0.0`, so there is no reading that can
         # distinguish a switched-off PCS from an absent one. See `build_pcs`.
         pcs=build_pcs(panel),
-        evse={key: build_evse(device, feeds, node_id=key) for device, key in _harmonised_evse_keys(roles.evse).items()},
+        evse={
+            key: build_evse(device, feeds, node_id=key, feed_statuses=feed_statuses)
+            for device, key in _harmonised_evse_keys(roles.evse).items()
+        },
     )
 
 

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from span_panel_api.models import FieldMetadata
 from span_panel_api_schema_1.const import (
     NODE_BREAKER,
+    NODE_CONNECTION,
     NODE_DOOR,
     NODE_INFO,
     NODE_LOAD_SHED,
@@ -110,6 +111,23 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     (TYPE_CIRCUIT, NODE_METER, "exported-energy", "circuit.consumed_energy_wh"),
     (TYPE_CIRCUIT, NODE_BREAKER, "rating", "circuit.breaker_rating_a"),
     (TYPE_CIRCUIT, NODE_BREAKER, "poles", "circuit.is_240v"),
+    # --- Circuit `connection` -> the DER the circuit feeds ---------------------
+    # The one place a row's device type and its field path deliberately disagree.
+    # v1.0 states the enclosure/DER relationship on the *circuit*, so the panel's
+    # view of the link to a PV or a charger is published by whichever circuit
+    # feeds it -- `build_pv` and `build_evse` read it through
+    # `feed_connection_statuses`, and the field it fills belongs to the DER.
+    #
+    # Two rows for one property, because one circuit's record describes a PV and
+    # another's describes a charger. That is what the property *is* on this
+    # device class; which DER a given instance names is a value, and a metadata
+    # row describes neither values nor instances.
+    #
+    # `feeds-device-id` carries no row on purpose: it is topology the mapper
+    # consumes into `feed_circuit_id`, `device_type` and `relative_position`, and
+    # a unit for a device id would describe a reading nothing renders.
+    (TYPE_CIRCUIT, NODE_CONNECTION, "feeds-device-status", "evse.connected"),
+    (TYPE_CIRCUIT, NODE_CONNECTION, "feeds-device-status", "pv.connected"),
     # --- BESS ----------------------------------------------------------------
     (TYPE_BESS, NODE_SOC, "soc", "battery.soe_percentage"),
     (TYPE_BESS, NODE_SOC, "soe", "battery.soe_kwh"),

@@ -180,6 +180,13 @@ NEW_IN_V1_0: dict[str, str] = {
         "panel's view rather than the device's. Two views of one link, and v1.0 is the "
         "first schema to publish the second"
     ),
+    "pv.connected": (
+        "the enclosure's view of the link to the PV, from the feeding circuit's "
+        "`connection/feeds-device-status`. Flat's `energy.ebus.device.pv` type declares "
+        "no link property at all -- flat publishes `connected` on the BESS and nowhere "
+        "else -- so nothing can orphan and no entity changes meaning. v1.0 is the first "
+        "schema in which the enclosure says anything about the PV link"
+    ),
 }
 """Additions with no flat property to have been re-sourced from.
 

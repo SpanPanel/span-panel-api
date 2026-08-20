@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- **Per-DER connection health reaches the snapshot: `SpanEvseSnapshot.connected` and `SpanPVSnapshot.connected`.** `battery.connected` has carried the enclosure's view of the link to the BESS since v1.0 landed, from the upstream lugs'
+  `connection/fed-by-device-status`. The other half of the same capability — a circuit's `connection/feeds-device-status`, which is how the enclosure reports the link to a PV or a charger — reached nothing, so only one of a panel's three DER classes had a
+  link-health field. Both new fields are `bool | None` and mirror `battery.connected` exactly, read by `build_pv` and `build_evse` through the new `feed_connection_statuses`.
+- **`None` is the specification's "unknown", and it is load-bearing.** The enum is `OK,LOST,DEGRADED` with no `UNKNOWN` member, so an unpublished property is the only way a panel can say it does not know — and `distribution-enclosure.md` states that a
+  mixed-load or unsurveyed circuit publishes no connection record at all, which is the normal state for most of a panel's circuits. So absence is never a fault: a DER no circuit claims, or one whose circuit publishes an id without a status, reports `None`
+  rather than `False`. `DEGRADED` collapses to `False`, because the question this field answers is whether the enclosure can talk to the device.
+- **The charger's link is not the charger's session.** `evse.status` is the OCPP-style state the charger reports about the cable in front of it; `evse.connected` is the enclosure reporting whether it can reach the charger at all. A charger mid-session over
+  a lost link publishes `CHARGING` and `connected=False` at once, and the two fields stay separate for the same reason `battery.connected` and `battery.communication_state` do.
+- **`_PROPERTY_FIELD_MAP` rows for both**, from `(circuit, connection, feeds-device-status)` — the one place a row's device type and its field path deliberately differ, because v1.0 states the relationship on the circuit and the field belongs to the DER.
+  One property carries two rows, since one circuit's record describes a PV and another's a charger. Both buy the datatype the circuit's own `$description` declares plus the three-way resolution contract.
+
 - **The BESS's own meter and link health reach the snapshot: `SpanBatterySnapshot.power_w` and `SpanBatterySnapshot.communication_state`.** The battery device has published `meter/active-power` and `status/communication-state` all along and neither reached
   a field, so a consumer could show the enclosure's arbitrated `power_flow_battery` and nothing the BESS itself reports. Both are `None` on a BESS that publishes no such node, and on every flat panel — the flat schema's BESS device class declares neither
   property, so this is new surface rather than a re-sourcing, and nothing that exists today changes.

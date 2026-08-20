@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 
 from span_panel_api.models import ADOPTION_IDENTITY_NODE, ADOPTION_TOPOLOGY_NODE, AdoptedDevice, AdoptedProperty
 from span_panel_api_schema_1.const import (
+    HOMIE_DOMAIN,
+    HOMIE_VERSION,
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_EVSE,
@@ -137,6 +139,7 @@ def _readings(device: DiscoveredDevice, declared_nodes: dict[str, dict[str, obje
             continue
         for property_id, definition in properties(node).items():
             raw = device.get_property(node_id, property_id)
+            settable = bool(definition.get("settable", False))
             readings.append(
                 AdoptedProperty(
                     node_id=node_id,
@@ -144,8 +147,22 @@ def _readings(device: DiscoveredDevice, declared_nodes: dict[str, dict[str, obje
                     datatype=str(definition.get("datatype") or "string"),
                     unit=optional_str(definition.get("unit")),
                     format=optional_str(definition.get("format")),
-                    settable=bool(definition.get("settable", False)),
+                    settable=settable,
                     value=None if raw is None else str(raw),
+                    set_topic=_set_topic(device.device_id, node_id, property_id) if settable else None,
                 )
             )
     return tuple(readings)
+
+
+def _set_topic(device_id: str, node_id: str, property_id: str) -> str:
+    """The Homie topic a write to one property is published to.
+
+    The same three-part construction the adapter uses for every curated control,
+    repeated here rather than reached for, because that is the point: this
+    function is only ever called on a device `is_modelled` rejected and only for
+    a property the device declares settable, so no topic it can produce names
+    anything a curated setter owns. Sharing the adapter's builder would put the
+    whole address space one argument away.
+    """
+    return f"{HOMIE_DOMAIN}/{HOMIE_VERSION}/{device_id}/{node_id}/{property_id}/set"

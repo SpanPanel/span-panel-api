@@ -61,6 +61,7 @@ from .phase_validation import (
     validate_solar_tabs,
 )
 from .protocol import (
+    AdoptedControlProtocol,
     CircuitControlProtocol,
     EvseControlProtocol,
     PanelCapability,
@@ -80,6 +81,11 @@ __all__ = [  # noqa: RUF022
     # firmware publishes no such property, so the flat adapter answers None and
     # the transport refuses.
     "EvseControlProtocol",
+    # Added 2026-08-20 with device-scoped adoption: the first control whose
+    # subject this library does not understand. Additive, and authorised by the
+    # snapshot rather than by its arguments -- a device the adapter models
+    # produces no AdoptedDevice and so cannot be addressed through it.
+    "AdoptedControlProtocol",
     "PanelCapability",
     "PanelControlProtocol",
     "SpanPanelClientProtocol",

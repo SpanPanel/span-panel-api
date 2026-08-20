@@ -651,6 +651,25 @@ class AdoptedProperty:
     `None` when the property is declared and nothing has arrived.
     """
 
+    set_topic: str | None = None
+    """The topic a write to this property is published to, or None.
+
+    Populated **only** for a settable property on an adopted device, and that
+    scoping is the authorisation rather than a check somebody has to remember.
+
+    The alternative -- a generic `set_property_topic(device, node, property)` on
+    the adapter -- would be a back door around every curated control, and the
+    bypass would skip real work: schema_1 has to translate `GRID` into `ON_GRID`
+    for the islanding assertion, and `evse_charge_limit_payload` *refuses* a
+    value above the commissioned ceiling because publishing past it is the one
+    write with a physical consequence. A topic that can only ever exist on a
+    device nothing models cannot be aimed at either.
+
+    It also keeps this additive. A member on `SchemaAdapter` becomes required of
+    every adapter package, so an install carrying an older adapter wheel would
+    fail at *discovery* -- the whole integration, not one feature.
+    """
+
     @property
     def path(self) -> str:
         """`{node}/{property}` -- how the capability catalogs spell it."""

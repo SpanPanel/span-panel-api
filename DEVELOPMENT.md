@@ -163,6 +163,19 @@ The two answer opposite questions and are separate types so that conflating them
 
 `AdoptedProperty` also carries the declared `format` and `settable` flag, which together are the value domain a consumer needs to build a control rather than a reading.
 
+### Writing to an adopted property
+
+`AdoptedProperty.set_topic` is populated **only** for a settable property on a device `is_modelled` rejects. That scoping is the authorisation rather than a check somebody has to remember: `SpanMqttClient.set_adopted_property` resolves the property against
+the current snapshot's `adopted_devices` and publishes to the topic that property carries, and accepts no topic from its caller.
+
+The alternative — a `set_property_topic(device, node, property)` member on `SchemaAdapter` — was rejected twice over:
+
+- It would put every curated control one argument away, and two of them do real work on the way out. `dominant_power_source_payload` translates `GRID` into the `ON_GRID` the v1.0 islanding assertion accepts, and `evse_charge_limit_payload` **refuses** a
+  value above the commissioned ceiling because publishing past it is the one write here with a physical consequence.
+- `_derive_required_members` derives the required set from the protocol, so the member would be required of every adapter package. An installation carrying an older adapter wheel would fail at **discovery** — the whole integration, not one feature.
+
+No translation and no bounds check on the way out. Both exist on curated controls because this library knows what those properties mean; it knows nothing about an adopted one beyond its declaration.
+
 ### Additive by construction
 
 `adopted_devices` defaults to `()`. schema_0 never populates it — flat has no device tree to find an unmodelled device in, and panels upgrade to v1.0 and stay there, so adoption operates in the schema that is the terminus.

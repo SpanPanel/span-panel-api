@@ -79,6 +79,26 @@ class EvseControlProtocol(Protocol):
 
 
 @runtime_checkable
+class AdoptedControlProtocol(Protocol):
+    """Control protocol for settable properties on a device nothing here models.
+
+    Separate from the three above because its subject is different in kind. Those
+    name a control this library understands -- a relay, a shed priority, a charge
+    ceiling -- and translate or bound the value on the way out. This one names a
+    property by its wire address and passes the caller's value through, because
+    the declaration is all anybody here knows about it.
+
+    The write is authorised by the snapshot rather than by the arguments: the
+    transport resolves the property against the current `adopted_devices` and
+    refuses anything it does not find carrying a set topic. A device this library
+    models produces no `AdoptedDevice` and so cannot be addressed here, which is
+    what stops this becoming a generic write around the curated setters.
+    """
+
+    async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> None: ...
+
+
+@runtime_checkable
 class StreamingCapableProtocol(Protocol):
     """Push-based transport that delivers updates via callbacks."""
 

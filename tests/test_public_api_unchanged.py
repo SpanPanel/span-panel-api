@@ -51,6 +51,7 @@ EXPECTED_PUBLIC_API = {
     "ADOPTION_TOPOLOGY_NODE",
     "AdoptedDevice",
     "AdoptedProperty",
+    "AdoptedControlProtocol",
     "is_discovery_path",
     # Snapshots
     "SpanBatterySnapshot",

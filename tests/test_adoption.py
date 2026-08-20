@@ -299,3 +299,57 @@ def test_the_snapshot_field_defaults_empty() -> None:
     every adapter package.
     """
     assert SpanPanelSnapshot.__dataclass_fields__["adopted_devices"].default == ()
+
+
+# -- The set topic exists only where a write is legal ------------------------
+
+
+def test_a_settable_property_carries_the_topic_a_write_goes_to() -> None:
+    nodes = {"generator": {"properties": {"mode": {"datatype": "enum", "format": "AUTO,OFF", "settable": True}}}}
+    tree = _with(_tree(), "generator-1", _device(UNMODELLED_TYPE, nodes=nodes))
+
+    (control,) = _adopted(_snapshot(tree))["generator-1"].properties
+    assert control.set_topic == "ebus/5/generator-1/generator/mode/set"
+
+
+def test_a_property_the_device_does_not_declare_settable_carries_no_topic() -> None:
+    """The absence is the authorisation, not a flag a caller is trusted to read.
+
+    A consumer cannot construct a write for a property that carries no topic, so
+    "is this writable" is answered by the declaration once, here, rather than by
+    every caller remembering to ask.
+    """
+    nodes = {"meter": {"properties": {"active-power": {"datatype": "float", "unit": "W"}}}}
+    tree = _with(_tree(), "generator-1", _device(UNMODELLED_TYPE, nodes=nodes))
+
+    (reading,) = _adopted(_snapshot(tree))["generator-1"].properties
+    assert reading.set_topic is None
+
+
+def test_no_topic_reachable_this_way_can_name_a_modelled_device() -> None:
+    """The property that keeps this from being a generic write.
+
+    A generic `set_property_topic(device, node, property)` would put every
+    curated control one argument away -- including the two that do real work on
+    the way out: the islanding assertion translates its value, and the charge
+    ceiling refuses one above what the charger was commissioned for. Because a
+    modelled device produces no `AdoptedDevice` at all, no topic produced here
+    can address one, whatever a caller passes.
+    """
+    tree = _with(_tree(), "generator-1", _device(UNMODELLED_TYPE))
+    snapshot = _snapshot(tree)
+
+    addressable = {device.device_id for device in snapshot.adopted_devices for prop in device.properties if prop.set_topic}
+    modelled = {device_id for device_id in _tree() if device_id != PANEL}
+    assert not (addressable & modelled)
+
+
+def test_a_settable_property_on_a_modelled_device_is_never_adopted_and_so_never_writable() -> None:
+    """Stated against a circuit, which really does declare settable properties.
+
+    The reference tree's circuits declare `switch/relay` and `load-shed/priority`
+    settable, and both have curated setters. Adoption must not offer a second
+    route to either.
+    """
+    snapshot = _snapshot(_tree())
+    assert snapshot.adopted_devices == ()

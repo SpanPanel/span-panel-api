@@ -28,7 +28,7 @@ from ..exceptions import (
     SpanPanelStaleDataError,
     SpanPanelTimeoutError,
 )
-from ..models import FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot, V2HomieSchema
+from ..models import AdoptedProperty, FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot, V2HomieSchema
 from ..protocol import PanelCapability, SchemaAdapter
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S
@@ -581,6 +581,56 @@ class SpanMqttClient:
             raise SpanPanelServerError(f"{amps} A is outside what EVSE {node_id!r} accepts")
         if self._bridge is not None:
             self._bridge.publish(topic, payload, qos=1)
+
+    # -- AdoptedControlProtocol --------------------------------------------
+
+    async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> None:
+        """Publish a write to one settable property of an adopted device.
+
+        Args:
+            device_id: the adopted device's wire id, as `AdoptedDevice.device_id`
+            node_id: the Homie node
+            property_id: the Homie property
+            value: the payload, already in the property's declared vocabulary
+
+        **The lookup is the authorisation.** No topic is accepted from the
+        caller: this finds the property in the current snapshot's adopted
+        devices and publishes to the topic that property carries. A device the
+        adapter models has no `AdoptedDevice`, and a property the device does not
+        declare settable carries no `set_topic`, so neither can be reached from
+        here however the arguments are spelled. That is what keeps this from
+        being a generic write that routes around the curated setters -- which
+        would skip real work, since the islanding assertion needs its value
+        translated and the charge-current ceiling refuses values above what the
+        charger was commissioned for.
+
+        No payload translation and no bounds check, deliberately. Both exist on
+        curated controls because this library knows what those properties mean.
+        It knows nothing about an adopted one beyond its declaration, and
+        inventing a bound would be inventing a fact about somebody's hardware.
+        The caller constrains the value to the declared `format`; the panel
+        remains the authority on whether to accept it.
+        """
+        surface = self._adopted_property(device_id, node_id, property_id)
+        if surface is None or surface.set_topic is None:
+            raise SpanPanelServerError(f"No settable adopted property {node_id}/{property_id} on device {device_id!r}")
+        if self._bridge is not None:
+            self._bridge.publish(surface.set_topic, value, qos=1)
+
+    def _adopted_property(self, device_id: str, node_id: str, property_id: str) -> AdoptedProperty | None:
+        """The named property of the named adopted device in the current snapshot.
+
+        Built fresh rather than cached: a device that has left the tree must stop
+        being writable the moment it does, and a snapshot is the only thing that
+        knows.
+        """
+        for device in self._require_adapter().build_snapshot().adopted_devices:
+            if device.device_id != device_id:
+                continue
+            for surface in device.properties:
+                if surface.node_id == node_id and surface.property_id == property_id:
+                    return surface
+        return None
 
     # -- StreamingCapableProtocol ------------------------------------------
 

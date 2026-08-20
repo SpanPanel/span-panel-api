@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- **A settable property on an adopted device can be written, and the write cannot reach anything else: `AdoptedProperty.set_topic` and `SpanMqttClient.set_adopted_property`.** The topic is populated only for a settable property on a device `is_modelled`
+  rejects, so it is the scoping that authorises the write rather than a check a caller has to remember. The transport resolves the property against the current snapshot's `adopted_devices` and publishes to the topic that property carries; no topic is
+  accepted from the caller, and a device this library models produces no `AdoptedDevice` to find.
+- **The alternative was a `set_property_topic` member on `SchemaAdapter`, and it was rejected for two independent reasons.** It would have put every curated control one argument away, and two of them do real work on the way out —
+  `dominant_power_source_payload` translates `GRID` into the `ON_GRID` the v1.0 islanding assertion accepts, and `evse_charge_limit_payload` refuses a value above the commissioned ceiling because publishing past it is the one write with a physical
+  consequence. It would also have been required of every adapter package, since `_derive_required_members` derives the required set from the protocol, so an installation carrying an older adapter wheel would have failed at _discovery_ rather than losing
+  one feature.
+- **No translation and no bounds check on an adopted write, deliberately.** Both exist on curated controls because this library knows what those properties mean. It knows nothing about an adopted one beyond its declaration, and inventing a bound would be
+  inventing a fact about somebody else's hardware. The consumer constrains the value to the declared `format`; the panel stays the authority on whether to accept it.
+- **`AdoptedControlProtocol`**, so a consumer asks `isinstance` before offering the control, exactly as it does for circuit, panel and EVSE control.
+
 - **A device type this adapter models nothing for is reported whole rather than ignored: `SpanPanelSnapshot.adopted_devices`.** `TreeRoles` sorts the tree into the roles the snapshot needs, and anything that matches none of them has always fallen off the
   end silently — a panel publishing a device nobody modelled produced no field, no metadata row and no sign it was there. The schema is explicitly vendor-extensible, so that is an expected arrival rather than a hypothetical one. `AdoptedDevice` carries the
   device's identity and its readings; `span_panel_api_schema_1.adoption` builds one per unmodelled child.

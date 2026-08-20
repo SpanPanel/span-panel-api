@@ -22,6 +22,7 @@ sharing a helper.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -57,18 +58,23 @@ from span_panel_api_schema_1.const import (
     PROP_FULL_CHARGE_TIME_TO_PRIORITY_SHED,
     PROP_FULL_CHARGE_TOTAL_TIME_REMAINING,
     PROP_GRID_FORMING_ENTITY,
+    PROP_HARDWARE_VERSION,
     PROP_IMPORT_LIMIT,
     PROP_IMPORTED_ENERGY,
     PROP_MODEL,
+    PROP_POLICY,
     PROP_RATING,
     PROP_RELAY,
     PROP_SERIAL_NUMBER,
     PROP_STATE,
     PROP_TIME_TO_PRIORITY_SHED,
     PROP_TOTAL_TIME_REMAINING,
+    PROP_VENDOR_NAME,
     PROP_VOLTAGE_A,
     PROP_VOLTAGE_B,
     PROP_WIFI,
+    PROP_WIFI_SSID,
+    SHED_POLICY_SOC_PRIORITY_V1,
     TYPE_BESS,
     TYPE_PV,
     UNKNOWN,
@@ -289,6 +295,82 @@ def find_lugs(devices: list[DiscoveredDevice], upstream: bool) -> DiscoveredDevi
     return None
 
 
+class _ShedPolicy(NamedTuple):
+    """What `shed/policy` says, as far as this reader understands it.
+
+    Three fields rather than a parsed document, because a consumer renders three
+    values beside the shed state: which algorithm is in force, and the two SoC
+    thresholds that make its behaviour predictable.
+    """
+
+    algorithm: str | None
+    soc_threshold_shed_percent: int | None
+    soc_threshold_release_percent: int | None
+
+
+_NO_SHED_POLICY = _ShedPolicy(None, None, None)
+
+
+def _shed_policy(raw: str | None) -> _ShedPolicy:
+    """Parse `shed/policy`, degrading rather than raising at every step.
+
+    The property is a `json` document whose Homie `$format` is the JSON Schema
+    it conforms to, and that schema is versioned in its own `$id`
+    (`soc-priority.v1`). Versioning the document rather than the property is the
+    publisher's way of saying a different algorithm may arrive, so a reader that
+    assumed this one would misreport the day one did.
+
+    Hence the shape here: the algorithm name is taken from whatever parses, and
+    the two thresholds only from a document that says it is `soc-priority.v1`.
+    An unrecognised algorithm keeps its name and yields no thresholds, and the
+    raw string is retained beside this by the caller -- a consumer can still show
+    what the panel said, which is strictly more than an exception leaves it.
+
+    Every failure lands on the same answer as "not published", because to a
+    consumer they are the same event: there is nothing here it can render.
+    """
+    if not raw:
+        return _NO_SHED_POLICY
+    try:
+        document = json.loads(raw)
+    except ValueError:
+        _LOGGER.debug("shed/policy is not JSON, keeping the raw value: %r", raw)
+        return _NO_SHED_POLICY
+    if not isinstance(document, dict):
+        return _NO_SHED_POLICY
+
+    algorithm = document.get("algorithm")
+    algorithm = algorithm if isinstance(algorithm, str) and algorithm else None
+    if algorithm != SHED_POLICY_SOC_PRIORITY_V1:
+        # A named algorithm nothing here knows how to read is still worth
+        # naming: it tells a consumer why the thresholds are absent.
+        return _ShedPolicy(algorithm, None, None)
+
+    parameters = document.get("parameters")
+    if not isinstance(parameters, dict):
+        return _ShedPolicy(algorithm, None, None)
+    return _ShedPolicy(
+        algorithm,
+        _percent(parameters.get("soc-threshold-shed")),
+        _percent(parameters.get("soc-threshold-release")),
+    )
+
+
+def _percent(value: object) -> int | None:
+    """A declared-`integer` SoC threshold, or `None` for anything that is not one.
+
+    `bool` is excluded explicitly: it is an `int` in Python, and a policy
+    document carrying `true` would otherwise read as a 1% threshold.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None
+
+
 class PanelFields:
     """Panel-level values gathered from the tree, ready for the snapshot.
 
@@ -306,6 +388,13 @@ class PanelFields:
     ) -> None:
         self.serial_number = text(panel, NODE_INFO, PROP_SERIAL_NUMBER, panel.device_id)
         self.firmware_version = text(panel, NODE_INFO, PROP_FIRMWARE_VERSION)
+        # The enclosure's own build identity, for the device card a consumer
+        # renders. `None` rather than a default when the panel does not publish
+        # one: the consumer owns the fallback text it has always shown, and a
+        # default invented here would replace it with a different invention.
+        self.vendor_name = text(panel, NODE_INFO, PROP_VENDOR_NAME) or None
+        self.model = text(panel, NODE_INFO, PROP_MODEL) or None
+        self.hardware_version = text(panel, NODE_INFO, PROP_HARDWARE_VERSION) or None
         self.main_relay_state = text(panel, NODE_STATUS, PROP_RELAY, UNKNOWN)
         self.door_state = text(panel, NODE_DOOR, PROP_STATE, UNKNOWN)
 
@@ -367,8 +456,19 @@ class PanelFields:
         # Kept as an attribute only so nothing that reads it breaks; the snapshot
         # takes the resolver's answer.
         self.grid_islandable: bool | None = None
-        # Not published by v1.0 firmware.
-        self.wifi_ssid: str | None = None
+        # `status/wifi-ssid`, the same value flat published as `core/wifi-ssid`.
+        # Read here rather than left `None` because the integration surfaces it
+        # as an attribute today: a v1.0 panel that did not read it lost that
+        # attribute on upgrade, silently, while every conformance check agreed
+        # nothing was wrong.
+        self.wifi_ssid = text(panel, NODE_STATUS, PROP_WIFI_SSID) or None
+
+        # `shed/policy` -- the algorithm the panel sheds by, and its parameters.
+        self.shed_policy = text(panel, NODE_SHED, PROP_POLICY) or None
+        policy = _shed_policy(self.shed_policy)
+        self.shed_policy_algorithm = policy.algorithm
+        self.shed_soc_threshold_shed_percent = policy.soc_threshold_shed_percent
+        self.shed_soc_threshold_release_percent = policy.soc_threshold_release_percent
 
         # Backup-planning forecast. Every field stays `None` when the panel
         # publishes no `shed-forecast` node, which is what lets a consumer gate

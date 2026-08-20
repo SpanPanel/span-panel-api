@@ -491,8 +491,60 @@ class SpanPanelSnapshot:
     l1_voltage: float | None = None  # v2: core/l1-voltage (V)
     l2_voltage: float | None = None  # v2: core/l2-voltage (V)
     main_breaker_rating_a: int | None = None  # v2: core/breaker-rating (A)
-    wifi_ssid: str | None = None  # v2: core/wifi-ssid
+    wifi_ssid: str | None = None  # v1.0: status/wifi-ssid | flat: core/wifi-ssid
     vendor_cloud: str | None = None  # v2: core/vendor-cloud
+
+    # The enclosure's own build identity, for the device card rather than for an
+    # entity. `None` when the panel publishes nothing, never a default string:
+    # the consumer has shown its own text since before these were readable, and
+    # a default invented here would silently replace it. v1.0 only -- flat
+    # declares none of the three.
+    vendor_name: str | None = None
+    """`info/vendor-name` -- who made the enclosure."""
+    model: str | None = None
+    """`info/model` -- the enclosure's model designation, e.g. `MAIN_40`.
+
+    The same property `panel_size` is derived from, kept as the string beside
+    the derived integer: the size is what circuits are built against, the
+    designation is what a device card shows. Spelled `model` to match
+    `battery.model`, `pv.model`, `evse.model` and `mid.model`, all of which name
+    the same `info/model` property on their own device.
+    """
+    hardware_version: str | None = None
+    """`info/hardware-version` -- the enclosure's board revision.
+
+    `hardware_version` rather than `hw_version`: the snapshot spells fields out,
+    and `DeviceInfo(hw_version=...)` is the consumer's abbreviation, not ours.
+    """
+
+    # `shed/policy`, v1.0 only: how the panel decides what to shed, and the two
+    # SoC thresholds that make its behaviour predictable. The wire carries one
+    # `json` document; these are the parsed answer plus the document itself.
+    shed_policy: str | None = None
+    """`shed/policy` verbatim -- the JSON document as published.
+
+    Kept beside the parsed members rather than discarded once parsed, because
+    the document's schema is versioned in its own `$id` and a publisher may ship
+    an algorithm this library does not know. The raw string is what lets a
+    consumer still show what the panel said instead of showing nothing.
+    """
+    shed_policy_algorithm: str | None = None
+    """The document's `algorithm` member, e.g. `soc-priority.v1`.
+
+    `None` means the property was not published, did not parse, or named no
+    algorithm -- to a consumer those are one event: there is nothing to render.
+    A *recognised* name and an unrecognised one are both reported here; only the
+    thresholds below are gated on recognising it.
+    """
+    shed_soc_threshold_shed_percent: int | None = None
+    """`parameters.soc-threshold-shed` -- SoC percent below which SOC_THRESHOLD circuits shed.
+
+    Populated only from a `soc-priority.v1` document, because it is that
+    algorithm's parameter. `0` is a legal threshold, so `None` cannot be
+    replaced by a default.
+    """
+    shed_soc_threshold_release_percent: int | None = None
+    """`parameters.soc-threshold-release` -- SoC percent above which shed circuits restore."""
 
     # Power flows (None when node not present)
     power_flow_pv: float | None = None  # v2: power-flows/pv (W)

@@ -37,6 +37,40 @@ def _device(device_id: str) -> DiscoveredDevice:
     return device_from_topics(device_id, _TREE[device_id])
 
 
+def _published(device_id: str, topic: str) -> str:
+    """What the capture publishes on this topic, or fail saying it does not.
+
+    Expectations are computed from this rather than written as literals, so a
+    test cannot keep passing against a capture that stopped carrying the value
+    it is about.
+    """
+    value = _TREE[device_id].get(topic)
+    assert value is not None, f"{device_id} publishes no {topic} in the capture"
+    return value
+
+
+def _panel_with(**overrides: str | None) -> DiscoveredDevice:
+    """The captured panel with topics rewritten, or unpublished where `None`.
+
+    Keyword spelling is `node__property_name`, matching `_synthetic` below.
+    Unpublishing is what a panel whose firmware omits a property looks like, and
+    it is a different event from publishing an empty string.
+    """
+    topics = dict(_TREE[PANEL])
+    for path, value in overrides.items():
+        node, _, prop = path.partition("__")
+        topic = f"{node.replace('_', '-')}/{prop.replace('_', '-')}"
+        if value is None:
+            topics.pop(topic, None)
+        else:
+            topics[topic] = value
+    return device_from_topics(PANEL, topics)
+
+
+def _fields_for(panel: DiscoveredDevice) -> PanelFields:
+    return PanelFields(panel=panel, upstream_lugs=None, downstream_lugs=None, mid=None)
+
+
 @pytest.fixture(name="fields")
 def _fields() -> PanelFields:
     return PanelFields(
@@ -428,3 +462,121 @@ def test_the_forming_device_is_named_readably_not_by_wire_id() -> None:
     assert resolve_grid_forming_device_name(_synthetic("mid", grid__grid_forming_entity="GRID"), names) is None
     # Unresolvable: the raw id stays on `grid_forming_entity` for anyone who needs it.
     assert resolve_grid_forming_device_name(_synthetic("mid", grid__grid_forming_entity="ghost"), names) is None
+
+
+def test_the_panel_reads_the_network_it_is_joined_to(fields: PanelFields) -> None:
+    """`status/wifi-ssid`, the property whose absence was a flat -> v1.0 regression.
+
+    Flat published `core/wifi-ssid`, the integration surfaces it as an attribute,
+    and schema_1 initialised the field to `None` and mapped nothing to it. Every
+    conformance check agreed that was fine, because each of them asks whether a
+    declaration has a reader and none asks whether a *user-visible* value
+    survived the schema change.
+    """
+    assert fields.wifi_ssid == _published(PANEL, "status/wifi-ssid")
+
+
+def test_an_unpublished_ssid_stays_absent_rather_than_becoming_empty() -> None:
+    """`None`, not `""`: the consumer omits the attribute entirely for `None`."""
+    assert _fields_for(_panel_with(status__wifi_ssid=None)).wifi_ssid is None
+    assert _fields_for(_panel_with(status__wifi_ssid="")).wifi_ssid is None
+
+
+def test_the_panel_carries_its_own_build_identity(fields: PanelFields) -> None:
+    """Vendor, model and hardware revision, for the enclosure's device card.
+
+    The model string is the same property `panel_size` is derived from, kept
+    beside the derived integer rather than instead of it: the size builds
+    circuits, the designation is what a person reads on a device card.
+    """
+    assert fields.vendor_name == _published(PANEL, "info/vendor-name")
+    assert fields.model == _published(PANEL, "info/model")
+    assert fields.hardware_version == _published(PANEL, "info/hardware-version")
+
+
+def test_a_panel_publishing_no_identity_reports_none_so_a_consumer_can_fall_back() -> None:
+    """Absence must be `None`, because the consumer owns the fallback text.
+
+    The integration has shown "Span" and "SPAN Panel" on the panel's device card
+    since before either was readable. A default invented here would replace that
+    text with a different one, on every panel that publishes nothing, which is a
+    change no user asked for and none would recognise as ours.
+    """
+    bare = _fields_for(_panel_with(info__vendor_name=None, info__model=None, info__hardware_version=None))
+
+    assert bare.vendor_name is None
+    assert bare.model is None
+    assert bare.hardware_version is None
+
+
+def test_the_shed_policy_is_parsed_into_its_algorithm_and_thresholds(fields: PanelFields) -> None:
+    """`shed/policy` is a JSON document; the two SoC thresholds are what a consumer shows.
+
+    Asserted against the document the capture publishes rather than against
+    literals, so the parse is checked against the producer's own encoding.
+    """
+    document = json.loads(_published(PANEL, "shed/policy"))
+
+    assert fields.shed_policy == _published(PANEL, "shed/policy")
+    assert fields.shed_policy_algorithm == document["algorithm"]
+    assert fields.shed_soc_threshold_shed_percent == document["parameters"]["soc-threshold-shed"]
+    assert fields.shed_soc_threshold_release_percent == document["parameters"]["soc-threshold-release"]
+
+
+def test_an_unknown_shed_algorithm_keeps_its_name_and_yields_no_thresholds() -> None:
+    """The `$format` schema is versioned in its own `$id`, so another algorithm may arrive.
+
+    A reader that assumed `soc-priority.v1` would report that algorithm's
+    thresholds for a document that never had them. Naming the algorithm and
+    declining the numbers is the honest answer, and the raw document stays
+    available beside it.
+    """
+    other = json.dumps({"algorithm": "runtime-priority.v2", "parameters": {"minutes-shed": 30}})
+    parsed = _fields_for(_panel_with(shed__policy=other))
+
+    assert parsed.shed_policy == other, "the raw document survives so a consumer can still show it"
+    assert parsed.shed_policy_algorithm == "runtime-priority.v2"
+    assert parsed.shed_soc_threshold_shed_percent is None
+    assert parsed.shed_soc_threshold_release_percent is None
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        pytest.param("not json at all", id="unparseable"),
+        pytest.param("[1, 2, 3]", id="not-an-object"),
+        pytest.param('{"algorithm": "soc-priority.v1"}', id="no-parameters"),
+        pytest.param('{"algorithm": "soc-priority.v1", "parameters": "20"}', id="parameters-not-an-object"),
+        pytest.param(
+            '{"algorithm": "soc-priority.v1", "parameters": {"soc-threshold-shed": "low"}}',
+            id="threshold-not-a-number",
+        ),
+        pytest.param(
+            '{"algorithm": "soc-priority.v1", "parameters": {"soc-threshold-shed": true}}',
+            id="threshold-is-a-bool",
+        ),
+    ],
+)
+def test_a_malformed_shed_policy_degrades_rather_than_raising(policy: str) -> None:
+    """Every failure lands on "nothing to render", which is what absence means too.
+
+    A panel is a publisher this library does not control, and a snapshot build
+    that raises on one bad string takes every other entity down with it. The
+    boolean case is called out because `bool` is an `int` in Python: `true`
+    would otherwise read as a 1% threshold.
+    """
+    parsed = _fields_for(_panel_with(shed__policy=policy))
+
+    assert parsed.shed_policy == policy
+    assert parsed.shed_soc_threshold_shed_percent is None
+    assert parsed.shed_soc_threshold_release_percent is None
+
+
+def test_an_unpublished_shed_policy_reports_nothing_at_all() -> None:
+    """A panel with no policy published is not a panel with an unparseable one."""
+    absent = _fields_for(_panel_with(shed__policy=None))
+
+    assert absent.shed_policy is None
+    assert absent.shed_policy_algorithm is None
+    assert absent.shed_soc_threshold_shed_percent is None
+    assert absent.shed_soc_threshold_release_percent is None

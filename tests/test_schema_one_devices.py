@@ -64,6 +64,17 @@ def _bess_with(overrides: Mapping[str, str | None]) -> DiscoveredDevice:
     return device_from_topics("bess", topics)
 
 
+def _without(device_id: str, *topics: str) -> DiscoveredDevice:
+    """The captured device with these topics unpublished.
+
+    The counterpart of `_published`: identity values now arrive valued in the
+    capture, so proving a consumer distinguishes "not published" from "published
+    blank" needs the absence built rather than found.
+    """
+    remaining = {topic: value for topic, value in _TREE[device_id].items() if topic not in topics}
+    return device_from_topics(device_id, remaining)
+
+
 def _bess_without_node(node_id: str) -> DiscoveredDevice:
     """The captured BESS with one capability node gone from its `$description`.
 
@@ -373,20 +384,35 @@ def test_the_mid_is_surfaced_as_its_own_device() -> None:
     enclosure device itself does not publish them" -- so this is where islanding state,
     grid state and the grid-forming entity actually live.
 
-    The reference tree's MID publishes no serial, because upstream's example config
-    declares no BESS serial for it to derive one from. That exercises the fallback:
-    identity drops to the Homie device id. `test_the_mid_identity_is_its_serial` covers
-    the path that matters more, against a capture that has one.
+    Identity is the published serial, per `devices/proxy.md`: a proxied device id is
+    not stable across the proxy-to-native transition, so it cannot be what a consumer
+    keys its registry on. `test_the_mid_falls_back_to_its_device_id_without_a_serial`
+    covers the other branch.
     """
     mid = build_mid(_device("bess-mid"), {})
 
     assert mid is not None
-    assert mid.islanding_state == "ON_GRID"
-    assert mid.grid_state == "UP"
-    assert mid.grid_forming_entity == "GRID"
-    assert mid.vendor_name == "Span"
-    assert mid.node_id == "bess-mid", "with no serial published, identity falls back to the device id"
+    assert mid.islanding_state == _published("bess-mid", "grid/islanding-state")
+    assert mid.grid_state == _published("bess-mid", "grid/grid-state")
+    assert mid.grid_forming_entity == _published("bess-mid", "grid/grid-forming-entity")
+    assert mid.vendor_name == _published("bess-mid", "info/vendor-name")
+    assert mid.model == _published("bess-mid", "info/model")
+    assert mid.serial_number == _published("bess-mid", "info/serial-number")
+    assert mid.node_id == mid.serial_number
+
+
+def test_the_mid_falls_back_to_its_device_id_without_a_serial() -> None:
+    """A MID that publishes no serial still gets an identity, from the Homie device id.
+
+    The fallback branch of the rule above. It was the capture's own state until the
+    reference tree caught up with what the producer publishes, so it is written out
+    rather than left to a fixture that happens not to carry a value.
+    """
+    mid = build_mid(_without("bess-mid", "info/serial-number"), {})
+
+    assert mid is not None
     assert mid.serial_number is None
+    assert mid.node_id == "bess-mid"
 
 
 def test_a_panel_with_no_mid_reports_none_rather_than_an_empty_device() -> None:
@@ -412,16 +438,16 @@ def test_the_mid_carries_its_own_firmware_and_hardware_revision() -> None:
     `software_version` rather than `firmware_version`: the sub-devices share a
     spelling because a consumer builds all of them the same way. Only the enclosure
     calls it `firmware_version`.
-    """
-    device = _device("bess-mid")
-    device.update_property("info", "firmware-version", "sim-mid/v0.1.0")
-    device.update_property("info", "hardware-version", "rev1")
 
-    mid = build_mid(device, {})
+    Read straight off the capture now that it carries what the producer publishes;
+    it used to inject the two values, which asked whether the mapper could read a
+    property this tree did not have.
+    """
+    mid = build_mid(_device("bess-mid"), {})
 
     assert mid is not None
-    assert mid.software_version == "sim-mid/v0.1.0"
-    assert mid.hardware_version == "rev1"
+    assert mid.software_version == _published("bess-mid", "info/firmware-version")
+    assert mid.hardware_version == _published("bess-mid", "info/hardware-version")
 
 
 def test_the_pv_carries_its_firmware_version() -> None:
@@ -431,22 +457,21 @@ def test_the_pv_carries_its_firmware_version() -> None:
     now. Unlike the MID there is no `hardware-version` to carry — the topic reference
     documents five properties on the PV and that is not one of them.
     """
-    device = _device("pv")
-    device.update_property("info", "firmware-version", "sim-pv/v0.1.0")
+    pv = build_pv(_device("pv"), {}, feed_statuses={})
 
-    assert build_pv(device, {}, feed_statuses={}).software_version == "sim-pv/v0.1.0"
+    assert pv.software_version == _published("pv", "info/firmware-version")
 
 
 def test_a_device_publishing_no_revision_reports_none_rather_than_empty_string() -> None:
     """Absent stays absent, so a consumer can tell "not published" from "published blank".
 
     `DeviceInfo` renders an empty string as a present-but-blank row; `None` omits the
-    row. The reference tree publishes neither property, which is what makes it the
-    right fixture for this.
+    row. The capture publishes all three, so the absence is built by unpublishing
+    them, which is what a panel whose firmware omits them actually looks like.
     """
-    mid = build_mid(_device("bess-mid"), {})
+    mid = build_mid(_without("bess-mid", "info/firmware-version", "info/hardware-version"), {})
 
     assert mid is not None
     assert mid.software_version is None
     assert mid.hardware_version is None
-    assert build_pv(_device("pv"), {}, feed_statuses={}).software_version is None
+    assert build_pv(_without("pv", "info/firmware-version"), {}, feed_statuses={}).software_version is None

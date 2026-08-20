@@ -61,6 +61,14 @@ PROP_SPACES = "spaces"
 
 # shed node
 PROP_ASSERTED_ISLANDING_STATE = "asserted-islanding-state"
+# The shed algorithm and its parameters, as a `json` property whose Homie
+# `$format` is the JSON Schema the document conforms to. The schema is versioned
+# in its own `$id` (`soc-priority.v1`), which is what lets a publisher ship a
+# different algorithm without breaking a reader that pins this one: the document
+# names the algorithm it used, so an unrecognised one degrades to the raw string
+# rather than to a misread threshold.
+PROP_POLICY = "policy"
+SHED_POLICY_SOC_PRIORITY_V1 = "soc-priority.v1"
 
 # pcs node. `energy.ebus.capability.pcs` 0.3 publishes two disjoint property
 # sets under one node type: the enclosure runs the arbitration and publishes the
@@ -111,6 +119,11 @@ PROP_VOLTAGE_B = "voltage-b"
 PROP_CLOUD_CONNECTION = "cloud-connection"
 PROP_ETHERNET = "ethernet"
 PROP_WIFI = "wifi"
+# The network the panel is joined to, not whether the radio is up -- `wifi` is
+# that. Flat published the pair as `core/wifi` and `core/wifi-ssid` and the
+# integration surfaces the SSID as an attribute today, so a v1.0 panel that did
+# not read this one lost an attribute on upgrade.
+PROP_WIFI_SSID = "wifi-ssid"
 # `energy.ebus.capability.status` 0.1: the publisher's view of its own link to
 # the device it represents (proxy) or to its backhaul (native). Enum
 # OK/DEGRADED/LOST/UNKNOWN. Orthogonal to whether the eBus publisher is reporting
@@ -125,6 +138,8 @@ UNKNOWN = "UNKNOWN"
 CLOUD_CONNECTED = "CONNECTED"
 
 PROP_MODEL = "model"
+PROP_HARDWARE_VERSION = "hardware-version"
+PROP_VENDOR_NAME = "vendor-name"
 
 # Topic root. Children are peers of the panel in the topic tree rather than
 # nodes beneath it, so a subscription covering the tree spans the domain.

@@ -191,6 +191,12 @@ _SPAN_EXTENSIONS: dict[tuple[str, str], str] = {
     (const.NODE_STATUS, "relay"): "panel main relay position; the catalog's status is alerts and comms only",
     (const.NODE_STATUS, "ethernet"): "panel ethernet link state",
     (const.NODE_STATUS, "wifi"): "panel wifi link state",
+    (const.NODE_STATUS, "wifi-ssid"): (
+        "the network the panel is joined to. Declared on the enclosure and documented by "
+        "r202633 as the MQTT successor to the flat Wi-Fi endpoint, but absent from the "
+        "status catalog, which is alerts and comms only -- the same reason its `wifi` "
+        "sibling above is an extension."
+    ),
     (const.NODE_STATUS, "cloud-connection"): "panel vendor-cloud reachability",
     (const.NODE_STATUS, "status"): "EVSE session status",
     (const.NODE_METER, "voltage-a"): "split-phase per-leg voltage; the catalog carries a single voltage",

@@ -62,6 +62,11 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     (TYPE_PANEL, NODE_STATUS, "relay", "panel.main_relay_state"),
     (TYPE_PANEL, NODE_STATUS, "ethernet", "panel.eth0_link"),
     (TYPE_PANEL, NODE_STATUS, "wifi", "panel.wlan_link"),
+    # The SSID, not the link. Flat carries the same row (`core/wifi-ssid`), which
+    # is what makes this a plain both-adapters declaration on the consumer side
+    # rather than a schema-conditional one -- and what makes its absence here a
+    # regression rather than a new feature.
+    (TYPE_PANEL, NODE_STATUS, "wifi-ssid", "panel.wifi_ssid"),
     (TYPE_PANEL, NODE_STATUS, "cloud-connection", "panel.vendor_cloud"),
     (TYPE_PANEL, NODE_METER, "voltage-a", "panel.l1_voltage"),
     (TYPE_PANEL, NODE_METER, "voltage-b", "panel.l2_voltage"),
@@ -152,6 +157,10 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     (TYPE_EVSE, NODE_STATUS, "status", "evse.status"),
     (TYPE_EVSE, NODE_SWITCH, "lock-state", "evse.lock_state"),
     (TYPE_EVSE, NODE_METER, "advertised-current", "evse.advertised_current_a"),
+    # The charger's SKU. Flat maps `evse/part-number` to the same field, so this
+    # row is what lifts `evse.part_number` out of one-adapter exemption and into
+    # a declaration the producible gate covers on both.
+    (TYPE_EVSE, NODE_INFO, "part-number", "evse.part_number"),
 )
 
 

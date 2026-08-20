@@ -46,6 +46,11 @@ from span_panel_api_schema_1.const import (
     NODE_SWITCH,
     PROP_ACTIVE_POWER,
     PROP_COMMUNICATION_STATE,
+    PROP_FIRMWARE_VERSION,
+    PROP_HARDWARE_VERSION,
+    PROP_MODEL,
+    PROP_SERIAL_NUMBER,
+    PROP_VENDOR_NAME,
     UNKNOWN,
 )
 from span_panel_api_schema_1.panel import number, resolve_grid_forming_device_name, text
@@ -55,14 +60,14 @@ if TYPE_CHECKING:
 
     from ebus_sdk.homie import DiscoveredDevice
 
-PROP_FIRMWARE_VERSION = "firmware-version"
-PROP_HARDWARE_VERSION = "hardware-version"
-PROP_MODEL = "model"
+# The `info` properties only a sub-device carries. The five the enclosure
+# publishes too -- vendor name, model, serial, firmware and hardware revision --
+# are imported from `const` above rather than restated here: they name one wire
+# property each, and two spellings of one property is how a rename reaches one
+# reader and not the other.
 PROP_NAMEPLATE_CAPACITY = "nameplate-capacity"
 PROP_NOMINAL_POWER = "nominal-power"
 PROP_PART_NUMBER = "part-number"
-PROP_SERIAL_NUMBER = "serial-number"
-PROP_VENDOR_NAME = "vendor-name"
 
 PROP_SOC = "soc"
 PROP_SOE = "soe"

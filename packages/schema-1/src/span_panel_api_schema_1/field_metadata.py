@@ -26,6 +26,7 @@ from span_panel_api_schema_1.const import (
     NODE_LOAD_SHED,
     NODE_METER,
     NODE_POWER_FLOWS,
+    NODE_SHED_FORECAST,
     NODE_SOC,
     NODE_STATUS,
     NODE_SWITCH,
@@ -67,6 +68,14 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     (TYPE_PANEL, NODE_POWER_FLOWS, "battery", "panel.power_flow_battery"),
     (TYPE_PANEL, NODE_POWER_FLOWS, "grid", "panel.power_flow_grid"),
     (TYPE_PANEL, NODE_POWER_FLOWS, "site", "panel.power_flow_site"),
+    # Only the two live estimates. The `full-charge-*` pair and `confidence`
+    # are read too, but a consumer renders them beside these rather than as
+    # readings of their own, so a unit row for them would advertise a surface
+    # that is not there. The pair below is what carries `min`, and with it the
+    # declared-gap signal: a panel that publishes the node while omitting one of
+    # these reports it as degradation rather than as absent hardware.
+    (TYPE_PANEL, NODE_SHED_FORECAST, "time-to-priority-shed", "panel.shed_time_to_priority_shed_min"),
+    (TYPE_PANEL, NODE_SHED_FORECAST, "total-time-remaining", "panel.shed_total_time_remaining_min"),
     # --- Lugs → panel.* ------------------------------------------------------
     # Deliberately absent. Which device a lugs property belongs to comes from
     # `info/direction` at read time, and a table keyed on (type, node, property)

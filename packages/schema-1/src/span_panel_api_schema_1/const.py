@@ -33,6 +33,12 @@ NODE_METER = "meter"
 NODE_PCS = "pcs"
 NODE_POWER_FLOWS = "power-flows"
 NODE_SHED = "shed"
+# `energy.ebus.capability.shed-forecast` 0.1 -- the enclosure's backup-planning
+# estimates. A separate node from `shed`, which carries the policy and the
+# asserted islanding state: `shed` says what the panel will do, `shed-forecast`
+# says when. Present only where the enclosure publishes it, so every consumer of
+# these fields gates on the node rather than defaulting.
+NODE_SHED_FORECAST = "shed-forecast"
 NODE_GRID_FORMING = "grid-forming"
 NODE_SOC = "soc"
 NODE_STATUS = "status"
@@ -55,6 +61,16 @@ PROP_SPACES = "spaces"
 
 # shed node
 PROP_ASSERTED_ISLANDING_STATE = "asserted-islanding-state"
+
+# shed-forecast node. All four times are `integer` minutes; `confidence` is the
+# enum LOW/MEDIUM/HIGH qualifying them. The `full-charge-*` pair answers the
+# hypothetical "if the BESS were full", so it is a capability figure rather than
+# a live countdown and moves only when the installation does.
+PROP_TIME_TO_PRIORITY_SHED = "time-to-priority-shed"
+PROP_TOTAL_TIME_REMAINING = "total-time-remaining"
+PROP_FULL_CHARGE_TIME_TO_PRIORITY_SHED = "full-charge-time-to-priority-shed"
+PROP_FULL_CHARGE_TOTAL_TIME_REMAINING = "full-charge-total-time-remaining"
+PROP_CONFIDENCE = "confidence"
 # `energy.ebus.capability.grid-forming` 0.1: "Static hardware capability: does this
 # inverter support grid-forming operation at all?" -- the same *kind* of statement
 # flat's `grid-islandable` made, and a MUST on the capability.

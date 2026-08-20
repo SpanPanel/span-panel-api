@@ -319,6 +319,35 @@ class SpanPanelSnapshot:
     power_flow_grid: float | None = None  # v2: power-flows/grid (W)
     power_flow_site: float | None = None  # v2: power-flows/site (W)
 
+    # Backup-planning forecast (`shed-forecast`, v1.0 only; None when the
+    # enclosure publishes no such node). Minutes, as the capability declares —
+    # `int` rather than `float` because the wire datatype is `integer` and a
+    # forecast is not measured to a fraction of a minute.
+    #
+    # `None` is load-bearing on all five: a panel that does not publish the node
+    # must produce no entity, and zero is a legitimate reading ("shedding
+    # starts now"). Defaulting any of these to 0 would say exactly that.
+    shed_time_to_priority_shed_min: int | None = None
+    """`shed-forecast/time-to-priority-shed` — minutes until the next priority tier sheds."""
+    shed_total_time_remaining_min: int | None = None
+    """`shed-forecast/total-time-remaining` — minutes until every sheddable circuit is shed."""
+    shed_full_charge_time_to_priority_shed_min: int | None = None
+    """`shed-forecast/full-charge-time-to-priority-shed` — the same estimate from a full BESS.
+
+    A capability figure, not a countdown: it answers "what would this
+    installation give me if the battery were full", so it moves when the
+    hardware or the load profile changes rather than as the battery drains.
+    """
+    shed_full_charge_total_time_remaining_min: int | None = None
+    """`shed-forecast/full-charge-total-time-remaining` — total runtime from a full BESS."""
+    shed_forecast_confidence: str | None = None
+    """`shed-forecast/confidence` — LOW | MEDIUM | HIGH, the algorithm's self-assessment.
+
+    Kept as the raw wire string. It qualifies the four times rather than
+    standing alone, and a consumer that shows it beside them needs the value the
+    catalog's enum defines, not a re-encoding of it.
+    """
+
     # Upstream lugs per-phase current (None when not available)
     upstream_l1_current_a: float | None = None  # v2: upstream-lugs/l1-current (A)
     upstream_l2_current_a: float | None = None  # v2: upstream-lugs/l2-current (A)

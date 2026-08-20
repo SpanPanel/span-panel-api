@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`shed-forecast` reaches the snapshot: five new `SpanPanelSnapshot` fields.** `shed_time_to_priority_shed_min`, `shed_total_time_remaining_min`, `shed_full_charge_time_to_priority_shed_min`, `shed_full_charge_total_time_remaining_min` and
+  `shed_forecast_confidence`. The enclosure has published `energy.ebus.capability.shed-forecast` 0.1 since r202633 and nothing read it — the backup-planning numbers ("how long before my battery starts shedding circuits", "how long before it is exhausted")
+  were on the wire and stopped at the transport. All four times are `integer` minutes as the capability declares, parsed through `panel.integer` so a publisher that serialises a whole number with a decimal point still resolves; `confidence` stays the raw
+  `LOW`/`MEDIUM`/`HIGH` string, because it qualifies the four times rather than standing alone. Every field is `None` when the panel publishes no such node, and `None` is load-bearing: zero minutes is a legitimate reading — shedding starts now — so a
+  defaulted zero would be indistinguishable from the worst forecast the capability can report. Purely additive; a panel that publishes nothing here is unchanged.
+- **`_PROPERTY_FIELD_MAP` rows for the two live estimates**, `panel.shed_time_to_priority_shed_min` and `panel.shed_total_time_remaining_min`. That buys them the unit and datatype the device's own `$description` declares, and with it the three-way
+  resolution contract: a panel that publishes the node while omitting one of the two reports degradation rather than absent hardware. The `full-charge-*` pair and `confidence` deliberately get no row — a consumer renders them beside the two live estimates
+  rather than as readings of their own, so there is no unit surface for a row to describe.
+- **`shed-forecast` 0.1 vendored under `packages/schema-1/spec/catalogs/`** and pinned in `spec_lock.json`, byte-copied from the specification at the recorded `synced_commit`. The conformance suite requires a catalog for every capability node the adapter
+  addresses, so a node read without one would be unchecked while looking checked.
+
 ## [3.0.0b5] - 08/2026
 
 Pre-release. Publishes the captured schema document consumers were copying by hand.

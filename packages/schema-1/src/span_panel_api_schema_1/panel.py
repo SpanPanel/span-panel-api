@@ -36,15 +36,19 @@ from span_panel_api_schema_1.const import (
     NODE_METER,
     NODE_POWER_FLOWS,
     NODE_SHED,
+    NODE_SHED_FORECAST,
     NODE_STATUS,
     PANEL_SIZE_BY_MODEL,
     PROP_ACTIVE_POWER,
     PROP_ASSERTED_ISLANDING_STATE,
     PROP_CAPABLE,
     PROP_CLOUD_CONNECTION,
+    PROP_CONFIDENCE,
     PROP_ETHERNET,
     PROP_EXPORTED_ENERGY,
     PROP_FIRMWARE_VERSION,
+    PROP_FULL_CHARGE_TIME_TO_PRIORITY_SHED,
+    PROP_FULL_CHARGE_TOTAL_TIME_REMAINING,
     PROP_GRID_FORMING_ENTITY,
     PROP_IMPORTED_ENERGY,
     PROP_MODEL,
@@ -52,6 +56,8 @@ from span_panel_api_schema_1.const import (
     PROP_RELAY,
     PROP_SERIAL_NUMBER,
     PROP_STATE,
+    PROP_TIME_TO_PRIORITY_SHED,
+    PROP_TOTAL_TIME_REMAINING,
     PROP_VOLTAGE_A,
     PROP_VOLTAGE_B,
     PROP_WIFI,
@@ -101,6 +107,25 @@ def number(device: DiscoveredDevice | None, node: str, prop: str) -> float | Non
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def integer(device: DiscoveredDevice | None, node: str, prop: str) -> int | None:
+    """A property the tree declares as `integer`, or `None` when it is not published.
+
+    Separate from `number` rather than casting its result at the call site,
+    because the two answer different questions. `number` exists for `float`
+    properties and returns `float`; a caller that wanted an `int` would have to
+    remember that `int(float(...))` truncates, and a truncating conversion
+    written once per call site is one that eventually gets written wrong.
+
+    Parsed through `float` first so a publisher that sends `3037.0` for an
+    integer property still resolves — the datatype is a declaration about the
+    quantity, and rejecting a decimal point would turn a formatting choice into
+    a missing entity. A value that is not a number at all yields `None`, which
+    is the same answer as not publishing: neither is a reading.
+    """
+    raw = number(device, node, prop)
+    return None if raw is None else int(raw)
 
 
 def flag(device: DiscoveredDevice | None, node: str, prop: str) -> bool:
@@ -314,6 +339,19 @@ class PanelFields:
         self.grid_islandable: bool | None = None
         # Not published by v1.0 firmware.
         self.wifi_ssid: str | None = None
+
+        # Backup-planning forecast. Every field stays `None` when the panel
+        # publishes no `shed-forecast` node, which is what lets a consumer gate
+        # entity creation on presence instead of showing a fabricated zero.
+        self.shed_time_to_priority_shed_min = integer(panel, NODE_SHED_FORECAST, PROP_TIME_TO_PRIORITY_SHED)
+        self.shed_total_time_remaining_min = integer(panel, NODE_SHED_FORECAST, PROP_TOTAL_TIME_REMAINING)
+        self.shed_full_charge_time_to_priority_shed_min = integer(
+            panel, NODE_SHED_FORECAST, PROP_FULL_CHARGE_TIME_TO_PRIORITY_SHED
+        )
+        self.shed_full_charge_total_time_remaining_min = integer(
+            panel, NODE_SHED_FORECAST, PROP_FULL_CHARGE_TOTAL_TIME_REMAINING
+        )
+        self.shed_forecast_confidence = text(panel, NODE_SHED_FORECAST, PROP_CONFIDENCE) or None
 
 
 # Matches `schema_0`'s epsilon so the no-MID heuristic answers identically on the two

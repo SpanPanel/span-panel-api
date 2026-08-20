@@ -25,10 +25,19 @@ publishes a *negative* ``meter/active-power``. ``build_circuit`` negates for
 exactly this reason, and ``build_battery`` does the same, so the snapshot's rule
 holds everywhere: positive means power flowing into the metered device.
 
-Note the enclosure's own ``power-flows/battery`` uses the opposite convention
-(the capability catalog defines it as discharge-positive) and is passed through
-untouched into ``panel.power_flow_battery``. Same physical power, opposite
-frames; ``battery.power_w`` is the one already in the snapshot's frame.
+Note the enclosure's own ``power-flows/battery`` is passed through untouched
+into ``panel.power_flow_battery``, and is **charge-positive**: power flowing out
+of the site node toward the battery. The catalog said discharge-positive when
+this was written; `capabilities/power-flows.md` 0.2 corrected it to the frame
+the firmware always published. Pass-through is right either way — only the
+reason changed. ``battery.power_w`` is the one this module puts in the
+snapshot's frame.
+
+The conversion below assumes the BESS child publishes its own meter
+spec-conformantly, i.e. discharge-positive. SPAN r202633 does not: it publishes
+charge-positive, so ``power_w`` inverts on that firmware. See the r202633
+conformance note in the consumer's delta document; unresolved, and deliberately
+not compensated here until a live panel confirms it.
 """
 
 from __future__ import annotations

@@ -570,6 +570,153 @@ class V2HomieSchema:
             raise ValueError(f"Cannot parse max from space format '{fmt}'") from exc
 
 
+ADOPTION_IDENTITY_NODE = "info"
+"""The node whose properties are a device's build identity, never entities.
+
+`info/model`, `info/serial-number`, `info/firmware-version` and their siblings
+describe the thing rather than report a reading. On a curated device they already
+land on the device card -- `bess_device_info` has read them that way since v1.0 --
+and an adopted device gets the same treatment for the same reason.
+"""
+
+ADOPTION_TOPOLOGY_NODE = "connection"
+"""The node that says what a device hangs off, never entities.
+
+`connection` answers a device-tree question: which device feeds this one, which
+one it feeds, and the health of that link. That is `via_device` and the registry,
+not a sensor -- a panel publishing its own wiring should not arrive as a handful
+of entities holding opaque device ids.
+
+The partition is by node rather than by property name deliberately. The eBus
+catalogs carry no marker for "this string is a device reference", so a consumer
+that wants one has to hard-code the property names, and that list goes stale:
+`ebus-sdk`'s own `topology.py` covers `feeds-device-id` and `fed-by-device-id`
+and silently omits `grid-forming-entity`, which lives on the `grid` capability.
+A node is what the vocabulary defines, so keying on it cannot go stale that way.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class AdoptedProperty:
+    """One property of a device this library models no snapshot field for.
+
+    The counterpart to `DiscoveredMetadata`, and deliberately not the same type.
+    A discovered row describes a property on a device the adapter *does* model
+    and exists to be forwarded in diagnostics, so it carries no value by
+    construction. An adopted property belongs to a device nothing here models at
+    all, and its whole purpose is to reach a consumer as a reading -- so it
+    carries the value, and must never be put in diagnostics.
+    """
+
+    node_id: str
+    """The Homie node, e.g. `meter`.
+
+    Never `info` or `connection`: those two resolve to the device card and the
+    device tree before this type is built.
+    """
+
+    property_id: str
+    """The Homie property, e.g. `active-power`."""
+
+    datatype: str
+    """The declared Homie datatype -- `float`, `integer`, `boolean`, `enum`, `string`.
+
+    What a consumer parses the value with, and half of what it picks a platform
+    with.
+    """
+
+    unit: str | None = None
+    """The declared unit, verbatim.
+
+    `None` when the declaration carries none, which is the normal case for a
+    `boolean` or an `enum`.
+    """
+
+    format: str | None = None
+    """The declared Homie `$format`: an option list for an `enum`, a
+    `min:max:step` range for a number.
+
+    Load-bearing for a settable property, because it is the value domain. A
+    select with no option list and a number with no bounds are not controls a
+    consumer can build, so its absence is what makes a settable property surface
+    read-only rather than as a control.
+    """
+
+    settable: bool = False
+    """Whether the panel accepts a write to this property."""
+
+    value: str | None = None
+    """The retained value as published, unparsed.
+
+    `None` when the property is declared and nothing has arrived.
+    """
+
+    @property
+    def path(self) -> str:
+        """`{node}/{property}` -- how the capability catalogs spell it."""
+        return f"{self.node_id}/{self.property_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class AdoptedDevice:
+    """A device on the tree whose type this library models no fields for.
+
+    Adoption is scoped to a whole device rather than to a property, and the
+    distinction is the design. A new property on a device we *do* model is a
+    curation task with a short turnaround, and minting an entity for it spends an
+    entity id permanently on a shape a human would likely have chosen differently
+    -- the sixteen `pcs` properties that curation collapsed into one entity and
+    thirteen attributes are the worked example. A device type nothing here models
+    is the opposite case: no curation is coming, so surfacing it is strictly
+    better than the silence that ships today.
+
+    Extra instances of a *modelled* type are deliberately not adopted. A second
+    BESS is a multiplicity limitation, not an unmodelled device, and adopting it
+    would put a machine-named device card beside a curated one describing the
+    same class of hardware.
+    """
+
+    device_id: str
+    """The device's own id on the wire.
+
+    Opaque, and per the eBus proxy rule (`{proxier-id}-{proxied-id}`) not
+    comparable across enclosures -- the same physical device carries different
+    ids under different proxiers by design. Usable as this panel's local handle,
+    never as a cross-panel identity.
+    """
+
+    device_type: str
+    """The declared `$type`, e.g. `energy.ebus.device.generator`, verbatim."""
+
+    name: str | None = None
+    """The device's declared Homie `name`, when it publishes one."""
+
+    vendor_name: str | None = None
+    """`info/vendor-name` -- for the device card."""
+
+    model: str | None = None
+    """`info/model` -- for the device card."""
+
+    serial_number: str | None = None
+    """`info/serial-number` -- for the device card.
+
+    Deliberately *not* an identity-anchor decision made here. A consumer that
+    keys a device registry on an anchor must freeze it at first sighting: a
+    serial arriving on a device already adopted under its wire id is new
+    information for the card and nothing else, because re-deriving the anchor
+    turns an upgrade into a device replacement and takes the entities with it.
+    """
+
+    software_version: str | None = None
+    """`info/firmware-version` -- for the device card."""
+
+    hardware_version: str | None = None
+    """`info/hardware-version` -- for the device card."""
+
+    properties: tuple[AdoptedProperty, ...] = ()
+    """Everything outside `info` and `connection`, in declaration order."""
+
+
 @dataclass(frozen=True, slots=True)
 class SpanPanelSnapshot:
     """Complete panel state — single point-in-time view."""
@@ -718,6 +865,20 @@ class SpanPanelSnapshot:
     signal. A new optional device should not inherit that: presence is
     `snapshot.mid is not None`, with nothing to infer.
     """
+    adopted_devices: tuple[AdoptedDevice, ...] = ()
+    """Devices on the tree whose type this library models no fields for.
+
+    Empty for every adapter that does not answer the question. schema_0 never
+    populates it: flat has no device tree to find an unmodelled device in, and
+    panels upgrade to v1.0 and stay there, so adoption operates in the schema
+    that is the terminus.
+
+    A defaulted snapshot field rather than a `SchemaAdapter` member, on purpose.
+    The protocol derives its required members from itself, so a new member is
+    required of every adapter package and invalidates built wheels; a snapshot
+    field that defaults empty is additive and costs neither.
+    """
+
     pcs: SpanPcsSnapshot | None = None
     """The enclosure's Power Control System, when it publishes a `pcs` node. v1.0 only.
 

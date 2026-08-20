@@ -39,6 +39,18 @@ EXPECTED_PUBLIC_API = {
     # curated rows it saw before.
     "DISCOVERY_NAMESPACE",
     "DiscoveredMetadata",
+    # Added 2026-08-20: device-scoped adoption -- the two nodes whose properties
+    # resolve to a device card and a device link rather than to entities, and the
+    # pair of records an adapter reports an unmodelled device with. Additive for
+    # the same reason: `SpanPanelSnapshot.adopted_devices` defaults empty, so an
+    # adapter that adopts nothing and a consumer that never reads the field are
+    # both unaffected. Deliberately not `SchemaAdapter` members -- the protocol
+    # derives its required set from itself, so a member there would be required
+    # of every adapter package and would invalidate built wheels.
+    "ADOPTION_IDENTITY_NODE",
+    "ADOPTION_TOPOLOGY_NODE",
+    "AdoptedDevice",
+    "AdoptedProperty",
     "is_discovery_path",
     # Snapshots
     "SpanBatterySnapshot",

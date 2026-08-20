@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING
 
 from span_panel_api.models import SpanPanelSnapshot
+from span_panel_api_schema_1.adoption import build_adopted_devices
 from span_panel_api_schema_1.circuits import build_circuit
 from span_panel_api_schema_1.const import (
     NODE_INFO,
@@ -25,6 +26,7 @@ from span_panel_api_schema_1.const import (
     TYPE_MID,
     TYPE_PV,
 )
+from span_panel_api_schema_1.description import device_type
 from span_panel_api_schema_1.devices import (
     build_battery,
     build_evse,
@@ -51,17 +53,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ebus_sdk.homie import DiscoveredDevice
-
-
-def device_type(device: DiscoveredDevice) -> str:
-    """The device's declared type from its description, or '' before it arrives.
-
-    A device exists in the tree from the moment its parent names it as a child,
-    so an empty type is the normal mid-discovery state rather than an error.
-    """
-    description: dict[str, object] = device.description or {}
-    declared = description.get("type")
-    return str(declared) if declared else ""
 
 
 class TreeRoles:
@@ -208,6 +199,10 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         # capability publishes is legally `0.0`, so there is no reading that can
         # distinguish a switched-off PCS from an absent one. See `build_pcs`.
         pcs=build_pcs(panel),
+        # Every child whose type nothing above sorts into a role. Built from the
+        # same `children` the roles were sorted from, so a type dropping out of
+        # `TreeRoles` surfaces here rather than vanishing from both.
+        adopted_devices=build_adopted_devices(children),
         evse={
             key: build_evse(device, feeds, node_id=key, feed_statuses=feed_statuses)
             for device, key in harmonised_evse_keys(roles.evse).items()

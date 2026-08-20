@@ -18,6 +18,17 @@ if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
 
 
+def device_type(device: DiscoveredDevice) -> str:
+    """The device's declared type from its description, or '' before it arrives.
+
+    A device exists in the tree from the moment its parent names it as a child,
+    so an empty type is the normal mid-discovery state rather than an error.
+    """
+    description: dict[str, object] = device.description or {}
+    declared = description.get("type")
+    return str(declared) if declared else ""
+
+
 def nodes(description: dict[str, object]) -> dict[str, dict[str, object]]:
     """The capability nodes a description declares, by node id."""
     declared = description.get("nodes")

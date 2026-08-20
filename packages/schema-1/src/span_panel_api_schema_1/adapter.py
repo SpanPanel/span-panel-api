@@ -37,9 +37,10 @@ from span_panel_api_schema_1.const import (
     PROP_RELAY,
     STATE_READY,
 )
+from span_panel_api_schema_1.description import device_type
 from span_panel_api_schema_1.field_metadata import build_field_metadata
 from span_panel_api_schema_1.panel import integer
-from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot, device_type, harmonised_evse_keys
+from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot, harmonised_evse_keys
 from span_panel_api_schema_1.transport import ControllerRoutes
 
 if TYPE_CHECKING:

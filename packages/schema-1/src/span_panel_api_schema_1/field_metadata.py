@@ -52,9 +52,13 @@ from span_panel_api_schema_1.const import (
     TYPE_PANEL,
     TYPE_PV,
 )
-from span_panel_api_schema_1.description import nodes as declared_nodes, optional_str, properties as declared_properties
+from span_panel_api_schema_1.description import (
+    device_type as declared_type,
+    nodes as declared_nodes,
+    optional_str,
+    properties as declared_properties,
+)
 from span_panel_api_schema_1.panel import PROP_CURRENT_A, PROP_CURRENT_B, find_lugs
-from span_panel_api_schema_1.snapshot import device_type as declared_type
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice

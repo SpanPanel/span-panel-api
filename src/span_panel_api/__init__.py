@@ -31,7 +31,11 @@ from .exceptions import (
 )
 from .factory import create_span_client
 from .models import (
+    ADOPTION_IDENTITY_NODE,
+    ADOPTION_TOPOLOGY_NODE,
     DISCOVERY_NAMESPACE,
+    AdoptedDevice,
+    AdoptedProperty,
     DiscoveredMetadata,
     FieldMetadata,
     HomieSchemaTypes,
@@ -90,6 +94,13 @@ __all__ = [  # noqa: RUF022
     "DISCOVERY_NAMESPACE",
     "DiscoveredMetadata",
     "is_discovery_path",
+    # Added 2026-08-20: device-scoped adoption. Additive in the same way --
+    # `SpanPanelSnapshot.adopted_devices` defaults empty, so an adapter that
+    # adopts nothing and a consumer that reads the field are both unaffected.
+    "ADOPTION_IDENTITY_NODE",
+    "ADOPTION_TOPOLOGY_NODE",
+    "AdoptedDevice",
+    "AdoptedProperty",
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",

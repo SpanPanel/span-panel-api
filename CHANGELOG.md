@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- **A device type this adapter models nothing for is reported whole rather than ignored: `SpanPanelSnapshot.adopted_devices`.** `TreeRoles` sorts the tree into the roles the snapshot needs, and anything that matches none of them has always fallen off the
+  end silently — a panel publishing a device nobody modelled produced no field, no metadata row and no sign it was there. The schema is explicitly vendor-extensible, so that is an expected arrival rather than a hypothetical one. `AdoptedDevice` carries the
+  device's identity and its readings; `span_panel_api_schema_1.adoption` builds one per unmodelled child.
+- **The unit is a device, never a property, and that is the whole design.** A new property on a device this adapter already models is a curation task with a short turnaround, and surfacing it automatically spends a consumer's entity identity permanently on
+  a shape a human would likely have chosen differently — the sixteen `pcs` properties that curation collapsed into one entity and thirteen attributes are the worked example. An unmodelled _type_ is the opposite case: no curation is coming, so the silence
+  is the only alternative. Extra instances of a modelled type are deliberately not adopted either: a second BESS is a multiplicity limit, not an unmodelled device, and adopting it would stand a machine-named record beside a curated one for the same
+  hardware.
+- **`info` and `connection` resolve away from readings, by node rather than by property name.** `info` is a device's build identity and becomes the card fields `AdoptedDevice` carries; `connection` is topology and becomes the device link. The partition is
+  keyed on the node because the catalogs carry no marker for "this string is a device reference", which leaves a hard-coded name list as the only alternative — and such a list goes stale silently: `ebus-sdk`'s own `topology.py` covers `feeds-device-id` and
+  `fed-by-device-id` and omits `grid-forming-entity`, which lives on the `grid` capability. A node is what the vocabulary defines, so keying on it cannot go stale the same way.
+- **`AdoptedProperty` carries the value; `DiscoveredMetadata` still must not.** The two answer opposite questions and are separate types so that conflating them is a type error. Discovery rows are built to be forwarded in consumer diagnostics, which leave
+  the machine, so they carry declarations only. An adopted property exists to become an entity on the machine that built it, so it carries the reading — along with the declared `format` and `settable` flag, which are together the value domain a consumer
+  needs to build a control rather than a reading.
+- **Additive, and deliberately not a protocol member.** `adopted_devices` defaults to `()`, so schema_0 — which has no device tree to find an unmodelled device in — is untouched, and `ADAPTER_CONTRACT_VERSION` does not move. `SchemaAdapter` derives its
+  required members from itself, so a member there would be required of every adapter package and would invalidate built wheels.
+
 - **The capability catalogs are used as a validator, not just as a vocabulary list: `span_panel_api_schema_1.catalog`.** Sixteen catalogs have been vendored since v1.0 landed and were read only to assert that a catalog _exists_ for every node the adapter
   addresses. Nothing compared a declared `unit` or `datatype` against the catalog's definition of the same property, which is the comparison that catches a mislabel — and the one mislabel this repository has met (`meter/active-power` declared `kW` while
   the values are watts, a 1000x error) was found because a person noticed a sibling device declaring the same quantity differently. The new module compares one declaration against one catalog definition and classifies the result;

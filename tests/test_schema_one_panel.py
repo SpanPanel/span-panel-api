@@ -445,7 +445,39 @@ def test_an_unresolvable_forming_entity_cannot_escape_as_a_raw_id() -> None:
 
     assert resolve_dominant_power_source(stranger, {}) == "UNKNOWN"
     assert resolve_dominant_power_source(unmapped, {"wh-1": "energy.ebus.device.water-heater"}) == "UNKNOWN"
-    assert resolve_dominant_power_source(None, {}) is None
+
+
+def test_a_panel_with_no_mid_reports_the_grid_as_forming() -> None:
+    """Elimination, not a guess, and it restores an answer flat already gave.
+
+    A commissioned MID is what SPAN islands with, so its absence rules out every
+    other value this field can take. `BATTERY` needs a BESS and a BESS brings a
+    MID; `PV` cannot form a grid alone, because anything that can is a
+    grid-forming inverter and therefore a MID; `NONE` describes a panel supplying
+    nothing, which is a panel that is not publishing. What remains is a generator,
+    and that is two cases of which only one reaches here — one wired through a MID
+    is named by that MID and answered before this point, while one with no MID
+    interface is what SPAN treats as the grid, and is the only kind an install
+    with no MID can have. So this keeps holding if MID-integrated generators
+    arrive: they bring a MID.
+
+    Observed: a live no-BESS panel read `Grid` on flat all night and went
+    `Unknown` the moment it upgraded, because the property moved onto a device
+    that install does not have. Nothing about the site changed.
+    """
+    assert resolve_dominant_power_source(None, {}) == "GRID"
+
+
+def test_a_mid_that_has_not_answered_is_unknown_rather_than_grid() -> None:
+    """Distinct from having no MID at all, and the distinction is the whole point.
+
+    An islanding authority exists and has not said what is forming the grid. That
+    is genuinely unknown — unlike an install with no such authority, where the
+    answer is settled by what cannot be there.
+    """
+    silent = _synthetic("mid", grid__grid_forming_entity="")
+
+    assert resolve_dominant_power_source(silent, {}) is None
 
 
 def test_the_forming_device_is_named_readably_not_by_wire_id() -> None:

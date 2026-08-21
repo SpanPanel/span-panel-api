@@ -753,9 +753,38 @@ def resolve_dominant_power_source(
     exists, surface the addition separately: a changed value breaks automations silently,
     a new field cannot.
 
-    `None` rather than `UNKNOWN` when there is no MID or no answer at all, matching what
-    the field already does on a panel that publishes nothing.
+    **No MID at all means `GRID`, and that is an elimination rather than a guess.**
+    A commissioned MID is what SPAN has to island with, so its absence rules out every
+    other value this field can take. `BATTERY` needs a BESS, and a BESS brings a MID.
+    `PV` cannot form a grid on its own — anything that can is a grid-forming inverter,
+    which is a MID. `NONE` describes a panel supplying nothing, which is a panel that is
+    not publishing. That leaves a generator, which is two cases rather than one and only
+    one of them reaches here. A generator wired through a MID is named by that MID, so
+    the branch above answers and this one never runs. A generator with no MID interface
+    is what SPAN treats as the grid, and it is the only generator an install with no MID
+    can have. So the elimination holds now and keeps holding if MID-integrated generators
+    arrive: they bring a MID, and a MID is answered above.
+
+    A site genuinely running off-grid without storage is not a counterexample; it goes
+    dark at sunset.
+
+    This deliberately does **not** follow `resolve_islanding_state`, which refuses the
+    same shortcut. The two answer different questions and the counterexample that defeats
+    it there is the one that supports it here: a generator-fed island is islanded — so
+    inferring on-grid from a missing MID would be wrong — while its grid-forming entity
+    really is what SPAN calls the grid. Islanding is a safety fact about separation; this
+    is a class of source.
+
+    It is also no worse than flat, which is the bar. Flat could not see an uninterfaced
+    generator either and published `GRID` regardless; a panel upgrading to v1.0 keeps the
+    answer it has been giving rather than losing it to the loss of a property.
+
+    `None` only when a MID exists and has not answered. That is genuinely unknown — there
+    is an islanding authority and it has not said — and is distinct from there being none.
     """
+    if mid is None:
+        return "GRID"
+
     forming = text(mid, NODE_GRID, PROP_GRID_FORMING_ENTITY).strip()
     if not forming:
         return None

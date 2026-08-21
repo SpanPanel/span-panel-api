@@ -7,6 +7,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is the parent/child device tree SPAN firmware `r202633+` publishes, identified by `SUPPORTS_DATA_MODEL_VERSIONS` rather than by this version
 number. A release here means this parser changed, never that the panel did.
 
+## [0.1.0b8] - 08/2026
+
+Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged.
+
+### Fixed
+
+- **`dominant_power_source` reports `GRID` on a panel with no MID, instead of nothing.** The field's source moved in v1.0: flat published a closed enum of source classes on the panel, v1.0 names the forming device on the MID's `grid` node. A panel with no
+  battery has no MID, so the property has no publisher and the field went `None` — observed on a live install that read `Grid` on flat all night and went unknown the moment it upgraded, with nothing about the site having changed.
+
+  A missing MID settles the answer by elimination rather than leaving it open. `BATTERY` needs a BESS and a BESS brings a MID; `PV` cannot form a grid alone, because anything that can is a grid-forming inverter and therefore a MID; `NONE` describes a panel
+  supplying nothing, which is a panel that is not publishing. What remains is a generator, and that is two cases of which only one reaches here: a generator wired through a MID is named by that MID and answered before this point, while a generator with no
+  MID interface is what SPAN treats as the grid — and it is the only kind an install with no MID can have. The elimination therefore keeps holding if MID-integrated generators arrive, because they bring a MID. A site running off-grid without storage is not
+  a counterexample — it goes dark at sunset.
+
+  This deliberately does not follow `resolve_islanding_state`, which refuses the same shortcut, and the counterexample that defeats it there is what supports it here: a generator-fed island **is** islanded, so inferring on-grid from a missing MID would be
+  wrong, while its grid-forming entity really is what SPAN calls the grid. It is also no worse than flat, which could not see an uninterfaced generator either and published `GRID` regardless.
+
+  A MID that exists and has not answered still reports nothing. That is genuinely unknown, and distinct from there being no islanding authority at all.
+
 ## [0.1.0b7] - 08/2026
 
 Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged.

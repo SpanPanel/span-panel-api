@@ -42,6 +42,13 @@
     // `globs` above scans the tree directly, so pre-commit's `exclude` cannot
     // filter this out -- it has to be ignored here.
     "packages/schema-1/spec/**",
+    // The peer checkouts CI clones for the provenance checks: the eBus
+    // specification and panelbench, cloned into a gitignored `peers/`. Same
+    // reasoning as the vendored spec above and more so -- these are whole
+    // upstream repositories, and 835 findings in somebody else's prose were
+    // enough to fail the job before the tests ran. `globs` scans the tree
+    // directly, so being gitignored is not enough to keep them out.
+    "peers/**",
     ".venv/**",
     "venv/**",
     "node_modules/**",

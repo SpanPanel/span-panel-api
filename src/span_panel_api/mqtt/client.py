@@ -823,7 +823,20 @@ class SpanMqttClient:
         for _ in range(_REDISPATCH_RETRY_ATTEMPTS):
             try:
                 return await get_homie_schema(self._host, port=self._panel_http_port, httpx_client=self._httpx_client)
-            except (SpanPanelConnectionError, SpanPanelTimeoutError) as exc:
+            except (
+                SpanPanelConnectionError,
+                SpanPanelTimeoutError,
+                # The third way HTTP lags the broker, and the one a real upgrade
+                # actually produced: the panel answers, with 502. Its front end is
+                # up while the application behind it is still starting, which is
+                # the ordinary order for a booting device. Omitting this meant the
+                # first attempt raised straight out of this loop, out of the
+                # fire-and-forget task that called it, and the parser was never
+                # swapped -- observed on two Home Assistant instances watching one
+                # panel through the same upgrade, neither of which recovered
+                # without a manual reload.
+                SpanPanelServerError,
+            ) as exc:
                 last = exc
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, _REDISPATCH_RETRY_MAX_S)
@@ -862,6 +875,23 @@ class SpanMqttClient:
         """
         try:
             await self._redispatch_once()
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Nothing may escape here. This runs as a fire-and-forget task, so an
+            # escaping exception becomes "Task exception was never retrieved" in
+            # the log and the parser silently stays on the old generation --
+            # which is the failure this whole method exists to prevent, arrived at
+            # by a different route. That is not hypothetical: a 502 from a
+            # rebooting panel did exactly this on two live installs.
+            #
+            # Logged at ERROR with the consequence spelled out, because the user's
+            # remedy is a reload and nothing else will tell them so.
+            _LOGGER.error(
+                "Could not follow the panel's schema-generation change; the %r parser is "
+                "unchanged and its data will read as missing. Reload the integration once "
+                "the panel is fully back up.",
+                self._data_model_version,
+                exc_info=True,
+            )
         finally:
             # Released only when the swap is finished, not when the fetch is.
             # Clearing it after the fetch left a window that the slowest step in

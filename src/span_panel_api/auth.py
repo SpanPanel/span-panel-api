@@ -15,7 +15,13 @@ import uuid
 import httpx
 
 from ._http import _build_url, _get_client
-from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelConnectionError, SpanPanelTimeoutError
+from .exceptions import (
+    SpanPanelAPIError,
+    SpanPanelAuthError,
+    SpanPanelConnectionError,
+    SpanPanelServerError,
+    SpanPanelTimeoutError,
+)
 from .models import HomieSchemaTypes, V2AuthResponse, V2HomieSchema, V2StatusInfo
 
 
@@ -187,8 +193,22 @@ async def get_homie_schema(
     except httpx.TimeoutException as exc:
         raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
 
+    if response.status_code >= 500:
+        # A rebooting panel answers 502 from its front end while the application
+        # behind it is still starting. That is "not ready yet", not "wrong" --
+        # and it is the ordinary shape of a firmware upgrade, because a device
+        # brings its network stack and proxy up before its application. Raised as
+        # a distinct class so a caller can retry it and fail fast on a 4xx, which
+        # will not fix itself.
+        raise SpanPanelServerError(
+            f"Panel not ready: HTTP {response.status_code} fetching the Homie schema",
+            status_code=response.status_code,
+        )
     if response.status_code != 200:
-        raise SpanPanelAPIError(f"Failed to fetch Homie schema: HTTP {response.status_code}")
+        raise SpanPanelAPIError(
+            f"Failed to fetch Homie schema: HTTP {response.status_code}",
+            status_code=response.status_code,
+        )
 
     data: dict[str, object] = response.json()
 

@@ -7,15 +7,15 @@
     "data_model_version": ">=1.0,<2.0"
   },
   "spec_repo": "https://github.com/electrification-bus/specification",
-  "synced_commit": "4085c684f9a79bb3c25086112ba08c1f967f63c8",
-  "synced_date": "2026-08-20",
+  "synced_commit": "7ee7ca93b19c3de3d61be44f01887ba9557dd803",
+  "synced_date": "2026-08-21",
   "framework": "0.9",
   "peer": {
     "repo": "https://github.com/SpanPanel/panelbench",
     "ref": "main",
     "role": "publisher",
-    "commit": "6c649e53572577db81d7806dbbb79b9dd712abb2",
-    "synced_commit": "4085c684f9a79bb3c25086112ba08c1f967f63c8",
+    "commit": "e7579104a04dfb381ba89bfa1cbbe76e2c2d2058",
+    "synced_commit": "7ee7ca93b19c3de3d61be44f01887ba9557dd803",
     "firmware_range": "r202633+",
     "fixtures": {
       "tree": "tests/conformance/fixtures/golden_tree.json",
@@ -34,7 +34,7 @@
       "load-shed": "0.3",
       "meter": "0.4",
       "pcs": "0.3",
-      "power-flows": "0.2",
+      "power-flows": "0.3",
       "shed": "0.2",
       "shed-forecast": "0.1",
       "soc": "0.2",
@@ -42,9 +42,9 @@
       "switch": "0.3"
     },
     "devices": {
-      "distribution-enclosure": "0.12",
-      "circuit": "0.3",
-      "bess": "0.14"
+      "distribution-enclosure": "0.14",
+      "circuit": "0.4",
+      "bess": "0.15"
     },
     "registries": {
       "capability-types": "0.19",

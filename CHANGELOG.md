@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0b8]
+
+### Fixed
+
+- **A panel answering `502` while it reboots no longer costs the automatic reload.** When a panel upgrades its firmware it drops MQTT, comes back, and serves HTTP a little later — and a booting device brings its network stack and reverse proxy up before
+  the application behind them, so the schema fetch is answered with `502` rather than refused. The retry that exists for exactly this handled "cannot reach" and "timed out" but not "answered, with 502", so the first attempt raised straight out of the loop,
+  out of the fire-and-forget task that called it, and the parser was never swapped. Caught on two Home Assistant instances watching one panel through the same live upgrade: both logged `Task exception was never retrieved`, both stayed on the old parser,
+  and neither recovered without a manual reload. `get_homie_schema` now raises `SpanPanelServerError` for any 5xx — "not ready yet", distinct from a 4xx that will not fix itself — and the retry treats it as retryable.
+- **The wait is now the length of a real reboot.** Five attempts backing off to 8s gave up after about 23 seconds. The observed upgrade took four minutes from MQTT dropping to the broker returning, with HTTP still answering 502 at that point. Twelve
+  attempts backing off to 30s covers it.
+- **Nothing escapes the redispatch task any more.** An unexpected failure there used to surface as a bare `Task exception was never retrieved` while the parser silently stayed on the old generation — the failure the redispatch exists to prevent, reached by
+  another route. It is now logged at ERROR naming the consequence and the remedy, because a reload is the user's only move and nothing else was going to tell them.
+
 ## [3.0.0b7]
 
 ### Changed

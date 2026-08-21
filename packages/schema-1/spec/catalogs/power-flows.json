@@ -3,7 +3,7 @@
   "schema_version": "property-schema-v1",
   "kind": "capability-catalog",
   "capability": "energy.ebus.capability.power-flows",
-  "version": "0.2",
+  "version": "0.3",
   "status": "DRAFT",
   "date": "2026-08-20",
   "properties": {

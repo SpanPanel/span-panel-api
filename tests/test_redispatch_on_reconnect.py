@@ -30,7 +30,7 @@ from unittest.mock import patch
 
 import pytest
 
-from span_panel_api.exceptions import SpanPanelConnectionError
+from span_panel_api.exceptions import SpanPanelConnectionError, SpanPanelServerError
 from span_panel_api.mqtt.client import _REDISPATCH_RETRY_ATTEMPTS, SpanMqttClient
 from span_panel_api.mqtt.models import MqttClientConfig
 
@@ -299,3 +299,68 @@ async def test_a_raising_consumer_does_not_break_the_swap() -> None:
 
     assert client.data_model_version == "1.0", "the swap must stand"
     assert reached == ["second"], "one raising subscriber must not starve the others"
+
+
+@pytest.mark.asyncio
+async def test_a_rebooting_panel_answering_502_is_waited_for_not_abandoned() -> None:
+    """The failure that cost a live firmware upgrade its automatic reload.
+
+    A panel accepts MQTT before it serves HTTP, and the retry loop above exists
+    for that. But there are three ways HTTP lags the broker, and this loop
+    originally handled two: it caught "cannot reach" and "timed out" and not
+    "answered, with 502". A booting device brings its network stack and reverse
+    proxy up before the application behind them, so 502 is the *ordinary* shape,
+    not an exotic one.
+
+    Because `SpanPanelServerError` was not caught, the very first attempt raised
+    straight out of the loop, out of the fire-and-forget task that called it, and
+    the parser was never swapped. Observed on two Home Assistant instances
+    watching one panel through the same upgrade: both logged `Task exception was
+    never retrieved`, both stayed on the flat parser, and neither recovered
+    without a manual reload.
+    """
+    client, _ = _client(None)
+    before = client.adapter
+    attempts = 0
+
+    def _five_oh_two_then_ready(*_a: object, **_k: object) -> _Schema:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise SpanPanelServerError("Panel not ready: HTTP 502 fetching the Homie schema", 502)
+        return _Schema("1.0")
+
+    with (
+        patch("span_panel_api.mqtt.client.get_homie_schema", side_effect=_five_oh_two_then_ready),
+        patch("span_panel_api.mqtt.client._REDISPATCH_RETRY_INITIAL_S", 0),
+        patch("span_panel_api.mqtt.client._REDISPATCH_RETRY_MAX_S", 0),
+    ):
+        await _panel_publishes_version(client, "1.0")
+
+    assert attempts >= 3, "a 502 must be retried rather than ending the attempt"
+    assert client.adapter is not before, "the parser must swap once the panel answers"
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_failure_leaves_a_usable_message_rather_than_a_bare_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Nothing may escape the fire-and-forget task.
+
+    An escaping exception surfaces as "Task exception was never retrieved" and
+    the parser silently stays on the old generation -- the exact failure this
+    method exists to prevent, reached by a different route. The user's remedy is
+    a reload, and nothing else is going to tell them so.
+    """
+    client, _ = _client(None)
+    before = client.adapter
+
+    with patch(
+        "span_panel_api.mqtt.client.get_homie_schema",
+        side_effect=RuntimeError("something nobody predicted"),
+    ):
+        await _panel_publishes_version(client, "1.0")
+
+    assert client.adapter is before
+    assert "Reload the integration" in caplog.text
+    assert "something nobody predicted" in caplog.text

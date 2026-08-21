@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0b9]
+
+### Fixed
+
+- **The retry window for a rebooting panel is actually widened this time.** b8 taught the schema fetch to treat a `502` as "not ready yet" but shipped with the old five attempts capped at eight seconds — about twenty-three seconds against a panel observed
+  taking four minutes to come back, still answering 502 when the broker returned. The widening was written, lost to a failed edit in the same change, and shipped without it; nothing failed, because catching the 502 and giving up early looks exactly like
+  working. Now twelve attempts backing off to thirty seconds, a little over four minutes, and pinned by a test that asserts the total window outlasts the observed reboot rather than checking the constants individually.
+
 ## [3.0.0b8]
 
 ### Fixed

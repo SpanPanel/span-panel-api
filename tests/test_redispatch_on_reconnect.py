@@ -31,7 +31,12 @@ from unittest.mock import patch
 import pytest
 
 from span_panel_api.exceptions import SpanPanelConnectionError, SpanPanelServerError
-from span_panel_api.mqtt.client import _REDISPATCH_RETRY_ATTEMPTS, SpanMqttClient
+from span_panel_api.mqtt.client import (
+    _REDISPATCH_RETRY_ATTEMPTS,
+    _REDISPATCH_RETRY_INITIAL_S,
+    _REDISPATCH_RETRY_MAX_S,
+    SpanMqttClient,
+)
 from span_panel_api.mqtt.models import MqttClientConfig
 
 from conftest import SERIAL
@@ -364,3 +369,29 @@ async def test_an_unexpected_failure_leaves_a_usable_message_rather_than_a_bare_
     assert client.adapter is before
     assert "Reload the integration" in caplog.text
     assert "something nobody predicted" in caplog.text
+
+
+def test_the_retry_window_outlasts_a_real_panel_reboot() -> None:
+    """Catching the 502 buys nothing if the loop gives up before the panel is ready.
+
+    Measured rather than assumed. On a live firmware upgrade the panel dropped
+    MQTT at 11:22:07 and the broker was back at 11:26:15 — four minutes — and its
+    HTTP front end was still answering 502 at that moment, which is when this
+    loop starts.
+
+    Pinned as a total because the three constants only mean something together,
+    and because the widening was written once, lost to a failed edit, and shipped
+    without it. Nothing failed: the 502 was caught and the loop still gave up
+    after twenty-three seconds. A test on the constants is the only thing that
+    would have noticed.
+    """
+    delay = _REDISPATCH_RETRY_INITIAL_S
+    total = 0.0
+    for _ in range(_REDISPATCH_RETRY_ATTEMPTS):
+        total += delay
+        delay = min(delay * 2, _REDISPATCH_RETRY_MAX_S)
+
+    observed_reboot_s = 4 * 60
+    assert total >= observed_reboot_s, (
+        f"the retry window is {total:.0f}s, shorter than the {observed_reboot_s}s reboot " "this loop exists to wait out"
+    )

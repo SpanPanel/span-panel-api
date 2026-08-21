@@ -48,9 +48,21 @@ _CIRCUIT_NAMES_POLL_INTERVAL_S = 0.25
 # Re-reading the schema after a suspected generation change. Bounded because the
 # caller is a fire-and-forget task on a live connection, and generous enough to
 # outlast a panel that is still binding its HTTP port after a restart.
-_REDISPATCH_RETRY_ATTEMPTS = 5
+_REDISPATCH_RETRY_ATTEMPTS = 12
 _REDISPATCH_RETRY_INITIAL_S = 1.0
-_REDISPATCH_RETRY_MAX_S = 8.0
+_REDISPATCH_RETRY_MAX_S = 30.0
+"""How long to wait for the panel's HTTP endpoint after it returns on MQTT.
+
+Sized from a live firmware upgrade rather than guessed. The panel dropped MQTT at
+11:22:07 and the broker was back at 11:26:15 -- four minutes -- and its HTTP
+front end was still answering 502 at that moment. Five attempts capped at 8s
+gives up after about 23 seconds, which is not the same order of magnitude as a
+device that is still booting: catching the 502 buys nothing if the loop stops
+before the panel is ready.
+
+Twelve attempts backing off to 30s is a little over four minutes. Each one is a
+single GET, and the panel is the only thing that can end the wait.
+"""
 
 
 def _metadata_for_the_log() -> tuple[list[str], str]:

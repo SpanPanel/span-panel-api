@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is fixed — the flat single-device schema, SPAN firmware `r202603` through `r202627` — and is identified by `SUPPORTS_DATA_MODEL_VERSIONS`
 rather than by this version number. A release here means this parser changed, never that the panel did.
 
+## [1.0.0b5] - 08/2026
+
+Pre-release. Requires `span-panel-api` 3.0.0b4 or newer, which is the floor the manifest has carried since the bootstrap grew the EVSE charge-limit members.
+
+### Added
+
+- **`set_evse_charge_limit_topic` and `evse_charge_limit_payload`.** Both required of every adapter, because `SchemaAdapter` gained them: `_derive_required_members` makes each public protocol member mandatory of every adapter wheel, so an adapter without
+  them is rejected at discovery no matter which panel it would have parsed. Flat firmware publishes no charge-limit surface, so this distribution answers for the absence rather than for a topic — the point being that answering is not optional.
+- **`adopted_devices` reports empty.** Adoption is a parent/child idea: a flat panel is one device with no unmodelled children to adopt, so the honest answer is a stable empty tuple rather than an unimplemented member. `set_adopted_property` therefore
+  raises on a flat panel for the same reason it raises for a device that does not exist, which is what makes the snapshot lookup an authorization rather than a lookup.
+
 ## [1.0.0b3] - 08/2026
 
 Pre-release. Requires `span-panel-api` 3.0.0b2 or newer — unchanged, because nothing added here reaches for anything newer.

@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is the parent/child device tree SPAN firmware `r202633+` publishes, identified by `SUPPORTS_DATA_MODEL_VERSIONS` rather than by this version
 number. A release here means this parser changed, never that the panel did.
 
+## [0.1.0b6] - 08/2026
+
+Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged. The eBus SDK ceiling tightens to `<0.23`, the versions actually tested: 0.x carries no compatibility contract, and 0.22 was read module by module before the bound was set — it changes
+only publisher-side code, leaving `adapter.py`, `topology.py`, `transport.py` and `property.py` byte-identical to 0.21.
+
+### Fixed
+
+- **The BESS meter is discharge-positive, and was named for the opposite.** `_charge_positive` is renamed `_discharge_positive`. No published value changes — the negation was always right — but the name asserted a direction that the wire does not carry,
+  and the root changelog documented that wrong direction as fact. Settled by measurement rather than by reading: with the producer in self-consumption and the grid at exactly zero, `pv −4181.34 + battery −1917.49 + grid −0.0 + site +6098.83 = 0`, so the
+  battery was discharging at 1917 W and both `battery.power_w` and `bess_meter_power` reported `+1917.49`. The convention therefore matches `pv_power` positive-while-producing and `grid_power_flow` positive-while-importing, and agrees with
+  `panel.power_flow_battery` rather than opposing it.
+
+### Added
+
+- **`adoption`, building `AdoptedDevice` records for device types this parser does not model**, with `set_topic` populated only where the declaration says the property is settable. Subtype-aware, so a curated device never lands in `adopted_devices`.
+
 ## [0.1.0b5] - 08/2026
 
 Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged, because nothing added here reaches for anything newer.

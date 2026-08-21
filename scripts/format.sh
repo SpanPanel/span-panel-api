@@ -20,6 +20,6 @@ uv run ruff check src/ \
   --exclude=src/span_panel_api/generated_client/**
 
 # Format markdown files
-uv run format-markdown
+uv run python scripts/format_markdown.py
 
 echo "✅ Formatting complete!"

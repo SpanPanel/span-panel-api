@@ -10,17 +10,33 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10,<4.0"
 dependencies = [
-    "httpx>=0.28.1",
+    # Bounded, and the bound is load-bearing. httpx 1.0 is an API rewrite that
+    # removes `AsyncClient` -- 1.0.dev1..dev4 are on PyPI now, and every
+    # distribution of this library is a prerelease, so `pip install --pre`, the
+    # verb RELEASE.md itself prescribes, resolves them. `paho-mqtt` has been
+    # bounded from the start; this was the one unbounded runtime dependency, and
+    # a ceiling cannot be added to a version already published.
+    "httpx>=0.28.1,<1.0",
     "paho-mqtt>=2.0.0,<3.0.0",
     "pyyaml>=6.0.0",
 ]
 
+[project.optional-dependencies]
+# Not runtime dependencies: this distribution still registers no adapter and
+# imports none, and `scripts/verify_adapterless_install.py` holds that line.
+# These exist so `pip install -U --pre "span-panel-api[schema-0,schema-1]"` has a
+# correct upgrade path, because the dependency arrow runs the other way -- an
+# adapter floors on the bootstrap, the bootstrap requires no adapter -- so
+# upgrading the bootstrap alone leaves stale adapter wheels that
+# `_derive_required_members` then rejects at discovery, with pip reporting
+# success. An extra is the only thing pip can act on, and extras cannot be added
+# to a version after it is published.
+schema-0 = ["span-panel-api-schema-0>=1.0.0b5"]
+schema-1 = ["span-panel-api-schema-1>=0.1.0b6"]
+
 [project.urls]
 Homepage = "https://github.com/SpanPanel/span-panel-api"
 Issues = "https://github.com/SpanPanel/span-panel-api/issues"
-
-[project.scripts]
-format-markdown = "scripts.format_markdown:main"
 
 # No [project.entry-points."span_panel_api.schema_adapters"] block here, and that
 # absence is the point of Phase 1: this distribution registers no adapter and
@@ -72,7 +88,29 @@ span-panel-api-schema-0 = { workspace = true }
 span-panel-api-schema-1 = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/span_panel_api", "scripts"]
+# `scripts/` is deliberately absent. Shipping it put `scripts/__init__.py` at the
+# top level of every consumer's site-packages, so an unrelated `import scripts`
+# in a Home Assistant venv resolved to this distribution, and it installed a
+# markdown formatter as a console script for every user. It is a dev tool;
+# `scripts/format.sh` runs it by path.
+packages = ["src/span_panel_api"]
+
+[tool.hatch.build.targets.sdist]
+# Explicit, because the default swept the whole tree: the root sdist contained
+# packages/schema-0 and packages/schema-1 in full, contradicting the one
+# invariant this distribution is built around -- that it registers no adapter and
+# imports none. Anyone auditing the bootstrap sdist found both parsers inside it.
+# Anchored with a leading slash: an unanchored "README.md" is a glob that matches
+# at any depth, which pulled each adapter's own README, CHANGELOG and pyproject
+# back in and left the bootstrap sdist still naming both parsers.
+include = [
+    "/src/span_panel_api",
+    "/tests",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
 
 [tool.ruff]
 line-length = 125

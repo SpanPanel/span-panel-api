@@ -19,7 +19,15 @@ dependencies = [
     # schema-0 stay clean, so a flat-panel install never pulls it in — which is
     # what bounds the release coupling this dependency introduces to panels on
     # r202633+.
-    "ebus-sdk>=0.19.0,<1.0",
+    # Ceiling tightened to the versions actually tested. 0.x carries no
+    # compatibility contract, 0.21 and 0.22 shipped on the same day, and this
+    # release reaches hosts that are not quick to iterate on. Widening a ceiling
+    # later is a patch release; narrowing one after a user's host has resolved a
+    # bad pairing is not. 0.22 was checked module by module and changes only
+    # publisher-side code -- `adapter.py`, `topology.py`, `transport.py` and
+    # `property.py` are byte-identical to 0.21 -- so this is a bound on exposure
+    # rather than a report of breakage.
+    "ebus-sdk>=0.19.0,<0.23",
 ]
 
 [project.urls]

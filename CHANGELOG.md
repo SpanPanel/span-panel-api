@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0b6]
 
 ### Added
 
@@ -72,9 +72,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **The BESS's own meter and link health reach the snapshot: `SpanBatterySnapshot.power_w` and `SpanBatterySnapshot.communication_state`.** The battery device has published `meter/active-power` and `status/communication-state` all along and neither reached
   a field, so a consumer could show the enclosure's arbitrated `power_flow_battery` and nothing the BESS itself reports. Both are `None` on a BESS that publishes no such node, and on every flat panel — the flat schema's BESS device class declares neither
   property, so this is new surface rather than a re-sourcing, and nothing that exists today changes.
-- **`power_w` is charge-positive, and the wire is not.** The enclosure meters the BESS the way it meters a circuit it feeds, so a charging battery publishes a _negative_ `meter/active-power`; `build_battery` negates it, exactly as `build_circuit` does for
-  a load, so the snapshot's rule holds on every power field: positive means power flowing into the metered device. Note the deliberate asymmetry with `panel.power_flow_battery`, which the capability catalog defines as discharge-positive and which both
-  adapters pass through untouched. The two describe the same physical power in opposite frames; `battery.power_w` is the one already in the snapshot's frame, so a consumer rendering both negates the other.
+- **`power_w` is discharge-positive, and the wire is not.** The enclosure meters the BESS the way it meters a circuit it feeds, so a _discharging_ battery publishes a negative `meter/active-power`; `build_battery` negates it, exactly as `build_circuit`
+  does for a load. Positive therefore means the battery is supplying power, which is the frame `panel.power_flow_battery` already uses and which the capability catalog defines — the two agree rather than opposing each other, so a consumer rendering both
+  negates neither. This entry said the opposite until the direction was settled by measurement rather than by reading: with the producer driven into self-consumption and the grid at exactly zero, the wire read `-1917.49` and the snapshot reported
+  `+1917.49` while the battery was discharging. `_charge_positive` was renamed `_discharge_positive` in the same pass, and the convention now matches `pv_power` positive-while-producing and `grid_power_flow` positive-while-importing.
 - **`communication_state` stays the published enum string** (`OK`/`DEGRADED`/`LOST`/`UNKNOWN`) rather than collapsing to a bool: `DEGRADED` is neither `OK` nor `LOST`, and a bool would have to pick one. It is deliberately not merged into
   `battery.connected`, which is the _enclosure's_ `connection/fed-by-device-status` view of the same link. One is the device speaking about itself and the other the panel speaking about it, and the migration guide warns against conflating them.
 - **`_PROPERTY_FIELD_MAP` rows for both**, which buys them the unit and datatype the BESS's own `$description` declares plus the three-way resolution contract — a BESS that publishes the node while omitting the property reports degradation rather than

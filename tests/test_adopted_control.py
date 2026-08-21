@@ -118,3 +118,71 @@ async def test_a_device_that_has_left_the_tree_stops_being_writable() -> None:
         await client.set_adopted_property(DEVICE, "generator", "mode", "OFF")
 
     bridge.publish.assert_not_called()
+
+
+def _two_generators() -> tuple[SpanMqttClient, MagicMock]:
+    """Two adopted devices of one unmodelled type, each declaring the same control.
+
+    The realistic shape, and the one the single-device fixtures above cannot
+    exercise: nothing about adoption limits a panel to one generator, and two of a
+    kind is exactly when a device id stops being decoration.
+    """
+    config = MqttClientConfig(broker_host="h", username="u", password="p")
+    client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+
+    def control(device_id: str) -> AdoptedProperty:
+        return AdoptedProperty(
+            node_id="generator",
+            property_id="mode",
+            datatype="enum",
+            format="AUTO,MANUAL,OFF",
+            settable=True,
+            value="AUTO",
+            set_topic=f"ebus/5/{device_id}/generator/mode/set",
+        )
+
+    adapter = MagicMock()
+    adapter.build_snapshot.return_value = MagicMock(
+        adopted_devices=tuple(
+            AdoptedDevice(
+                device_id=device_id,
+                device_type="energy.ebus.device.generator",
+                properties=(control(device_id),),
+            )
+            for device_id in ("generator-1", "generator-2")
+        )
+    )
+    client._adapter = adapter
+    bridge = MagicMock()
+    client._bridge = bridge
+    return client, bridge
+
+
+@pytest.mark.asyncio
+async def test_the_write_reaches_the_device_that_was_named() -> None:
+    """The device id is the authorization, not a label on it.
+
+    The lookup returns the first device carrying the node and property asked for,
+    so without the id filter a write aimed at the second generator publishes to
+    the first one's topic -- the panel accepts it, and the wrong machine changes
+    mode. Every other test here uses a single adopted device, where the filter
+    cannot be wrong because there is nothing else to match.
+    """
+    client, bridge = _two_generators()
+
+    await client.set_adopted_property("generator-2", "generator", "mode", "MANUAL")
+
+    topic, payload = bridge.publish.call_args[0][:2]
+    assert topic == "ebus/5/generator-2/generator/mode/set"
+    assert payload == "MANUAL"
+
+
+@pytest.mark.asyncio
+async def test_a_device_that_is_not_adopted_is_refused_even_when_a_sibling_declares_the_property() -> None:
+    """The property existing somewhere is not the property existing here."""
+    client, bridge = _two_generators()
+
+    with pytest.raises(SpanPanelServerError):
+        await client.set_adopted_property("generator-3", "generator", "mode", "MANUAL")
+
+    bridge.publish.assert_not_called()

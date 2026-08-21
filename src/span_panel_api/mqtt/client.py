@@ -846,9 +846,23 @@ class SpanMqttClient:
         data, because the two schemas do not share a topic shape.
         """
         try:
-            schema = await self._fetch_schema_with_retry()
+            await self._redispatch_once()
         finally:
+            # Released only when the swap is finished, not when the fetch is.
+            # Clearing it after the fetch left a window that the slowest step in
+            # the method sits inside: `_preload_adapter` imports the new parser in
+            # a thread and takes seconds on a cold schema_1 import, and through
+            # all of it `_data_model_version` still holds the old value, so
+            # `_generation_appears_changed()` was still true. A second retained
+            # `data-model-version` message -- or the connect edge -- scheduled a
+            # second redispatch, and the consumer got two schema-change callbacks
+            # for one upgrade. The integration reloads its config entry off that
+            # callback, so that is a reload racing its own teardown.
             self._redispatch_in_flight = False
+
+    async def _redispatch_once(self) -> None:
+        """The body of one redispatch. See `_redispatch_if_generation_changed`."""
+        schema = await self._fetch_schema_with_retry()
         if schema is None:
             return
 

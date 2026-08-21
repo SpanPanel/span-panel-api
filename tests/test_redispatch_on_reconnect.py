@@ -32,7 +32,6 @@ import pytest
 
 from span_panel_api.exceptions import SpanPanelConnectionError, SpanPanelServerError
 from span_panel_api.mqtt.client import (
-    _REDISPATCH_RETRY_ATTEMPTS,
     _REDISPATCH_RETRY_INITIAL_S,
     _REDISPATCH_RETRY_MAX_S,
     SpanMqttClient,
@@ -101,7 +100,7 @@ async def _panel_publishes_version(client: SpanMqttClient, version: str | None) 
     # The refetch is scheduled rather than awaited, so the message callback can stay
     # synchronous. Let the loop drain it.
     # One turn per retry attempt, plus slack for the task itself.
-    for _ in range(_REDISPATCH_RETRY_ATTEMPTS + 4):
+    for _ in range(24):
         await asyncio.sleep(0)
 
 
@@ -215,13 +214,15 @@ async def test_http_lagging_the_broker_is_retried_not_abandoned() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_panel_that_never_serves_http_leaves_the_parser_alone() -> None:
-    """Bounded, and non-fatal when the bound is reached.
+async def test_a_panel_that_is_not_serving_http_yet_leaves_the_parser_alone() -> None:
+    """Waiting must not disturb what is already working.
 
-    MQTT is up or this path would not be running, so tearing the connection down over
-    an unreachable HTTP endpoint would turn a degraded panel into a dead integration.
-    A stale parser reports missing data rather than wrong data, because the two
-    schemas share no topic shape.
+    MQTT is up or this path would not be running, so tearing the connection down
+    over an HTTP endpoint that has not come up would turn a panel that is merely
+    booting into a dead integration. The parser stays as it is while the wait
+    runs — a stale parser reports missing data rather than wrong data, because
+    the two schemas share no topic shape — and the wait keeps going rather than
+    giving up, because nothing else will start it again.
     """
     client, _ = _client(None)
     before = client.adapter
@@ -236,8 +237,16 @@ async def test_a_panel_that_never_serves_http_leaves_the_parser_alone() -> None:
     ):
         await _panel_publishes_version(client, "1.0")
 
-    assert client.adapter is before
-    assert not client._redispatch_in_flight, "the in-flight guard must clear on failure"
+        assert client.adapter is before
+        assert client._redispatch_in_flight, (
+            "the guard is held for as long as the wait runs, so a second edge does not " "start a competing attempt"
+        )
+
+    # Cancelled directly rather than through `close()`, which this fixture's fake
+    # bridge cannot service. That the wait ends on cancellation is covered by
+    # `test_the_wait_ends_promptly_when_the_client_is_closed`.
+    for task in list(client._background_tasks):
+        task.cancel()
 
 
 @pytest.mark.asyncio
@@ -371,63 +380,103 @@ async def test_an_unexpected_failure_leaves_a_usable_message_rather_than_a_bare_
     assert "something nobody predicted" in caplog.text
 
 
-def test_the_last_attempt_outlasts_a_real_panel_reboot() -> None:
-    """What matters is when the final GET happens, not how long the function runs.
-
-    Measured rather than assumed. On a live firmware upgrade the panel dropped
-    MQTT at 11:22:07 and the broker was back at 11:26:15 — four minutes — and its
-    HTTP front end was still answering 502 at that moment, which is when this
-    loop starts.
-
-    **Asserted on the offset of the last attempt.** The first version of this test
-    summed every sleep and compared the total, which counted a trailing sleep that
-    no attempt followed: it read 241s while the last GET was at 211s, and a panel
-    ready at 220s would still have been abandoned. Summing the sleeps restates the
-    implementation's arithmetic, off-by-one included; the offset of the last
-    attempt is the property a user actually gets.
-    """
-    delay = _REDISPATCH_RETRY_INITIAL_S
-    offset = 0.0
-    for attempt in range(_REDISPATCH_RETRY_ATTEMPTS):
-        if attempt == _REDISPATCH_RETRY_ATTEMPTS - 1:
-            break
-        offset += delay
-        delay = min(delay * 2, _REDISPATCH_RETRY_MAX_S)
-
-    observed_reboot_s = 4 * 60
-    assert offset >= observed_reboot_s, (
-        f"the last attempt is at {offset:.0f}s, inside the {observed_reboot_s}s reboot this "
-        "loop exists to wait out — a panel ready after that is abandoned"
-    )
-
-
 @pytest.mark.asyncio
-async def test_the_loop_does_not_sleep_after_its_final_attempt() -> None:
-    """A trailing sleep buys nothing and costs two things.
+async def test_the_backoff_reaches_a_steady_state_rather_than_growing() -> None:
+    """Once the panel is up, the wait to notice it must stay short.
 
-    It delays the warning by a full backoff, and it holds `_redispatch_in_flight`
-    for that long — so a panel that comes back during it is ignored rather than
-    retried, which is the opposite of what the wait is for.
+    Doubling without a ceiling would mean a panel that took a while to come back
+    was then ignored for longer than it took — minutes between attempts by the
+    time it is answering. The interval has to settle, so the worst case between
+    the panel being ready and this loop finding out is one interval however long
+    the wait has already run.
+
+    **Observed from the loop, not recomputed.** The first version of this test
+    calculated the backoff sequence itself and asserted on its own arithmetic,
+    which passes just as happily when the ceiling is removed from the code — the
+    same mistake as the window test it replaced. These are the sleeps the real
+    function performed.
     """
     client, _ = _client(None)
     slept: list[float] = []
     attempts = 0
 
-    def _never_ready(*_a: object, **_k: object) -> _Schema:
+    def _ready_eventually(*_a: object, **_k: object) -> _Schema:
         nonlocal attempts
         attempts += 1
-        raise SpanPanelServerError("Panel not ready: HTTP 502", 502)
+        if attempts < 30:
+            raise SpanPanelServerError("Panel not ready: HTTP 502", 502)
+        return _Schema("1.0")
 
     async def _record(seconds: float) -> None:
         slept.append(seconds)
 
     with (
-        patch("span_panel_api.mqtt.client.get_homie_schema", side_effect=_never_ready),
+        patch("span_panel_api.mqtt.client.get_homie_schema", side_effect=_ready_eventually),
         patch("span_panel_api.mqtt.client.asyncio.sleep", _record),
     ):
-        assert await client._fetch_schema_with_retry() is None
+        assert await client._fetch_schema_with_retry() is not None
 
-    assert attempts == _REDISPATCH_RETRY_ATTEMPTS
-    assert (
-        len(slept) == _REDISPATCH_RETRY_ATTEMPTS - 1
-    ), f"{attempts} attempts should be separated by {attempts - 1} sleeps, got {len(slept)}"
+    assert slept[0] == _REDISPATCH_RETRY_INITIAL_S, "it should start responsive"
+    assert max(slept) == _REDISPATCH_RETRY_MAX_S, "and never wait longer than the ceiling"
+    assert slept[-1] == _REDISPATCH_RETRY_MAX_S, "settling there rather than continuing to grow"
+    assert _REDISPATCH_RETRY_MAX_S <= 30.0, (
+        "a steady-state gap longer than half a minute is too long to leave a panel " "that is already answering"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_wait_does_not_end_on_its_own() -> None:
+    """There is no attempt count to exhaust, and that is the point.
+
+    Every bounded version of this was wrong, twice, for the same reason: the
+    bound was sized against a reboot somebody had measured and the next reboot
+    was not that reboot. Giving up has nothing to recommend it — the triggers for
+    another attempt are the reconnect edge and the retained message, and a panel
+    that finishes booting afterwards produces neither, so exhausting a bound
+    means stranded until a human reloads.
+    """
+    client, _ = _client(None)
+    attempts = 0
+
+    def _ready_far_later(*_a: object, **_k: object) -> _Schema:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 40:  # well past any bound this ever had
+            raise SpanPanelServerError("Panel not ready: HTTP 502", 502)
+        return _Schema("1.0")
+
+    with (
+        patch("span_panel_api.mqtt.client.get_homie_schema", side_effect=_ready_far_later),
+        patch("span_panel_api.mqtt.client._REDISPATCH_RETRY_INITIAL_S", 0),
+        patch("span_panel_api.mqtt.client._REDISPATCH_RETRY_MAX_S", 0),
+    ):
+        assert await client._fetch_schema_with_retry() is not None
+
+    assert attempts == 40
+
+
+@pytest.mark.asyncio
+async def test_the_wait_ends_promptly_when_the_client_is_closed() -> None:
+    """Unbounded is only safe because cancellation is prompt.
+
+    `close()` cancels every background task, and the cancellation lands inside
+    the sleep. Without this, waiting forever would mean a Home Assistant
+    shutdown or a config-entry unload waiting with it.
+    """
+    client, _ = _client(None)
+
+    with (
+        patch(
+            "span_panel_api.mqtt.client.get_homie_schema",
+            side_effect=SpanPanelServerError("Panel not ready: HTTP 502", 502),
+        ),
+        patch("span_panel_api.mqtt.client._REDISPATCH_RETRY_INITIAL_S", 3600),
+        patch("span_panel_api.mqtt.client._REDISPATCH_RETRY_MAX_S", 3600),
+    ):
+        task = asyncio.create_task(client._fetch_schema_with_retry())
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert task.cancelled()

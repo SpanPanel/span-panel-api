@@ -48,9 +48,9 @@ _CIRCUIT_NAMES_POLL_INTERVAL_S = 0.25
 # Re-reading the schema after a suspected generation change. Bounded because the
 # caller is a fire-and-forget task on a live connection, and generous enough to
 # outlast a panel that is still binding its HTTP port after a restart.
-_REDISPATCH_RETRY_ATTEMPTS = 13
 _REDISPATCH_RETRY_INITIAL_S = 1.0
 _REDISPATCH_RETRY_MAX_S = 30.0
+_REDISPATCH_LOG_EVERY = 20
 """How long to wait for the panel's HTTP endpoint after it returns on MQTT.
 
 Sized from a live firmware upgrade rather than guessed. The panel dropped MQTT at
@@ -817,7 +817,7 @@ class SpanMqttClient:
         return active != observed
 
     async def _fetch_schema_with_retry(self) -> V2HomieSchema | None:
-        """Read the panel's REST schema, allowing for HTTP trailing the broker.
+        """Read the panel's REST schema, waiting for HTTP to catch up with the broker.
 
         A panel that has just restarted accepts MQTT before it serves HTTP — the
         broker is listening while the application is still binding its port. The
@@ -826,49 +826,56 @@ class SpanMqttClient:
         was no further edge to retry on, leaving the wrong parser in place for the
         rest of the session.
 
-        So this waits, briefly and boundedly. Returning None rather than raising
-        because the caller's job is to reconsider the parser, and being unable to
-        is not a reason to disturb a connection that is otherwise working.
+        **This waits as long as it takes, and that is deliberate.** Every bounded
+        version of it has been wrong, twice for the same reason: the bound was
+        sized against a reboot somebody had measured, and the next reboot was not
+        that reboot. Giving up has no upside to weigh against being wrong. The
+        triggers for another attempt are the reconnect edge and the retained
+        `data-model-version` message, and a panel that finishes booting after the
+        loop gave up produces neither — so exhausting a bound does not mean
+        "try again later", it means stranded until somebody reloads by hand.
+
+        Nor does waiting cost the freshness of anything. Energy sensors already
+        hold their last valid reading through an outage on their own grace period,
+        which exists precisely so a gap does not become an `unknown` and a
+        statistics spike; that mechanism is untouched by how long this waits, and
+        it is the thing that would have justified a deadline here. What is left is
+        one HTTP GET every thirty seconds to a device on the local network, which
+        is less traffic than the ordinary snapshot poll.
+
+        Ends on success, on cancellation — `close()` cancels this task, so unload
+        and shutdown are prompt — or on an error that is not the panel still
+        coming up, which is left to raise.
         """
         delay = _REDISPATCH_RETRY_INITIAL_S
-        last: Exception | None = None
-        for attempt in range(_REDISPATCH_RETRY_ATTEMPTS):
+        attempts = 0
+        while True:
             try:
                 return await get_homie_schema(self._host, port=self._panel_http_port, httpx_client=self._httpx_client)
             except (
                 SpanPanelConnectionError,
                 SpanPanelTimeoutError,
-                # The third way HTTP lags the broker, and the one a real upgrade
-                # actually produced: the panel answers, with 502. Its front end is
-                # up while the application behind it is still starting, which is
-                # the ordinary order for a booting device. Omitting this meant the
-                # first attempt raised straight out of this loop, out of the
-                # fire-and-forget task that called it, and the parser was never
-                # swapped -- observed on two Home Assistant instances watching one
-                # panel through the same upgrade, neither of which recovered
-                # without a manual reload.
+                # The panel answering rather than refusing: a 5xx from its front
+                # end while the application behind it starts, or a 200 carrying a
+                # body that cannot be a schema. The ordinary shape of a reboot,
+                # because a device brings its network stack and proxy up before
+                # its application -- and the shape that stranded two live installs
+                # when it was not caught here.
                 SpanPanelServerError,
             ) as exc:
-                last = exc
-                if attempt == _REDISPATCH_RETRY_ATTEMPTS - 1:
-                    # No sleep after the final attempt. It delays the warning by a
-                    # full backoff for nothing, and holds `_redispatch_in_flight`
-                    # -- so a panel that returns during it is ignored rather than
-                    # retried.
-                    break
+                attempts += 1
+                if attempts == 1 or attempts % _REDISPATCH_LOG_EVERY == 0:
+                    # First failure, then occasionally. A panel that never returns
+                    # would otherwise write a line every thirty seconds forever,
+                    # and the second line is worth no more than the first.
+                    _LOGGER.warning(
+                        "Panel is not serving its schema yet (%s). Attempt %d; still "
+                        "waiting, and the parser stays as it is until it answers.",
+                        exc,
+                        attempts,
+                    )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, _REDISPATCH_RETRY_MAX_S)
-        _LOGGER.warning(
-            "Could not re-read the panel schema after %d attempts (%s). The active "
-            "parser is unchanged, so if the panel's schema generation did change its "
-            "data will read as missing. Reload the integration once the panel is fully "
-            "back up: this will not retry on its own, because the triggers are the "
-            "reconnect edge and the retained data-model-version message, and a panel "
-            "that finishes booting produces neither again.",
-            _REDISPATCH_RETRY_ATTEMPTS,
-            last,
-        )
-        return None
 
     async def _redispatch_if_generation_changed(self) -> None:
         """Swap the parser when the panel comes back as a different schema generation.

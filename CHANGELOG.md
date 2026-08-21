@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [3.0.0b10]
 
+### Changed
+
+- **The wait for a panel to finish rebooting no longer gives up.** It used to stop after a fixed number of attempts, and that bound was wrong twice for the same reason: it was sized against a reboot somebody had measured, and the next reboot was not that
+  reboot. Giving up has nothing to recommend it — the only things that start another attempt are the reconnect edge and the panel republishing its data-model version, and a panel that finishes booting after the wait expired produces neither, so running out
+  of attempts means stranded until somebody reloads by hand. It now waits as long as the panel takes.
+- **Waiting costs nothing you were relying on.** Energy sensors already hold their last reading through an outage on their own grace period — fifteen minutes by default, configurable — which exists precisely so a gap does not become an `unknown` and a
+  statistics spike. That is untouched by how long this waits, and it was the only thing that would have justified a deadline. What is left is one request every thirty seconds to a device on your own network.
+- **The retry interval settles at thirty seconds rather than growing.** Backing off without a ceiling would mean a panel that took a while to return was then ignored for longer than it took. The gap goes 1, 2, 4, 8, 16, 30 and stays there, so once your
+  panel is answering it is noticed within half a minute however long the wait has already run.
+
 ### Fixed
 
 - **Four more ways a booting panel answers now count as "not ready" rather than as a hard failure.** b8 and b9 covered the 502 that a live upgrade produced; review found the fix had covered the observed shape rather than the class. A panel resetting its

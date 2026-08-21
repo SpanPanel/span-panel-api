@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is the parent/child device tree SPAN firmware `r202633+` publishes, identified by `SUPPORTS_DATA_MODEL_VERSIONS` rather than by this version
 number. A release here means this parser changed, never that the panel did.
 
+## [0.1.0b7] - 08/2026
+
+Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged.
+
+### Changed
+
+- **The eBus SDK ceiling moves to `<0.24`.** 0.23.0 and 0.23.1 both shipped the same day the previous `<0.23` bound was set, so that bound excluded the current release on its first day. Re-checked rather than extrapolated: diffing the 0.22.0 and 0.23.1
+  wheels module by module, exactly two files change — `__init__.py`, by the version string alone, and `declaration.py`, the declarative builder. This distribution's whole SDK surface is `Controller`, `homie.DiscoveredDevice` and structural conformance to
+  `MqttControllerTransport`, and nothing here imports `declaration`. The suite is green against 0.23.1 with no source change.
+
 ## [0.1.0b6] - 08/2026
 
 Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged. The eBus SDK ceiling tightens to `<0.23`, the versions actually tested: 0.x carries no compatibility contract, and 0.22 was read module by module before the bound was set — it changes

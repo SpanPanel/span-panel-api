@@ -16,8 +16,10 @@ only publisher-side code, leaving `adapter.py`, `topology.py`, `transport.py` an
 
 - **The BESS meter is discharge-positive, and was named for the opposite.** `_charge_positive` is renamed `_discharge_positive`. No published value changes — the negation was always right — but the name asserted a direction that the wire does not carry,
   and the root changelog documented that wrong direction as fact. Settled by measurement rather than by reading: with the producer in self-consumption and the grid at exactly zero, `pv −4181.34 + battery −1917.49 + grid −0.0 + site +6098.83 = 0`, so the
-  battery was discharging at 1917 W and both `battery.power_w` and `bess_meter_power` reported `+1917.49`. The convention therefore matches `pv_power` positive-while-producing and `grid_power_flow` positive-while-importing, and agrees with
-  `panel.power_flow_battery` rather than opposing it.
+  battery was discharging at 1917 W and `battery.power_w` reported `+1917.49`. The convention matches the eBus rule for a device's own meter: positive is power flowing out of the device.
+
+  It stays deliberately opposite to `panel.power_flow_battery`, which is the enclosure's arbitrated figure, passed through untouched and charge-positive. The two are the same physical power in different frames, and a consumer rendering both negates one of
+  them.
 
 ### Added
 

@@ -161,3 +161,36 @@ def test_a_flat_panel_reports_itself_at_the_service_entrance() -> None:
 
     assert SpanPanelSnapshot.__dataclass_fields__["lugs_at_service_entrance"].default is True
     assert adapter.build_snapshot().lugs_at_service_entrance is True
+
+
+def test_a_float_property_published_without_a_decimal_point_still_parses() -> None:
+    """Live firmware publishes integer literals for `float` properties, inconsistently.
+
+    Observed on a service-entrance panel: `power-flows/pv` arrived as `-2434`,
+    `battery` as `0` and `grid` as `-310`, while `site` on the same node arrived
+    as `2744.0`. All four declare `datatype: float`. An integer literal is a legal
+    float payload under Homie 5, so this is firmware being terse rather than
+    wrong -- but the inconsistency is between sibling properties of one node, so
+    nothing can be inferred from a sample of one property.
+
+    Worth its own test because no producer we develop against does it: the
+    reference emitter publishes a decimal point every time, so the whole suite
+    would pass while a stricter parse silently dropped three of the four site
+    flows to `None` and reported the panel as publishing no power-flows node.
+    """
+    tree = _mutable_tree()
+    for name, terse in (("pv", "-2434"), ("battery", "0"), ("grid", "-310")):
+        tree[PANEL][f"power-flows/{name}"] = terse
+    tree[PANEL]["power-flows/site"] = "2744.0"
+
+    snapshot = _snapshot(tree)
+
+    assert snapshot.power_flow_pv == -2434.0
+    assert snapshot.power_flow_battery == 0.0
+    assert snapshot.power_flow_grid == -310.0
+    assert snapshot.power_flow_site == 2744.0
+    # The four terms sum to zero, which is the identity the specification states
+    # and which a dropped term would break silently rather than loudly.
+    assert (
+        snapshot.power_flow_pv + snapshot.power_flow_battery + snapshot.power_flow_grid + snapshot.power_flow_site
+    ) == 0.0

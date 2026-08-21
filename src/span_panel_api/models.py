@@ -375,14 +375,19 @@ class SpanBatterySnapshot:
     # meters a circuit, so a charging battery reads negative there and positive
     # here, exactly as `SpanCircuitSnapshot.instant_power_w` reports a load's
     # consumption positive. The snapshot's rule across every power field is that
-    # positive means power flowing *into* the metered device.
+    # positive means power flowing *out of* the battery, which is discharging.
+    # That is the frame the eBus specification asks of a device's own meter, and
+    # it is deliberately NOT the into-the-device rule the circuit fields follow:
+    # the wire input is in the opposite frame, so one negation lands here rather
+    # than there. Measured against a producer in self-consumption with the grid
+    # at zero, where the direction cannot be argued.
     #
     # Distinct from `SpanPanelSnapshot.power_flow_battery`, which is the
-    # enclosure's own arbitrated flow figure and is passed through in the
-    # publisher's discharge-positive frame. The two describe the same physical
-    # power in opposite frames, so a consumer rendering both must negate one of
-    # them; this one is already negated.
-    power_w: float | None = None  # v2: bess meter/active-power (W), charge-positive
+    # enclosure's own arbitrated flow figure, passed through untouched and
+    # charge-positive. The two describe the same physical power in opposite
+    # frames, so a consumer rendering both must negate one of them; this one is
+    # already negated.
+    power_w: float | None = None  # v2: bess meter/active-power (W), discharge-positive
 
     # `status/communication-state`, v1.0 only: the BESS publisher's report of its
     # own link health (OK/DEGRADED/LOST/UNKNOWN). **Not** `connected`, which is

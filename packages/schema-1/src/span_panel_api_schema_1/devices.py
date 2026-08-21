@@ -19,25 +19,36 @@ against conflating them. Both are now carried, in separate fields
 (``connected`` and ``communication_state``), because they answer different
 questions: the panel's view of the link, and the publisher's view of its own.
 
-**Battery power is charge-positive, and the wire is not.** The enclosure meters
-the BESS the way it meters a circuit — a device it feeds — so a charging battery
-publishes a *negative* ``meter/active-power``. ``build_circuit`` negates for
-exactly this reason, and ``build_battery`` does the same, so the snapshot's rule
-holds everywhere: positive means power flowing into the metered device.
+**Battery power is discharge-positive, and that is not the rule circuits follow.**
+``build_circuit`` negates so that positive means power flowing *into* the metered
+device, which is the convention the rest of this module states. ``build_battery``
+negates too, but its wire input is in the opposite frame, so it lands on the
+opposite result: ``battery.power_w`` is positive while the battery *discharges*.
 
-Note the enclosure's own ``power-flows/battery`` is passed through untouched
-into ``panel.power_flow_battery``, and is **charge-positive**: power flowing out
-of the site node toward the battery. The catalog said discharge-positive when
-this was written; `capabilities/power-flows.md` 0.2 corrected it to the frame
-the firmware always published. Pass-through is right either way — only the
-reason changed. ``battery.power_w`` is the one this module puts in the
-snapshot's frame.
+Measured rather than reasoned. Driving the producer into self-consumption with
+the grid at zero forces the direction: PV 4181 W plus battery 1917 W meeting a
+6099 W load leaves nothing ambiguous, and the battery is discharging. The wire
+publishes ``-1917.49`` and this module reports ``+1917.49``.
 
-The conversion below assumes the BESS child publishes its own meter
-spec-conformantly, i.e. discharge-positive. SPAN r202633 does not: it publishes
-charge-positive, so ``power_w`` inverts on that firmware. See the r202633
-conformance note in the consumer's delta document; unresolved, and deliberately
-not compensated here until a live panel confirms it.
+That value is *correct* -- it is the frame the eBus specification asks for from a
+device's own meter, "positive while discharging, that is, power flowing out of
+the device". What was wrong was the name: this used to be ``_charge_positive``,
+and the sentence above used to claim the into-the-device rule held everywhere.
+It does not hold for the battery, and saying so was the defect.
+
+Both wire properties behind it carry the *same* sign as each other -- a live
+panel capture and ``ebus-panel-sim`` 0.6.0 both publish the pair identically --
+so ``panel.power_flow_battery`` (passed through untouched) and
+``battery.power_w`` (negated here) end up as each other's mirror, and a consumer
+showing both sees one convention after applying one negation to either.
+
+Note that the alignment of those two wire properties is the specification's
+*violation* rather than its rule: the spec defines ``power-flows/battery`` as the
+negation of the BESS meter, and this firmware publishes them equal. Comparing the
+two therefore tells a consumer which firmware it is on -- equal means today's,
+opposite means a conformant future one -- which is what would let this conversion
+stay correct across that change. Undecidable while the battery is idle and both
+read zero.
 """
 
 from __future__ import annotations
@@ -175,8 +186,15 @@ def _connected(status: str | None) -> bool | None:
     return None if status is None else status == STATUS_OK
 
 
-def _charge_positive(raw_power_w: float | None) -> float | None:
-    """Flip the enclosure's meter frame to the snapshot's charge-positive one.
+def _discharge_positive(raw_power_w: float | None) -> float | None:
+    """Flip the enclosure's meter frame to the BESS device's own.
+
+    Positive means power flowing *out of the battery*, which is discharging, and
+    which is what the eBus specification asks of a device's own meter. Named for
+    what it produces after being called `_charge_positive` for as long as it
+    produced the opposite -- measured against a producer driven into
+    self-consumption, where the grid sits at zero and the direction cannot be
+    argued.
 
     `None` stays `None`: a BESS that publishes no `meter` node has no power
     reading, which is not the same as zero. The `0.0` guard is `build_circuit`'s,
@@ -212,7 +230,7 @@ def build_battery(bess: DiscoveredDevice | None, owners: list[DiscoveredDevice])
         nameplate_capacity_kwh=number(bess, NODE_INFO, PROP_NAMEPLATE_CAPACITY),
         # None when unclaimed, so "nobody has said" stays distinct from "not OK".
         connected=_connected(status),
-        power_w=_charge_positive(number(bess, NODE_METER, PROP_ACTIVE_POWER)),
+        power_w=_discharge_positive(number(bess, NODE_METER, PROP_ACTIVE_POWER)),
         # The BESS's own link health, kept as the published enum string rather
         # than collapsed to a bool: DEGRADED is neither OK nor LOST, and a bool
         # would have to pick one.

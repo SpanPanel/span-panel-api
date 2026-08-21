@@ -215,14 +215,25 @@ def test_the_capture_is_a_charging_battery() -> None:
     assert float(_published("bess", BESS_POWER_TOPIC)) < 0
 
 
-def test_battery_power_is_charge_positive() -> None:
-    """The snapshot's frame: positive means power flowing into the metered device.
+def test_battery_power_is_the_negation_of_the_wire() -> None:
+    """One negation, and the frame it lands in is the BESS device's own.
 
-    Same rule as `SpanCircuitSnapshot.instant_power_w`, and reached the same way
-    -- `build_circuit` negates the enclosure's meter for a load, and a charging
-    BESS is a load. Asserting the magnitude and the sign separately is deliberate:
-    dropping the negation keeps the magnitude and fails here on the sign, which is
-    the mistake worth catching.
+    Positive means power flowing *out of* the battery -- discharging -- which is
+    what the eBus specification asks of a device's own meter, and deliberately
+    NOT the into-the-device rule `SpanCircuitSnapshot.instant_power_w` follows.
+    The wire inputs are in opposite frames, so the same single negation lands the
+    two fields on opposite conventions. This test used to claim the circuit rule
+    held here too; it does not, and the helper was renamed from
+    `_charge_positive` to `_discharge_positive` to stop implying it.
+
+    Asserted against the wire rather than against a constant, and the sign
+    separately from the magnitude: dropping the negation keeps the magnitude and
+    fails on the sign, which is the mistake worth catching.
+
+    The direction was settled by measurement rather than by reading the catalog
+    -- a producer in self-consumption with the grid at zero, PV and battery
+    together meeting the load, leaves no room to argue which way the battery is
+    going.
     """
     raw = float(_published("bess", BESS_POWER_TOPIC))
 

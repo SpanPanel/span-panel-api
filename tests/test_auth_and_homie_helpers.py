@@ -221,3 +221,55 @@ class TestHttpxClientInjectionAuthHelpers:
 
         mock_cls.assert_not_called()
         injected.aclose.assert_not_called()
+
+
+class TestGetHomieSchemaNotReadyShapes:
+    """Every way a booting panel answers that is not a clean 5xx.
+
+    Each of these used to escape `get_homie_schema` untranslated, skip the
+    caller's retry clause entirely, and strand the parser — the same failure the
+    502 produced on a live upgrade, wearing a different exception.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            httpx.ReadError("connection reset"),
+            httpx.WriteError("broken pipe"),
+            httpx.RemoteProtocolError("server closed connection without sending a response"),
+        ],
+        ids=["read-reset", "write-reset", "proxy-closed-without-answering"],
+    )
+    async def test_a_transport_failure_is_a_connection_error(self, failure: Exception) -> None:
+        """A panel resetting its listener mid-request, and a proxy dying mid-request.
+
+        `httpx.TimeoutException` is itself a `TransportError`, so the timeout
+        branch has to stay ahead of this one — covered by the timeout test above.
+        """
+        with patch("span_panel_api._http.httpx.AsyncClient") as cls:
+            cls.return_value = _mock_client("get", failure)
+            with pytest.raises(SpanPanelConnectionError):
+                await get_homie_schema("192.168.1.1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", ["", "{trunc", "null", "[]"], ids=["empty", "truncated", "null", "list"])
+    async def test_a_200_that_cannot_be_a_schema_is_not_ready_rather_than_broken(self, body: str) -> None:
+        """A panel part-way through starting can answer 200 with nothing usable.
+
+        Retryable for the same reason a 502 is: it is "not ready yet" wearing a
+        success status. The bounded attempt count makes retrying a genuinely
+        broken body cheap.
+        """
+        response = MagicMock()
+        response.status_code = 200
+        response.json = MagicMock(side_effect=(lambda: json.loads(body)) if body else ValueError("no content"))
+        mock = AsyncMock()
+        mock.get = AsyncMock(return_value=response)
+        mock.__aenter__ = AsyncMock(return_value=mock)
+        mock.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("span_panel_api._http.httpx.AsyncClient") as cls:
+            cls.return_value = mock
+            with pytest.raises(SpanPanelServerError):
+                await get_homie_schema("192.168.1.1")

@@ -188,10 +188,18 @@ async def get_homie_schema(
     try:
         async with _get_client(httpx_client, timeout) as client:
             response = await client.get(url)
-    except httpx.ConnectError as exc:
-        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
     except httpx.TimeoutException as exc:
         raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+    except httpx.TransportError as exc:
+        # Every way the connection itself can fail, not just a refused connect:
+        # `ReadError` and `WriteError` when a rebooting panel resets mid-request,
+        # and `RemoteProtocolError` when its proxy closes without answering --
+        # which is exactly what a proxy restarting under load produces. Catching
+        # only `ConnectError` meant those escaped this function untranslated,
+        # skipped the caller's retry clause entirely, and stranded the parser the
+        # same way a 502 used to. `TimeoutException` is itself a `TransportError`,
+        # so it has to be caught first.
+        raise SpanPanelConnectionError(f"Cannot reach panel at {host}: {exc}") from exc
 
     if response.status_code >= 500:
         # A rebooting panel answers 502 from its front end while the application
@@ -210,7 +218,24 @@ async def get_homie_schema(
             status_code=response.status_code,
         )
 
-    data: dict[str, object] = response.json()
+    try:
+        parsed = response.json()
+    except ValueError as exc:
+        # A panel part-way through starting can answer 200 with a truncated or
+        # empty body. Retryable for the same reason a 502 is -- it is "not ready
+        # yet" wearing a different status -- and untranslated this had precisely
+        # the 502's old character: raised out of the caller's retry loop on the
+        # first attempt and left the parser where it was.
+        raise SpanPanelServerError(
+            f"Panel not ready: {host} answered 200 with a body that is not JSON",
+            status_code=response.status_code,
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise SpanPanelServerError(
+            f"Panel not ready: {host} answered 200 with {type(parsed).__name__}, not an object",
+            status_code=response.status_code,
+        )
+    data: dict[str, object] = parsed
 
     # Extract types — each value is a dict of property definitions
     raw_types = data.get("types", {})

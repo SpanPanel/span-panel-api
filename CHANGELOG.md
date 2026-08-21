@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0b10]
+
+### Fixed
+
+- **Four more ways a booting panel answers now count as "not ready" rather than as a hard failure.** b8 and b9 covered the 502 that a live upgrade produced; review found the fix had covered the observed shape rather than the class. A panel resetting its
+  listener mid-request raises `ReadError` or `WriteError`, a proxy that dies mid-request raises `RemoteProtocolError`, and a panel part-way through starting can answer `200` with a truncated or empty body. All four escaped untranslated, skipped the retry
+  entirely, and stranded the parser exactly as the 502 did. Transport failures are now `SpanPanelConnectionError` and an unusable body is `SpanPanelServerError`.
+- **The last retry attempt happens after the reboot it is sized for.** The window ended with a sleep that no attempt followed: it read 241 seconds while the final request went out at 211, so a panel ready at 220 was still abandoned. The loop no longer
+  sleeps after its final attempt — which also stopped it holding the in-flight guard, and the warning, for a pointless extra backoff — and the last request now lands at 241 seconds. The test asserts that offset instead of summing the sleeps, which was
+  restating the implementation's own off-by-one.
+- **The give-up warning no longer promises a recovery that cannot arrive.** It said data would read as missing "until the next reconnect". The triggers are the reconnect edge and the retained `data-model-version` message, and a panel that finishes booting
+  produces neither again, so exhausting the window means stuck until a reload. It now says so.
+
 ## [3.0.0b9]
 
 ### Fixed

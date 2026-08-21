@@ -30,7 +30,13 @@ class SpanPanelAPIError(SpanPanelError):
 
 
 class SpanPanelServerError(SpanPanelAPIError):
-    """Server error (500)."""
+    """The panel answered, and the answer means "not ready yet".
+
+    Any 5xx, and a 200 whose body cannot be a schema. Distinct from
+    `SpanPanelAPIError` because a caller can retry this and should not retry a
+    4xx, which will not fix itself. A rebooting panel produces these for as long
+    as its front end is up and the application behind it is not.
+    """
 
 
 class SpanPanelStaleDataError(SpanPanelError):

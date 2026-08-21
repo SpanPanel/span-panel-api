@@ -48,7 +48,7 @@ _CIRCUIT_NAMES_POLL_INTERVAL_S = 0.25
 # Re-reading the schema after a suspected generation change. Bounded because the
 # caller is a fire-and-forget task on a live connection, and generous enough to
 # outlast a panel that is still binding its HTTP port after a restart.
-_REDISPATCH_RETRY_ATTEMPTS = 12
+_REDISPATCH_RETRY_ATTEMPTS = 13
 _REDISPATCH_RETRY_INITIAL_S = 1.0
 _REDISPATCH_RETRY_MAX_S = 30.0
 """How long to wait for the panel's HTTP endpoint after it returns on MQTT.
@@ -832,7 +832,7 @@ class SpanMqttClient:
         """
         delay = _REDISPATCH_RETRY_INITIAL_S
         last: Exception | None = None
-        for _ in range(_REDISPATCH_RETRY_ATTEMPTS):
+        for attempt in range(_REDISPATCH_RETRY_ATTEMPTS):
             try:
                 return await get_homie_schema(self._host, port=self._panel_http_port, httpx_client=self._httpx_client)
             except (
@@ -850,12 +850,21 @@ class SpanMqttClient:
                 SpanPanelServerError,
             ) as exc:
                 last = exc
+                if attempt == _REDISPATCH_RETRY_ATTEMPTS - 1:
+                    # No sleep after the final attempt. It delays the warning by a
+                    # full backoff for nothing, and holds `_redispatch_in_flight`
+                    # -- so a panel that returns during it is ignored rather than
+                    # retried.
+                    break
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, _REDISPATCH_RETRY_MAX_S)
         _LOGGER.warning(
             "Could not re-read the panel schema after %d attempts (%s). The active "
-            "parser is unchanged; if the panel's schema generation did change, its "
-            "data will read as missing until the next reconnect.",
+            "parser is unchanged, so if the panel's schema generation did change its "
+            "data will read as missing. Reload the integration once the panel is fully "
+            "back up: this will not retry on its own, because the triggers are the "
+            "reconnect edge and the retained data-model-version message, and a panel "
+            "that finishes booting produces neither again.",
             _REDISPATCH_RETRY_ATTEMPTS,
             last,
         )

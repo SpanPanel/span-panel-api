@@ -371,27 +371,63 @@ async def test_an_unexpected_failure_leaves_a_usable_message_rather_than_a_bare_
     assert "something nobody predicted" in caplog.text
 
 
-def test_the_retry_window_outlasts_a_real_panel_reboot() -> None:
-    """Catching the 502 buys nothing if the loop gives up before the panel is ready.
+def test_the_last_attempt_outlasts_a_real_panel_reboot() -> None:
+    """What matters is when the final GET happens, not how long the function runs.
 
     Measured rather than assumed. On a live firmware upgrade the panel dropped
     MQTT at 11:22:07 and the broker was back at 11:26:15 — four minutes — and its
     HTTP front end was still answering 502 at that moment, which is when this
     loop starts.
 
-    Pinned as a total because the three constants only mean something together,
-    and because the widening was written once, lost to a failed edit, and shipped
-    without it. Nothing failed: the 502 was caught and the loop still gave up
-    after twenty-three seconds. A test on the constants is the only thing that
-    would have noticed.
+    **Asserted on the offset of the last attempt.** The first version of this test
+    summed every sleep and compared the total, which counted a trailing sleep that
+    no attempt followed: it read 241s while the last GET was at 211s, and a panel
+    ready at 220s would still have been abandoned. Summing the sleeps restates the
+    implementation's arithmetic, off-by-one included; the offset of the last
+    attempt is the property a user actually gets.
     """
     delay = _REDISPATCH_RETRY_INITIAL_S
-    total = 0.0
-    for _ in range(_REDISPATCH_RETRY_ATTEMPTS):
-        total += delay
+    offset = 0.0
+    for attempt in range(_REDISPATCH_RETRY_ATTEMPTS):
+        if attempt == _REDISPATCH_RETRY_ATTEMPTS - 1:
+            break
+        offset += delay
         delay = min(delay * 2, _REDISPATCH_RETRY_MAX_S)
 
     observed_reboot_s = 4 * 60
-    assert total >= observed_reboot_s, (
-        f"the retry window is {total:.0f}s, shorter than the {observed_reboot_s}s reboot " "this loop exists to wait out"
+    assert offset >= observed_reboot_s, (
+        f"the last attempt is at {offset:.0f}s, inside the {observed_reboot_s}s reboot this "
+        "loop exists to wait out — a panel ready after that is abandoned"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_loop_does_not_sleep_after_its_final_attempt() -> None:
+    """A trailing sleep buys nothing and costs two things.
+
+    It delays the warning by a full backoff, and it holds `_redispatch_in_flight`
+    for that long — so a panel that comes back during it is ignored rather than
+    retried, which is the opposite of what the wait is for.
+    """
+    client, _ = _client(None)
+    slept: list[float] = []
+    attempts = 0
+
+    def _never_ready(*_a: object, **_k: object) -> _Schema:
+        nonlocal attempts
+        attempts += 1
+        raise SpanPanelServerError("Panel not ready: HTTP 502", 502)
+
+    async def _record(seconds: float) -> None:
+        slept.append(seconds)
+
+    with (
+        patch("span_panel_api.mqtt.client.get_homie_schema", side_effect=_never_ready),
+        patch("span_panel_api.mqtt.client.asyncio.sleep", _record),
+    ):
+        assert await client._fetch_schema_with_retry() is None
+
+    assert attempts == _REDISPATCH_RETRY_ATTEMPTS
+    assert (
+        len(slept) == _REDISPATCH_RETRY_ATTEMPTS - 1
+    ), f"{attempts} attempts should be separated by {attempts - 1} sleeps, got {len(slept)}"

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0b7]
+
+### Changed
+
+- **`SpanMqttClient` accepts an `httpx_client`, and so does `create_span_client`.** Four config-flow-facing entry points already took an injected client; the runtime path was the one that did not, so every schema read built a throwaway — including the
+  retry loop that runs during a firmware upgrade, which built one per attempt at exactly the moment the panel was mid-reboot. Optional and defaulted, so nothing outside Home Assistant changes. The ownership rule is the one the existing entry points already
+  state: a client handed in is never closed here, and its timeouts, limits and headers are the caller's, which is why the per-call `timeout` defaults are ignored when one is given. Home Assistant's shared client carries httpx's default timeout rather than
+  this library's 10 s, and that is the caller exercising the policy it owns rather than a setting being lost.
+
 ## [3.0.0b6]
 
 ### Added

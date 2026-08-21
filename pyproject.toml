@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "3.0.0b6"
+version = "3.0.0b7"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}

@@ -13,6 +13,7 @@ import contextlib
 from importlib.metadata import version
 import logging
 import time
+from typing import TYPE_CHECKING
 
 from span_panel_api.schema_drift import log_schema_drift
 
@@ -33,6 +34,9 @@ from ..protocol import PanelCapability, SchemaAdapter
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S
 from .models import MqttClientConfig
+
+if TYPE_CHECKING:
+    import httpx
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,6 +78,7 @@ class SpanMqttClient:
         data_model_version: str | None = None,
         schema_dispatch_reason: str | None = None,
         schema: V2HomieSchema | None = None,
+        httpx_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._host = host
         self._serial_number = serial_number
@@ -81,6 +86,12 @@ class SpanMqttClient:
         self._snapshot_interval = snapshot_interval
         self._panel_http_port = panel_http_port
         self._adapter_factory = adapter_factory
+        # Shared by the caller, owned by the caller: never closed here, and its
+        # policy -- timeouts, limits, headers -- is whatever the caller set. That
+        # is the same rule the four config-flow entry points already state, and
+        # the reason this exists at all is that the runtime path was the one place
+        # left without it. See `_get_client`.
+        self._httpx_client = httpx_client
 
         self._bridge: AsyncMqttBridge | None = None
         self._adapter: SchemaAdapter | None = None
@@ -287,7 +298,11 @@ class SpanMqttClient:
         # would be a second call to the same unauthenticated endpoint for a
         # value that cannot have changed. A directly-constructed client has no
         # schema yet, so it fetches here and dispatches in _build_adapter.
-        schema = self._schema if self._schema is not None else await get_homie_schema(self._host, port=self._panel_http_port)
+        schema = (
+            self._schema
+            if self._schema is not None
+            else await get_homie_schema(self._host, port=self._panel_http_port, httpx_client=self._httpx_client)
+        )
         self._schema = schema
         await self._preload_adapter(schema)
         adapter = self._build_adapter(schema)
@@ -807,7 +822,7 @@ class SpanMqttClient:
         last: Exception | None = None
         for _ in range(_REDISPATCH_RETRY_ATTEMPTS):
             try:
-                return await get_homie_schema(self._host, port=self._panel_http_port)
+                return await get_homie_schema(self._host, port=self._panel_http_port, httpx_client=self._httpx_client)
             except (SpanPanelConnectionError, SpanPanelTimeoutError) as exc:
                 last = exc
                 await asyncio.sleep(delay)

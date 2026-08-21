@@ -37,6 +37,7 @@ import ast
 import importlib
 import json
 import os
+import subprocess
 from pathlib import Path
 import re
 from typing import NoReturn
@@ -572,26 +573,64 @@ def test_nothing_is_recorded_as_unexercised_once_the_simulator_publishes_it() ->
 
 
 def test_vendored_catalogs_are_byte_identical_to_the_specification() -> None:
-    """Byte comparison against the specification at `synced_commit`.
+    """Are the bytes we vendored the bytes we claim they are?
 
-    Skipped rather than failed without a checkout: the checks above are the ones
-    that must run everywhere, and making them depend on a second repository would
-    mean they stop running.
+    Read out of git **at `synced_commit`** rather than from the checkout's working
+    tree, so the answer does not depend on what that clone happens to be sitting
+    on. This used to read the working tree while its own docstring claimed
+    otherwise, and `synced_commit` appeared only in the failure message. That is
+    wrong three ways, and one of them is the dangerous one:
+
+    * it **fails** when the clone has moved *ahead* of the pin, which is ordinary
+      currency drift and not a defect here -- observed the day the specification
+      went to `power-flows` 0.3;
+    * it **fails spuriously** with the clone on an unrelated branch;
+    * it **passes falsely** with a clone itself stale at the pinned commit while
+      the specification has moved on.
+
+    **Integrity, deliberately not currency.** Whether upstream has moved past our
+    pin is a separate question whose answer is normally "yes, a little", and it
+    must not fail a build. Conflating the two is what made this unreliable.
+    Currency is not checked by anything automatic here, and wants a scheduled job
+    rather than a gate.
+
+    The upstream reference producer fixed the same defect in its own copy of this
+    check (`distribution-enclosure-simulator` #47), which is where the framing
+    comes from.
     """
     spec = _checkout(
         "EBUS_SPEC_DIR",
         "a specification checkout to verify vendored bytes",
         expect="capabilities",
     )
-    differing = [
-        path.name
-        for path in sorted(_CATALOGS.glob("*.json"))
-        if (spec / "capabilities" / path.name).read_bytes() != path.read_bytes()
-    ]
+    commit = _lock()["synced_commit"]
+    differing: list[str] = []
+    for path in sorted(_CATALOGS.glob("*.json")):
+        blob = subprocess.run(
+            ["git", "-C", str(spec), "show", f"{commit}:capabilities/{path.name}"],
+            capture_output=True,
+            # Stripped, because `-C` does not beat them. Git hooks export `GIT_DIR`
+            # and `GIT_INDEX_FILE` pointing at the repository being committed to,
+            # and an exported `GIT_DIR` wins over directory discovery -- so under
+            # pre-commit this read the *consumer's* object store, could not find a
+            # specification commit there, and failed with a fetch instruction for a
+            # commit the clone already had. Caught by the hook that causes it.
+            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+        )
+        if blob.returncode != 0:
+            # A clone that cannot resolve the pin fails rather than skipping: a
+            # silent skip reads exactly like a pass on the one check that proves
+            # the vendored bytes are what the lockfile says.
+            pytest.fail(
+                f"{spec} cannot resolve {commit} (needed to read capabilities/{path.name}). "
+                f"Fetch it: git -C {spec} fetch origin {commit}"
+            )
+        if blob.stdout != path.read_bytes():
+            differing.append(path.name)
 
     assert not differing, (
-        f"vendored catalogs differ from {spec} (lockfile pins {_lock()['synced_commit']}): {differing}. "
-        "Check the checkout is at synced_commit before assuming the copies are wrong."
+        f"vendored catalogs differ from the specification at {commit}: {differing}. "
+        "These are byte copies, so this is a vendoring defect rather than upstream having moved."
     )
 
 

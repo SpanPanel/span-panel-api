@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 
+- **`SpanPanelSnapshot.lugs_at_service_entrance`, saying whether this enclosure's upstream lugs are the utility connection point.** `instant_grid_power_w` is those lugs' `meter/active-power`, and the name holds only at the service entrance: a BESS wired
+  ahead of the main lugs, or an enclosure fed by another enclosure, leaves the lugs metering panel-side flow while the utility side differs by whatever that device contributes or absorbs. `power_flow_grid` stays site-level and correct in both, so the two
+  legitimately disagree — and before this a consumer seeing them disagree could not tell a topology from a fault. Sourced from the lugs' `connection/fed-by-device-id`, which `power-flows` 0.3 names as the detection mechanism when it qualifies its own
+  negation table; this library already read that property and then discarded it, so no consumer could compute this for itself. Defaults `True` because flat firmware predates chaining and a flat panel's lugs really are its service entrance, so schema_0
+  leaves it alone. Additive, so it costs no protocol member and no contract bump. Worth knowing: the reference capture publishes `fed-by-device-id: bess` on its upstream lugs, so the reference panel reports `False`.
+
 - **An adopted device carries the proxy link it declares: `AdoptedDevice.parent` and `AdoptedDevice.proxied`.** Carried rather than acted on — an adopted device is still registered under the enclosure — because a _proxied_ unmodelled device is a real shape
   that would otherwise be flattened away unrecorded. The reference tree already contains one: `bess-mid` declares `parent: bess`, the `{proxier-id}-{proxied-id}` naming of `devices/proxy.md`. `proxied` is derived against the tree `root` in the adapter,
   because device ids are opaque and a consumer holding one device cannot tell the enclosure's id from a sibling's.

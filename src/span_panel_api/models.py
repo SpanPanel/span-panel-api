@@ -947,3 +947,47 @@ class SpanPanelSnapshot:
     holding zeros are different facts, and only a nullable member can tell them
     apart — every limit in this capture is a legal `0.0`.
     """
+
+    lugs_at_service_entrance: bool = True
+    """Whether this enclosure's upstream lugs *are* the utility connection point.
+
+    `False` means something sits between the utility and the main lugs, so the
+    lugs measure flow on the panel side of that device while the utility side
+    differs by whatever it contributes or absorbs. Two ordinary topologies do
+    this: an **upstream DER**, a BESS wired ahead of the main lugs, and an
+    **enclosure chain**, where this panel is fed by another panel rather than by
+    the service.
+
+    **What it is for.** `instant_grid_power_w` is the upstream lugs'
+    `meter/active-power`. On a panel at the service entrance that reading *is*
+    grid flow, which is why the field carries that name. On a panel where this is
+    `False` it is the panel's own feed, and presenting it as grid power is wrong
+    -- `power_flow_grid` is then the only site-level figure. The two will
+    legitimately disagree, and without this a consumer seeing them disagree has
+    no way to tell a topology from a fault.
+
+    Sourced from the lugs device's `connection/fed-by-device-id`, which the
+    specification names as the detection mechanism: `power-flows` 0.3 qualified
+    its own negation table to say the `grid` row holds "only where the lugs are
+    the utility connection point", and pointed consumers here. The property is
+    read by this library already; before this field it was consumed for relative
+    position and otherwise discarded, so no consumer could compute this for
+    itself.
+
+    Defaults `True`, and the default is a fact rather than an optimism: flat
+    firmware predates enclosure chaining and publishes no way to express it, so a
+    flat panel's lugs are its service entrance. schema_0 leaves it alone for that
+    reason.
+
+    A defaulted snapshot field rather than a `SchemaAdapter` member, for the
+    reason `adopted_devices` gives above: the protocol derives its required
+    members from itself, so a new member would be required of every adapter
+    package and would invalidate built wheels.
+
+    A boolean rather than the intervening device's id, because the id answers a
+    question nobody downstream asks. What a consumer needs is whether to trust
+    the lugs as grid; naming the device would invite a second, weaker inference
+    about *what* is upstream, which the enclosure-chain case cannot support --
+    the feeding device is another panel with its own tree, not a child of this
+    one.
+    """

@@ -143,6 +143,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         firmware_version=fields.firmware_version,
         main_relay_state=fields.main_relay_state,
         instant_grid_power_w=fields.instant_grid_power_w,
+        lugs_at_service_entrance=fields.lugs_at_service_entrance,
         feedthrough_power_w=fields.feedthrough_power_w,
         main_meter_energy_consumed_wh=fields.main_meter_energy_consumed_wh,
         main_meter_energy_produced_wh=fields.main_meter_energy_produced_wh,

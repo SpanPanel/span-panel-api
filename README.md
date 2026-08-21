@@ -120,7 +120,15 @@ async def main():
 
         # Get a point-in-time snapshot
         snapshot = await client.get_snapshot()
-        print(f"Grid power: {snapshot.instant_grid_power_w}W")
+        # The upstream lugs' own meter. That is grid flow only where the lugs are
+        # the utility connection point; a BESS wired ahead of them, or a panel fed
+        # by another panel, makes it this panel's feed instead. `power_flow_grid`
+        # is the site-level figure in every topology.
+        if snapshot.lugs_at_service_entrance:
+            print(f"Grid power: {snapshot.instant_grid_power_w}W")
+        else:
+            print(f"Panel feed: {snapshot.instant_grid_power_w}W")
+            print(f"Grid power: {snapshot.power_flow_grid}W")
         print(f"Firmware: {snapshot.firmware_version}")
         print(f"Circuits: {len(snapshot.circuits)}")
 

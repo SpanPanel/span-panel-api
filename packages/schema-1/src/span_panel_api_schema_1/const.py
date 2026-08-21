@@ -35,6 +35,14 @@ TYPE_LUGS = "energy.ebus.device.lugs"
 
 NODE_BREAKER = "breaker"
 NODE_CONNECTION = "connection"
+
+# The `connection` node's four property names. Here rather than in `devices`,
+# which is where they started, because `panel` reads one of them and `devices`
+# imports `panel` -- so the constant has to live below both of them.
+PROP_FEEDS_DEVICE_ID = "feeds-device-id"
+PROP_FEEDS_DEVICE_STATUS = "feeds-device-status"
+PROP_FED_BY_DEVICE_ID = "fed-by-device-id"
+PROP_FED_BY_DEVICE_STATUS = "fed-by-device-status"
 NODE_DOOR = "door"
 NODE_GRID = "grid"
 NODE_INFO = "info"

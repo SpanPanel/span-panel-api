@@ -67,6 +67,10 @@ from span_panel_api_schema_1.const import (
     NODE_SWITCH,
     PROP_ACTIVE_POWER,
     PROP_COMMUNICATION_STATE,
+    PROP_FED_BY_DEVICE_ID,
+    PROP_FED_BY_DEVICE_STATUS,
+    PROP_FEEDS_DEVICE_ID,
+    PROP_FEEDS_DEVICE_STATUS,
     PROP_FIRMWARE_VERSION,
     PROP_HARDWARE_VERSION,
     PROP_MODEL,
@@ -96,11 +100,6 @@ PROP_SOE = "soe"
 PROP_ADVERTISED_CURRENT = "advertised-current"
 PROP_LOCK_STATE = "lock-state"
 PROP_STATUS = "status"
-
-PROP_FEEDS_DEVICE_ID = "feeds-device-id"
-PROP_FEEDS_DEVICE_STATUS = "feeds-device-status"
-PROP_FED_BY_DEVICE_ID = "fed-by-device-id"
-PROP_FED_BY_DEVICE_STATUS = "fed-by-device-status"
 
 STATUS_OK = "OK"
 

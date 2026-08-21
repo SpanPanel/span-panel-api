@@ -1,9 +1,18 @@
 """Map the v1.0 device tree onto the panel-level fields of ``SpanPanelSnapshot``.
 
 Where the flat schema kept everything on one device's nodes, v1.0 spreads the
-same information across the panel and its children: the grid connection is the
+same information across the panel and its children: the service connection is the
 upstream lugs device, feedthrough is the downstream lugs device, and grid state
 lives on the MID.
+
+**The upstream lugs are not always the utility connection point.** A BESS wired
+ahead of the main lugs, or an enclosure fed by another enclosure, sits between
+the utility and this meter, so the lugs read panel-side flow while the grid
+differs by whatever that device contributes or absorbs. `power-flows` 0.3
+qualified its own negation table to say so and named the detection mechanism, and
+`lugs_at_service_entrance` carries the answer to the snapshot -- without it a
+consumer sees `instant_grid_power_w` and `power_flow_grid` disagree and cannot
+tell a topology from a fault.
 
 **Direction is per-device, and the two rules are opposites.** Everything is
 stated in the enclosure's reference frame — power flowing *into* the panel is
@@ -30,6 +39,7 @@ from span_panel_api.models import SpanCircuitSnapshot, SpanPcsSnapshot
 from span_panel_api_schema_1.const import (
     CLOUD_CONNECTED,
     NODE_BREAKER,
+    NODE_CONNECTION,
     NODE_DOOR,
     NODE_GRID,
     NODE_GRID_FORMING,
@@ -54,6 +64,7 @@ from span_panel_api_schema_1.const import (
     PROP_ENABLED,
     PROP_ETHERNET,
     PROP_EXPORTED_ENERGY,
+    PROP_FED_BY_DEVICE_ID,
     PROP_FIRMWARE_VERSION,
     PROP_FULL_CHARGE_TIME_TO_PRIORITY_SHED,
     PROP_FULL_CHARGE_TOTAL_TIME_REMAINING,
@@ -416,9 +427,23 @@ class PanelFields:
         self.power_flow_grid = number(panel, NODE_POWER_FLOWS, "grid")
         self.power_flow_site = number(panel, NODE_POWER_FLOWS, "site")
 
-        # Upstream lugs are the grid connection. No sign flip: the enclosure
-        # frame already reports import-positive, which is what consumption
-        # means here.
+        # Whether the upstream lugs are the utility connection point, which is not
+        # a given: a BESS wired ahead of the main lugs, or a panel fed by another
+        # panel, puts a device between the utility and this meter. Read from the
+        # lugs' own `connection/fed-by-device-id`, the mechanism `power-flows` 0.3
+        # names when it qualifies the `grid` row of its negation table. Empty
+        # string is the absence -- `text` defaults to it -- and absence is the
+        # ordinary case.
+        self.lugs_at_service_entrance = not text(upstream_lugs, NODE_CONNECTION, PROP_FED_BY_DEVICE_ID)
+
+        # No sign flip: the enclosure frame already reports import-positive, which
+        # is what consumption means here.
+        #
+        # The name says grid, and that is only true when the lugs are the service
+        # entrance. Where they are not, this is the panel's own feed and
+        # `power_flow_grid` is the site-level figure; `lugs_at_service_entrance`
+        # above is how a consumer tells the two apart. The reading itself is
+        # correct in either topology -- it is the label that is conditional.
         self.instant_grid_power_w = number(upstream_lugs, NODE_METER, PROP_ACTIVE_POWER) or 0.0
         self.main_meter_energy_consumed_wh = number(upstream_lugs, NODE_METER, PROP_IMPORTED_ENERGY) or 0.0
         self.main_meter_energy_produced_wh = number(upstream_lugs, NODE_METER, PROP_EXPORTED_ENERGY) or 0.0

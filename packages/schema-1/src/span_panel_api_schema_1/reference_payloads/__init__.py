@@ -20,11 +20,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from importlib import resources
 import json
-from typing import TypeAlias
 
 from ebus_sdk.homie import DiscoveredDevice
 
-RetainedTopicTree: TypeAlias = Mapping[str, Mapping[str, str]]
+type RetainedTopicTree = Mapping[str, Mapping[str, str]]
 """A retained-topic capture: device id -> topic -> payload, all strings.
 
 `$description` is a JSON *string*, not a nested object — it is stored on the

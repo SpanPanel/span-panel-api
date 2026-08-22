@@ -153,8 +153,8 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
     evse_subjects = [
         (device, ExtensionSubject(kind="evse", instance_key=key)) for device, key in harmonised_evse_keys(roles.evse).items()
     ]
-    # **Lugs are their own subject, keyed by direction.** They were `panel` in
-    # 0.1.0b9, which made the subject non-unique: a consumer keys an identity on
+    # **Lugs are their own subject, keyed by direction.** Pairing both with the
+    # `panel` subject makes the subject non-unique: a consumer keys an identity on
     # `(kind, instance_key, node/property)`, and the two lugs devices run the
     # same firmware, so a vendor extension on one is the *expected* case of a
     # vendor extension on both -- two wire addresses collapsing onto one

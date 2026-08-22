@@ -7,63 +7,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is fixed — the flat single-device schema, SPAN firmware `r202603` through `r202627` — and is identified by `SUPPORTS_DATA_MODEL_VERSIONS`
 rather than by this version number. A release here means this parser changed, never that the panel did.
 
-## [1.0.0b5] - 08/2026
+Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
-Pre-release. Requires `span-panel-api` 3.0.0b4 or newer, which is the floor the manifest has carried since the bootstrap grew the EVSE charge-limit members.
+## [1.0.0]
 
-### Added
-
-- **`set_evse_charge_limit_topic` and `evse_charge_limit_payload`.** Both required of every adapter, because `SchemaAdapter` gained them: `_derive_required_members` makes each public protocol member mandatory of every adapter wheel, so an adapter without
-  them is rejected at discovery no matter which panel it would have parsed. Flat firmware publishes no charge-limit surface, so this distribution answers for the absence rather than for a topic — the point being that answering is not optional.
-- **`adopted_devices` reports empty.** Adoption is a parent/child idea: a flat panel is one device with no unmodelled children to adopt, so the honest answer is a stable empty tuple rather than an unimplemented member. `set_adopted_property` therefore
-  raises on a flat panel for the same reason it raises for a device that does not exist, which is what makes the snapshot lookup an authorization rather than a lookup.
-
-## [1.0.0b3] - 08/2026
-
-Pre-release. Requires `span-panel-api` 3.0.0b2 or newer — unchanged, because nothing added here reaches for anything newer.
-
-### Changed
-
-- **BREAKING — DER identity is translated into v1.0's vocabulary rather than mirroring flat's names.** `model` is the human designation and `part_number` the SKU, on `battery`, `evse` and `pv` alike; `product_name` is retired on all three. Flat is the
-  irregular side: it puts the SKU in `bess/model` and in `evse/part-number` — the same concept under two names — and gives PV neither. `schema_1` used to cross over to preserve each entity's displayed meaning, which worked and permanently encoded flat's
-  irregularity in the snapshot. This adapter now normalises instead: `bess/model` → `part_number`, `bess/product-name` → `model`. **`battery.model` changes value for existing flat users at this upgrade.** Measured: every EVSE identity field now reads
-  identically on both adapters, so for that device class identity stops being a migration delta at all.
+First release as a standalone distribution. Requires `span-panel-api` 3.0.0 or newer.
 
 ### Added
 
-- **`dominant_power_source_payload`.** Flat already speaks this vocabulary, so the value passes through — the method exists because `schema_1` must translate, and a caller should not have to know which schema is underneath. Validated rather than passed
-  blindly: an unrecognised value returns `None` and the transport refuses the command, matching `schema_1` rather than putting a string outside the enum on the wire.
-
-## [1.0.0b2] - 08/2026
-
-Pre-release. Follows the reshaped `SchemaAdapter` protocol released in `span-panel-api` 3.0.0b2.
-
-### Added
-
+- **The flat-schema parser, extracted from `span-panel-api` 2.6.4.** Relocated from `span_panel_api._impl.schema_0` to `span_panel_api_schema_0`, and registered as `schema_0` under the `span_panel_api.schema_adapters` entry-point group, which is the only
+  way `span-panel-api` reaches it — the bootstrap never imports this package. Installing it is what makes flat-schema panels work; `span-panel-api` alone connects and then raises `SpanPanelAdapterMissingError` naming the adapter it could not find.
+- **`HomieLifecycle`, `HomiePropertyAccumulator` and `HomieDeviceConsumer` live here now.** All three left the bootstrap because they are flat-schema-specific rather than Homie-convention-level: the accumulator filters every topic against a single device's
+  prefix and stores `node → prop`, and `HomieLifecycle`'s members are not Homie 5 `$state` values but a consumer-side progression encoding "one description received ⇒ ready".
+- **`SCHEMA_ANCHOR`** (`sha256:d347556a07d98f40`, firmware `spanos2/r202603/05`) — the schema revision every hardcoded fact in this package was read from, with `SCHEMA_ANCHOR_FIELD` naming the field it comes from (`typesSchemaHash`). The field is
+  per-adapter: parent/child firmware renames it to `deviceClassesSchemaHash` along with the block it covers, so `schema_1` declares its own rather than inheriting one that does not exist on its firmware.
 - **`ADAPTER_CONTRACT = 1`**, declaring which version of the bootstrap-to-adapter contract this parser was built against. Declared as a literal rather than imported from `span_panel_api.protocol`: a value read from the installed bootstrap would agree with
   every bootstrap, which is exactly the disagreement the check exists to find.
-
-### Changed
-
-- **BREAKING: `SchemaZeroAdapter(serial_number, schema)`** replaces `SchemaZeroAdapter(serial_number, panel_size)`, following the protocol change in `span-panel-api`. Panel size is now derived here, by reading the circuit `space` format out of the flat
-  schema's `types` block — knowledge that belongs to this package rather than to the transport, which was previously doing it on every adapter's behalf.
-- **`build_field_metadata()` takes no arguments**, reading the schema this adapter was constructed with.
-- **The `span-panel-api` floor is now `>=3.0.0b2`.** `1.0.0b1` declared `>=3.0.0b1`, which admitted a bootstrap that constructs adapters with `panel_size` — a pairing that could not work. Installing that combination now fails by name at discovery rather
-  than on argument count inside the transport, but the floor is what stops a resolver reaching it at all.
-
-## [1.0.0b1] - 08/2026
-
-Pre-release. First release as a standalone distribution.
-
-### Added
-
-- **The flat-schema parser, extracted from `span-panel-api` 2.6.4.** Relocated verbatim from `span_panel_api._impl.schema_0` to `span_panel_api_schema_0`; only import statements changed. Registers itself as `schema_0` under the
-  `span_panel_api.schema_adapters` entry-point group, which is the only way `span-panel-api` reaches it — the bootstrap never imports this package.
-- **`SCHEMA_ANCHOR`** (`sha256:d347556a07d98f40`, firmware `spanos2/r202603/05`) — the schema revision every hardcoded fact in this package was read from, with `SCHEMA_ANCHOR_FIELD` naming the field it comes from (`typesSchemaHash`). The field is
-  per-adapter: parent/child firmware renames it to `deviceClassesSchemaHash` along with the block it covers, so a future `schema_1` declares its own rather than inheriting one that does not exist on its firmware.
+- **`dominant_power_source_payload`.** Flat already speaks this vocabulary, so the value passes through — the method exists because `schema_1` must translate, and a caller should not have to know which schema is underneath. Validated rather than passed
+  blindly: an unrecognised value returns `None` and the transport refuses the command, matching `schema_1` rather than putting a string outside the enum on the wire.
+- **`set_evse_charge_limit_topic` and `evse_charge_limit_payload`.** Both are required of every adapter, because `_derive_required_members` makes each public protocol member mandatory of every adapter wheel — an adapter without them is rejected at
+  discovery no matter which panel it would have parsed. Flat firmware publishes no charge-limit surface, so this distribution answers for the absence rather than for a topic; the point is that answering is not optional.
+- **`adopted_devices` reports empty.** Adoption is a parent/child idea: a flat panel is one device with no unmodelled children to adopt, so the honest answer is a stable empty tuple rather than an unimplemented member. `set_adopted_property` therefore
+  raises on a flat panel for the same reason it raises for a device that does not exist, which is what makes the snapshot lookup an authorization rather than a lookup.
+- **Panel size is derived here**, by reading the circuit `space` format out of the flat schema's `types` block — knowledge that belongs to this package rather than to the transport, which previously did it on every adapter's behalf.
 - **Provenance tests** asserting that all 64 hardcoded `(node_type, property_id)` pairs still resolve against the captured schema, that `HOMIE_DOMAIN` / `HOMIE_VERSION` still match it, and that the two lugs subtypes real firmware publishes remain absent
   from the schema _and_ present in the metadata alias table. This is the only signal that catches schema drift before release; every other symptom reaches production as a silent absence.
 - **A `py.typed` marker**, so consumers type-check against this package's real annotations rather than resolving everything it exports as `Any`.
+
+### Changed
+
+- **BREAKING — DER identity is translated into the parent/child vocabulary rather than mirroring flat's names.** `model` is the human designation and `part_number` the SKU, on `battery`, `evse` and `pv` alike; `product_name` is retired on all three. Flat
+  is the irregular side: it puts the SKU in `bess/model` and in `evse/part-number` — the same concept under two names — and gives PV neither. Mirroring that would have permanently encoded flat's irregularity in the snapshot, so this adapter normalises
+  instead: `bess/model` → `part_number`, `bess/product-name` → `model`. **`battery.model` changes value for existing flat users at this upgrade.** Measured: every EVSE identity field now reads identically on both adapters, so for that device class identity
+  stops being a migration delta at all.
 
 ### Known deviations from the published schema
 

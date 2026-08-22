@@ -13,7 +13,7 @@ support for a new panel schema by installing a package rather than by upgrading 
 ## Installation
 
 ```console
-pip install span-panel-api span-panel-api-schema-0
+pip install "span-panel-api[schema-0]"
 ```
 
 Installing this package is what makes flat-schema panels work. `span-panel-api` on its own will connect and then raise `SpanPanelAdapterMissingError` naming the adapter it could not find.
@@ -21,10 +21,11 @@ Installing this package is what makes flat-schema panels work. `span-panel-api` 
 A consumer that wants to support panels on either schema installs both adapters:
 
 ```console
-pip install span-panel-api span-panel-api-schema-0 span-panel-api-schema-1
+pip install "span-panel-api[schema-0,schema-1]"
 ```
 
-Dispatch happens at runtime, per panel, from the `data-model-version` the panel reports.
+Dispatch happens at runtime, per panel, from the `data-model-version` the panel reports. The extras are the recommended spelling because they give `pip install -U` a correct upgrade path — the dependency arrow runs from adapter to bootstrap, so upgrading
+the bootstrap alone would otherwise leave a stale adapter wheel that discovery then rejects, with pip reporting success. Naming the distributions directly works too.
 
 ## Retirement
 

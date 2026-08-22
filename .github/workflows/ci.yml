@@ -17,6 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        # One entry because `requires-python` is `>=3.14`: the declared floor and
+        # the version tested are the same, which is the only arrangement where a
+        # green run actually proves the range. Widen `requires-python` and this
+        # list has to grow with it -- a floor no job runs is a claim, not a
+        # guarantee.
         python-version: ["3.14"]
 
     steps:
@@ -64,6 +69,7 @@ jobs:
         uv run pytest tests/ -v -rs \
           --cov=src/span_panel_api \
           --cov=packages/schema-0/src/span_panel_api_schema_0 \
+          --cov=packages/schema-1/src/span_panel_api_schema_1 \
           --cov-report=xml --cov-report=term-missing
 
 

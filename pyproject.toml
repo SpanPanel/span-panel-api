@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "3.0.0b13"
+version = "3.0.0"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -8,14 +8,16 @@ authors = [
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.14,<4.0"
 dependencies = [
     # Bounded, and the bound is load-bearing. httpx 1.0 is an API rewrite that
-    # removes `AsyncClient` -- 1.0.dev1..dev4 are on PyPI now, and every
-    # distribution of this library is a prerelease, so `pip install --pre`, the
-    # verb RELEASE.md itself prescribes, resolves them. `paho-mqtt` has been
-    # bounded from the start; this was the one unbounded runtime dependency, and
-    # a ceiling cannot be added to a version already published.
+    # removes `AsyncClient`, and 1.0.dev1..dev4 are on PyPI now. The bound was
+    # first set when every distribution here was a prerelease and `pip install
+    # --pre` was the prescribed verb, which made those dev releases resolvable;
+    # that particular exposure ended at 3.0.0, but the ceiling stays, because a
+    # caller may still pass `--pre` for its own reasons and because a ceiling
+    # cannot be added to a version already published. `paho-mqtt` has been
+    # bounded from the start; this was the one unbounded runtime dependency.
     "httpx>=0.28.1,<1.0",
     "paho-mqtt>=2.0.0,<3.0.0",
     "pyyaml>=6.0.0",
@@ -24,15 +26,20 @@ dependencies = [
 [project.optional-dependencies]
 # Not runtime dependencies: this distribution still registers no adapter and
 # imports none, and `scripts/verify_adapterless_install.py` holds that line.
-# These exist so `pip install -U --pre "span-panel-api[schema-0,schema-1]"` has a
+# These exist so `pip install -U "span-panel-api[schema-0,schema-1]"` has a
 # correct upgrade path, because the dependency arrow runs the other way -- an
 # adapter floors on the bootstrap, the bootstrap requires no adapter -- so
 # upgrading the bootstrap alone leaves stale adapter wheels that
 # `_derive_required_members` then rejects at discovery, with pip reporting
 # success. An extra is the only thing pip can act on, and extras cannot be added
 # to a version after it is published.
-schema-0 = ["span-panel-api-schema-0>=1.0.0b5"]
-schema-1 = ["span-panel-api-schema-1>=0.1.0b6"]
+#
+# Floors are stable versions deliberately. A specifier that names a prerelease
+# is pip's own signal that prereleases are acceptable for that requirement, so a
+# `>=1.0.0b5` floor here would leave a released install willing to resolve a
+# future beta of the adapter without anyone asking for one.
+schema-0 = ["span-panel-api-schema-0>=1.0.0"]
+schema-1 = ["span-panel-api-schema-1>=1.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/SpanPanel/span-panel-api"
@@ -159,13 +166,19 @@ ignore = [
 force-sort-within-sections = true
 combine-as-imports = true
 split-on-trailing-comma = false
-# Both distributions in this workspace are first-party. Stated explicitly
-# because the repo now has two source roots, and inference from a single `src/`
-# would classify the adapter package as third-party.
-known-first-party = ["span_panel_api", "span_panel_api_schema_0"]
+# Every distribution in this workspace is first-party. Stated explicitly because
+# the repo has more than one source root, and inference from a single `src/`
+# would classify the adapter packages as third-party. Each new adapter package
+# has to be added here -- schema_1 was missing for several releases, which is
+# the failure this comment exists to prevent and did not.
+known-first-party = ["span_panel_api", "span_panel_api_schema_0", "span_panel_api_schema_1"]
 
 [tool.mypy]
-python_version = "3.13"
+# The declared floor. Type-checking as of the oldest supported interpreter is
+# what catches a call into stdlib that only exists further up; checking as of a
+# newer one would let it through. Floor and ceiling are the same version today,
+# so this must move with `requires-python` rather than being left behind.
+python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

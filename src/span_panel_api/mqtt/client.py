@@ -393,7 +393,7 @@ class SpanMqttClient:
         # Wait for Homie ready state
         try:
             await asyncio.wait_for(self._ready_event.wait(), timeout=MQTT_READY_TIMEOUT_S)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             await self.close()
             raise SpanPanelConnectionError(f"Timed out waiting for Homie device ready ({self._serial_number})") from exc
 

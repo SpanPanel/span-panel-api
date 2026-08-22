@@ -7,184 +7,111 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is the parent/child device tree SPAN firmware `r202633+` publishes, identified by `SUPPORTS_DATA_MODEL_VERSIONS` rather than by this version
 number. A release here means this parser changed, never that the panel did.
 
-## [0.1.0b10] - 08/2026
+Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
-Pre-release. Requires `span-panel-api` 3.0.0b12 or newer — unchanged.
+## [1.0.0]
 
-### Fixed
-
-- **The two lugs devices are two extension subjects, not one.** 0.1.0b9 paired both with `ExtensionSubject(kind="panel")` and no instance key, on the reasoning that their curated fields land in the panel snapshot. But a subject is an _identity_: a consumer
-  keys an entity on `(kind, instance_key, node/property)`, so two lugs devices declaring the same vendor property produced one identity for two readings — whichever sorted first won, and the other was dropped. Identical firmware on both lugs makes that the
-  expected case rather than a coincidence, not something a vendor would have to do oddly to hit. They are now `kind="lugs"` with `upstream`/`downstream` as the instance key, matched on `info/direction` for the reason `find_lugs` documents: the reference
-  tree's ids are the simulator's naming, and the direction property is what the schema defines. A lugs device declaring no direction is left unpaired rather than keyed on something unstable — its properties stay in discovery, which is where an
-  unidentifiable device belongs.
-
-Pre-release. **Requires `span-panel-api` 3.0.0b12 or newer** — the floor moved, because this parser now imports `ExtensionProperty` and `ExtensionSubject` and constructs a snapshot with `extension_properties`.
+First release as a standalone distribution, and the first parser for the parent/child data model. Requires `span-panel-api` 3.0.0 or newer, and `ebus-sdk` `>=0.19,<0.24`.
 
 ### Added
 
-- **Vendor properties on modelled devices are emitted with their values.** Every property a modelled device declares that this adapter maps to no snapshot field — excluding `info` and `connection`, which resolve to the device card and the tree — now
-  arrives as an `ExtensionProperty` carrying its subject, its declaration and its retained value. A battery vendor hanging `battery-2/cell-temperature` off the BESS previously reached a consumer nowhere.
-- **`node_has_curated_siblings`**, one bit per row: whether this adapter reads any _other_ property of the same node. A vendor extending `meter` is probably extending the meter, and that is the whole of what the bit says — which fields are read stays
-  internal.
-
-### Changed
-
-- **`addressed_rows()` is extracted from `build_discovery`**, so the discovery rows and the extension rows cannot disagree about what "unaddressed" means. A property counted as addressed by one and not the other would either appear as an entity the
-  diagnostics claim is ignored, or be reported ignored while a consumer renders it — each reading as a defect in whichever surface disagreed.
-
-## [0.1.0b8] - 08/2026
-
-Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged.
-
-### Fixed
-
-- **`dominant_power_source` reports `GRID` on a panel with no MID, instead of nothing.** The field's source moved in v1.0: flat published a closed enum of source classes on the panel, v1.0 names the forming device on the MID's `grid` node. A panel with no
-  battery has no MID, so the property has no publisher and the field went `None` — observed on a live install that read `Grid` on flat all night and went unknown the moment it upgraded, with nothing about the site having changed.
-
-  A missing MID settles the answer by elimination rather than leaving it open. `BATTERY` needs a BESS and a BESS brings a MID; `PV` cannot form a grid alone, because anything that can is a grid-forming inverter and therefore a MID; `NONE` describes a panel
-  supplying nothing, which is a panel that is not publishing. What remains is a generator, and that is two cases of which only one reaches here: a generator wired through a MID is named by that MID and answered before this point, while a generator with no
-  MID interface is what SPAN treats as the grid — and it is the only kind an install with no MID can have. The elimination therefore keeps holding if MID-integrated generators arrive, because they bring a MID. A site running off-grid without storage is not
-  a counterexample — it goes dark at sunset.
-
-  This deliberately does not follow `resolve_islanding_state`, which refuses the same shortcut, and the counterexample that defeats it there is what supports it here: a generator-fed island **is** islanded, so inferring on-grid from a missing MID would be
-  wrong, while its grid-forming entity really is what SPAN calls the grid. It is also no worse than flat, which could not see an uninterfaced generator either and published `GRID` regardless.
-
-  A MID that exists and has not answered still reports nothing. That is genuinely unknown, and distinct from there being no islanding authority at all.
-
-## [0.1.0b7] - 08/2026
-
-Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged.
-
-### Changed
-
-- **The eBus SDK ceiling moves to `<0.24`.** 0.23.0 and 0.23.1 both shipped the same day the previous `<0.23` bound was set, so that bound excluded the current release on its first day. Re-checked rather than extrapolated: diffing the 0.22.0 and 0.23.1
-  wheels module by module, exactly two files change — `__init__.py`, by the version string alone, and `declaration.py`, the declarative builder. This distribution's whole SDK surface is `Controller`, `homie.DiscoveredDevice` and structural conformance to
-  `MqttControllerTransport`, and nothing here imports `declaration`. The suite is green against 0.23.1 with no source change.
-
-## [0.1.0b6] - 08/2026
-
-Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged. The eBus SDK ceiling tightens to `<0.23`, the versions actually tested: 0.x carries no compatibility contract, and 0.22 was read module by module before the bound was set — it changes
-only publisher-side code, leaving `adapter.py`, `topology.py`, `transport.py` and `property.py` byte-identical to 0.21.
-
-### Fixed
-
-- **The BESS meter is discharge-positive, and was named for the opposite.** `_charge_positive` is renamed `_discharge_positive`. No published value changes — the negation was always right — but the name asserted a direction that the wire does not carry,
-  and the root changelog documented that wrong direction as fact. Settled by measurement rather than by reading: with the producer in self-consumption and the grid at exactly zero, `pv −4181.34 + battery −1917.49 + grid −0.0 + site +6098.83 = 0`, so the
-  battery was discharging at 1917 W and `battery.power_w` reported `+1917.49`. The convention matches the eBus rule for a device's own meter: positive is power flowing out of the device.
-
-  It stays deliberately opposite to `panel.power_flow_battery`, which is the enclosure's arbitrated figure, passed through untouched and charge-positive. The two are the same physical power in different frames, and a consumer rendering both negates one of
-  them.
-
-### Added
-
-- **`adoption`, building `AdoptedDevice` records for device types this parser does not model**, with `set_topic` populated only where the declaration says the property is settable. Subtype-aware, so a curated device never lands in `adopted_devices`.
-
-## [0.1.0b5] - 08/2026
-
-Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged, because nothing added here reaches for anything newer.
-
-### Added
-
-- **`span_panel_api_schema_1.reference_payloads`, shipping `parent_child_tree.json` as package data.** The captured retained-topic tree of a full 40-space panel moves out of the repository's `tests/fixtures/` and into the wheel, reached by
-  `parent_child_tree()` rather than by path. The reason is the same one that put the schema document in the bootstrap's wheel: consumers outside this repository need a real capture to check an adapter's output against, and the only alternative to shipping
-  one is vendoring a byte copy that has no version and goes stale in silence. It ships from _this_ distribution rather than the bootstrap because a retained topic tree is only interpretable by the parser that speaks its vocabulary — and the eBus SDK that
-  turns it back into devices is this distribution's dependency alone.
-- **`devices_from_tree` and `device_from_topics`.** A tree is not directly usable: every consumer has to replay the retained topics through `DiscoveredDevice` first, and that replay is this parser's own knowledge of how the transport feeds it. Shipping the
-  capture without the replay would just move a copy of that logic into every consumer, which is the burden the package data exists to remove — four test modules here held the same twelve lines, and the Home Assistant integration held a fifth copy with a
-  comment naming the test it was mirrored from. `devices_from_tree` takes the tree rather than reading it, so a consumer can filter the capture first — dropping the BESS to model a panel that has none — and still build devices the same way.
-
-## [0.1.0b3] - 08/2026
-
-Pre-release. **Requires `span-panel-api` 3.0.0b3 or newer** — see Fixed.
-
-### Added
-
-- **Spec conformance checking.** `spec_lock.json` ships with the package and records what this parser targets: the firmware range, the eBus specification commit its vocabulary was read from, and the version of every capability, device and registry it
-  implements. It is the consumer counterpart to the simulator's publisher lockfile, and both are pinned to the same specification commit — though the anchor shared between them is the **firmware range**, not that commit, because the specification says what
-  a device class _may_ publish while a panel publishes one specific tree.
-- **The 13 capability catalogs this adapter addresses**, byte-copied under `spec/` along with the device-types registry. Vendored rather than depended on because the specification is a git repository of versioned documents, not a package. They exist to be
-  checked against, never parsed in production: units and datatypes still come from each device's `$description`, since the catalog is the superset across all hardware rather than a statement about the panel in front of us. Formatting hooks are excluded
-  from `spec/`, because a lint fix there would quietly invalidate the byte comparison that makes the copies worth having.
-- **`tests/test_schema_one_conformance.py`**, which asks the consumer's question rather than the publisher's. A publisher asks whether everything it emits is legal, and for it an omission is unremarkable. This asks whether every name the adapter _reads_ is
-  one the specification defines — because a consumer addressing a name that no longer exists does not fail, it goes quiet: the property never arrives, metadata lookup returns `None`, and an entity disappears. `ebus-sdk` 0.18.0 removing the `battery`
-  capability key in favour of `soc`, with no alias, is exactly that shape.
-- **An explicit SPAN extension allowlist.** Fourteen of the forty-two properties this adapter reads are absent from every catalog — per-phase meter readings, panel link states, circuit `spaces`, the EVSE surface. All are legal, since the specification
-  permits properties it has never heard of. They are enumerated with reasons so that a name missing from the catalog must be a deliberate claim about SPAN's vocabulary rather than an unnoticed typo; at runtime the two are indistinguishable. Tests also fail
-  when an extension is later adopted upstream, or when one is declared for a property nothing reads.
-- **A peer record and simulator coverage check.** `spec_lock.json` now records the producer this parser is developed against — the SPAN simulator, `role: publisher` — with the specification commit and firmware range it pins, and a captured copy of the tree
-  it publishes is vendored alongside the catalogs. Two sides reading different vocabularies is now a test failure rather than something noticed later, and the anchor asserted between them is the **firmware range**, since the specification says what a
-  device class may publish while a panel publishes one specific tree.
-- **An explicit record of what the producer does not exercise.** Of the 42 `(capability, property)` pairs this adapter reads, the simulator's captured tree declares 41. The exception is `grid/islanding-state`: the simulator models a MID but its tracked
-  config publishes none, so `grid_state` — corrected in `0.1.0b2` to read `islanding-state` rather than `grid-state` — is the single mapping the producer gives no evidence for. Recorded rather than left implicit, because a passing suite otherwise reads as
-  coverage it does not have. The entry is rejected once the simulator starts publishing it.
-- **The parser is now driven end to end from what the producer actually publishes.** Every other test in this package runs on a fixture captured off the upstream _generic_ eBus panel simulator, which by construction never carries SPAN's own vocabulary.
-  `spec/fixtures/simulator_wire.json` is a capture from SPAN's publisher instead — descriptions, `$state` and all 494 property values across 37 devices — fed in sorted topic order, the way a retained store replays it rather than the way a tree is walked.
-  The parser reaches ready on it, sizes the panel from `MAIN_40`, and parses all 30 circuits. Values are deliberately not asserted: the producer's config carries `noise_factor` and its clock advances, so pinning a wattage would fail on every recapture for
-  a reason nobody could act on.
-- **Two producer-side gaps are pinned rather than left to be noticed.** `grid_state` stays `None` because nothing instantiates a MID, and every DER — BESS, PV and both EVSEs — declares `info/model` in its `$description` and never publishes a value (PV
-  declares five `info` properties and publishes one). The second breaks the single standing obligation eBus places on a publisher, to declare accurately what it publishes, and is invisible to a conformance checker: comparing declarations against catalogs
-  cannot see a declaration nothing fulfils. Only a capture carrying values can, which is the argument for this fixture existing. Both are asserted as current expectations, so closing either fails the test that describes it.
-
-Provenance (byte comparison against a specification or simulator checkout) is skipped unless `EBUS_SPEC_DIR` / `PANELBENCH_DIR` are set, so conformance and coverage run everywhere while the byte checks stay opportunistic. The wire capture is compared on
-shape rather than bytes for the same reason its values are not asserted. Provenance proves the right bytes were copied; it cannot prove they were understood, which is what the other two are for.
-
-### Fixed
-
-- **The conformance check was reading the wrong set of names.** Built from `_PROPERTY_FIELD_MAP` alone, it covered only properties that carry field metadata and silently skipped everything the snapshot mapper reads directly — the MID, `connection`
-  feeds/fed-by, `info/direction`. `grid_state`, the most recently corrected mapping in this package, was among them. The read set is now derived from the source itself, so it cannot fall behind the code; that immediately surfaced `info/direction` as a
-  fifteenth undeclared extension.
-- **The bootstrap floor is raised to 3.0.0b3**, which is where it should always have been: this parser imports `SpanMidSnapshot`, and 3.0.0b2 does not define it. The declared `>=3.0.0b2` let a resolver pair this wheel with 3.0.0b2 and fail on import.
-  Caught before the first release that would have shipped it. `schema-0` keeps its b2 floor; every name it imports is present there, checked rather than assumed.
-
-## [0.1.0b2] - 08/2026
-
-Pre-release. Corrects the dependency floor `0.1.0b1` shipped with, and follows the reshaped `SchemaAdapter` protocol released in `span-panel-api` 3.0.0b2.
-
-### Added
-
-- **`ADAPTER_CONTRACT = 1`**, declaring which version of the bootstrap-to-adapter contract this parser was built against. Declared as a literal rather than imported from `span_panel_api.protocol`: a value read from the installed bootstrap would agree with
-  every bootstrap, which is exactly the disagreement the check exists to find.
-
-### Fixed
-
-- **The `span-panel-api` floor was `>=3.0.0b1`, which no published bootstrap could satisfy in practice.** `0.1.0b1` was built against a bootstrap that reads the panel's `data-model-version` and constructs adapters with the whole schema; the only bootstrap
-  on PyPI at the time did neither. Its `V2HomieSchema` had no `data_model_version` field at all, so a `1.x` panel could not even be represented, and its factory hardcoded the version to `None` — meaning this adapter was discoverable and never selectable.
-  The floor is now `>=3.0.0b2`, the first release where both hold. Nothing was installed against the old floor; the combination was unreachable rather than broken in the field.
-
-## [0.1.0b1] - 08/2026
-
-Pre-release. First release as a standalone distribution, and the first parser for the parent/child data model.
-
-### Added
+#### The adapter
 
 - **`SchemaOneAdapter`**, registered as `schema_1` under the `span_panel_api.schema_adapters` entry-point group. A panel reporting `data-model-version` `1.x` resolves to it; a panel without this package installed still gets the named
   `SpanPanelAdapterMissingError`, so installing it is the opt-in.
+- **`ADAPTER_CONTRACT = 1`**, declaring which version of the bootstrap-to-adapter contract this parser was built against. Declared as a literal rather than imported from `span_panel_api.protocol`: a value read from the installed bootstrap would agree with
+  every bootstrap, which is exactly the disagreement the check exists to find.
 - **`ControllerRoutes`** — an `ebus_sdk.MqttControllerTransport` that records `Controller`'s subscriptions instead of making them, so the SDK parses the tree over span-panel-api's own connection to the panel's broker. The adapter is built before a
   connection exists and never receives one; a single wildcard subscription made by the transport layer covers the whole tree, and this routes each message to whichever SDK callback asked for it.
 - **The snapshot mapper.** Sorts the tree by declared device type — never by device id — and maps it onto `SpanPanelSnapshot`: circuits, both lugs, the MID, and the BESS/PV/EVSE devices.
-- **Panel size from `info/model`** via `PANEL_SIZE_BY_MODEL`, which is what restores the unmapped-position entries the integration builds from the difference between total and occupied spaces. `info/spaces` has no format and the panel publishes no size
+- **Retained messages are held until their route exists.** `Controller` learns its topics as it walks the tree, but one subscription delivers the whole tree at once in whatever order the broker replays its retained store; seeded children-first, a 40-space
+  panel would otherwise parse as zero circuits. Unrouted messages are held and released when the matching route appears — the value a per-device subscription would have been given at subscribe time — with a ceiling so an unclaimed subtree cannot leak.
+- **Readiness asks about every declared device, at any depth**, not only the root, so a connection cannot complete with a fraction of its circuits and no panel size. Child _state_ is deliberately not required, so an offline DER does not block a connection;
+  the model is required only when the root's description declares it.
+- **Panel size from `info/model`** via `PANEL_SIZE_BY_MODEL`, which is what restores the unmapped-position entries a consumer builds from the difference between total and occupied spaces. `info/spaces` has no format and the panel publishes no size
   property, so the model is the only source; `panel_model_drift()` reports a model the panel declares that we have no size for, because the alternative is a user noticing missing positions.
 - **Field metadata read from each device's `$description`** rather than a schema document. The same capability type exposes different properties on different device classes — `meter` is voltage on the panel, power and energy on a circuit, both currents on
   lugs — so the per-device description is what this panel actually has.
 - **A `py.typed` marker**, so consumers type-check against this package's real annotations.
 
+#### Mapping decisions worth knowing
+
+- **`grid_state` reads the MID's `grid/islanding-state`, not its `grid/grid-state`.** The MID publishes both: `islanding-state` is `ON_GRID`/`OFF_GRID`/`UNKNOWN`, and `grid-state` is `UP`/`DOWN`/`DEGRADED`/`UNKNOWN`. Flat's `grid_state` was the BESS's
+  `grid-state`, an islanding answer, so its successor is `islanding-state`; matching on the property name rather than the value set would put `UP` where a consumer expects `ON_GRID` — an entity keeping its id and history while its vocabulary silently
+  changed. `grid/grid-state` asks whether the utility supply is healthy, is new in v1.0 with no flat equivalent, and is left unmapped as a new signal rather than a replacement.
+- **`dominant_power_source` reports `GRID` on a panel with no MID**, rather than nothing. The field's source moved: flat published a closed enum of source classes on the panel, and v1.0 names the forming device on the MID's `grid` node — so a panel with no
+  battery has no MID, the property has no publisher, and the field would go `None`. Observed on a live install that read `Grid` on flat all night and went unknown the moment it upgraded, with nothing about the site having changed.
+
+  A missing MID settles the answer by elimination rather than leaving it open. `BATTERY` needs a BESS and a BESS brings a MID; `PV` cannot form a grid alone, because anything that can is a grid-forming inverter and therefore a MID; `NONE` describes a panel
+  supplying nothing, which is a panel that is not publishing. What remains is a generator, and that is two cases of which only one reaches here: a generator wired through a MID is named by that MID and answered before this point, while a generator with no
+  MID interface is what SPAN treats as the grid — and it is the only kind an install with no MID can have. The elimination therefore keeps holding if MID-integrated generators arrive, because they bring a MID. A site running off-grid without storage is not
+  a counterexample: it goes dark at sunset.
+
+  This deliberately does not follow `resolve_islanding_state`, which refuses the same shortcut, and the counterexample that defeats it there is what supports it here: a generator-fed island **is** islanded, so inferring on-grid from a missing MID would be
+  wrong, while its grid-forming entity really is what SPAN calls the grid. A MID that exists and has not answered still reports nothing — that is genuinely unknown, and distinct from there being no islanding authority at all.
+
+- **`battery.power_w` is discharge-positive.** The enclosure meters the BESS the way it meters a circuit it feeds, so a discharging battery publishes a negative `meter/active-power` and the mapper negates it. Positive therefore means power flowing _out of_
+  the battery, which is the eBus rule for a device's own meter. It stays deliberately opposite to `panel.power_flow_battery`, the enclosure's arbitrated figure, which is passed through untouched by both adapters and is charge-positive. The two are the same
+  physical power in different frames, and a consumer rendering both negates one of them.
+
+#### Adoption and vendor extensions
+
+- **`adoption`, building `AdoptedDevice` records for device types this parser does not model**, with `set_topic` populated only where the declaration says the property is settable. Subtype-aware, so a curated device never lands in `adopted_devices`.
+- **Vendor properties on modelled devices are emitted with their values.** Every property a modelled device declares that this adapter maps to no snapshot field — excluding `info` and `connection`, which resolve to the device card and the tree — arrives as
+  an `ExtensionProperty` carrying its subject, its declaration and its retained value. A battery vendor hanging `battery-2/cell-temperature` off the BESS would otherwise reach a consumer nowhere.
+- **The two lugs devices are two extension subjects, not one.** A subject is an _identity_: a consumer keys an entity on `(kind, instance_key, node/property)`, so pairing both lugs with a single subject would give one identity for two readings, and
+  identical firmware on both lugs makes that the expected case rather than a coincidence. They are `kind="lugs"` with `upstream`/`downstream` as the instance key, matched on `info/direction` for the reason `find_lugs` documents: the reference tree's ids
+  are the simulator's naming, and the direction property is what the schema defines. A lugs device declaring no direction is left unpaired rather than keyed on something unstable — its properties stay in discovery, which is where an unidentifiable device
+  belongs.
+- **`node_has_curated_siblings`**, one bit per row: whether this adapter reads any _other_ property of the same node. A vendor extending `meter` is probably extending the meter, and that is the whole of what the bit says — which fields are read stays
+  internal. `addressed_rows()` is shared with `build_discovery`, so the discovery rows and the extension rows cannot disagree about what "unaddressed" means.
+
+#### Conformance against the specification and the producer
+
+- **`spec_lock.json` ships with the package** and records what this parser targets: the firmware range, the eBus specification commit its vocabulary was read from, and the version of every capability, device and registry it implements. It is the consumer
+  counterpart to the simulator's publisher lockfile, and both are pinned to the same specification commit — though the anchor shared between them is the **firmware range**, not that commit, because the specification says what a device class _may_ publish
+  while a panel publishes one specific tree.
+- **The capability catalogs this adapter addresses are byte-copied under `spec/`**, along with the device-types registry. Vendored rather than depended on because the specification is a git repository of versioned documents, not a package. They exist to be
+  checked against, never parsed in production: units and datatypes still come from each device's `$description`, since the catalog is the superset across all hardware rather than a statement about the panel in front of us. Formatting hooks are excluded
+  from `spec/`, because a lint fix there would quietly invalidate the byte comparison that makes the copies worth having.
+- **A conformance suite that asks the consumer's question rather than the publisher's.** A publisher asks whether everything it emits is legal, and for it an omission is unremarkable. This asks whether every name the adapter _reads_ is one the
+  specification defines — because a consumer addressing a name that no longer exists does not fail, it goes quiet: the property never arrives, metadata lookup returns `None`, and an entity disappears. The read set is derived from the source itself rather
+  than from the metadata table alone, so it cannot fall behind the code.
+- **An explicit SPAN extension allowlist.** A number of the properties this adapter reads are absent from every catalog — per-phase meter readings, panel link states, circuit `spaces`, `info/direction`, the EVSE surface. All are legal, since the
+  specification permits properties it has never heard of. They are enumerated with reasons so that a name missing from the catalog must be a deliberate claim about SPAN's vocabulary rather than an unnoticed typo; at runtime the two are indistinguishable.
+  Tests also fail when an extension is later adopted upstream, or when one is declared for a property nothing reads.
+- **The catalogs are used as a validator, not just as a vocabulary list.** `span_panel_api_schema_1.catalog` compares a declared `unit` or `datatype` against the catalog's definition of the same property, which is the comparison that catches a mislabel.
+  Agreement is silence; disagreement is surfaced, never silently resolved — a finding is not a licence to change a wire reader to match the catalog, nor to assume the catalog is right, since both sides have been wrong. Divergences are recorded with what
+  the wire says, what the catalog says, which producers show it, a reason and a date, and the baseline fails in **both** directions: a new divergence fails until somebody records it, and a recorded divergence that has disappeared fails until its line is
+  removed. That second direction is what keeps the register self-cleaning rather than a suppression list.
+- **An abstract unit is a dimension, and comparing it as a string would report conformance as the defect.** `soc/soe`, `soc/total-energy-storage`, `soc/loadup-headroom` and `info/nameplate-capacity` are all `unit: "energy"`, which the specification
+  requires a publisher to substitute a real unit for — a BESS in kWh, a water heater in Wh. `UNIT_FAMILIES` enumerates membership rather than deriving it from an SI-prefix rule, so a member is silent, echoing the placeholder back is a finding, and an
+  energy unit nobody enumerated is a question for a human.
+- **A peer record and a producer coverage check.** `spec_lock.json` records the producer this parser is developed against — the SPAN simulator, `role: publisher` — and a capture of the tree it publishes is vendored alongside the catalogs, so two sides
+  reading different vocabularies is a test failure rather than something noticed later. Of the `(capability, property)` pairs this adapter reads, the capture declares all but `grid/islanding-state`: the simulator models a MID but its tracked config
+  publishes none. That gap is recorded rather than left implicit, because a passing suite otherwise reads as coverage it does not have, and the entry is rejected once the simulator starts publishing it.
+- **The parser is driven end to end from what the producer actually publishes.** `spec/fixtures/simulator_wire.json` is a capture from SPAN's publisher — descriptions, `$state` and all property values across every device — fed in sorted topic order, the
+  way a retained store replays it rather than the way a tree is walked. The parser reaches ready on it, sizes the panel from `MAIN_40`, and parses all 30 circuits. Values are deliberately not asserted: the producer's config carries `noise_factor` and its
+  clock advances, so pinning a wattage would fail on every recapture for a reason nobody could act on.
+- **Provenance is opportunistic; conformance is not.** Byte comparison against a specification or simulator checkout is skipped unless `EBUS_SPEC_DIR` / `PANELBENCH_DIR` are set, so conformance and coverage run everywhere while the byte checks stay
+  opportunistic — and CI sets both, so a skip there is a failure. Provenance proves the right bytes were copied; it cannot prove they were understood, which is what the other two are for.
+
+#### Reference payloads
+
+- **`span_panel_api_schema_1.reference_payloads`, shipping `parent_child_tree.json` as package data.** The captured retained-topic tree of a full 40-space panel is reached by `parent_child_tree()` rather than by path. Consumers outside this repository need
+  a real capture to check an adapter's output against, and the only alternative to shipping one is vendoring a byte copy that has no version and goes stale in silence. It ships from _this_ distribution rather than the bootstrap because a retained topic
+  tree is only interpretable by the parser that speaks its vocabulary — and the eBus SDK that turns it back into devices is this distribution's dependency alone.
+- **`devices_from_tree` and `device_from_topics`.** A tree is not directly usable: every consumer has to replay the retained topics through `DiscoveredDevice` first, and that replay is this parser's own knowledge of how the transport feeds it. Shipping the
+  capture without the replay would just move a copy of that logic into every consumer. `devices_from_tree` takes the tree rather than reading it, so a consumer can filter the capture first — dropping the BESS to model a panel that has none — and still
+  build devices the same way.
+
 ### Known deviations and deliberate gaps
 
 - **`set_dominant_power_source_topic()` returns `None`.** The v1.0 property split into `grid-forming-entity` and `asserted-islanding-state`, which are different controls on different devices rather than a rename. `None` makes the transport reject the
   command instead of publishing where nothing listens; which successor to expose is a product decision.
-- **`dsm_state`, `current_run_config`, `grid_islandable` and `pv.relative_position`** have no direct v1.0 equivalent and are left to the product decisions tracked separately. Fields the mapper declines carry no metadata row, so the integration never
-  validates against a field nothing populates.
-
-### Fixed before first release
-
-Both found by verifying reconnect against a live broker, and both presented as a healthy connection.
-
-- **Messages arriving before the SDK registered a route for them were dropped.** `Controller` learns its topics as it walks the tree, but one subscription delivers the whole tree at once in whatever order the broker replays its retained store. Seeded
-  children-first, a 40-space panel parsed as zero circuits. Unrouted messages are now held and released when the matching route appears — the value a per-device subscription would have been given at subscribe time — with a ceiling so an unclaimed subtree
-  cannot leak.
-- **Readiness asked only about the root**, so a connection completed with a fraction of its circuits and no panel size. It now waits for every declared device to describe itself, at any depth. Child _state_ is deliberately not required, so an offline DER
-  does not block a connection; the model is required only when the root's description declares it.
-- **`grid_state` read the wrong one of the MID's two grid properties.** The MID publishes both `grid/islanding-state` (`ON_GRID`/`OFF_GRID`/`UNKNOWN`) and `grid/grid-state` (`UP`/`DOWN`/`DEGRADED`/`UNKNOWN`). The flat schema's `grid_state` was the BESS's
-  `grid-state`, an islanding answer, so its successor is `islanding-state`; `grid/grid-state` asks whether the utility supply is healthy and is new in v1.0 with no flat equivalent. Matching on the property name rather than the value set put `UP` where a
-  consumer expects `ON_GRID` — an entity keeping its id and history while its vocabulary silently changed. `grid/grid-state` is left unmapped, being a new signal rather than a replacement for an existing field.
+- **`pv.relative_position` has no v1.0 equivalent** and is left to the product decisions tracked separately. Fields the mapper declines carry no metadata row, so a consumer never validates against a field nothing populates.
+- **`grid_islandable` returns `None` until something publishes it.** It maps to `grid-forming/capable` over the BESS's inverter children, as the disjunction — a panel does not island, its DER does. No producer publishes it today, which is recorded rather
+  than worked around; `None` keeps absence a gap instead of a claim.
+- **Two producer-side gaps are pinned rather than left to be noticed.** `grid_state` stays `None` on the captured tree because nothing instantiates a MID, and every DER — BESS, PV and both EVSEs — declares `info/model` in its `$description` and never
+  publishes a value. The second breaks the single standing obligation eBus places on a publisher, to declare accurately what it publishes, and is invisible to a conformance checker: comparing declarations against catalogs cannot see a declaration nothing
+  fulfils. Only a capture carrying values can, which is the argument for that fixture existing. Both are asserted as current expectations, so closing either fails the test that describes it.

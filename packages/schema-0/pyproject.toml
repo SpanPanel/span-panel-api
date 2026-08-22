@@ -1,15 +1,18 @@
 [project]
 name = "span-panel-api-schema-0"
-version = "1.0.0b5"
+version = "1.0.0"
 description = "Flat-schema (data-model-version absent) parser for span-panel-api"
 authors = [
     {name = "SpanPanel"}
 ]
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.14,<4.0"
 dependencies = [
-    "span-panel-api>=3.0.0b4,<4.0",
+    # Stated as a stable version rather than as the prerelease the floor tracked
+    # during development: naming a prerelease in a specifier is pip's own signal
+    # that prereleases are acceptable for that requirement.
+    "span-panel-api>=3.0.0,<4.0",
 ]
 
 [project.urls]

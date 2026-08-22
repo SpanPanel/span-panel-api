@@ -48,8 +48,8 @@ def _adapter() -> SchemaOneAdapter:
     """Feed the capture the way the broker replays it.
 
     Sorted by topic rather than tree order, on purpose: the retained store has no
-    notion of parents before children, and the ordering bug fixed before 0.1.0b1
-    was exactly a case of that assumption being made silently.
+    notion of parents before children, and the ordering bug fixed before the
+    first release was exactly a case of that assumption being made silently.
     """
     with _WIRE.open() as handle:
         capture: dict[str, dict[str, str]] = json.load(handle)

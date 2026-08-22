@@ -2,8 +2,18 @@
 
 ## Prerequisites
 
-- Python 3.10+ (CI tests 3.13 and 3.14)
+- Python 3.14 (every manifest declares `>=3.14,<4.0`, and CI runs the suite on 3.14)
 - [uv](https://docs.astral.sh/uv/) for dependency management
+
+**The declared floor and the tested version are the same on purpose.** A `requires-python` no job runs is a claim rather than a guarantee, and the two drift apart easily, because every developer and every other workflow here is on the newest interpreter.
+Keeping them identical means a green run proves the whole declared range instead of one end of it. If the floor is ever widened, the CI matrix has to widen with it in the same change.
+
+The floor tracks the consumer. Home Assistant requires Python `>=3.12` from 2025.1, `>=3.13.2` from 2025.10 and `>=3.14.2` from 2026.3 — and the SPAN integration that consumes this library requires HA 2026.8 or newer, which puts every install that reaches
+this code on 3.14. Declaring anything lower would describe a configuration nobody runs and nothing verifies.
+
+Two older versions are worth naming as specifically ruled out, so that a future "why not support 3.10?" gets answered without re-deriving it. `tests/test_packaging.py` imports `tomllib`, stdlib only from 3.11. More seriously, Python 3.10 replaces a
+`Protocol`'s `__init__` with `(*args, **kwargs)`, so `SchemaAdapter`'s declared constructor signature is not introspectable there and `test_schema_adapter_construction_signature_matches_its_implementation` has nothing to read — the check that stops two
+independently-versioned wheels disagreeing about how an adapter is constructed would be inert. For a library built around exactly that seam, that is the wrong place to have a hole.
 
 ## Setup
 
@@ -271,5 +281,14 @@ See [RELEASE.md](RELEASE.md) — each distribution versions and publishes indepe
 1. Fork and clone the repository
 2. Install dev dependencies: `uv sync`
 3. Make changes and add tests
-4. Ensure all checks pass: `uv run pytest && uv run mypy src/ && uv run ruff check src/`
+4. Ensure all checks pass across every distribution, not just the bootstrap:
+
+   ```bash
+   uv run pytest
+   uv run mypy src packages
+   uv run ruff check .
+   ```
+
+   `uv run pre-commit run --all-files` is what CI actually runs, and it covers these plus the markdown, security and dead-code hooks.
+
 5. Submit a pull request

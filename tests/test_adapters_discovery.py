@@ -345,8 +345,8 @@ def test_a_contract_that_is_not_an_integer_is_rejected() -> None:
 
 
 def test_an_adapter_predating_contract_versioning_is_rejected_by_age_not_by_shape() -> None:
-    """The real regression this closes: schema-1 0.1.0b1 paired with a bootstrap
-    whose adapters took `panel_size`. Such an adapter carries every other
+    """The real regression this closes: an early schema-1 build paired with a
+    bootstrap whose adapters took `panel_size`. Such an adapter carries every other
     required name, so nothing but the contract member distinguishes it, and
     without one it reached construction and died on argument count."""
     members = _conforming_members()

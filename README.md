@@ -23,16 +23,39 @@ A Python client library for the SPAN Panel v2 API, using MQTT/Homie for real-tim
 
 ## Installation
 
-Two packages: the transport, and a parser for your panel's schema. `span-panel-api` contains no parser — installing it alone gives a client that connects and then raises `SpanPanelAdapterMissingError`.
+Two packages: the transport, and a parser for your panel's schema. `span-panel-api` contains **no parser** — installing it alone gives a client that connects and then raises `SpanPanelAdapterMissingError`.
 
 ```bash
-pip install span-panel-api span-panel-api-schema-0
+# flat schema, firmware r202603-r202627
+pip install "span-panel-api[schema-0]"
+
+# parent/child schema, firmware r202633+ (data-model-version 1.x)
+pip install "span-panel-api[schema-1]"
+
+# support either panel from one install
+pip install "span-panel-api[schema-0,schema-1]"
 ```
 
-`span-panel-api-schema-0` parses the flat schema used by firmware `r202603` through `r202627`, which is every panel in the field today. Panels reporting a `data-model-version` need the adapter for that schema major instead; the error names the one it could
-not find and lists what is installed.
+The extras are the recommended spelling because they give `pip install -U` a correct upgrade path; naming `span-panel-api-schema-0` / `span-panel-api-schema-1` directly works too.
 
-Parsers are discovered through the `span_panel_api.schema_adapters` entry-point group, so support for a new panel schema arrives by installing a package rather than by upgrading the transport. The two version independently — see [RELEASE.md](RELEASE.md).
+### The parser is hot-loaded, not imported
+
+`span-panel-api` never imports a parser. Each wire format is its own distribution, registering itself under the `span_panel_api.schema_adapters` entry-point group, and the transport reaches it by key at runtime:
+
+1. **Ask the panel first.** Before the broker is opened, the client fetches `GET /api/v2/homie/schema` over REST and reads `dataModelVersion`. Absence means the flat schema — a real signal, since the property arrived with the firmware that introduced
+   parent/child. A value whose major can be read but whose form is non-canonical (`1`, `1.0-beta`) dispatches on that major and logs the deviation; one with no extractable major raises `SpanPanelSchemaVersionError` rather than guessing.
+2. **Enumerate without importing.** `installed_adapter_keys()` reads distribution metadata only. Nothing is imported to find out what is installed, so a flat panel never pays for `span-panel-api-schema-1` — nor for the eBus SDK underneath it.
+3. **Resolve on demand, once.** The adapter for the selected key is imported the first time a panel asks for it, then cached. The async paths run enumeration and resolution in a thread, so neither blocks the event loop.
+4. **Verify the contract before trusting it.** Every adapter declares `ADAPTER_CONTRACT` as a literal, and discovery rejects any that does not match this package's `ADAPTER_CONTRACT_VERSION`. Member presence is not the whole contract — a Protocol cannot
+   express signatures at runtime — so this is what stops two packages built against different versions of each other failing much later as a bare `TypeError` inside the transport. A rejection is logged rather than raised, so one unusable third-party
+   adapter cannot take down a panel whose own adapter is fine.
+5. **Re-dispatch when the panel changes underneath you.** A panel that upgrades firmware from flat to parent/child mid-life drops MQTT, reboots and comes back on a new schema. The client refetches, resolves the new adapter **before** touching any state,
+   and swaps the parser in place — no reload. An install with no adapter for the new generation logs which package to install and keeps the parser it has.
+
+Three errors keep the failure modes apart, because the remedy differs: `SpanPanelAdapterMissingError` (install something), `SpanPanelSchemaVersionError` (a schema no adapter can even be named for), and `SpanPanelAdapterIncompatibleError` (installing more
+cannot help). All are exported from the top-level package.
+
+The consequence worth planning around: **supporting a new panel schema is an install, not an upgrade.** The distributions version independently — see [RELEASE.md](RELEASE.md).
 
 ### Dependencies
 
@@ -44,10 +67,15 @@ Parsers are discovered through the `span_panel_api.schema_adapters` entry-point 
 
 ### Transport
 
-The `SpanMqttClient` connects to the panel's MQTT broker (MQTTS or WebSocket) and subscribes to the Homie device tree. A two-layer architecture separates generic Homie v5 protocol handling from SPAN-specific interpretation:
+The `SpanMqttClient` connects to the panel's MQTT broker (MQTTS or WebSocket) and subscribes to the Homie device tree. It owns the connection, the subscription and the dispatch decision — and nothing else. Everything that knows what a topic _means_ lives
+in the adapter for that panel's schema:
 
-- **`HomiePropertyAccumulator`** — handles message routing, property and `$target` storage, dirty-node tracking, and an explicit lifecycle state machine (`HomieLifecycle`). Protocol-only; no SPAN domain knowledge.
-- **`HomieDeviceConsumer`** — reads from the accumulator via a query API and builds typed `SpanPanelSnapshot` dataclasses. Handles power sign normalization, DSM derivation, unmapped tab synthesis, and dirty-node-aware snapshot caching.
+- **The transport** (this package) makes one wildcard subscription, routes messages, tracks connection state, publishes commands, and hands raw messages to whichever parser was resolved for this panel.
+- **The parser** (`span-panel-api-schema-0` or `span-panel-api-schema-1`) accumulates properties, decides when the panel is ready to read, and builds typed `SpanPanelSnapshot` dataclasses from what it has.
+
+That boundary is why `HomiePropertyAccumulator`, `HomieLifecycle` and `HomieDeviceConsumer` are **not** exported from this package: all three are flat-schema-specific rather than Homie-convention-level. The accumulator filters every topic against a single
+device's prefix and stores `node → prop`, which drops nearly every message under the parent/child model, and `HomieLifecycle`'s members are not Homie 5 `$state` values but a consumer-side progression encoding "one description received ⇒ ready". They live
+in `span_panel_api_schema_0`, where that model is correct. The parent/child parser reaches the same result differently, replaying the retained tree through the eBus SDK and waiting for every declared device to describe itself at any depth.
 
 Changes are pushed to consumers via callbacks. Dirty-node tracking allows the snapshot builder to skip unchanged nodes, reducing per-scan CPU cost on constrained hardware.
 
@@ -68,7 +96,7 @@ This means the library can be dropped into any asyncio application — including
 
 Circuit names arrive as MQTT retained messages that may land after the Homie device transitions to `$state=ready`. The client handles this with a bounded wait during `connect()`:
 
-1. After the device reaches ready state, the client polls `HomieDeviceConsumer.circuit_nodes_missing_names()` every 250ms.
+1. After the device reaches ready state, the client polls the resolved adapter's `circuit_nodes_missing_names()` every 250ms — a `SchemaAdapter` member, so both parsers answer it in their own terms.
 2. As retained name properties arrive, the consumer stores them. Once all circuit-type nodes have a name, the wait returns immediately.
 3. If names have not all arrived within 10 seconds, the timeout expires (non-fatal) and the client proceeds — circuits without names will use fallback identifiers.
 
@@ -76,28 +104,44 @@ This ensures that the first `get_snapshot()` after connect returns human-readabl
 
 ### Protocols
 
-The library defines three structural subtyping protocols (PEP 544) that both the MQTT transport and the simulation engine implement:
+The library defines structural subtyping protocols (PEP 544). All are `runtime_checkable`, so a consumer asks `isinstance` before offering a control rather than assuming the panel in front of it supports one:
 
 | Protocol                   | Purpose                                                                                    |
 | -------------------------- | ------------------------------------------------------------------------------------------ |
 | `SpanPanelClientProtocol`  | Core lifecycle: `connect`, `close`, `ping`, `get_snapshot`, `register_connection_callback` |
 | `CircuitControlProtocol`   | Relay and shed-priority control: `set_circuit_relay`, `set_circuit_priority`               |
 | `PanelControlProtocol`     | Panel-level control: `set_dominant_power_source`                                           |
+| `EvseControlProtocol`      | Per-charger control: `set_evse_charge_limit(node_id, amps)`                                |
+| `AdoptedControlProtocol`   | Write to a settable property of a device this library models nothing for                   |
 | `StreamingCapableProtocol` | Push-based updates: `register_snapshot_callback`, `start_streaming`, `stop_streaming`      |
 
-Integration code programs against these protocols, not transport-specific classes.
+The first five differ in subject, not just in name. `EvseControlProtocol` is separate from `PanelControlProtocol` because several chargers may be commissioned at once and every call names which one. `AdoptedControlProtocol` differs in kind: the curated
+setters name a control this library understands and translate or bound the value on the way out, while this one names a property by its wire address and passes the value through, because the declaration is all anybody here knows about it. That write is
+authorised by the snapshot rather than by its arguments — the transport resolves the property against the current `adopted_devices` and refuses anything it does not find carrying a set topic, so a device this library _does_ model cannot be addressed
+through it.
+
+A seventh protocol, `SchemaAdapter`, is the bootstrap-to-parser contract rather than a consumer-facing one; it is what an adapter distribution implements and what discovery checks. Integration code programs against the protocols above, not against
+transport-specific classes.
 
 ### Snapshots
 
 All panel state is represented as immutable, frozen dataclasses:
 
-| Dataclass             | Content                                                                                                                                        |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SpanPanelSnapshot`   | Complete panel state: power, energy, grid/DSM state, hardware status, per-leg voltages, power flows, lugs current, circuits, battery, PV, EVSE |
-| `SpanCircuitSnapshot` | Per-circuit: power, energy, relay state, priority, tabs, device type, breaker rating, current, `$target` pending state                         |
-| `SpanBatterySnapshot` | BESS: SoC percentage, SoE kWh, vendor/product metadata, nameplate capacity                                                                     |
-| `SpanPVSnapshot`      | PV inverter: vendor/product metadata, nameplate capacity                                                                                       |
-| `SpanEvseSnapshot`    | EVSE (EV charger): status, lock state, advertised current, vendor/product/serial/version metadata                                              |
+| Dataclass             | Content                                                                                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SpanPanelSnapshot`   | Complete panel state: power, energy, grid/DSM state, hardware status, per-leg voltages, power flows, lugs current, shed forecast, circuits, battery, PV, EVSE, MID |
+| `SpanCircuitSnapshot` | Per-circuit: power, energy, relay state, priority, tabs, device type, breaker rating, current, `$target` pending state                                             |
+| `SpanBatterySnapshot` | BESS: SoC percentage, SoE kWh, own meter reading, communication state, link health, `model` / `part_number`, nameplate capacity                                    |
+| `SpanPVSnapshot`      | PV inverter: link health, `model` / `part_number`, nameplate capacity                                                                                              |
+| `SpanEvseSnapshot`    | EVSE (EV charger): status, lock state, advertised current, link health, `model` / `part_number` / serial / version metadata                                        |
+| `SpanMidSnapshot`     | Microgrid Interconnect Device: islanding state, grid state, grid-forming entity                                                                                    |
+| `AdoptedDevice`       | A device type this library models nothing for, carried whole: identity, readings, proxy link                                                                       |
+| `ExtensionProperty`   | A vendor property on a device this library _does_ model, with its value and the subject it hangs off                                                               |
+
+Identity is normalised across every DER class: **`model` is the human designation and `part_number` is the SKU**, on `battery`, `evse` and `pv` alike. `product_name` was retired in 3.0.0 — see the changelog, because `battery.model` changes value for
+existing flat users at that upgrade.
+
+`mid`, `adopted_devices`, `extension_properties` and the per-DER link-health fields exist only under the parent/child schema. They are `None` or empty on a flat panel rather than absent, so a consumer reads the same snapshot type either way.
 
 ## Usage
 
@@ -346,10 +390,21 @@ All exceptions inherit from `SpanPanelError`:
 | `SpanPanelTimeoutError`    | Request or connection timed out                                                                    |
 | `SpanPanelValidationError` | Data validation failure                                                                            |
 | `SpanPanelAPIError`        | Unexpected HTTP response from v2 endpoints                                                         |
-| `SpanPanelServerError`     | Panel returned HTTP 500                                                                            |
+| `SpanPanelServerError`     | Panel answered 5xx, or answered `200` with a body that cannot be used — "not ready yet"            |
+
+Three more are specific to the hot-loading model, and they are separate because the remedy differs:
+
+| Exception                           | Cause                                                                     | Remedy                                       |
+| ----------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------- |
+| `SpanPanelAdapterMissingError`      | Known schema, no installed parser for it                                  | Install the named package                    |
+| `SpanPanelSchemaVersionError`       | The panel reports a `data-model-version` no adapter can even be named for | Nothing to install yet — report the value    |
+| `SpanPanelAdapterIncompatibleError` | The required adapter is installed but was built against another contract  | Installing more cannot help — align versions |
+
+Reporting the third as the first would send someone to install a package they already have.
 
 `SpanPanelStaleDataError` is distinct from `SpanPanelConnectionError`: the former means the client is running but data cannot be trusted right now (transient disconnect, or panel-declared not-ready); the latter means the initial connect failed and the
-client cannot be used at all.
+client cannot be used at all. `SpanPanelServerError` covers the whole 5xx class deliberately: a booting panel brings its network stack and reverse proxy up before the application behind them, so it _answers_ rather than refuses, and that has to be
+distinguishable from a 4xx that will not fix itself on its own.
 
 ```python
 from span_panel_api import (
@@ -410,27 +465,42 @@ Each payload carries the version of the release it shipped in. Pin a version and
 
 ## Project Structure
 
+One repository, three distributions. The bootstrap is at the root; each parser is a workspace member under `packages/`, published separately and versioned on its own axis.
+
 ```text
-src/span_panel_api/
-├── __init__.py          # Public API exports
-├── auth.py              # v2 HTTP provisioning (register, cert, schema, passphrase)
-├── const.py             # Panel state constants (DSM, relay)
-├── detection.py         # detect_api_version() → DetectionResult
-├── exceptions.py        # Exception hierarchy
-├── factory.py           # create_span_client() → SpanMqttClient
-├── models.py            # Snapshot dataclasses (panel, circuit, battery, PV)
-├── phase_validation.py  # Electrical phase utilities
-├── protocol.py          # PEP 544 protocols + PanelCapability flags
-├── reference_payloads/  # Captured wire payloads shipped as package data
+src/span_panel_api/          # distribution: span-panel-api (no parser)
+├── __init__.py              # Public API exports
+├── _http.py                 # Shared httpx plumbing / client ownership rules
+├── adapters.py              # installed_adapter_keys(), resolve_adapter() — metadata, then lazy import
+├── auth.py                  # v2 HTTP provisioning (register, cert, schema, passphrase)
+├── const.py                 # Panel state constants (DSM, relay)
+├── detection.py             # detect_api_version() → DetectionResult
+├── dispatch.py              # select_adapter_key() — what does this panel need?
+├── exceptions.py            # Exception hierarchy
+├── factory.py               # create_span_client() → SpanMqttClient
+├── models.py                # Snapshot dataclasses (panel, circuit, battery, PV, EVSE, MID, adopted)
+├── phase_validation.py      # Electrical phase utilities
+├── protocol.py              # PEP 544 protocols, SchemaAdapter, PanelCapability flags
+├── schema_drift.py          # Reporting a panel that outruns what we can read
+├── reference_payloads/      # Captured GET /api/v2/homie/schema, shipped as package data
 └── mqtt/
     ├── __init__.py
-    ├── accumulator.py   # HomiePropertyAccumulator (Homie v5 protocol layer)
-    ├── async_client.py  # NullLock + AsyncMQTTClient (HA core pattern)
-    ├── client.py        # SpanMqttClient (all three protocols)
-    ├── connection.py    # AsyncMqttBridge (event-loop-driven, no threads)
-    ├── const.py         # MQTT/Homie constants + UUID helpers
-    ├── homie.py         # HomieDeviceConsumer (SPAN snapshot builder)
-    └── models.py        # MqttClientConfig, MqttTransport
+    ├── async_client.py      # NullLock + AsyncMQTTClient (HA core pattern)
+    ├── client.py            # SpanMqttClient (transport + control protocols)
+    ├── connection.py        # AsyncMqttBridge (event-loop-driven, no threads)
+    ├── const.py             # MQTT/Homie constants + UUID helpers
+    └── models.py            # MqttClientConfig, MqttTransport
+
+packages/schema-0/           # distribution: span-panel-api-schema-0
+└── src/span_panel_api_schema_0/
+                             # Flat parser: HomiePropertyAccumulator, HomieLifecycle,
+                             # HomieDeviceConsumer, field metadata, SCHEMA_ANCHOR
+
+packages/schema-1/           # distribution: span-panel-api-schema-1
+├── spec/                    # eBus capability catalogs, byte-copied; checked against, never parsed
+└── src/span_panel_api_schema_1/
+                             # Parent/child parser: ControllerRoutes, snapshot mapper,
+                             # adoption, catalog validator, spec_lock.json, reference payloads
 ```
 
 ## Development

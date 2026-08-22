@@ -30,7 +30,10 @@ The bootstrap and the adapters do not share a version, and this is deliberate ra
 
 So `span-panel-api 3.0.0` and `span-panel-api-schema-0 1.0.0` are unrelated numbers, and either can move without the other.
 
-Adapters declare a floor on the bootstrap (`span-panel-api>=3.0.0b1,<4.0`). That dependency is why the versions committed in the manifests are load-bearing: they participate in resolution, so they are not placeholders that a release process may overwrite.
+Adapters declare a floor on the bootstrap (`span-panel-api>=3.0.0,<4.0`). That dependency is why the versions committed in the manifests are load-bearing: they participate in resolution, so they are not placeholders that a release process may overwrite.
+
+Those floors name **stable** versions on purpose. A specifier that names a prerelease is pip's own signal that prereleases are acceptable for that requirement, so a floor left pointing at a beta would leave a released install willing to resolve a future
+beta of its sibling without anyone asking for one.
 
 ## How a tag selects a distribution
 
@@ -73,7 +76,12 @@ A mismatch is a hard failure with both numbers in the message, so the common mis
 
 ## Releasing one distribution
 
-1. **Bump the version** in that distribution's manifest, and add a `CHANGELOG.md` entry (the root one for the bootstrap, `packages/schema-N/CHANGELOG.md` for an adapter).
+1. **Bump the version** in that distribution's manifest, and record the change in its `CHANGELOG.md` (the root one for the bootstrap, `packages/schema-N/CHANGELOG.md` for an adapter).
+
+   **Changelogs carry public versions only.** A beta gets no heading of its own: fold its changes into the entry for the public version it is working towards, described against the **last public release** rather than against the beta before it. A fix that
+   only repairs something an earlier beta broke does not appear at all — from the point of view of somebody upgrading between released versions, it never happened. This keeps the file answering the question a reader actually has ("what changes if I
+   upgrade?") instead of narrating development.
+
 2. **Merge to `develop`** (or `main`, once this work is no longer prototype) and let CI go green.
 3. **Create a GitHub Release:**
    - **Tag** — `vX.Y.Z` or `schema-N-vX.Y.Z`, per the table above.
@@ -100,9 +108,9 @@ To release the whole workspace:
 4. Cut the releases **bootstrap first, then each adapter**:
 
    ```text
-   v3.0.0b1              → span-panel-api
-   schema-0-v1.0.0b1     → span-panel-api-schema-0
-   schema-1-v0.1.0       → span-panel-api-schema-1
+   v3.0.0                → span-panel-api
+   schema-0-v1.0.0       → span-panel-api-schema-0
+   schema-1-v1.0.0       → span-panel-api-schema-1
    ```
 
    PyPI accepts them in any order, but bootstrap-first means there is never a window in which an adapter is installable and its dependency is not.
@@ -160,7 +168,7 @@ CI going green proves the build, not the install. The seam this repository is bu
 
 ```bash
 # 1. The bootstrap alone must fail by name, not with ModuleNotFoundError
-python3 -m venv .solo && ./.solo/bin/pip install --pre span-panel-api
+python3 -m venv .solo && ./.solo/bin/pip install span-panel-api
 ./.solo/bin/python -c "
 from span_panel_api.adapters import installed_adapter_keys, resolve_adapter, DEFAULT_ADAPTER_KEY
 from span_panel_api.exceptions import SpanPanelAdapterMissingError
@@ -172,16 +180,24 @@ except SpanPanelAdapterMissingError as exc:
 "
 
 # 2. Both packages: the adapter resolves through discovery
-python3 -m venv .both && ./.both/bin/pip install --pre span-panel-api span-panel-api-schema-0
+python3 -m venv .both && ./.both/bin/pip install "span-panel-api[schema-0]"
 ./.both/bin/python -c "
+from span_panel_api.adapters import installed_adapter_keys
+print('adapters:', installed_adapter_keys())
+"
+
+# 3. The extra is the upgrade path, so check it resolves the adapter too
+python3 -m venv .all && ./.all/bin/pip install "span-panel-api[schema-0,schema-1]"
+./.all/bin/python -c "
 from span_panel_api.adapters import installed_adapter_keys
 print('adapters:', installed_adapter_keys())
 "
 ```
 
-Expected: `adapters: []` then a named `SpanPanelAdapterMissingError` in the first, `adapters: ['schema_0']` in the second.
+Expected: `adapters: []` then a named `SpanPanelAdapterMissingError` in the first, `adapters: ['schema_0']` in the second, and both keys in the third.
 
-Drop `--pre` once the versions being verified are not pre-releases.
+Add `--pre` only when the versions being verified are pre-releases. It is not the default verb any more: from 3.0.0 onwards every distribution here publishes stable versions, and no floor in any manifest names a prerelease — which is deliberate, since a
+specifier that names one is pip's own signal that prereleases are acceptable for that requirement.
 
 ## Pre-releases
 

@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is the parent/child device tree SPAN firmware `r202633+` publishes, identified by `SUPPORTS_DATA_MODEL_VERSIONS` rather than by this version
 number. A release here means this parser changed, never that the panel did.
 
+## [0.1.0b9] - 08/2026
+
+Pre-release. **Requires `span-panel-api` 3.0.0b12 or newer** — the floor moved, because this parser now imports `ExtensionProperty` and `ExtensionSubject` and constructs a snapshot with `extension_properties`.
+
+### Added
+
+- **Vendor properties on modelled devices are emitted with their values.** Every property a modelled device declares that this adapter maps to no snapshot field — excluding `info` and `connection`, which resolve to the device card and the tree — now
+  arrives as an `ExtensionProperty` carrying its subject, its declaration and its retained value. A battery vendor hanging `battery-2/cell-temperature` off the BESS previously reached a consumer nowhere.
+- **`node_has_curated_siblings`**, one bit per row: whether this adapter reads any _other_ property of the same node. A vendor extending `meter` is probably extending the meter, and that is the whole of what the bit says — which fields are read stays
+  internal.
+
+### Changed
+
+- **`addressed_rows()` is extracted from `build_discovery`**, so the discovery rows and the extension rows cannot disagree about what "unaddressed" means. A property counted as addressed by one and not the other would either appear as an entity the
+  diagnostics claim is ignored, or be reported ignored while a consumer renders it — each reading as a defect in whichever surface disagreed.
+
 ## [0.1.0b8] - 08/2026
 
 Pre-release. Requires `span-panel-api` 3.0.0b4 or newer — unchanged.

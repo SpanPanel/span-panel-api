@@ -510,6 +510,36 @@ charger at build time; see `build_discovery`.
 """
 
 
+def addressed_rows(devices: list[DiscoveredDevice]) -> set[tuple[str, str, str]]:
+    """Every `(device type, node, property)` this adapter reads a snapshot field from.
+
+    `_ADDRESSED` states the static rows; the loop adds the EVSE charge-limit
+    surface, which is resolved per device because firmware publishes the limit
+    and its ceiling under node and property names this adapter discovers rather
+    than knows.
+
+    Extracted rather than inlined because two callers must agree exactly on what
+    "unaddressed" means: `build_discovery` reports those properties to a
+    maintainer, and `build_extension_properties` turns them into readings for a
+    user. A property counted as addressed by one and not the other would either
+    appear as an entity the diagnostics claim is ignored, or be reported ignored
+    while a consumer renders it — both of which read as defects in the surface
+    that disagrees.
+    """
+    addressed = set(_ADDRESSED)
+    for device in devices:
+        evse_type = declared_type(device)
+        if not evse_type.startswith(TYPE_EVSE):
+            continue
+        surface = resolve_charge_limit(device)
+        if surface is None:
+            continue
+        for declaration in (surface.limit, surface.ceiling):
+            if declaration is not None:
+                addressed.add((evse_type, surface.node, declaration.property_id))
+    return addressed
+
+
 def build_discovery(devices: list[DiscoveredDevice]) -> dict[str, DiscoveredMetadata]:
     """Metadata rows for every property this tree declares that nothing here reads.
 
@@ -536,17 +566,7 @@ def build_discovery(devices: list[DiscoveredDevice]) -> dict[str, DiscoveredMeta
     unaddressed" there would describe the schema document and could not answer
     the question this exists to ask.
     """
-    addressed = set(_ADDRESSED)
-    for device in devices:
-        evse_type = declared_type(device)
-        if not evse_type.startswith(TYPE_EVSE):
-            continue
-        surface = resolve_charge_limit(device)
-        if surface is None:
-            continue
-        for declaration in (surface.limit, surface.ceiling):
-            if declaration is not None:
-                addressed.add((evse_type, surface.node, declaration.property_id))
+    addressed = addressed_rows(devices)
 
     declarations: dict[str, tuple[str | None, str]] = {}
     valued: set[str] = set()
@@ -556,7 +576,7 @@ def build_discovery(devices: list[DiscoveredDevice]) -> dict[str, DiscoveredMeta
             continue
         for node_id, node in declared_nodes(device.description or {}).items():
             for property_id, definition in declared_properties(node).items():
-                if _addressed_by(addressed, device_type, node_id, property_id):
+                if is_addressed(addressed, device_type, node_id, property_id):
                     continue
                 path = discovery_path(_short_type(device_type), node_id, property_id)
                 declarations.setdefault(
@@ -579,7 +599,7 @@ def _short_type(device_type: str) -> str:
     return device_type
 
 
-def _addressed_by(addressed: set[tuple[str, str, str]], device_type: str, node_id: str, property_id: str) -> bool:
+def is_addressed(addressed: set[tuple[str, str, str]], device_type: str, node_id: str, property_id: str) -> bool:
     """Whether any addressed row covers this declaration, subtypes included.
 
     Carries `_lookup`'s subtype rule for the same reason it exists there: eBus

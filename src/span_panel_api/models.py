@@ -777,6 +777,109 @@ class AdoptedDevice:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtensionSubject:
+    """Which modelled snapshot subject an extension property hangs off.
+
+    The adapter already knows which wire device populated which snapshot subject
+    -- that mapping is how `battery.power_w` gets a value. This type exposes the
+    *subject* and never the mapping: a consumer needs "this belongs to the
+    battery", not "this is how `battery.*` is assembled". Exporting the
+    field-level map would freeze the adapter's internals as API; exporting the
+    subject cannot, because it is one value per device drawn from a closed set.
+
+    Resolution is by declared `$type` and is indifferent to proxying: the
+    reference tree's own MID arrives proxied as `bess-mid` and still resolves to
+    `mid`. A proxied device of an *unmodelled* type resolves to no subject at all
+    and belongs to `AdoptedDevice`, which carries `parent` for that shape.
+    """
+
+    kind: str
+    """One of: `panel`, `battery`, `mid`, `pv`, `evse`, `circuit`."""
+
+    instance_key: str | None = None
+    """The snapshot map key for multi-instance kinds, `None` for the singletons.
+
+    The EVSE's `node_id` and the circuit's `circuit_id` -- the same keys
+    `snapshot.evse` and `snapshot.circuits` use, so a consumer holding the
+    snapshot resolves the subject with a lookup it already performs.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class ExtensionProperty:
+    """One property a *modelled* device declares that no snapshot field carries.
+
+    The value-carrying counterpart to `DiscoveredMetadata`, and deliberately a
+    third type rather than either neighbour. A discovered row exists to be
+    forwarded in diagnostics -- payloads that leave the machine into issues and
+    forum posts -- so it carries no value by construction. An `AdoptedProperty`
+    belongs to a device nothing here models, and its `set_topic` scoping *is* a
+    write authorisation this type must not inherit. This one belongs to a device
+    the adapter does model, exists to reach a consumer as a reading, and is
+    read-only by construction: no set topic, and no member a write path could be
+    built from.
+
+    **Not a `FieldMetadata`, and that is the diagnostics guarantee.**
+    `partition()` walks `build_field_metadata()`; this type rides
+    `build_snapshot()` instead, so there is no code path from here into
+    `SchemaFindings` or a diagnostics payload. The same wire property appears in
+    both surfaces on purpose -- as a declaration for the maintainer, as a value
+    for the user -- joined by the `{node}/{property}` path body.
+
+    **Read-only is not a policy this type states, it is a shape it has.** A
+    settable extension property is carried with `settable=True` for curation
+    triage and still surfaces as a reading: a control on a modelled device would
+    sit beside curated controls that do real safety work (the EVSE limit refuses
+    a value above the commissioned ceiling; schema_1 translates `GRID` into
+    `ON_GRID`), and a generic write path would bypass both on the same wire.
+    """
+
+    subject: ExtensionSubject
+    """The curated device this property hangs off."""
+
+    node_id: str
+    """The Homie node, e.g. `battery-2`. Never `info` or `connection`."""
+
+    property_id: str
+    """The Homie property, e.g. `cell-temperature`."""
+
+    datatype: str
+    """The declared Homie datatype -- `float`, `integer`, `boolean`, `enum`, `string`."""
+
+    unit: str | None = None
+    """The declared unit, verbatim. `None` is normal for a `boolean` or an `enum`."""
+
+    format: str | None = None
+    """The declared `$format`: an option list for an `enum`, `min:max:step` for a number."""
+
+    settable: bool = False
+    """Declaration fact, carried for curation triage.
+
+    Deliberately not paired with a set topic. See the read-only note above: the
+    absence of a write member is what makes the ruling structural rather than
+    remembered.
+    """
+
+    value: str | None = None
+    """The retained value as published, unparsed. `None` when declared and never valued."""
+
+    node_has_curated_siblings: bool = False
+    """Whether the adapter maps any *other* property of this node to a snapshot field.
+
+    The one bit of the node-to-field mapping worth exporting: a vendor extending
+    `meter` is probably extending the meter. Stamped in one pass over knowledge
+    the adapter already holds, and it says nothing about *which* fields, so it
+    freezes no internals. A weak signal -- Homie nodes are organisational rather
+    than editorial -- and advisory only.
+    """
+
+    @property
+    def path(self) -> str:
+        """`{node}/{property}` -- how the capability catalogs spell it."""
+        return f"{self.node_id}/{self.property_id}"
+
+
+@dataclass(frozen=True, slots=True)
 class SpanPanelSnapshot:
     """Complete panel state — single point-in-time view."""
 
@@ -936,6 +1039,26 @@ class SpanPanelSnapshot:
     The protocol derives its required members from itself, so a new member is
     required of every adapter package and invalidates built wheels; a snapshot
     field that defaults empty is additive and costs neither.
+    """
+
+    extension_properties: tuple[ExtensionProperty, ...] = ()
+    """Properties *modelled* devices declare that no snapshot field carries.
+
+    The other half of vendor extensibility from `adopted_devices` above: that
+    one covers a device type nothing models, this one a new property on a device
+    something does. Until this existed the second case reached a consumer
+    nowhere -- it became a `DiscoveredMetadata` row and stopped at diagnostics.
+
+    Empty is deliberately ambiguous between "none declared" and "this adapter
+    predates the field", and a consumer must not try to tell them apart: the
+    older-wheel case is the normal partial-upgrade state, because the adapters
+    are separately published packages that version independently of this core.
+    A defaulted snapshot field rather than a protocol member for exactly the
+    reason `adopted_devices` gives -- a required member would fail at
+    *discovery*, taking down every install whose adapter lags by one release.
+
+    schema_0 leaves it empty: flat has no device tree to find a declared-but
+    -unmapped property in, and panels upgrade to v1.0 and stay there.
     """
 
     pcs: SpanPcsSnapshot | None = None

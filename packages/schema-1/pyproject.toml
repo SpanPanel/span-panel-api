@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api-schema-1"
-version = "0.1.0b8"
+version = "0.1.0b9"
 description = "Parent/child schema (data-model-version 1.x) parser for span-panel-api"
 authors = [
     {name = "SpanPanel"}
@@ -9,12 +9,14 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10,<4.0"
 dependencies = [
-    # b3, not b2: this parser imports `SpanMidSnapshot`, which 3.0.0b2 does not
-    # define. A `>=3.0.0b2` floor lets a resolver pair this wheel with 3.0.0b2 and
-    # fail on import -- the precise hazard RELEASE.md warns about under "Releasing
-    # every distribution". schema-0 keeps its b2 floor; every name it imports is
-    # present there, checked rather than assumed.
-    "span-panel-api>=3.0.0b4,<4.0",
+    # b12, not b4: this parser imports `ExtensionProperty` and `ExtensionSubject`
+    # and constructs `SpanPanelSnapshot(extension_properties=...)`, none of which
+    # 3.0.0b11 defines. A lower floor lets a resolver pair this wheel with a
+    # bootstrap that fails at import -- the precise hazard RELEASE.md warns about
+    # under "Releasing every distribution", and the same reason the floor moved to
+    # b3 for `SpanMidSnapshot` before it. schema-0 keeps its own lower floor;
+    # every name it imports is present there, checked rather than assumed.
+    "span-panel-api>=3.0.0b12,<4.0",
     # Only this distribution depends on the eBus SDK. The bootstrap and
     # schema-0 stay clean, so a flat-panel install never pulls it in — which is
     # what bounds the release coupling this dependency introduces to panels on

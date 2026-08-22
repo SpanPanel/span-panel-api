@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0b12]
+
+### Added
+
+- **A vendor property on a device this library already models now reaches a consumer, instead of stopping at diagnostics.** The schema is explicitly vendor-extensible and adoption covered only half of that: a device type nothing here models is adopted with
+  its readings, while a new property on the BESS, a charger, a circuit or the panel became a `DiscoveredMetadata` row — a declaration, no value, visible only to a maintainer reading a diagnostics attachment. `SpanPanelSnapshot.extension_properties` carries
+  those properties with their values, so a consumer can render what the publisher published.
+- **`ExtensionProperty` and `ExtensionSubject`.** The subject names which modelled snapshot subject a property hangs off — `battery`, `mid`, `pv`, `panel`, and `evse`/`circuit` with the instance key the snapshot's own maps use — so a consumer resolves the
+  device it belongs on with a lookup it already performs. What is _not_ exposed is the field-level mapping: the subject is one value per device and cannot drift, while the wire-property-to-snapshot-field map is the adapter's internal business and exporting
+  it would freeze it as API.
+
+### Notes
+
+- **The value never reaches diagnostics, and that is structural rather than remembered.** `ExtensionProperty` is deliberately not a `FieldMetadata`, so it cannot enter the map `partition()` walks and has no path into a payload that leaves the machine. The
+  discovery rows keep flowing unchanged: the same property appears in both surfaces on purpose, joined by its `{node}/{property}` path — a declaration for the maintainer, a reading for the user.
+- **Read-only by construction.** An extension property carries `settable` for curation triage and no set topic, and there is no member a write path could be built from. These properties live on exactly the devices whose curated controls do real work — the
+  EVSE limit refuses a value above the commissioned ceiling, the islanding assertion translates `GRID` into `ON_GRID` — and a generic write beside them would have neither.
+- **Additive in both skew directions.** The snapshot field defaults empty, so an older adapter degrades to the previous behaviour with no new `SchemaAdapter` member required — a required member would fail at _discovery_, taking down every install whose
+  adapter wheel lags the bootstrap by a release. The reverse skew is handled by `span-panel-api-schema-1` 0.1.0b9 declaring this release as its floor.
+
 ## [3.0.0b11]
 
 Carries `span-panel-api-schema-1` 0.1.0b8, which restores `dominant_power_source` on a panel with no MID. No change in this distribution.

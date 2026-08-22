@@ -37,6 +37,8 @@ from .models import (
     AdoptedDevice,
     AdoptedProperty,
     DiscoveredMetadata,
+    ExtensionProperty,
+    ExtensionSubject,
     FieldMetadata,
     HomieSchemaTypes,
     SpanBatterySnapshot,
@@ -107,6 +109,8 @@ __all__ = [  # noqa: RUF022
     "ADOPTION_TOPOLOGY_NODE",
     "AdoptedDevice",
     "AdoptedProperty",
+    "ExtensionProperty",
+    "ExtensionSubject",
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",

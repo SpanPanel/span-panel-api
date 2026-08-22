@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from span_panel_api.models import SpanPanelSnapshot
+from span_panel_api.models import ExtensionSubject, SpanPanelSnapshot
 from span_panel_api_schema_1.adoption import build_adopted_devices
 from span_panel_api_schema_1.circuits import build_circuit
 from span_panel_api_schema_1.const import (
@@ -35,6 +35,8 @@ from span_panel_api_schema_1.devices import (
     feed_circuit_ids,
     feed_connection_statuses,
 )
+from span_panel_api_schema_1.extension import build_extension_properties
+from span_panel_api_schema_1.field_metadata import addressed_rows
 from span_panel_api_schema_1.panel import (
     PanelFields,
     build_pcs,
@@ -110,9 +112,15 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
     }
 
     circuits = {}
+    # Paired with their snapshot key as they are built, for `extension.py`. The
+    # key a multi-instance subject carries has to be the one the snapshot map
+    # uses, and this loop is where a circuit's is decided -- deriving it a
+    # second time downstream would be a second implementation free to drift.
+    circuit_subjects: list[tuple[DiscoveredDevice, ExtensionSubject]] = []
     for circuit in roles.circuits:
         snapshot = build_circuit(circuit, device_type=der_type_by_circuit.get(circuit.device_id, "circuit"))
         circuits[snapshot.circuit_id] = snapshot
+        circuit_subjects.append((circuit, ExtensionSubject(kind="circuit", instance_key=snapshot.circuit_id)))
 
     occupied = {tab for circuit in circuits.values() for tab in circuit.tabs}
     # Unoccupied positions are `total - occupied`, so this is only meaningful
@@ -137,6 +145,30 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
             device_names[device.device_id] = str(name)
     inverters = [device for device in children if device_type(device) == TYPE_INVERTER]
     islanding = resolve_islanding_state(roles.mid, panel)
+
+    # Vendor extensions on devices this adapter *does* model. The pairing is
+    # built here, where each subject's snapshot key is already decided: the
+    # singletons key on nothing, the EVSEs on the harmonised key their snapshot
+    # map uses, the circuits on the ids collected above. Lugs pair to `panel`
+    # because that is the subject their fields land in.
+    evse_subjects = [
+        (device, ExtensionSubject(kind="evse", instance_key=key)) for device, key in harmonised_evse_keys(roles.evse).items()
+    ]
+    singleton_subjects = [
+        (device, ExtensionSubject(kind=kind))
+        for kind, device in (
+            ("panel", panel),
+            ("battery", roles.bess),
+            ("mid", roles.mid),
+            ("pv", roles.pv),
+            *(("panel", lugs) for lugs in roles.lugs),
+        )
+        if device is not None
+    ]
+    extension_properties = build_extension_properties(
+        [*singleton_subjects, *evse_subjects, *circuit_subjects],
+        addressed_rows(children),
+    )
 
     return SpanPanelSnapshot(
         serial_number=fields.serial_number,
@@ -204,6 +236,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         # same `children` the roles were sorted from, so a type dropping out of
         # `TreeRoles` surfaces here rather than vanishing from both.
         adopted_devices=build_adopted_devices(children),
+        extension_properties=extension_properties,
         evse={
             key: build_evse(device, feeds, node_id=key, feed_statuses=feed_statuses)
             for device, key in harmonised_evse_keys(roles.evse).items()

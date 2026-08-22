@@ -51,6 +51,8 @@ EXPECTED_PUBLIC_API = {
     "ADOPTION_TOPOLOGY_NODE",
     "AdoptedDevice",
     "AdoptedProperty",
+    "ExtensionProperty",
+    "ExtensionSubject",
     "AdoptedControlProtocol",
     "is_discovery_path",
     # Snapshots

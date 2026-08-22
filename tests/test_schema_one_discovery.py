@@ -114,6 +114,16 @@ def _snapshot_fields(snapshot: SpanPanelSnapshot) -> dict[str, str]:
     fields: dict[str, str] = {}
     for field in dataclasses.fields(snapshot):
         value = getattr(snapshot, field.name)
+        if field.name == "extension_properties":
+            # Excluded, and the exclusion is the point rather than a convenience.
+            # This field carries every *unaddressed* declaration by construction,
+            # so republishing any property discovery reports would move it — and
+            # "does republishing this move a snapshot field" would answer yes for
+            # every discovered row, which is the question this oracle exists to
+            # ask. What the test still catches is the real defect: a discovered
+            # property that moves a *curated* field, i.e. one the mapper reads
+            # while the addressed set says it does not.
+            continue
         if field.name in {"circuits", "evse"}:
             for key, item in value.items():
                 _record(fields, f"{field.name}@{key}", item)

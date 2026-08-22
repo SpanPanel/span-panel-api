@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0b13]
+
+Carries `span-panel-api-schema-1` 0.1.0b10, which gives the two lugs devices their own extension subject. No behaviour change in this distribution: `ExtensionSubject.kind` documents `lugs` alongside the kinds it already accepted, which the type never
+enumerated in code.
+
 ## [3.0.0b12]
 
 ### Added

@@ -794,7 +794,14 @@ class ExtensionSubject:
     """
 
     kind: str
-    """One of: `panel`, `battery`, `mid`, `pv`, `evse`, `circuit`."""
+    """One of: `panel`, `lugs`, `battery`, `mid`, `pv`, `evse`, `circuit`.
+
+    `lugs` is separate from `panel` although its curated fields land in the panel
+    snapshot, because a subject is an identity and the two lugs devices are two
+    devices: they run the same firmware, so a vendor extension on one is the
+    expected case of the same extension on both, and folding them into `panel`
+    made two wire addresses one identity.
+    """
 
     instance_key: str | None = None
     """The snapshot map key for multi-instance kinds, `None` for the singletons.

@@ -7,7 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Note that this package versions on the **library-API axis**, not the wire-format axis. The wire format it parses is the parent/child device tree SPAN firmware `r202633+` publishes, identified by `SUPPORTS_DATA_MODEL_VERSIONS` rather than by this version
 number. A release here means this parser changed, never that the panel did.
 
-## [0.1.0b9] - 08/2026
+## [0.1.0b10] - 08/2026
+
+Pre-release. Requires `span-panel-api` 3.0.0b12 or newer — unchanged.
+
+### Fixed
+
+- **The two lugs devices are two extension subjects, not one.** 0.1.0b9 paired both with `ExtensionSubject(kind="panel")` and no instance key, on the reasoning that their curated fields land in the panel snapshot. But a subject is an _identity_: a consumer
+  keys an entity on `(kind, instance_key, node/property)`, so two lugs devices declaring the same vendor property produced one identity for two readings — whichever sorted first won, and the other was dropped. Identical firmware on both lugs makes that the
+  expected case rather than a coincidence, not something a vendor would have to do oddly to hit. They are now `kind="lugs"` with `upstream`/`downstream` as the instance key, matched on `info/direction` for the reason `find_lugs` documents: the reference
+  tree's ids are the simulator's naming, and the direction property is what the schema defines. A lugs device declaring no direction is left unpaired rather than keyed on something unstable — its properties stay in discovery, which is where an
+  unidentifiable device belongs.
 
 Pre-release. **Requires `span-panel-api` 3.0.0b12 or newer** — the floor moved, because this parser now imports `ExtensionProperty` and `ExtensionSubject` and constructs a snapshot with `extension_properties`.
 

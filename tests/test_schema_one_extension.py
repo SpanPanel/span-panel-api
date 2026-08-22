@@ -258,3 +258,46 @@ def test_discovery_path_joins_the_two_surfaces() -> None:
     rows = {row.path for row in _snapshot(mutated).extension_properties}
     assert f"{VENDOR_NODE}/cell-temperature" in rows
     assert expected.endswith(f"/{VENDOR_NODE}/cell-temperature")
+
+
+def test_the_two_lugs_devices_are_two_subjects() -> None:
+    """Identical firmware on both lugs is what made one subject a collision.
+
+    A vendor extension on the upstream lugs is the expected case of the same
+    extension on the downstream lugs, so folding both into `panel` gave two wire
+    addresses one identity -- a consumer keying on
+    `(kind, instance_key, node/property)` would mint one id for two readings and
+    show whichever sorted first.
+    """
+    tree = _tree()
+    lugs = [
+        device_id
+        for device_id in tree
+        if ".lugs" in _declared_type(tree, device_id) or _declared_type(tree, device_id).endswith("lugs")
+    ]
+    if len(lugs) < 2:
+        pytest.skip("reference tree carries fewer than two lugs devices")
+
+    mutated = {other: dict(topics) for other, topics in tree.items()}
+    for device_id, value in zip(lugs, ("1.5", "99.9"), strict=False):
+        description = json.loads(mutated[device_id]["$description"])
+        description["nodes"]["acme"] = {
+            "name": "acme",
+            "type": "energy.ebus.capability.vendor.acme.balance",
+            "properties": {"phase-balance": {"name": "Phase balance", "datatype": "float", "unit": "%"}},
+        }
+        mutated[device_id]["$description"] = json.dumps(description)
+        mutated[device_id]["acme/phase-balance"] = value
+
+    rows = [row for row in _snapshot(mutated).extension_properties if row.path == "acme/phase-balance"]
+    assert len(rows) == 2
+    assert all(row.subject.kind == "lugs" for row in rows)
+    assert {row.subject.instance_key for row in rows} == {"upstream", "downstream"}
+    # Distinct identities carrying distinct readings, which is the point.
+    assert {row.value for row in rows} == {"1.5", "99.9"}
+
+
+def test_every_subject_identity_is_unique_per_property() -> None:
+    """No two rows may share `(kind, instance_key, path)` -- that tuple is the identity."""
+    identities = [(row.subject.kind, row.subject.instance_key, row.path) for row in _snapshot(_tree()).extension_properties]
+    assert len(identities) == len(set(identities))

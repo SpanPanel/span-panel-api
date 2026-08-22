@@ -149,10 +149,26 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
     # Vendor extensions on devices this adapter *does* model. The pairing is
     # built here, where each subject's snapshot key is already decided: the
     # singletons key on nothing, the EVSEs on the harmonised key their snapshot
-    # map uses, the circuits on the ids collected above. Lugs pair to `panel`
-    # because that is the subject their fields land in.
+    # map uses, the circuits on the ids collected above.
     evse_subjects = [
         (device, ExtensionSubject(kind="evse", instance_key=key)) for device, key in harmonised_evse_keys(roles.evse).items()
+    ]
+    # **Lugs are their own subject, keyed by direction.** They were `panel` in
+    # 0.1.0b9, which made the subject non-unique: a consumer keys an identity on
+    # `(kind, instance_key, node/property)`, and the two lugs devices run the
+    # same firmware, so a vendor extension on one is the *expected* case of a
+    # vendor extension on both -- two wire addresses collapsing onto one
+    # identity, with whichever sorted first winning. `find_lugs` matches
+    # direction rather than device id for the reason it documents, and the same
+    # reasoning keys the subject: ids in the reference tree are the simulator's
+    # naming, while `info/direction` is what the schema defines. A lugs device
+    # declaring no direction is left unpaired rather than keyed on something
+    # unstable -- its properties stay in discovery, which is where an
+    # unidentifiable device belongs.
+    lugs_subjects = [
+        (device, ExtensionSubject(kind="lugs", instance_key=key))
+        for key, device in (("upstream", upstream), ("downstream", downstream))
+        if device is not None
     ]
     singleton_subjects = [
         (device, ExtensionSubject(kind=kind))
@@ -161,12 +177,11 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
             ("battery", roles.bess),
             ("mid", roles.mid),
             ("pv", roles.pv),
-            *(("panel", lugs) for lugs in roles.lugs),
         )
         if device is not None
     ]
     extension_properties = build_extension_properties(
-        [*singleton_subjects, *evse_subjects, *circuit_subjects],
+        [*singleton_subjects, *lugs_subjects, *evse_subjects, *circuit_subjects],
         addressed_rows(children),
     )
 

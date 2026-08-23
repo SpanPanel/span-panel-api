@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "3.0.0"
+version = "3.0.1"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -9,6 +9,21 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.14,<4.0"
+# Declared so the published metadata states the supported version rather than
+# leaving a reader to infer it, and so the README's Python badge can be derived
+# from PyPI instead of hardcoded. The hardcoded one said "3.10+" for the whole
+# of 3.0.0, five minor versions below the real floor -- a number nothing checked
+# because nothing could.
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Home Automation",
+    "Typing :: Typed",
+]
 dependencies = [
     # Bounded, and the bound is load-bearing. httpx 1.0 is an API rewrite that
     # removes `AsyncClient`, and 1.0.dev1..dev4 are on PyPI now. The bound was

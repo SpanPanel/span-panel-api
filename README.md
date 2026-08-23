@@ -1,8 +1,12 @@
 # SPAN Panel API
 
-[![GitHub Release](https://img.shields.io/github/v/release/SpanPanel/span-panel-api?style=flat-square)](https://github.com/SpanPanel/span-panel-api/releases)
-[![PyPI Version](https://img.shields.io/pypi/v/span-panel-api?style=flat-square)](https://pypi.org/project/span-panel-api/) [![Python Versions](https://img.shields.io/badge/python-3.10+-blue?style=flat-square)](https://pypi.org/project/span-panel-api/)
+[![GitHub Release](https://img.shields.io/github/v/release/SpanPanel/span-panel-api?filter=v*&style=flat-square&label=release)](https://github.com/SpanPanel/span-panel-api/releases)
+[![PyPI Version](https://img.shields.io/pypi/v/span-panel-api?style=flat-square&label=span-panel-api)](https://pypi.org/project/span-panel-api/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/span-panel-api?style=flat-square)](https://pypi.org/project/span-panel-api/)
 [![License](https://img.shields.io/github/license/SpanPanel/span-panel-api?style=flat-square)](https://github.com/SpanPanel/span-panel-api/blob/main/LICENSE)
+
+[![schema-0](https://img.shields.io/pypi/v/span-panel-api-schema-0?style=flat-square&label=schema-0)](https://pypi.org/project/span-panel-api-schema-0/)
+[![schema-1](https://img.shields.io/pypi/v/span-panel-api-schema-1?style=flat-square&label=schema-1)](https://pypi.org/project/span-panel-api-schema-1/)
 
 [![CI Status](https://img.shields.io/github/actions/workflow/status/SpanPanel/span-panel-api/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/SpanPanel/span-panel-api/actions/workflows/ci.yml)
 
@@ -14,12 +18,23 @@
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support%20development-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/cayossarian)
 
-A Python client library for the SPAN Panel v2 API, using MQTT/Homie for real-time push-based panel state.
+A Python client library for the SPAN Panel API, using MQTT/Homie for real-time push-based panel state.
 
-## v1.x Sunset Notice
+## Version support
 
-**Package versions prior to 2.0.0 are deprecated.** These versions depend on the SPAN v1 REST API, which will be retired when SPAN sunsets v1 firmware at the end of 2026. Users should upgrade to v2.0.0 or later, which requires v2 firmware
-(`spanos2/r202603/05` or later) and a panel passphrase.
+| Line    | Status                                                               | Needs                     |
+| ------- | -------------------------------------------------------------------- | ------------------------- |
+| **3.x** | Current. Transport and dispatcher; the parser is a separate install. | v2 firmware, Python 3.14+ |
+| **2.x** | Superseded by 3.0.0 and no longer developed. Fixes land on 3.x only. | v2 firmware, Python 3.10+ |
+| **1.x** | Deprecated.                                                          | v1 firmware               |
+
+**1.x is built on the SPAN v1 REST API**, which SPAN retires when v1 firmware sunsets at the end of 2026. Nothing on that line will outlive the firmware it talks to.
+
+**2.x still works against v2 firmware, but it is closed to new work.** Everything since — the parent/child data model, adoption, discovery, extension properties — landed on 3.x, and so will anything that comes next. Treat 2.x as a line to leave rather than
+a line to stay on.
+
+Moving from 2.x to 3.x is an install rather than only an upgrade: 3.0.0 removed the bundled parser, so `pip install -U span-panel-api` alone leaves you with a client that connects and then raises `SpanPanelAdapterMissingError`. See
+[Installation](#installation) for the extra to name.
 
 ## Installation
 
@@ -43,7 +58,9 @@ The extras are the recommended spelling because they give `pip install -U` a cor
 `span-panel-api` never imports a parser. Each wire format is its own distribution, registering itself under the `span_panel_api.schema_adapters` entry-point group, and the transport reaches it by key at runtime:
 
 1. **Ask the panel first.** Before the broker is opened, the client fetches `GET /api/v2/homie/schema` over REST and reads `dataModelVersion`. Absence means the flat schema — a real signal, since the property arrived with the firmware that introduced
-   parent/child. A value whose major can be read but whose form is non-canonical (`1`, `1.0-beta`) dispatches on that major and logs the deviation; one with no extractable major raises `SpanPanelSchemaVersionError` rather than guessing.
+   parent/child. Current parent/child firmware reports the canonical `MAJOR.MINOR[.PATCH]` form — `1.0` — which selects `schema_1` outright. A value whose major is still unambiguous but whose form is not canonical (`1`, `1_0`) dispatches on that major and
+   logs the deviation, so a firmware that changes format is visible before it is an outage. A value with no readable major (`v1.0`, `x`) raises `SpanPanelSchemaVersionError` rather than guessing: falling back to flat would hand a parent/child panel to the
+   flat parser, which does not fail — it produces plausible but wrong figures.
 2. **Enumerate without importing.** `installed_adapter_keys()` reads distribution metadata only. Nothing is imported to find out what is installed, so a flat panel never pays for `span-panel-api-schema-1` — nor for the eBus SDK underneath it.
 3. **Resolve on demand, once.** The adapter for the selected key is imported the first time a panel asks for it, then cached. The async paths run enumeration and resolution in a thread, so neither blocks the event loop.
 4. **Verify the contract before trusting it.** Every adapter declares `ADAPTER_CONTRACT` as a literal, and discovery rejects any that does not match this package's `ADAPTER_CONTRACT_VERSION`. Member presence is not the whole contract — a Protocol cannot

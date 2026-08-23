@@ -11,7 +11,7 @@ collect_ignore = ["scripts"]
 
 
 @pytest.fixture
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
+def event_loop() -> Generator[asyncio.AbstractEventLoop]:
     """Provide a new asyncio event loop for each test (for pytest-homeassistant compatibility)."""
     loop = asyncio.new_event_loop()
     yield loop

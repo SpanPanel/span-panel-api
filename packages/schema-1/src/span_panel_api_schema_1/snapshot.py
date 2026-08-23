@@ -1,0 +1,299 @@
+"""Assemble a ``SpanPanelSnapshot`` from a discovered v1.0 device tree.
+
+Sorting the tree into roles is the one job here, and it is done by **declared
+device type**, never by device id. The reference tree's ids (``bess``, ``pv``,
+``lugs-upstream``) are the simulator's naming; real firmware uses whatever it
+likes, and the type string is what the schema defines.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING
+
+from span_panel_api.models import ExtensionSubject, SpanPanelSnapshot
+from span_panel_api_schema_1.adoption import build_adopted_devices
+from span_panel_api_schema_1.circuits import build_circuit
+from span_panel_api_schema_1.const import (
+    NODE_INFO,
+    PROP_MODEL,
+    PROP_SERIAL_NUMBER,
+    TYPE_BESS,
+    TYPE_CIRCUIT,
+    TYPE_EVSE,
+    TYPE_INVERTER,
+    TYPE_LUGS,
+    TYPE_MID,
+    TYPE_PV,
+)
+from span_panel_api_schema_1.description import device_type
+from span_panel_api_schema_1.devices import (
+    build_battery,
+    build_evse,
+    build_mid,
+    build_pv,
+    feed_circuit_ids,
+    feed_connection_statuses,
+)
+from span_panel_api_schema_1.extension import build_extension_properties
+from span_panel_api_schema_1.field_metadata import addressed_rows
+from span_panel_api_schema_1.panel import (
+    PanelFields,
+    build_pcs,
+    build_unmapped_tabs,
+    find_lugs,
+    panel_size_from_model,
+    resolve_dominant_power_source,
+    resolve_dsm_state,
+    resolve_grid_islandable,
+    resolve_islanding_state,
+    resolve_run_config,
+    text,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from ebus_sdk.homie import DiscoveredDevice
+
+
+class TreeRoles:
+    """The tree sorted into the roles a snapshot needs.
+
+    Matching is prefix-based for lugs, because firmware may declare either the
+    base ``…device.lugs`` type with a ``direction`` property or a subtyped
+    ``…device.lugs.upstream`` — the flat adapter already had to handle both
+    conventions, and there is no reason to assume v1.0 settled it.
+    """
+
+    def __init__(self, devices: list[DiscoveredDevice]) -> None:
+        self.circuits: list[DiscoveredDevice] = []
+        self.lugs: list[DiscoveredDevice] = []
+        self.evse: list[DiscoveredDevice] = []
+        self.bess: DiscoveredDevice | None = None
+        self.pv: DiscoveredDevice | None = None
+        self.mid: DiscoveredDevice | None = None
+
+        for device in devices:
+            declared = device_type(device)
+            if declared == TYPE_CIRCUIT:
+                self.circuits.append(device)
+            elif declared.startswith(TYPE_LUGS):
+                self.lugs.append(device)
+            elif declared == TYPE_EVSE:
+                self.evse.append(device)
+            elif declared == TYPE_BESS and self.bess is None:
+                self.bess = device
+            elif declared == TYPE_PV and self.pv is None:
+                self.pv = device
+            elif declared == TYPE_MID and self.mid is None:
+                self.mid = device
+
+
+def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], ready_since: float = 0.0) -> SpanPanelSnapshot:
+    """Build a full snapshot from the panel and its descendants."""
+    roles = TreeRoles(children)
+    upstream = find_lugs(roles.lugs, upstream=True)
+    downstream = find_lugs(roles.lugs, upstream=False)
+    fields = PanelFields(panel=panel, upstream_lugs=upstream, downstream_lugs=downstream, mid=roles.mid)
+
+    feeds = feed_circuit_ids(roles.circuits)
+    # The other half of the same circuit-side records: which DER each circuit
+    # feeds, and what the enclosure says about the link to it. Read once here
+    # and handed to whichever DER it names, exactly as `feeds` is.
+    feed_statuses = feed_connection_statuses(roles.circuits)
+    # A DER's device type decides how its feeding circuit is labelled, so the
+    # circuit inherits it — matching the flat adapter, where the same circuit
+    # reports device_type "pv" rather than "circuit".
+    der_type_by_circuit = {
+        circuit_id: kind
+        for kind, device in (("pv", roles.pv), *(("evse", e) for e in roles.evse))
+        if device is not None and (circuit_id := feeds.get(device.device_id))
+    }
+
+    circuits = {}
+    # Paired with their snapshot key as they are built, for `extension.py`. The
+    # key a multi-instance subject carries has to be the one the snapshot map
+    # uses, and this loop is where a circuit's is decided -- deriving it a
+    # second time downstream would be a second implementation free to drift.
+    circuit_subjects: list[tuple[DiscoveredDevice, ExtensionSubject]] = []
+    for circuit in roles.circuits:
+        snapshot = build_circuit(circuit, device_type=der_type_by_circuit.get(circuit.device_id, "circuit"))
+        circuits[snapshot.circuit_id] = snapshot
+        circuit_subjects.append((circuit, ExtensionSubject(kind="circuit", instance_key=snapshot.circuit_id)))
+
+    occupied = {tab for circuit in circuits.values() for tab in circuit.tabs}
+    # Unoccupied positions are `total - occupied`, so this is only meaningful
+    # when the model gave a real total. An unknown model yields size 0 and no
+    # unmapped entries rather than a fabricated set.
+    panel_size = panel_size_from_model(text(panel, NODE_INFO, PROP_MODEL))
+    circuits.update(build_unmapped_tabs(panel_size, occupied))
+
+    # Owners are every device that can claim a DER through a `connection` node.
+    owners = [*roles.lugs, *roles.circuits, panel]
+
+    # Grid answers are read from the MID rather than derived, per the recorded
+    # decision. `device_types` resolves `grid-forming-entity` to a device class, which
+    # is what makes PANEL_BACKUP distinguishable from PANEL_OFF_GRID authoritatively
+    # instead of guessed from a power source the way flat had to.
+    device_types = {device.device_id: device_type(device) for device in children}
+    device_names: dict[str, str] = {}
+    for device in children:
+        description: dict[str, object] = device.description or {}
+        name = description.get("name")
+        if name:
+            device_names[device.device_id] = str(name)
+    inverters = [device for device in children if device_type(device) == TYPE_INVERTER]
+    islanding = resolve_islanding_state(roles.mid, panel)
+
+    # Vendor extensions on devices this adapter *does* model. The pairing is
+    # built here, where each subject's snapshot key is already decided: the
+    # singletons key on nothing, the EVSEs on the harmonised key their snapshot
+    # map uses, the circuits on the ids collected above.
+    evse_subjects = [
+        (device, ExtensionSubject(kind="evse", instance_key=key)) for device, key in harmonised_evse_keys(roles.evse).items()
+    ]
+    # **Lugs are their own subject, keyed by direction.** Pairing both with the
+    # `panel` subject makes the subject non-unique: a consumer keys an identity on
+    # `(kind, instance_key, node/property)`, and the two lugs devices run the
+    # same firmware, so a vendor extension on one is the *expected* case of a
+    # vendor extension on both -- two wire addresses collapsing onto one
+    # identity, with whichever sorted first winning. `find_lugs` matches
+    # direction rather than device id for the reason it documents, and the same
+    # reasoning keys the subject: ids in the reference tree are the simulator's
+    # naming, while `info/direction` is what the schema defines. A lugs device
+    # declaring no direction is left unpaired rather than keyed on something
+    # unstable -- its properties stay in discovery, which is where an
+    # unidentifiable device belongs.
+    lugs_subjects = [
+        (device, ExtensionSubject(kind="lugs", instance_key=key))
+        for key, device in (("upstream", upstream), ("downstream", downstream))
+        if device is not None
+    ]
+    singleton_subjects = [
+        (device, ExtensionSubject(kind=kind))
+        for kind, device in (
+            ("panel", panel),
+            ("battery", roles.bess),
+            ("mid", roles.mid),
+            ("pv", roles.pv),
+        )
+        if device is not None
+    ]
+    extension_properties = build_extension_properties(
+        [*singleton_subjects, *lugs_subjects, *evse_subjects, *circuit_subjects],
+        addressed_rows(children),
+    )
+
+    return SpanPanelSnapshot(
+        serial_number=fields.serial_number,
+        firmware_version=fields.firmware_version,
+        main_relay_state=fields.main_relay_state,
+        instant_grid_power_w=fields.instant_grid_power_w,
+        lugs_at_service_entrance=fields.lugs_at_service_entrance,
+        feedthrough_power_w=fields.feedthrough_power_w,
+        main_meter_energy_consumed_wh=fields.main_meter_energy_consumed_wh,
+        main_meter_energy_produced_wh=fields.main_meter_energy_produced_wh,
+        feedthrough_energy_consumed_wh=fields.feedthrough_energy_consumed_wh,
+        feedthrough_energy_produced_wh=fields.feedthrough_energy_produced_wh,
+        # Read, not derived. Flat had to infer both from `dominant-power-source`
+        # plus grid power because nothing stated them; v1.0 states them on the MID,
+        # so the multi-signal heuristic is gone and only the no-MID tier remains a
+        # heuristic. The user-visible value set is unchanged.
+        dsm_state=resolve_dsm_state(islanding),
+        current_run_config=resolve_run_config(roles.mid, islanding, device_types),
+        door_state=fields.door_state,
+        # The panel has no proximity sensor property; the flat adapter reports
+        # authenticated-and-ready, and the same holds here.
+        proximity_proven=True,
+        uptime_s=int(time.monotonic() - ready_since) if ready_since > 0.0 else 0,
+        eth0_link=fields.eth0_link,
+        wlan_link=fields.wlan_link,
+        wwan_link=fields.wwan_link,
+        panel_size=panel_size,
+        dominant_power_source=resolve_dominant_power_source(roles.mid, device_types),
+        grid_state=fields.grid_state,
+        grid_islandable=resolve_grid_islandable(inverters),
+        l1_voltage=fields.l1_voltage,
+        l2_voltage=fields.l2_voltage,
+        main_breaker_rating_a=fields.main_breaker_rating_a,
+        wifi_ssid=fields.wifi_ssid,
+        vendor_cloud=fields.vendor_cloud,
+        vendor_name=fields.vendor_name,
+        model=fields.model,
+        hardware_version=fields.hardware_version,
+        shed_policy=fields.shed_policy,
+        shed_policy_algorithm=fields.shed_policy_algorithm,
+        shed_soc_threshold_shed_percent=fields.shed_soc_threshold_shed_percent,
+        shed_soc_threshold_release_percent=fields.shed_soc_threshold_release_percent,
+        power_flow_pv=fields.power_flow_pv,
+        power_flow_battery=fields.power_flow_battery,
+        power_flow_grid=fields.power_flow_grid,
+        power_flow_site=fields.power_flow_site,
+        shed_time_to_priority_shed_min=fields.shed_time_to_priority_shed_min,
+        shed_total_time_remaining_min=fields.shed_total_time_remaining_min,
+        shed_full_charge_time_to_priority_shed_min=fields.shed_full_charge_time_to_priority_shed_min,
+        shed_full_charge_total_time_remaining_min=fields.shed_full_charge_total_time_remaining_min,
+        shed_forecast_confidence=fields.shed_forecast_confidence,
+        upstream_l1_current_a=fields.upstream_l1_current_a,
+        upstream_l2_current_a=fields.upstream_l2_current_a,
+        downstream_l1_current_a=fields.downstream_l1_current_a,
+        downstream_l2_current_a=fields.downstream_l2_current_a,
+        circuits=circuits,
+        battery=build_battery(roles.bess, owners),
+        pv=build_pv(roles.pv, feeds, upstream, downstream, feed_statuses=feed_statuses),
+        mid=build_mid(roles.mid, device_names),
+        # Gated on the node being declared, not on any value: every limit this
+        # capability publishes is legally `0.0`, so there is no reading that can
+        # distinguish a switched-off PCS from an absent one. See `build_pcs`.
+        pcs=build_pcs(panel),
+        # Every child whose type nothing above sorts into a role. Built from the
+        # same `children` the roles were sorted from, so a type dropping out of
+        # `TreeRoles` surfaces here rather than vanishing from both.
+        adopted_devices=build_adopted_devices(children),
+        extension_properties=extension_properties,
+        evse={
+            key: build_evse(device, feeds, node_id=key, feed_statuses=feed_statuses)
+            for device, key in harmonised_evse_keys(roles.evse).items()
+        },
+    )
+
+
+def harmonised_evse_keys(evse_devices: Sequence[DiscoveredDevice]) -> dict[DiscoveredDevice, str]:
+    """Key each EVSE by its serial, which is what flat firmware keys it by.
+
+    Public because the command topics need the inverse of it: a caller holds a
+    snapshot key and the wire is addressed by device id, and rebuilding that
+    correspondence anywhere else is how a control ends up writing to the wrong
+    charger.
+
+    **This library is the harmonisation layer.** The integration builds an EVSE
+    entity's `unique_id` and its device-registry `identifiers` from what it finds
+    here, so a key that changes between schemas orphans a user's charger and stands a
+    duplicate up beside it. Presenting the same handle for the same physical device is
+    this seam's job, not the integration's.
+
+    On real flat firmware the EVSE **node id is the Drive's serial**. Confirmed on a
+    live panel in SpanPanel/span#214: the reporter's topic is
+    `ebus/5/<panel-serial>/<drive-serial>`, their diagnostics show the snapshot keyed
+    `"evse": {"<drive-serial>": ...}`, and the whole thread turns on that node id being
+    what the `unique_id` is built from. `schema_0` writes `result[node_id]` verbatim,
+    so against firmware it is already serial-keyed without knowing it.
+
+    v1.0 names the same device `<panel>-<serial>`, the proxied form, so stripping to
+    the serial reproduces flat's key exactly. The proxy model prescribes the same
+    thing independently: `devices/proxy.md` says a proxied device id is *not* stable
+    across the proxy-to-native transition, and that "consumers that need
+    cross-transition stable identity use `info/serial-number`".
+
+    **The flat simulator does not do this**, and it briefly cost us the wrong design.
+    It names EVSE nodes `evse` / `evse-2` -- positional slots no panel publishes --
+    which made this look like an ordering problem, needing a rule to reconstruct
+    firmware's enumeration and needing SPAN to confirm that rule. There was no
+    ordering problem; there was an unfaithful fixture.
+
+    A device with no serial keeps its v1.0 device id. Inventing an ordinal is the
+    thing this function exists to avoid, and an unkeyable EVSE is better left
+    obviously distinct than quietly merged with another.
+    """
+    return {device: (text(device, NODE_INFO, PROP_SERIAL_NUMBER) or device.device_id) for device in evse_devices}

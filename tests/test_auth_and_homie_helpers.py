@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from span_panel_api_schema_0.accumulator import HomiePropertyAccumulator
+from span_panel_api_schema_0.consumer import HomieDeviceConsumer, _parse_int
 from span_panel_api.auth import _int, download_ca_cert, get_homie_schema
-from span_panel_api.exceptions import SpanPanelConnectionError, SpanPanelTimeoutError
-from span_panel_api.mqtt.accumulator import HomiePropertyAccumulator
-from span_panel_api.mqtt.homie import HomieDeviceConsumer, _parse_int
-
+from span_panel_api.exceptions import (
+    SpanPanelAPIError,
+    SpanPanelConnectionError,
+    SpanPanelServerError,
+    SpanPanelTimeoutError,
+)
 
 # ---------------------------------------------------------------------------
 # auth._int edge cases (lines 29-31)
@@ -33,6 +37,17 @@ class TestIntHelper:
 # ---------------------------------------------------------------------------
 # auth — connection / timeout errors for download_ca_cert (lines 111-114)
 # ---------------------------------------------------------------------------
+
+
+def _mock_response(method: str, status_code: int) -> AsyncMock:
+    """A client whose request completes and returns `status_code`."""
+    response = MagicMock()
+    response.status_code = status_code
+    mock = AsyncMock()
+    setattr(mock, method, AsyncMock(return_value=response))
+    mock.__aenter__ = AsyncMock(return_value=mock)
+    mock.__aexit__ = AsyncMock(return_value=False)
+    return mock
 
 
 def _mock_client(method: str, side_effect: Exception) -> AsyncMock:
@@ -78,6 +93,32 @@ class TestGetHomieSchemaErrors:
             cls.return_value = _mock_client("get", httpx.TimeoutException("slow"))
             with pytest.raises(SpanPanelTimeoutError):
                 await get_homie_schema("192.168.1.1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [500, 502, 503, 504])
+    async def test_a_server_status_is_not_ready_rather_than_wrong(self, status: int) -> None:
+        """A rebooting panel answers from its front end while the app behind it starts.
+
+        Raised as `SpanPanelServerError` so a caller can tell "not yet" from
+        "no". The redispatch retry depends on this distinction: a live firmware
+        upgrade produced 502 here, the retry loop did not catch the general
+        `SpanPanelAPIError` it used to be, and the parser was never swapped.
+        """
+        with patch("span_panel_api._http.httpx.AsyncClient") as cls:
+            cls.return_value = _mock_response("get", status)
+            with pytest.raises(SpanPanelServerError) as caught:
+                await get_homie_schema("192.168.1.1")
+        assert caught.value.status_code == status
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 404])
+    async def test_a_client_status_is_not_retryable(self, status: int) -> None:
+        """These do not fix themselves, so they must not look like "not ready yet"."""
+        with patch("span_panel_api._http.httpx.AsyncClient") as cls:
+            cls.return_value = _mock_response("get", status)
+            with pytest.raises(SpanPanelAPIError) as caught:
+                await get_homie_schema("192.168.1.1")
+        assert not isinstance(caught.value, SpanPanelServerError)
 
 
 # ---------------------------------------------------------------------------
@@ -180,3 +221,55 @@ class TestHttpxClientInjectionAuthHelpers:
 
         mock_cls.assert_not_called()
         injected.aclose.assert_not_called()
+
+
+class TestGetHomieSchemaNotReadyShapes:
+    """Every way a booting panel answers that is not a clean 5xx.
+
+    Each of these used to escape `get_homie_schema` untranslated, skip the
+    caller's retry clause entirely, and strand the parser — the same failure the
+    502 produced on a live upgrade, wearing a different exception.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            httpx.ReadError("connection reset"),
+            httpx.WriteError("broken pipe"),
+            httpx.RemoteProtocolError("server closed connection without sending a response"),
+        ],
+        ids=["read-reset", "write-reset", "proxy-closed-without-answering"],
+    )
+    async def test_a_transport_failure_is_a_connection_error(self, failure: Exception) -> None:
+        """A panel resetting its listener mid-request, and a proxy dying mid-request.
+
+        `httpx.TimeoutException` is itself a `TransportError`, so the timeout
+        branch has to stay ahead of this one — covered by the timeout test above.
+        """
+        with patch("span_panel_api._http.httpx.AsyncClient") as cls:
+            cls.return_value = _mock_client("get", failure)
+            with pytest.raises(SpanPanelConnectionError):
+                await get_homie_schema("192.168.1.1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", ["", "{trunc", "null", "[]"], ids=["empty", "truncated", "null", "list"])
+    async def test_a_200_that_cannot_be_a_schema_is_not_ready_rather_than_broken(self, body: str) -> None:
+        """A panel part-way through starting can answer 200 with nothing usable.
+
+        Retryable for the same reason a 502 is: it is "not ready yet" wearing a
+        success status. The bounded attempt count makes retrying a genuinely
+        broken body cheap.
+        """
+        response = MagicMock()
+        response.status_code = 200
+        response.json = MagicMock(side_effect=(lambda: json.loads(body)) if body else ValueError("no content"))
+        mock = AsyncMock()
+        mock.get = AsyncMock(return_value=response)
+        mock.__aenter__ = AsyncMock(return_value=mock)
+        mock.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("span_panel_api._http.httpx.AsyncClient") as cls:
+            cls.return_value = mock
+            with pytest.raises(SpanPanelServerError):
+                await get_homie_schema("192.168.1.1")

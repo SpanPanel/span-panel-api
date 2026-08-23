@@ -29,7 +29,6 @@ from span_panel_api.auth import (
     register_v2,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -428,6 +427,54 @@ class TestGetHomieSchema:
         assert "energy.ebus.device.distribution-enclosure.core" in result.types
         core_type = result.types["energy.ebus.device.distribution-enclosure.core"]
         assert "door" in core_type
+        # Real flat firmware omits dataModelVersion entirely, and that absence
+        # is what routes the panel to the flat parser.
+        assert result.data_model_version is None
+
+    @pytest.mark.asyncio
+    async def test_parent_child_response_carries_its_data_model_version(self):
+        """The signal dispatch runs on, read over REST before MQTT is opened.
+
+        A parent/child payload keeps its type definitions under `deviceClasses`,
+        so `types` comes back empty here — harmless precisely because this
+        version routes the panel away from the parser that would have read it.
+        """
+        schema_json = {
+            "firmwareVersion": "spanos2/r202633/01",
+            "dataModelVersion": "1.0",
+            "homieDomain": "ebus",
+            "homieVersion": 5,
+            "deviceClasses": {"energy.ebus.device.panel": {}},
+        }
+        mock_response = _mock_response(200, schema_json)
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await get_homie_schema("192.168.65.70")
+
+        assert result.data_model_version == "1.0"
+        assert result.types == {}
+
+    @pytest.mark.asyncio
+    async def test_a_non_string_version_is_still_read_not_discarded(self):
+        """JSON may carry the version unquoted. Coercing beats treating a
+        present value as absent, which would silently mean "flat"."""
+        schema_json = {"firmwareVersion": "spanos2/r202633/01", "dataModelVersion": 1.0, "types": {}}
+        mock_response = _mock_response(200, schema_json)
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await get_homie_schema("192.168.65.70")
+
+        assert result.data_model_version == "1.0"
 
     @pytest.mark.asyncio
     async def test_schema_frozen(self):
@@ -477,15 +524,12 @@ class TestGetHomieSchema:
 
     def test_panel_size_from_live_fixture(self):
         """panel_size works with the real panel schema fixture."""
-        import json
-        from pathlib import Path
+        from span_panel_api.reference_payloads import homie_schema, homie_schema_types
 
-        fixture = Path(__file__).parent / "fixtures" / "v2" / "homie_schema.json"
-        data = json.loads(fixture.read_text())
         schema = V2HomieSchema(
-            firmware_version=data["firmwareVersion"],
+            firmware_version=homie_schema()["firmwareVersion"],
             types_schema_hash="sha256:test",
-            types=data["types"],
+            types=homie_schema_types(),
         )
         assert schema.panel_size == 32
 

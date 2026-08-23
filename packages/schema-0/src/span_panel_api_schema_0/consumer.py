@@ -12,9 +12,15 @@ import logging
 import time
 from typing import ClassVar
 
-from ..models import SpanBatterySnapshot, SpanCircuitSnapshot, SpanEvseSnapshot, SpanPanelSnapshot, SpanPVSnapshot
-from .accumulator import HomiePropertyAccumulator
-from .const import (
+from span_panel_api.models import (
+    SpanBatterySnapshot,
+    SpanCircuitSnapshot,
+    SpanEvseSnapshot,
+    SpanPanelSnapshot,
+    SpanPVSnapshot,
+)
+from span_panel_api_schema_0.accumulator import HomiePropertyAccumulator
+from span_panel_api_schema_0.const import (
     LUGS_DOWNSTREAM,
     LUGS_UPSTREAM,
     TYPE_BESS,
@@ -316,8 +322,12 @@ class HomieDeviceConsumer:
             soe_percentage=_parse_float(soc_str) if soc_str else None,
             soe_kwh=_parse_float(soe_str) if soe_str else None,
             vendor_name=vn if vn else None,
-            product_name=pn if pn else None,
-            model=mdl if mdl else None,
+            # Flat is the irregular side: it puts the SKU in `model` on the BESS and in
+            # `part-number` on the EVSE, for the same concept. The snapshot speaks v1.0's
+            # vocabulary now, so translate rather than mirror -- `product-name` is the
+            # designation and flat's `bess/model` is the SKU.
+            model=pn if pn else None,
+            part_number=mdl if mdl else None,
             serial_number=sn if sn else None,
             software_version=sw if sw else None,
             nameplate_capacity_kwh=_parse_float(nc) if nc else None,
@@ -332,13 +342,15 @@ class HomieDeviceConsumer:
 
         vn = self._acc.get_prop(pv_node, "vendor-name")
         pn = self._acc.get_prop(pv_node, "product-name")
+        sw = self._acc.get_prop(pv_node, "software-version")
         nc = self._acc.get_prop(pv_node, "nameplate-capacity")
         feed = self._acc.get_prop(pv_node, "feed")
         rel_pos = self._acc.get_prop(pv_node, "relative-position")
 
         return SpanPVSnapshot(
             vendor_name=vn if vn else None,
-            product_name=pn if pn else None,
+            model=pn if pn else None,
+            software_version=sw if sw else None,
             nameplate_capacity_w=_parse_float(nc) if nc else None,
             feed_circuit_id=normalize_circuit_id(feed) if feed else None,
             relative_position=rel_pos.upper() if rel_pos else None,
@@ -361,7 +373,7 @@ class HomieDeviceConsumer:
                 lock_state=self._acc.get_prop(node_id, "lock-state") or "UNKNOWN",
                 advertised_current_a=_parse_float(adv) if adv else None,
                 vendor_name=self._acc.get_prop(node_id, "vendor-name") or None,
-                product_name=self._acc.get_prop(node_id, "product-name") or None,
+                model=self._acc.get_prop(node_id, "product-name") or None,
                 part_number=self._acc.get_prop(node_id, "part-number") or None,
                 serial_number=self._acc.get_prop(node_id, "serial-number") or None,
                 software_version=self._acc.get_prop(node_id, "software-version") or None,

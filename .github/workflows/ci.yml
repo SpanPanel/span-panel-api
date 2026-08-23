@@ -17,6 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        # One entry because `requires-python` is `>=3.14`: the declared floor and
+        # the version tested are the same, which is the only arrangement where a
+        # green run actually proves the range. Widen `requires-python` and this
+        # list has to grow with it -- a floor no job runs is a claim, not a
+        # guarantee.
         python-version: ["3.14"]
 
     steps:
@@ -28,21 +33,44 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    # The schema_1 provenance checks compare vendored bytes against the two
+    # repositories they were copied from, and skip when neither is reachable. They
+    # skipped in every run this workflow has ever done, which reads in the summary
+    # line exactly like passing -- see DEVELOPMENT.md, "A skip here is not a pass".
+    # Cloning both at the commits spec_lock.json pins turns them into a question with
+    # a deterministic answer: do our vendored bytes match the commit we say they came
+    # from? Whether the *producer* has moved past that pin is a different question
+    # with a moving answer, and it lives in peer-drift.yml so it cannot fail a pull
+    # request for something the author did not do.
+    #
+    # CI is set by the runner, and tests/test_schema_one_conformance.py fails rather
+    # than skips when it is -- so removing this step breaks the build instead of
+    # quietly switching the checks back off.
+    - name: Check out the peers the provenance checks verify against
+      uses: ./.github/actions/peer-checkouts
+
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --all-packages
 
     - name: Run pre-commit hooks
       run: |
         uv run pre-commit run --all-files
 
+    # -rs so a skip that does survive is named in the log rather than counted. The
+    # only ones expected here are test_live_flat_differential.py, which needs a
+    # capture from a real panel that is deliberately gitignored.
     - name: Run tests with pytest
       run: |
-        uv run pytest tests/ -v --cov=src/span_panel_api --cov-report=xml --cov-report=term-missing
+        uv run pytest tests/ -v -rs \
+          --cov=src/span_panel_api \
+          --cov=packages/schema-0/src/span_panel_api_schema_0 \
+          --cov=packages/schema-1/src/span_panel_api_schema_1 \
+          --cov-report=xml --cov-report=term-missing
 
 
 
@@ -63,11 +91,11 @@ jobs:
         enable-cache: true
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --all-packages
 
     - name: Run Bandit security scan
       run: |
-        uv run bandit -r src/ -f json -o bandit-report.json || true
+        uv run bandit -r src/ packages/ -f json -o bandit-report.json || true
 
     - name: Upload Bandit scan results
       uses: actions/upload-artifact@v7
@@ -92,13 +120,39 @@ jobs:
         enable-cache: true
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --all-packages
 
-    - name: Build package
-      run: uv build
+    - name: Build packages
+      run: uv build --all-packages
 
-    - name: Check package
+    - name: Check packages
       run: uv run twine check dist/*
+
+    # Every distribution here is fully annotated, so every distribution has to
+    # carry the marker that lets a consumer's type checker see those annotations.
+    # Without it the package resolves to Any downstream and the typing is inert.
+    - name: Verify every wheel ships a py.typed marker
+      run: |
+        python -c "
+        import glob, sys, zipfile
+        wheels = glob.glob('dist/*.whl')
+        if not wheels:
+            sys.exit('::error::no wheels were built')
+        for wheel in wheels:
+            if not any(n.endswith('/py.typed') for n in zipfile.ZipFile(wheel).namelist()):
+                sys.exit(f'::error::{wheel} ships no py.typed marker; downstream type checking would resolve it as Any')
+            print(f'{wheel}: py.typed present')
+        "
+
+    # The configuration entry-point discovery exists to support, and the one
+    # nothing else in CI exercises: the bootstrap wheel installed with no
+    # adapter present. It must import, and it must fail by name rather than
+    # with ModuleNotFoundError.
+    - name: Verify the bootstrap installs without an adapter
+      run: |
+        uv venv /tmp/bootstrap-only
+        VIRTUAL_ENV=/tmp/bootstrap-only uv pip install dist/span_panel_api-*.whl
+        VIRTUAL_ENV=/tmp/bootstrap-only uv run --no-project python scripts/verify_adapterless_install.py
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v7

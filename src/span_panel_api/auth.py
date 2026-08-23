@@ -15,7 +15,13 @@ import uuid
 import httpx
 
 from ._http import _build_url, _get_client
-from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelConnectionError, SpanPanelTimeoutError
+from .exceptions import (
+    SpanPanelAPIError,
+    SpanPanelAuthError,
+    SpanPanelConnectionError,
+    SpanPanelServerError,
+    SpanPanelTimeoutError,
+)
 from .models import HomieSchemaTypes, V2AuthResponse, V2HomieSchema, V2StatusInfo
 
 
@@ -182,15 +188,54 @@ async def get_homie_schema(
     try:
         async with _get_client(httpx_client, timeout) as client:
             response = await client.get(url)
-    except httpx.ConnectError as exc:
-        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
     except httpx.TimeoutException as exc:
         raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+    except httpx.TransportError as exc:
+        # Every way the connection itself can fail, not just a refused connect:
+        # `ReadError` and `WriteError` when a rebooting panel resets mid-request,
+        # and `RemoteProtocolError` when its proxy closes without answering --
+        # which is exactly what a proxy restarting under load produces. Catching
+        # only `ConnectError` meant those escaped this function untranslated,
+        # skipped the caller's retry clause entirely, and stranded the parser the
+        # same way a 502 used to. `TimeoutException` is itself a `TransportError`,
+        # so it has to be caught first.
+        raise SpanPanelConnectionError(f"Cannot reach panel at {host}: {exc}") from exc
 
+    if response.status_code >= 500:
+        # A rebooting panel answers 502 from its front end while the application
+        # behind it is still starting. That is "not ready yet", not "wrong" --
+        # and it is the ordinary shape of a firmware upgrade, because a device
+        # brings its network stack and proxy up before its application. Raised as
+        # a distinct class so a caller can retry it and fail fast on a 4xx, which
+        # will not fix itself.
+        raise SpanPanelServerError(
+            f"Panel not ready: HTTP {response.status_code} fetching the Homie schema",
+            status_code=response.status_code,
+        )
     if response.status_code != 200:
-        raise SpanPanelAPIError(f"Failed to fetch Homie schema: HTTP {response.status_code}")
+        raise SpanPanelAPIError(
+            f"Failed to fetch Homie schema: HTTP {response.status_code}",
+            status_code=response.status_code,
+        )
 
-    data: dict[str, object] = response.json()
+    try:
+        parsed = response.json()
+    except ValueError as exc:
+        # A panel part-way through starting can answer 200 with a truncated or
+        # empty body. Retryable for the same reason a 502 is -- it is "not ready
+        # yet" wearing a different status -- and untranslated this had precisely
+        # the 502's old character: raised out of the caller's retry loop on the
+        # first attempt and left the parser where it was.
+        raise SpanPanelServerError(
+            f"Panel not ready: {host} answered 200 with a body that is not JSON",
+            status_code=response.status_code,
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise SpanPanelServerError(
+            f"Panel not ready: {host} answered 200 with {type(parsed).__name__}, not an object",
+            status_code=response.status_code,
+        )
+    data: dict[str, object] = parsed
 
     # Extract types — each value is a dict of property definitions
     raw_types = data.get("types", {})
@@ -206,10 +251,19 @@ async def get_homie_schema(
     types_json = json.dumps(data.get("types", {}), sort_keys=True)
     schema_hash = "sha256:" + hashlib.sha256(types_json.encode()).hexdigest()[:16]
 
+    # Read before anything else interprets the payload. A parent/child response
+    # carries `deviceClasses` where this one reads `types`, so every field below
+    # degrades to empty for such a panel — which is harmless only because this
+    # value routes it to a different parser before those fields are used.
+    # Absence is the flat signal and must stay distinct from an empty string.
+    raw_data_model_version = data.get("dataModelVersion")
+    data_model_version = None if raw_data_model_version is None else str(raw_data_model_version)
+
     return V2HomieSchema(
         firmware_version=str(data.get("firmwareVersion", "")),
         types_schema_hash=schema_hash,
         types=types,
+        data_model_version=data_model_version,
     )
 
 

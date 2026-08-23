@@ -218,7 +218,7 @@ class AsyncMqttBridge:
         # Wait for CONNACK
         try:
             await asyncio.wait_for(self._connect_event.wait(), timeout=MQTT_CONNECT_TIMEOUT_S)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             await self.disconnect()
             raise SpanPanelTimeoutError(f"Timed out connecting to MQTT broker at {self._host}:{self._port}") from exc
 

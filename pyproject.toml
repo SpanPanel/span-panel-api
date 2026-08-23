@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "2.6.4"
+version = "3.0.0"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -8,22 +8,56 @@ authors = [
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10,<4.0"
+requires-python = ">=3.14,<4.0"
 dependencies = [
-    "httpx>=0.28.1",
+    # Bounded, and the bound is load-bearing. httpx 1.0 is an API rewrite that
+    # removes `AsyncClient`, and 1.0.dev1..dev4 are on PyPI now. The bound was
+    # first set when every distribution here was a prerelease and `pip install
+    # --pre` was the prescribed verb, which made those dev releases resolvable;
+    # that particular exposure ended at 3.0.0, but the ceiling stays, because a
+    # caller may still pass `--pre` for its own reasons and because a ceiling
+    # cannot be added to a version already published. `paho-mqtt` has been
+    # bounded from the start; this was the one unbounded runtime dependency.
+    "httpx>=0.28.1,<1.0",
     "paho-mqtt>=2.0.0,<3.0.0",
     "pyyaml>=6.0.0",
 ]
+
+[project.optional-dependencies]
+# Not runtime dependencies: this distribution still registers no adapter and
+# imports none, and `scripts/verify_adapterless_install.py` holds that line.
+# These exist so `pip install -U "span-panel-api[schema-0,schema-1]"` has a
+# correct upgrade path, because the dependency arrow runs the other way -- an
+# adapter floors on the bootstrap, the bootstrap requires no adapter -- so
+# upgrading the bootstrap alone leaves stale adapter wheels that
+# `_derive_required_members` then rejects at discovery, with pip reporting
+# success. An extra is the only thing pip can act on, and extras cannot be added
+# to a version after it is published.
+#
+# Floors are stable versions deliberately. A specifier that names a prerelease
+# is pip's own signal that prereleases are acceptable for that requirement, so a
+# `>=1.0.0b5` floor here would leave a released install willing to resolve a
+# future beta of the adapter without anyone asking for one.
+schema-0 = ["span-panel-api-schema-0>=1.0.0"]
+schema-1 = ["span-panel-api-schema-1>=1.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/SpanPanel/span-panel-api"
 Issues = "https://github.com/SpanPanel/span-panel-api/issues"
 
-[project.scripts]
-format-markdown = "scripts.format_markdown:main"
+# No [project.entry-points."span_panel_api.schema_adapters"] block here, and that
+# absence is the point of Phase 1: this distribution registers no adapter and
+# imports none. Adapters are separate distributions that register themselves —
+# see packages/schema-0. Adding a block here would silently re-couple the
+# bootstrap to a parser and undo the split.
 
 [dependency-groups]
 dev = [
+    # The adapter is a dev dependency, never a runtime one: the bootstrap must
+    # remain installable without it. It is here so the test suite exercises the
+    # two distributions together, which is the configuration users will run.
+    "span-panel-api-schema-0",
+    "span-panel-api-schema-1",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-cov",
@@ -34,7 +68,12 @@ dev = [
     "mypy",
     "pylint",
     "radon",
-    "twine",
+    # 7.0 or newer: hatchling emits `Metadata-Version: 2.5` and twine 6.2 rejects
+    # it as invalid. The build backend is resolved fresh at build time from an
+    # unpinned `[build-system] requires`, so the metadata version moves without
+    # anything in this repository changing -- which is how a green CI turned red
+    # on a commit that touched two changelogs and a dependency floor.
+    "twine>=7.0",
     "vulture>=2.14",
     "types-pyyaml>=6.0.12.20250915",
     "coverage",
@@ -44,8 +83,41 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# One repo, independent distributions. The adapter is a workspace member so the
+# test suite runs against both halves together, while `uv build` in each
+# directory still produces a distribution that can be installed on its own —
+# which is what the adapter-less install test depends on.
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+span-panel-api-schema-0 = { workspace = true }
+span-panel-api-schema-1 = { workspace = true }
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/span_panel_api", "scripts"]
+# `scripts/` is deliberately absent. Shipping it put `scripts/__init__.py` at the
+# top level of every consumer's site-packages, so an unrelated `import scripts`
+# in a Home Assistant venv resolved to this distribution, and it installed a
+# markdown formatter as a console script for every user. It is a dev tool;
+# `scripts/format.sh` runs it by path.
+packages = ["src/span_panel_api"]
+
+[tool.hatch.build.targets.sdist]
+# Explicit, because the default swept the whole tree: the root sdist contained
+# packages/schema-0 and packages/schema-1 in full, contradicting the one
+# invariant this distribution is built around -- that it registers no adapter and
+# imports none. Anyone auditing the bootstrap sdist found both parsers inside it.
+# Anchored with a leading slash: an unanchored "README.md" is a glob that matches
+# at any depth, which pulled each adapter's own README, CHANGELOG and pyproject
+# back in and left the bootstrap sdist still naming both parsers.
+include = [
+    "/src/span_panel_api",
+    "/tests",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
 
 [tool.ruff]
 line-length = 125
@@ -94,9 +166,19 @@ ignore = [
 force-sort-within-sections = true
 combine-as-imports = true
 split-on-trailing-comma = false
+# Every distribution in this workspace is first-party. Stated explicitly because
+# the repo has more than one source root, and inference from a single `src/`
+# would classify the adapter packages as third-party. Each new adapter package
+# has to be added here -- schema_1 was missing for several releases, which is
+# the failure this comment exists to prevent and did not.
+known-first-party = ["span_panel_api", "span_panel_api_schema_0", "span_panel_api_schema_1"]
 
 [tool.mypy]
-python_version = "3.13"
+# The declared floor. Type-checking as of the oldest supported interpreter is
+# what catches a call into stdlib that only exists further up; checking as of a
+# newer one would let it through. Floor and ceiling are the same version today,
+# so this must move with `requires-python` rather than being left behind.
+python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
@@ -123,7 +205,11 @@ ignore_missing_imports = true
 
 [tool.coverage.run]
 data_file = ".local_coverage_data"
-source = ["src/span_panel_api"]
+source = [
+    "src/span_panel_api",
+    "packages/schema-0/src/span_panel_api_schema_0",
+    "packages/schema-1/src/span_panel_api_schema_1",
+]
 omit = [
     "tests/*",
     "*/tests/*",
@@ -162,6 +248,11 @@ exclude_dirs = ["tests", "scripts"]
 [tool.pylint.main]
 load-plugins = ["pylint.extensions.no_self_use"]
 extension-pkg-allow-list = []
+# Every source root in the workspace, so cross-package imports resolve no matter
+# which files a run happens to cover. Without this, pylint only finds
+# `span_panel_api` when a run also includes a file under `src/` — so committing
+# an adapter package on its own reports import-error for imports that are fine.
+init-hook = "import sys; sys.path[:0] = ['src', 'packages/schema-0/src', 'packages/schema-1/src']"
 ignore-paths = [
     "^tests/.*",
     "^scripts/.*",
@@ -169,10 +260,21 @@ ignore-paths = [
 
 [tool.pylint.messages_control]
 disable = [
+    # Import order is enforced by ruff's isort rules (lint select "I"), which
+    # knows both workspace source roots via known-first-party. pylint has no
+    # equivalent setting — only known-standard-library and known-third-party —
+    # so it classifies span_panel_api_schema_0 as third-party and disagrees with
+    # ruff on every adapter module. One authority for import order; ruff is the
+    # one that can be told the truth about this layout.
+    "wrong-import-order",
     "missing-module-docstring",
     "missing-class-docstring",
     "missing-function-docstring",
     "too-few-public-methods",
+    # The transport implements four protocols, so its public surface is set by
+    # how many the composition asks for rather than by anything a split would
+    # improve. Every sibling in this family is already off for the same reason.
+    "too-many-public-methods",
     "too-many-arguments",
     "too-many-instance-attributes",
     "too-many-locals",

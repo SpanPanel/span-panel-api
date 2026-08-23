@@ -10,7 +10,6 @@ from span_panel_api.models import (
     SpanPanelSnapshot,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers: snapshot factory functions
 # ---------------------------------------------------------------------------

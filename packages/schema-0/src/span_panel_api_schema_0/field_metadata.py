@@ -15,10 +15,8 @@ Field path convention: ``{snapshot_type}.{field_name}``
 
 from __future__ import annotations
 
-import logging
-
-from ..models import FieldMetadata, HomieSchemaTypes
-from .const import (
+from span_panel_api.models import FieldMetadata, HomieSchemaTypes
+from span_panel_api_schema_0.const import (
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_CORE,
@@ -30,14 +28,13 @@ from .const import (
     TYPE_PV,
 )
 
-_LOGGER = logging.getLogger(__name__)
-
 # ---------------------------------------------------------------------------
 # Static mapping: (node_type, property_id) → snapshot field path
 #
 # This encodes the library's internal knowledge of how _build_snapshot()
 # maps Homie properties to snapshot dataclass fields. The mapping must be
-# kept in sync with homie.py.
+# kept in sync with consumer.py (which held this class as homie.py before
+# the Phase 0 relocation).
 # ---------------------------------------------------------------------------
 
 _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
@@ -85,8 +82,12 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
     (TYPE_BESS, "soc", "battery.soe_percentage"),
     (TYPE_BESS, "soe", "battery.soe_kwh"),
     (TYPE_BESS, "vendor-name", "battery.vendor_name"),
-    (TYPE_BESS, "product-name", "battery.product_name"),
-    (TYPE_BESS, "model", "battery.model"),
+    # Flat's irregularity, translated rather than mirrored: it puts the designation in
+    # `product-name` and the SKU in `model` on the BESS, where the EVSE puts the SKU in
+    # `part-number`. The snapshot speaks v1.0's vocabulary, so both land on the field
+    # that matches the concept.
+    (TYPE_BESS, "product-name", "battery.model"),
+    (TYPE_BESS, "model", "battery.part_number"),
     (TYPE_BESS, "serial-number", "battery.serial_number"),
     (TYPE_BESS, "software-version", "battery.software_version"),
     (TYPE_BESS, "nameplate-capacity", "battery.nameplate_capacity_kwh"),
@@ -94,7 +95,14 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
     (TYPE_BESS, "grid-state", "panel.grid_state"),
     # --- PV → pv.* -----------------------------------------------------------
     (TYPE_PV, "vendor-name", "pv.vendor_name"),
-    (TYPE_PV, "product-name", "pv.product_name"),
+    (TYPE_PV, "product-name", "pv.model"),
+    # Declared by the flat schema's `energy.ebus.device.pv` type and read here even
+    # though no capture we hold values it — neither the frozen simulator nor the live
+    # panel. The row is about what flat *can* say, not what one panel happened to send:
+    # `test_der_additions_are_provisional_or_attested_but_never_unexamined` classifies
+    # a v1.0-only field by whether flat has a property behind it, and without this row
+    # `pv.software_version` would be filed as introduced by v1.0 when flat declares it.
+    (TYPE_PV, "software-version", "pv.software_version"),
     (TYPE_PV, "nameplate-capacity", "pv.nameplate_capacity_w"),
     (TYPE_PV, "feed", "pv.feed_circuit_id"),
     (TYPE_PV, "relative-position", "pv.relative_position"),  # IN_PANEL | UPSTREAM | DOWNSTREAM
@@ -103,7 +111,7 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str], ...] = (
     (TYPE_EVSE, "lock-state", "evse.lock_state"),
     (TYPE_EVSE, "advertised-current", "evse.advertised_current_a"),
     (TYPE_EVSE, "vendor-name", "evse.vendor_name"),
-    (TYPE_EVSE, "product-name", "evse.product_name"),
+    (TYPE_EVSE, "product-name", "evse.model"),
     (TYPE_EVSE, "part-number", "evse.part_number"),
     (TYPE_EVSE, "serial-number", "evse.serial_number"),
     (TYPE_EVSE, "software-version", "evse.software_version"),
@@ -147,6 +155,21 @@ def _lookup_property(
     return None
 
 
+def _type_declared(schema_types: HomieSchemaTypes, node_type: str) -> bool:
+    """Whether the schema carries a type block a property could have come from.
+
+    Presence follows the same path `_lookup_property` does, fallback included:
+    firmware that publishes only the generic `…device.lugs` block still answers
+    for the typed rows, so a property dropped from it is a drop and not absent
+    hardware. There is no node dimension here — schema_0's rows address the
+    type-level REST schema directly — so the type block is the whole question.
+    """
+    if isinstance(schema_types.get(node_type), dict):
+        return True
+    fallback_type = _LUGS_FALLBACK.get(node_type)
+    return fallback_type is not None and isinstance(schema_types.get(fallback_type), dict)
+
+
 def build_field_metadata(
     schema_types: HomieSchemaTypes,
 ) -> dict[str, FieldMetadata]:
@@ -167,6 +190,9 @@ def build_field_metadata(
     for node_type, property_id, field_path in _PROPERTY_FIELD_MAP:
         prop_def = _lookup_property(schema_types, node_type, property_id)
         if prop_def is None:
+            if _type_declared(schema_types, node_type):
+                # The type block exists and omits the property — a genuine drop.
+                result[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
             continue
 
         raw_unit = prop_def.get("unit")
@@ -177,53 +203,3 @@ def build_field_metadata(
         result[field_path] = FieldMetadata(unit=unit, datatype=datatype)
 
     return result
-
-
-def log_schema_drift(
-    previous: HomieSchemaTypes,
-    current: HomieSchemaTypes,
-) -> None:
-    """Log property-level differences between two schema versions.
-
-    Called by the client when the schema hash changes between connections.
-    All Homie-specific detail stays in this module — the integration never
-    sees this output, only the transport-agnostic field metadata.
-    """
-    prev_types = set(previous.keys())
-    curr_types = set(current.keys())
-
-    for node_type in sorted(curr_types - prev_types):
-        _LOGGER.debug("Schema drift: new node type '%s'", node_type)
-
-    for node_type in sorted(prev_types - curr_types):
-        _LOGGER.debug("Schema drift: removed node type '%s'", node_type)
-
-    for node_type in sorted(prev_types & curr_types):
-        prev_props = previous[node_type]
-        curr_props = current[node_type]
-        if not isinstance(prev_props, dict) or not isinstance(curr_props, dict):
-            continue
-
-        for prop_id in sorted(set(curr_props) - set(prev_props)):
-            _LOGGER.debug("Schema drift: new property '%s/%s'", node_type, prop_id)
-
-        for prop_id in sorted(set(prev_props) - set(curr_props)):
-            _LOGGER.debug("Schema drift: removed property '%s/%s'", node_type, prop_id)
-
-        for prop_id in sorted(set(prev_props) & set(curr_props)):
-            prev_def = prev_props[prop_id]
-            curr_def = curr_props[prop_id]
-            if not isinstance(prev_def, dict) or not isinstance(curr_def, dict):
-                continue
-            for attr in ("datatype", "unit", "format"):
-                old_val = prev_def.get(attr)
-                new_val = curr_def.get(attr)
-                if old_val != new_val:
-                    _LOGGER.debug(
-                        "Schema drift: '%s/%s' %s changed: '%s' → '%s'",
-                        node_type,
-                        prop_id,
-                        attr,
-                        old_val,
-                        new_val,
-                    )

@@ -22,11 +22,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from span_panel_api.mqtt.const import (
-    HOMIE_STATE_READY,
-    MQTT_DEFAULT_MQTTS_PORT,
-    MQTT_DEFAULT_WS_PORT,
-    MQTT_DEFAULT_WSS_PORT,
+from span_panel_api_schema_0 import SchemaZeroAdapter
+from span_panel_api_schema_0.accumulator import HomiePropertyAccumulator
+from span_panel_api_schema_0.const import (
     TOPIC_PREFIX,
     TYPE_BESS,
     TYPE_CIRCUIT,
@@ -38,10 +36,12 @@ from span_panel_api.mqtt.const import (
     TYPE_POWER_FLOWS,
     TYPE_PV,
 )
-from span_panel_api.mqtt.accumulator import HomiePropertyAccumulator
+from span_panel_api_schema_0.consumer import HomieDeviceConsumer
+from span_panel_api.mqtt.const import HOMIE_STATE_READY, MQTT_DEFAULT_MQTTS_PORT, MQTT_DEFAULT_WS_PORT, MQTT_DEFAULT_WSS_PORT
 from span_panel_api.mqtt.connection import AsyncMqttBridge
-from span_panel_api.mqtt.homie import HomieDeviceConsumer
 from span_panel_api.mqtt.models import MqttClientConfig
+
+from conftest import flat_schema
 from span_panel_api.protocol import (
     PanelCapability,
 )
@@ -180,18 +180,18 @@ class TestHomieConsumerState:
 
 class TestHomieCircuitSnapshot:
     def test_circuit_id_normalization(self):
-        from span_panel_api.mqtt.const import normalize_circuit_id
+        from span_panel_api_schema_0.const import normalize_circuit_id
 
         assert normalize_circuit_id("aabbccdd-1122-3344-5566-778899001122") == "aabbccdd11223344556677889900112" + "2"
 
     def test_circuit_id_denormalization(self):
-        from span_panel_api.mqtt.const import denormalize_circuit_id
+        from span_panel_api_schema_0.const import denormalize_circuit_id
 
         result = denormalize_circuit_id("aabbccdd11223344556677889900112" + "2")
         assert result == "aabbccdd-1122-3344-5566-778899001122"
 
     def test_denormalize_non_uuid(self):
-        from span_panel_api.mqtt.const import denormalize_circuit_id
+        from span_panel_api_schema_0.const import denormalize_circuit_id
 
         # Non-32-char strings pass through unchanged
         assert denormalize_circuit_id("short") == "short"
@@ -635,7 +635,7 @@ class TestHomieBattery:
 
         snapshot = consumer.build_snapshot()
         assert snapshot.battery.vendor_name == "Tesla"
-        assert snapshot.battery.product_name == "Powerwall 3"
+        assert snapshot.battery.model == "Powerwall 3"  # flat product-name is the designation
         assert snapshot.battery.nameplate_capacity_kwh == 13.5
 
     def test_battery_metadata_absent(self):
@@ -646,7 +646,7 @@ class TestHomieBattery:
         snapshot = consumer.build_snapshot()
         assert snapshot.battery.soe_percentage == 50.0
         assert snapshot.battery.vendor_name is None
-        assert snapshot.battery.product_name is None
+        assert snapshot.battery.model is None
         assert snapshot.battery.nameplate_capacity_kwh is None
 
 
@@ -677,7 +677,7 @@ class TestHomiePVMetadata:
 
         snapshot = consumer.build_snapshot()
         assert snapshot.pv.vendor_name == "Enphase"
-        assert snapshot.pv.product_name == "IQ8+"
+        assert snapshot.pv.model == "IQ8+"
         assert snapshot.pv.nameplate_capacity_w == 3960.0
         assert snapshot.pv.feed_circuit_id == "aabbccdd112233445566778899001122"
         assert snapshot.pv.relative_position == "IN_PANEL"
@@ -687,7 +687,7 @@ class TestHomiePVMetadata:
         acc, consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
         snapshot = consumer.build_snapshot()
         assert snapshot.pv.vendor_name is None
-        assert snapshot.pv.product_name is None
+        assert snapshot.pv.model is None
         assert snapshot.pv.nameplate_capacity_w is None
         assert snapshot.pv.feed_circuit_id is None
         assert snapshot.pv.relative_position is None
@@ -704,7 +704,7 @@ class TestHomiePVMetadata:
 
         snapshot = consumer.build_snapshot()
         assert snapshot.pv.vendor_name == "Other"
-        assert snapshot.pv.product_name is None
+        assert snapshot.pv.model is None
         assert snapshot.pv.nameplate_capacity_w is None
         assert snapshot.pv.feed_circuit_id is None
         assert snapshot.pv.relative_position is None
@@ -1019,6 +1019,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         mock_bridge = MagicMock()
         client._bridge = mock_bridge
@@ -1037,6 +1038,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         mock_bridge = MagicMock()
         client._bridge = mock_bridge
@@ -1055,13 +1057,12 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._accumulator = HomiePropertyAccumulator(SERIAL)
-        client._homie = HomieDeviceConsumer(client._accumulator, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         # Populate the homie description so core node is known
         desc = _make_description(_core_description())
-        client._homie.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
-        client._homie.handle_message(f"{PREFIX}/$description", desc)
+        client._adapter.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+        client._adapter.handle_message(f"{PREFIX}/$description", desc)
 
         mock_bridge = MagicMock()
         client._bridge = mock_bridge
@@ -1081,8 +1082,7 @@ class TestSpanMqttClientControl:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._accumulator = HomiePropertyAccumulator(SERIAL)
-        client._homie = HomieDeviceConsumer(client._accumulator, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         # No description loaded — core node not found
         with pytest.raises(SpanPanelServerError, match="Core node not found"):
@@ -1101,14 +1101,13 @@ class TestSpanMqttClientSnapshot:
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
-        client._accumulator = HomiePropertyAccumulator(SERIAL)
-        client._homie = HomieDeviceConsumer(client._accumulator, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
         client._bridge = _ConnectedBridge()
 
-        # Manually ready the homie consumer
-        client._homie.handle_message(f"{PREFIX}/$state", "ready")
-        client._homie.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
-        client._homie.handle_message(f"{PREFIX}/core/software-version", "test-fw")
+        # Manually ready the adapter
+        client._adapter.handle_message(f"{PREFIX}/$state", "ready")
+        client._adapter.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
+        client._adapter.handle_message(f"{PREFIX}/core/software-version", "test-fw")
 
         snapshot = await client.get_snapshot()
         assert snapshot.serial_number == SERIAL
@@ -1132,11 +1131,10 @@ class TestSpanMqttClientSnapshot:
         mock_bridge = MagicMock()
         mock_bridge.is_connected.return_value = True
         client._bridge = mock_bridge
-        client._accumulator = HomiePropertyAccumulator(SERIAL)
-        client._homie = HomieDeviceConsumer(client._accumulator, panel_size=32)
+        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
-        client._homie.handle_message(f"{PREFIX}/$state", "ready")
-        client._homie.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
+        client._adapter.handle_message(f"{PREFIX}/$state", "ready")
+        client._adapter.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
 
         assert await client.ping() is True
 
@@ -1489,7 +1487,7 @@ class TestHomieEVSEMetadata:
         assert evse.lock_state == "LOCKED"
         assert evse.advertised_current_a == 32.0
         assert evse.vendor_name == "SPAN"
-        assert evse.product_name == "SPAN Drive"
+        assert evse.model == "SPAN Drive"
         assert evse.part_number == "SPN-DRV-001"
         assert evse.serial_number == "SN12345"
         assert evse.software_version == "2.1.0"
@@ -1542,7 +1540,7 @@ class TestHomieEVSEMetadata:
         assert evse.lock_state == "UNKNOWN"
         assert evse.advertised_current_a is None
         assert evse.vendor_name is None
-        assert evse.product_name is None
+        assert evse.model is None
         assert evse.part_number is None
         assert evse.serial_number is None
         assert evse.software_version is None

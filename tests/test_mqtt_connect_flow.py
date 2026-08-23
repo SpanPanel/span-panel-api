@@ -321,6 +321,71 @@ class TestSpanMqttClientConnect:
         mqtt_client_mock.subscribe.assert_called()
 
     @pytest.mark.asyncio
+    async def test_no_package_metadata_is_read_on_the_event_loop(self, mqtt_client_mock: MagicMock) -> None:
+        """connect() reads packaging metadata three ways, and all of it is file I/O.
+
+        Entry-point enumeration and `version()` both open dist-info off disk;
+        resolution imports the adapter package, which for `schema_1` means the
+        eBus SDK and jsonschema. Home Assistant reported the lot — `listdir`,
+        `read_text`, `open`, `scandir` — as blocking calls in the event loop and
+        asked for a bug report, with the entry-point scan alone stalling setup
+        for two seconds on a cold import cache.
+
+        `version()` is watched because it was missed. Moving discovery off the
+        loop left it behind in the same log statement, and Home Assistant kept
+        reporting three blocking calls for a defect that read as fixed. A test
+        naming only the operations already known about would have agreed.
+
+        Asserted on the operations rather than on `resolve_adapter` running
+        off-thread, because it is deliberately called twice: once in a thread to
+        warm the cache, then again by `_build_adapter` on the loop, where a cache
+        hit costs nothing. Watching the call would fail a correct implementation;
+        watching the I/O is the actual property.
+        """
+        import threading
+
+        from span_panel_api.adapters import _reset_adapter_cache
+        from span_panel_api_schema_0 import SchemaZeroAdapter
+
+        loop_thread = threading.get_ident()
+        ran_on: dict[str, int] = {}
+
+        class _RecordingEntryPoint:
+            name = "schema_0"
+
+            def load(self) -> object:
+                ran_on["load"] = threading.get_ident()
+                return SchemaZeroAdapter
+
+        def _enumerate(group: str) -> list[_RecordingEntryPoint]:
+            ran_on["enumerate"] = threading.get_ident()
+            return [_RecordingEntryPoint()]
+
+        def _version(name: str) -> str:
+            ran_on["version"] = threading.get_ident()
+            return "0.0.0-test"
+
+        client = _make_span_client()
+        _reset_adapter_cache()
+        try:
+            with (
+                patch("span_panel_api.adapters.entry_points", side_effect=_enumerate),
+                patch("span_panel_api.mqtt.client.version", side_effect=_version),
+            ):
+                connect_task = asyncio.create_task(client.connect())
+                await asyncio.sleep(0.05)
+                client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
+                client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
+                await asyncio.wait_for(connect_task, timeout=5.0)
+        finally:
+            # The fake registry is process-wide; leaving it cached would hand
+            # every later test a single-entry-point environment.
+            _reset_adapter_cache()
+
+        assert set(ran_on) == {"enumerate", "load", "version"}, f"not all of it ran: {ran_on}"
+        assert loop_thread not in ran_on.values(), f"metadata read on the event loop: {ran_on}"
+
+    @pytest.mark.asyncio
     async def test_close(self, mqtt_client_mock: MagicMock) -> None:
         client = _make_span_client()
 
@@ -725,7 +790,8 @@ class TestSpanMqttClientAccumulatorReset:
 
     @pytest.mark.asyncio
     async def test_pre_rebuild_resets_accumulator(self, mqtt_client_mock: MagicMock) -> None:
-        """`_on_pre_rebuild` replaces accumulator and consumer with fresh instances."""
+        """`_on_pre_rebuild` replaces the adapter (and its internal accumulator/
+        consumer) with a fresh instance."""
         client = _make_span_client()
 
         connect_task = asyncio.create_task(client.connect())
@@ -734,21 +800,18 @@ class TestSpanMqttClientAccumulatorReset:
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
         await asyncio.wait_for(connect_task, timeout=5.0)
 
-        original_accumulator = client._accumulator
-        original_homie = client._homie
-        assert original_accumulator is not None
-        assert original_homie is not None
-        # Accumulator is in a ready-ish state from the simulated Homie messages.
-        assert original_homie.is_ready() is True
+        original_adapter = client._adapter
+        assert original_adapter is not None
+        # Adapter is in a ready-ish state from the simulated Homie messages.
+        assert original_adapter.is_ready() is True
 
         # Trigger the pre-rebuild hook directly — same call the bridge makes.
         client._on_pre_rebuild()
 
-        # New accumulator / consumer instances, fresh state.
-        assert client._accumulator is not original_accumulator
-        assert client._homie is not original_homie
-        assert client._homie is not None
-        assert client._homie.is_ready() is False
+        # New adapter instance, fresh state.
+        assert client._adapter is not original_adapter
+        assert client._adapter is not None
+        assert client._adapter.is_ready() is False
 
         await client.close()
 
@@ -765,15 +828,24 @@ class TestSpanMqttClientAccumulatorReset:
 
         schema_hash_before = client._schema_hash
         schema_types_before = client._previous_schema_types
-        field_metadata_before = client._field_metadata
-        panel_size_before = client._panel_size
+        schema_before = client._schema
+        field_metadata_before = client.field_metadata
+        assert field_metadata_before is not None
 
         client._on_pre_rebuild()
 
         assert client._schema_hash == schema_hash_before
         assert client._previous_schema_types == schema_types_before
-        assert client._field_metadata == field_metadata_before
-        assert client._panel_size == panel_size_before
+        assert client._schema == schema_before
+
+        # `field_metadata` reads the live adapter rather than a cache, so the
+        # fresh accumulator legitimately reads None until the new subscription's
+        # retained messages repopulate the tree. What survives the rebuild is the
+        # schema-derived *input*, observable as the same mapping once ready again.
+        assert client.field_metadata is None
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
+        assert client.field_metadata == field_metadata_before
 
         await client.close()
 
@@ -782,11 +854,10 @@ class TestSpanMqttClientAccumulatorReset:
         """If pre-rebuild somehow fires before connect() completes, the
         handler must not raise — there is no accumulator state to reset."""
         client = _make_span_client()
-        # _panel_size is None because connect() never ran.
+        # _schema is None because connect() never ran.
         client._on_pre_rebuild()
         # No exception, no state changes.
-        assert client._accumulator is None
-        assert client._homie is None
+        assert client._adapter is None
 
 
 # ---------------------------------------------------------------------------

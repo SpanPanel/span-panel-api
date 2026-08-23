@@ -4,6 +4,139 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
+beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
+
+## [3.0.0]
+
+`span-panel-api` becomes a transport and a dispatcher that contains **no parser**. Wire formats ship as separate distributions and register themselves through the `span_panel_api.schema_adapters` entry-point group, so support for a new panel schema arrives
+by installing a package rather than by upgrading the transport.
+
+### Removed
+
+- **BREAKING: `span-panel-api` no longer contains a parser.** Installing it alone gives a client that connects and then raises `SpanPanelAdapterMissingError`. A parser is an install:
+
+  ```console
+  # flat-schema panels, firmware r202603-r202627
+  pip install "span-panel-api[schema-0]"
+
+  # parent/child panels, firmware r202633+
+  pip install "span-panel-api[schema-1]"
+  ```
+
+  The adapter distributions can equally be named directly; the extras exist because the dependency arrow runs the other way — an adapter declares a floor on the bootstrap, the bootstrap requires no adapter — so upgrading the bootstrap alone would otherwise
+  leave a stale adapter wheel that discovery then rejects, with pip reporting success. The bootstrap never imports an adapter, and supporting a new panel schema on an existing install is an install rather than an upgrade.
+
+- **BREAKING: `HomieLifecycle`, `HomiePropertyAccumulator` and `HomieDeviceConsumer` are no longer exported** from `span_panel_api` or `span_panel_api.mqtt`. All three are flat-schema-specific rather than Homie-convention-level: the accumulator filters
+  every topic against a single device's prefix and stores `node → prop`, which drops nearly every message under the parent/child model; `HomieLifecycle`'s members are not Homie 5 `$state` values but a consumer-side progression encoding "one description
+  received ⇒ ready", which is the flat readiness model. They now live in `span_panel_api_schema_0`.
+- **Removed dead constants** `DEVICE_TOPIC_FMT`, `STATE_TOPIC_FMT`, `DESCRIPTION_TOPIC_FMT`, `PROPERTY_TOPIC_FMT` (unreferenced) and `TYPE_PCS` (a real schema type this library does not consume).
+
+### Changed
+
+- **BREAKING — DER identity speaks the parent/child vocabulary on every device class.** `model` is the human designation and `part_number` the SKU, on `battery`, `evse` and `pv` alike. `product_name` is retired on all three. Flat is the inconsistent side:
+  it puts the SKU in `bess/model` and in `evse/part-number`, the same concept under two names, and gives PV neither. Mirroring that would have permanently encoded flat's irregularity in the snapshot, so `schema_0` translates flat into the normalised shape
+  instead. Measured: every EVSE identity field reads identically on both adapters, so for that device class identity stops being a migration delta at all. **`battery.model` changes value for existing flat users at this upgrade** — it gains the designation
+  where it carried the SKU. That is the deliberate trade: a change scheduled in a library release beats the same change arriving unplanned during a firmware upgrade a user did not choose the timing of.
+- **Consumers reading `product_name` must move to `model` in the same release.** The Home Assistant integration builds its device-registry model from it; left unchanged, device cards go blank.
+- **Dispatch refuses an unreadable `data-model-version` instead of assuming flat.** Absence still means the flat schema — that is a real signal, since the property was introduced by the firmware that introduced parent/child. A value whose major _can_ be
+  read but whose form is non-canonical (`1`, `1.0-beta`) dispatches on that major and logs the deviation. A value with no extractable major raises `SpanPanelSchemaVersionError`. Previously all three fell through to the flat parser, which does not fail — it
+  produces plausible but wrong power and energy figures.
+- **`get_homie_schema()` tells "not ready yet" apart from "will not fix itself".** Any 5xx raises `SpanPanelServerError`, a transport failure raises `SpanPanelConnectionError`, and a `200` carrying a truncated or empty body raises `SpanPanelServerError`
+  rather than surfacing as a parse error. A booting panel brings its network stack and reverse proxy up before the application behind them, so it answers rather than refuses; the distinction is what lets a caller retry that and not retry a 4xx.
+
+### Added
+
+#### Adapter architecture
+
+- **The `SchemaAdapter` protocol, and `ADAPTER_CONTRACT` alongside it.** Member presence is not the whole contract — a Protocol cannot express signatures at runtime, so an adapter carrying every required name and the wrong `__init__` arity would pass
+  discovery and fail much later inside the transport, as a bare `TypeError` about an argument count. Every adapter declares `ADAPTER_CONTRACT` as a **literal** and discovery rejects anything that does not match this package's `ADAPTER_CONTRACT_VERSION`; a
+  value read from the installed bootstrap would agree with every bootstrap, which is the disagreement being looked for. The required-member set is derived from every public member the protocol declares, not only the callable ones.
+- **`installed_adapter_keys()` and `SpanMqttClient.installed_adapters`.** Enumeration reads distribution metadata only; an adapter is imported the first time a panel asks for that key. A flat panel therefore never imports `schema_1`, and with it never
+  imports the eBus SDK or jsonschema, for a parser it would not call. The async paths run both in a thread, and resolution stays cached per key, which is what keeps the synchronous pre-rebuild callback free of I/O.
+- **`resolve_adapter(key, reason)`** — the single place a missing adapter becomes a named error, used by both dispatch and the transport's default path.
+- **`span_panel_api.dispatch.select_adapter_key`**, so the transport can dispatch without importing the factory. `adapters.py` answers "what is installed"; `dispatch.py` answers "what does this panel need".
+- **`SpanPanelAdapterMissingError`, `SpanPanelSchemaVersionError` and `SpanPanelAdapterIncompatibleError`**, all exported from the top-level package. The three are separate because the remedy differs: missing means install something, a schema version no
+  adapter can even be named for means there is nothing to install yet, and incompatible means installing more cannot help. Reporting the third as the first sends someone to install a package they already have. Discovery only _logs_ a rejection, so one
+  unusable third-party adapter cannot take down a panel whose own adapter is fine; the error surfaces only when the rejected adapter turns out to be the one required.
+- **`SpanMqttClient(adapter_factory=...)` is optional.** When omitted the parser is resolved through entry-point discovery at `_build_adapter()`. Resolution is lazy by design: constructing a client must not require an adapter to be installed, only building
+  a parser must. Dispatch happens wherever a parser is built, so a directly constructed client dispatches exactly as the factory path does.
+- **`V2HomieSchema.data_model_version`**, carrying the `dataModelVersion` field and `None` when the panel omits it. Absence is the flat signal and stays distinct from an empty string.
+
+#### Surviving a firmware upgrade
+
+- **A panel that changes schema generation mid-life is redispatched rather than reloaded.** The schema is refetched over REST and the parser swapped in place, so an install that upgrades from flat to parent/child keeps running. The new adapter is resolved
+  **before** any state is touched, so a flat-only install that meets a parent/child panel logs which package is missing and keeps the parser it has instead of raising into a background task.
+- **The wait for a panel to finish rebooting does not give up.** Any bound here is sized against a reboot somebody measured, and the next reboot is not that reboot — a live firmware upgrade has been observed taking four minutes from MQTT dropping to the
+  broker returning, still answering `502` at that point. Giving up has nothing to recommend it: the only things that start another attempt are the reconnect edge and the panel republishing its data-model version, and a panel that finishes booting after the
+  wait expired produces neither, so running out of attempts means stranded until somebody reloads by hand.
+- **The retry interval settles at thirty seconds rather than growing.** Backing off without a ceiling would mean a panel that took a while to return was then ignored for longer than it took. The gap goes 1, 2, 4, 8, 16, 30 and stays there, so once your
+  panel is answering it is noticed within half a minute however long the wait has already run. Waiting costs nothing you were relying on — energy sensors hold their last reading through an outage on their own grace period, which is untouched by this — and
+  what is left is one request every thirty seconds to a device on your own network.
+- **Nothing escapes the redispatch task.** An unexpected failure there used to surface as a bare `Task exception was never retrieved` while the parser silently stayed on the old generation. It is logged at ERROR naming the consequence and the remedy,
+  because a reload is the user's only move and nothing else was going to tell them.
+
+#### Injected HTTP client on the runtime path
+
+- **`SpanMqttClient` accepts an `httpx_client`, and so does `create_span_client`.** Four config-flow-facing entry points already took an injected client; the runtime path was the one that did not, so every schema read built a throwaway — including the
+  retry loop that runs during a firmware upgrade, which built one per attempt at exactly the moment the panel was mid-reboot. Optional and defaulted, so nothing outside Home Assistant changes. The ownership rule is the one the existing entry points already
+  state: a client handed in is never closed here, and its timeouts, limits and headers are the caller's, which is why the per-call `timeout` defaults are ignored when one is given.
+
+#### Reference payloads shipped in the wheel
+
+- **`span_panel_api.reference_payloads`, shipping `homie_schema.json` as package data.** The captured `GET /api/v2/homie/schema` response is reached by `homie_schema()` and `homie_schema_types()` rather than by path. It was already being consumed outside
+  this repository — the Home Assistant integration checks the field paths it declares against what an adapter can actually produce — by vendoring a byte copy with a README explaining where the copy came from. A copy has no version: it goes stale in
+  silence, and a stale one turns the integration's conformance gate into a check against a schema no panel runs. Shipped, the payload carries the version of the release it came with. `homie_schema_types()` returns `HomieSchemaTypes`, precisely what
+  `span_panel_api_schema_0.field_metadata.build_field_metadata` accepts, so a caller building metadata never reaches into an untyped document to get it. The parent/child device tree is the other half and ships from `span-panel-api-schema-1`, with the
+  parser that can interpret it.
+
+#### New snapshot surface
+
+Everything below is additive. Each field is `None` or empty on a panel that publishes no such thing, and no flat panel publishes any of it unless stated.
+
+- **`SpanMidSnapshot` and `SpanPanelSnapshot.mid`.** The parent/child model puts the `grid` capability on a Microgrid Interconnect Device rather than on the enclosure, so islanding state, grid state and the grid-forming entity live there. Presence is
+  `snapshot.mid is not None` rather than a sentinel field, and identity is `info/serial-number` rather than the Homie device id, which the proxy model warns is not stable across a proxy-to-native transition.
+- **`dsm_state` and `current_run_config` are read from the MID.** Both are existing entities that would otherwise degrade to `UNKNOWN` on a parent/child panel: `schema_0` _derives_ them from a multi-signal heuristic, and the parent/child model states the
+  answer outright. Sensed from a ready MID, falling back to the user's `shed/asserted-islanding-state` when it is not ready, then to a `power-flows/grid` heuristic when there is no MID at all, and unknown otherwise. A missing MID never reports on-grid — it
+  means SPAN is not the islanding authority, not that the site is on grid, and a generator-fed island is the counterexample. `PANEL_BACKUP` versus `PANEL_OFF_GRID` becomes authoritative rather than guessed.
+- **`grid_islandable` is mapped to `grid-forming/capable`** over the BESS's inverter children, as the disjunction — a panel does not island, its DER does, and flat expressed a property of the DER as a property of the enclosure. It returns `None` rather
+  than `False` when nothing publishes it, so absence stays a gap instead of becoming a claim. No producer publishes it today, which is recorded rather than worked around.
+- **`SpanPanelSnapshot.lugs_at_service_entrance`, saying whether this enclosure's upstream lugs are the utility connection point.** `instant_grid_power_w` is those lugs' `meter/active-power`, and the name holds only at the service entrance: a BESS wired
+  ahead of the main lugs, or an enclosure fed by another enclosure, leaves the lugs metering panel-side flow while the utility side differs by whatever that device contributes or absorbs. `power_flow_grid` stays site-level and correct in both, so the two
+  legitimately disagree — and before this a consumer seeing them disagree could not tell a topology from a fault. Sourced from the lugs' `connection/fed-by-device-id`, which `power-flows` 0.3 names as the detection mechanism when it qualifies its own
+  negation table. Defaults `True`, because flat firmware predates chaining and a flat panel's lugs really are its service entrance.
+- **`SpanBatterySnapshot.power_w` and `SpanBatterySnapshot.communication_state`.** The battery device has always published `meter/active-power` and `status/communication-state` and neither reached a field, so a consumer could show the enclosure's
+  arbitrated `power_flow_battery` and nothing the BESS itself reports. `power_w` is **discharge-positive**: the enclosure meters the BESS the way it meters a circuit it feeds, so positive means power flowing _out of_ the battery, matching the eBus rule for
+  a device's own meter. The asymmetry with `panel.power_flow_battery` is deliberate — the enclosure's arbitrated figure is passed through untouched by both adapters and is charge-positive, so it reads negative for the same discharging battery that makes
+  `power_w` positive. The two describe the same physical power in opposite frames, and a consumer rendering both negates one of them. `communication_state` stays the published enum string (`OK`/`DEGRADED`/`LOST`/`UNKNOWN`) rather than collapsing to a bool,
+  because `DEGRADED` is neither `OK` nor `LOST`; it is deliberately not merged into `battery.connected`, which is the _enclosure's_ view of the same link.
+- **`SpanEvseSnapshot.connected` and `SpanPVSnapshot.connected`.** `battery.connected` has carried the enclosure's view of the link to the BESS from the upstream lugs' `connection/fed-by-device-status`; the other half of the same capability — a circuit's
+  `connection/feeds-device-status` — reached nothing, so only one of a panel's three DER classes had a link-health field. `None` is the specification's "unknown" and is load-bearing: the enum is `OK,LOST,DEGRADED` with no `UNKNOWN` member, and a mixed-load
+  or unsurveyed circuit publishes no connection record at all, which is the normal state for most of a panel's circuits. So absence is never a fault. `DEGRADED` collapses to `False`, because the question this field answers is whether the enclosure can talk
+  to the device. The charger's link is not the charger's session: `evse.status` is the OCPP-style state the charger reports about the cable in front of it, and a charger mid-session over a lost link publishes `CHARGING` and `connected=False` at once.
+- **Five `shed-forecast` fields**: `shed_time_to_priority_shed_min`, `shed_total_time_remaining_min`, `shed_full_charge_time_to_priority_shed_min`, `shed_full_charge_total_time_remaining_min` and `shed_forecast_confidence`. The backup-planning numbers —
+  how long before my battery starts shedding circuits, how long before it is exhausted — were on the wire and stopped at the transport. All four times are `integer` minutes as the capability declares, parsed so that a publisher serialising a whole number
+  with a decimal point still resolves; `confidence` stays the raw `LOW`/`MEDIUM`/`HIGH` string, because it qualifies the four times rather than standing alone. `None` is load-bearing here too: zero minutes is a legitimate reading — shedding starts now — so
+  a defaulted zero would be indistinguishable from the worst forecast the capability can report.
+- **`SpanPanelSnapshot.adopted_devices`, reporting a device type this library models nothing for rather than dropping it.** The schema is explicitly vendor-extensible, so an unmodelled device is an expected arrival rather than a hypothetical one; before
+  this it produced no field, no metadata row and no sign it was there. `AdoptedDevice` carries the device's identity and its readings. **The unit is a device, never a property**: a new property on a device already modelled is a curation task with a short
+  turnaround, and surfacing it automatically would spend a consumer's entity identity permanently on a shape a human would likely have chosen differently. An unmodelled _type_ is the opposite case — no curation is coming, so silence is the only
+  alternative. Extra instances of a modelled type are deliberately not adopted either: a second BESS is a multiplicity limit, not an unmodelled device.
+- **`AdoptedDevice.parent` and `AdoptedDevice.proxied`**, carrying the proxy link a device declares. Carried rather than acted on — an adopted device is still registered under the enclosure — because a _proxied_ unmodelled device is a real shape that would
+  otherwise be flattened away unrecorded. The nesting is deliberately not built: proxied ids differ by design and consumers correlate by `info/serial-number` rather than by device id, and the tree model is being reshaped upstream, so the fields capture the
+  evidence and the topology waits.
+- **`AdoptedProperty.set_topic`, `SpanMqttClient.set_adopted_property` and `AdoptedControlProtocol`**, so a settable property on an adopted device can be written and the write cannot reach anything else. The topic is populated only for a settable property
+  on a device `is_modelled` rejects, so it is the scoping that authorises the write rather than a check a caller has to remember: the transport resolves the property against the current snapshot's `adopted_devices` and publishes to the topic that property
+  carries, no topic is accepted from the caller, and a device this library models produces no `AdoptedDevice` to find. There is deliberately no translation and no bounds check on an adopted write — both exist on curated controls because this library knows
+  what those properties mean, and inventing a bound for somebody else's hardware would be inventing a fact. `AdoptedControlProtocol` lets a consumer ask `isinstance` before offering the control, exactly as it does for circuit, panel and EVSE control.
+- **`SpanPanelSnapshot.extension_properties`, `ExtensionProperty` and `ExtensionSubject`**, so a vendor property on a device this library _already_ models reaches a consumer instead of stopping at diagnostics. Adoption covers the unmodelled-device half;
+  this covers the other one, where a new property on the BESS, a charger, a circuit or the panel would otherwise be a declaration with no value, visible only to a maintainer reading a diagnostics attachment. The subject names which modelled snapshot
+  subject a property hangs off — `battery`, `mid`, `pv`, `panel`, `lugs` with `upstream`/`downstream`, and `evse`/`circuit` with the instance key the snapshot's own maps use — so a consumer resolves the device with a lookup it already performs. What is
+  _not_ exposed is the field-level mapping: the subject is one value per device and cannot drift, while the wire-property-to-snapshot-field map is the adapter's internal business and exporting it would freeze it as API.
+- **An extension property's value never reaches diagnostics, structurally.** `ExtensionProperty` is deliberately not a `FieldMetadata`, so it cannot enter the map `partition()` walks and has no path into a payload that leaves the machine. The discovery
+  rows keep flowing unchanged: the same property appears in both surfaces on purpose, joined by its `{node}/{property}` path — a declaration for the maintainer, a reading for the user. It is read-only by construction: it carries `settable` for curation
+  triage and no set topic, and there is no member a write path could be built from.
+
 ## [2.6.4] - 05/2026
 
 ### Fixed

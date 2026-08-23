@@ -13,7 +13,8 @@ import json
 import logging
 import time
 
-from .const import HOMIE_STATE_DISCONNECTED, HOMIE_STATE_LOST, HOMIE_STATE_READY, TOPIC_PREFIX
+from span_panel_api.mqtt.const import HOMIE_STATE_DISCONNECTED, HOMIE_STATE_LOST, HOMIE_STATE_READY
+from span_panel_api_schema_0.const import TOPIC_PREFIX
 
 _LOGGER = logging.getLogger(__name__)
 

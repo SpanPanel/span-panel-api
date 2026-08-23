@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from pathlib import Path
 from collections.abc import AsyncGenerator
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +16,35 @@ from paho.mqtt.reasoncodes import ReasonCode
 
 import span_panel_api._http as _http_mod
 from span_panel_api.models import V2HomieSchema
-from span_panel_api.mqtt.const import TOPIC_PREFIX, TYPE_CORE
+from span_panel_api_schema_0.const import TOPIC_PREFIX, TYPE_CORE
+
+_DOTENV = Path(__file__).parent.parent / ".env"
+
+
+def _load_dotenv() -> None:
+    """Populate the environment from `.env`, without overriding what is set.
+
+    Read directly rather than through python-dotenv: this supplies developer
+    defaults for the optional provenance checks (`EBUS_SPEC_DIR`,
+    `PANELBENCH_DIR`), and taking a dependency to parse two lines would put a
+    package in the test path to save nothing.
+
+    `setdefault`, never assignment. An exported value is a deliberate choice for
+    this run — pointing at a different checkout to reproduce something — and a
+    file silently winning over it is the kind of surprise that costs an
+    afternoon. See `.env.example`; absence is fine, the checks skip.
+    """
+    if not _DOTENV.exists():
+        return
+    for raw in _DOTENV.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
 
 
 @pytest.fixture(autouse=True)
@@ -34,16 +64,41 @@ TOPIC_PREFIX_SERIAL = f"{TOPIC_PREFIX}/{SERIAL}"
 # Minimal Homie description that makes the device "ready"
 MINIMAL_DESCRIPTION = json.dumps({"nodes": {"core": {"type": TYPE_CORE}}})
 
-# Mock schema for SpanMqttClient.connect() — panel_size=32
-_MOCK_SCHEMA = V2HomieSchema(
-    firmware_version="test",
-    types_schema_hash="sha256:test",
-    types={
-        "energy.ebus.device.circuit": {
-            "space": {"datatype": "integer", "format": "1:32:1"},
+
+def flat_schema(panel_size: int = 32) -> V2HomieSchema:
+    """A flat-schema REST response declaring ``panel_size`` breaker spaces.
+
+    No ``data_model_version``: absence is exactly what marks a payload as flat,
+    so this is what dispatch reads to select schema_0.
+    """
+    return V2HomieSchema(
+        firmware_version="test",
+        types_schema_hash="sha256:test",
+        types={
+            "energy.ebus.device.circuit": {
+                "space": {"datatype": "integer", "format": f"1:{panel_size}:1"},
+            },
         },
-    },
-)
+    )
+
+
+def parent_child_schema(data_model_version: str = "1.0") -> V2HomieSchema:
+    """A parent/child REST response, as r202633+ firmware serves it.
+
+    ``types`` is empty because that firmware keeps its definitions under
+    ``deviceClasses`` — which is exactly why the version has to be read before
+    anything tries to parse the payload.
+    """
+    return V2HomieSchema(
+        firmware_version="spanos2/r202633/01",
+        types_schema_hash="sha256:test",
+        types={},
+        data_model_version=data_model_version,
+    )
+
+
+# Mock schema for SpanMqttClient.connect() — panel_size=32, flat.
+MOCK_SCHEMA = flat_schema(32)
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +164,8 @@ async def mqtt_client_mock() -> AsyncGenerator[MagicMock, None]:
         patch("span_panel_api.mqtt.connection.AsyncMQTTClient") as cls,
         patch("span_panel_api.mqtt.connection.download_ca_cert", return_value="FAKE-PEM"),
         patch("span_panel_api.mqtt.connection._build_ssl_context", return_value=MagicMock()),
-        patch("span_panel_api.mqtt.client.get_homie_schema", return_value=_MOCK_SCHEMA),
+        patch("span_panel_api.mqtt.client.get_homie_schema", return_value=MOCK_SCHEMA),
+        patch("span_panel_api.factory.get_homie_schema", return_value=MOCK_SCHEMA),
     ):
         mock_client = cls.return_value
         mock_client.connect.side_effect = _connect

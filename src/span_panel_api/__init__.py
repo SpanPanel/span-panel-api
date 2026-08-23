@@ -18,10 +18,12 @@ from .auth import (
 )
 from .detection import DetectionResult, detect_api_version
 from .exceptions import (
+    SpanPanelAdapterMissingError,
     SpanPanelAPIError,
     SpanPanelAuthError,
     SpanPanelConnectionError,
     SpanPanelError,
+    SpanPanelSchemaVersionError,
     SpanPanelServerError,
     SpanPanelStaleDataError,
     SpanPanelTimeoutError,
@@ -29,18 +31,29 @@ from .exceptions import (
 )
 from .factory import create_span_client
 from .models import (
+    ADOPTION_IDENTITY_NODE,
+    ADOPTION_TOPOLOGY_NODE,
+    DISCOVERY_NAMESPACE,
+    AdoptedDevice,
+    AdoptedProperty,
+    DiscoveredMetadata,
+    ExtensionProperty,
+    ExtensionSubject,
     FieldMetadata,
     HomieSchemaTypes,
     SpanBatterySnapshot,
     SpanCircuitSnapshot,
     SpanEvseSnapshot,
+    SpanMidSnapshot,
     SpanPanelSnapshot,
+    SpanPcsSnapshot,
     SpanPVSnapshot,
     V2AuthResponse,
     V2HomieSchema,
     V2StatusInfo,
+    is_discovery_path,
 )
-from .mqtt import HomieLifecycle, HomiePropertyAccumulator, MqttClientConfig, SpanMqttClient
+from .mqtt import MqttClientConfig, SpanMqttClient
 from .phase_validation import (
     PhaseDistribution,
     are_tabs_opposite_phase,
@@ -50,7 +63,9 @@ from .phase_validation import (
     validate_solar_tabs,
 )
 from .protocol import (
+    AdoptedControlProtocol,
     CircuitControlProtocol,
+    EvseControlProtocol,
     PanelCapability,
     PanelControlProtocol,
     SpanPanelClientProtocol,
@@ -62,6 +77,17 @@ __version__ = _pkg_version("span-panel-api")
 __all__ = [  # noqa: RUF022
     # Protocols
     "CircuitControlProtocol",
+    # Added 2026-08-19: the charge-current ceiling on a commissioned EV charger,
+    # the first settable property outside the panel and its circuits. Purely
+    # additive -- a consumer that never asks for it is unaffected, and flat
+    # firmware publishes no such property, so the flat adapter answers None and
+    # the transport refuses.
+    "EvseControlProtocol",
+    # Added 2026-08-20 with device-scoped adoption: the first control whose
+    # subject this library does not understand. Additive, and authorised by the
+    # snapshot rather than by its arguments -- a device the adapter models
+    # produces no AdoptedDevice and so cannot be addressed through it.
+    "AdoptedControlProtocol",
     "PanelCapability",
     "PanelControlProtocol",
     "SpanPanelClientProtocol",
@@ -69,12 +95,30 @@ __all__ = [  # noqa: RUF022
     # Metadata
     "FieldMetadata",
     "HomieSchemaTypes",
+    # Added 2026-08-20: runtime discovery. Purely additive -- an adapter that
+    # emits no discovered rows is indistinguishable from one built before the
+    # namespace existed, and a consumer that never partitions on the namespace
+    # sees exactly the curated rows it saw before.
+    "DISCOVERY_NAMESPACE",
+    "DiscoveredMetadata",
+    "is_discovery_path",
+    # Added 2026-08-20: device-scoped adoption. Additive in the same way --
+    # `SpanPanelSnapshot.adopted_devices` defaults empty, so an adapter that
+    # adopts nothing and a consumer that reads the field are both unaffected.
+    "ADOPTION_IDENTITY_NODE",
+    "ADOPTION_TOPOLOGY_NODE",
+    "AdoptedDevice",
+    "AdoptedProperty",
+    "ExtensionProperty",
+    "ExtensionSubject",
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",
     "SpanEvseSnapshot",
+    "SpanMidSnapshot",
     "SpanPVSnapshot",
     "SpanPanelSnapshot",
+    "SpanPcsSnapshot",
     # Factory
     "create_span_client",
     # Detection
@@ -93,8 +137,6 @@ __all__ = [  # noqa: RUF022
     "regenerate_passphrase",
     "register_v2",
     # Transport
-    "HomieLifecycle",
-    "HomiePropertyAccumulator",
     "MqttClientConfig",
     "SpanMqttClient",
     # Phase validation
@@ -106,7 +148,9 @@ __all__ = [  # noqa: RUF022
     "validate_solar_tabs",
     # Exceptions
     "SpanPanelAPIError",
+    "SpanPanelAdapterMissingError",
     "SpanPanelAuthError",
+    "SpanPanelSchemaVersionError",
     "SpanPanelConnectionError",
     "SpanPanelError",
     "SpanPanelServerError",

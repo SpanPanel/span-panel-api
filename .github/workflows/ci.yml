@@ -5,6 +5,12 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main, develop ]
+  # Push and pull_request both arrive by webhook, so a dropped delivery leaves a
+  # commit with no run at all -- which reads the same as a commit that passed.
+  # Dispatch re-runs this against any ref on demand.
+  #
+  #   gh workflow run ci.yml --ref develop
+  workflow_dispatch:
 
 jobs:
   lint-and-test:
@@ -18,7 +24,7 @@ jobs:
       uses: actions/checkout@v7
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -47,7 +53,7 @@ jobs:
       uses: actions/checkout@v7
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: "3.14"
 
@@ -76,7 +82,7 @@ jobs:
       uses: actions/checkout@v7
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: "3.14"
 

@@ -8,6 +8,7 @@ client (which only covers v1 endpoints).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import uuid
@@ -37,6 +38,30 @@ def _int(val: object) -> int:
     if isinstance(val, float):
         return int(val)
     return int(str(val))
+
+
+HTTP_TOO_MANY_REQUESTS = 429
+
+#: Default attempts and base backoff used when the panel rate-limits a request.
+CA_CERT_MAX_ATTEMPTS = 5
+CA_CERT_BACKOFF_S = 1.5
+
+
+def _retry_delay(retry_after: str | None, attempt: int, backoff_s: float) -> float:
+    """Return how long to wait before retrying a rate-limited request.
+
+    Prefers the panel's ``Retry-After`` header (delta-seconds form) and falls
+    back to exponential backoff. Malformed or negative values fall back too,
+    so a bad header can never stall or skip the retry.
+    """
+    fallback = backoff_s * (2.0 ** (attempt - 1))
+    if retry_after is None:
+        return fallback
+    try:
+        parsed = float(retry_after)
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed >= 0 else fallback
 
 
 async def register_v2(
@@ -122,14 +147,24 @@ async def download_ca_cert(
     timeout: float = 10.0,
     port: int = 80,
     httpx_client: httpx.AsyncClient | None = None,
+    max_attempts: int = CA_CERT_MAX_ATTEMPTS,
+    backoff_s: float = CA_CERT_BACKOFF_S,
 ) -> str:
     """Download the PEM CA certificate from the SPAN Panel.
+
+    The panel rate-limits this endpoint and replies with HTTP 429 once the
+    limit is hit. A single reconnect storm — or another client polling the
+    same panel — is enough to trigger it, and a one-shot request would turn
+    that transient condition into a hard setup failure. Retry with
+    exponential backoff, honouring ``Retry-After`` when the panel sends it.
 
     Args:
         host: IP address or hostname of the SPAN Panel
         timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
         port: HTTP port of the panel bootstrap API
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+        max_attempts: Total attempts made when the panel replies HTTP 429.
+        backoff_s: Base delay for exponential backoff between 429 retries.
 
     Returns:
         PEM-encoded CA certificate as a string
@@ -140,23 +175,32 @@ async def download_ca_cert(
         SpanPanelAPIError: Unexpected response or invalid PEM
     """
     url = _build_url(host, port, "/api/v2/certificate/ca")
+    last_status: int | None = None
 
-    try:
-        async with _get_client(httpx_client, timeout) as client:
-            response = await client.get(url)
-    except httpx.ConnectError as exc:
-        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
-    except httpx.TimeoutException as exc:
-        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with _get_client(httpx_client, timeout) as client:
+                response = await client.get(url)
+        except httpx.ConnectError as exc:
+            raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
+        except httpx.TimeoutException as exc:
+            raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
 
-    if response.status_code != 200:
-        raise SpanPanelAPIError(f"Failed to download CA cert: HTTP {response.status_code}")
+        if response.status_code == 200:
+            pem = response.text
+            if not pem.startswith("-----BEGIN"):
+                raise SpanPanelAPIError("Response is not a valid PEM certificate")
+            return pem
 
-    pem = response.text
-    if not pem.startswith("-----BEGIN"):
-        raise SpanPanelAPIError("Response is not a valid PEM certificate")
+        last_status = response.status_code
 
-    return pem
+        if response.status_code == HTTP_TOO_MANY_REQUESTS and attempt < max_attempts:
+            await asyncio.sleep(_retry_delay(response.headers.get("retry-after"), attempt, backoff_s))
+            continue
+
+        break
+
+    raise SpanPanelAPIError(f"Failed to download CA cert: HTTP {last_status}")
 
 
 async def get_homie_schema(

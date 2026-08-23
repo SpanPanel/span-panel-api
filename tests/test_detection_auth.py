@@ -20,6 +20,7 @@ from span_panel_api.models import (
 )
 from span_panel_api.auth import (
     delete_fqdn,
+    _retry_delay,
     download_ca_cert,
     get_fqdn,
     get_homie_schema,
@@ -390,6 +391,110 @@ class TestDownloadCaCert:
 
             with pytest.raises(SpanPanelAPIError, match="500"):
                 await download_ca_cert("192.168.65.70")
+
+    @pytest.mark.asyncio
+    async def test_download_retries_after_429_then_succeeds(self):
+        """A transient rate-limit must not fail setup — it should be retried."""
+        responses = [_mock_response(429), _mock_response(429), _mock_response(200, text=PEM_CERT)]
+        sleeps: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        with (
+            patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls,
+            patch("span_panel_api.auth.asyncio.sleep", _fake_sleep),
+        ):
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=responses)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await download_ca_cert("192.168.65.70", backoff_s=1.5)
+
+        assert result.startswith("-----BEGIN")
+        assert mock_client.get.await_count == 3
+        # exponential backoff between the two retries
+        assert sleeps == [1.5, 3.0]
+
+    @pytest.mark.asyncio
+    async def test_download_gives_up_after_max_attempts(self):
+        """Persistent 429s surface as an API error rather than retrying forever."""
+        sleeps: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        with (
+            patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls,
+            patch("span_panel_api.auth.asyncio.sleep", _fake_sleep),
+        ):
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=_mock_response(429))
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelAPIError, match="429"):
+                await download_ca_cert("192.168.65.70", max_attempts=3)
+
+        assert mock_client.get.await_count == 3
+        assert len(sleeps) == 2
+
+    @pytest.mark.asyncio
+    async def test_download_honours_retry_after_header(self):
+        """When the panel sends Retry-After, obey it instead of the backoff curve."""
+        rate_limited = _mock_response(429)
+        rate_limited.headers["retry-after"] = "7"
+        sleeps: list[float] = []
+
+        async def _fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        with (
+            patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls,
+            patch("span_panel_api.auth.asyncio.sleep", _fake_sleep),
+        ):
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=[rate_limited, _mock_response(200, text=PEM_CERT)])
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            result = await download_ca_cert("192.168.65.70")
+
+        assert result.startswith("-----BEGIN")
+        assert sleeps == [7.0]
+
+    @pytest.mark.asyncio
+    async def test_download_does_not_retry_non_429(self):
+        """Only rate limiting is retried; other failures fail fast."""
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=_mock_response(500))
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(SpanPanelAPIError, match="500"):
+                await download_ca_cert("192.168.65.70")
+
+        assert mock_client.get.await_count == 1
+
+
+class TestRetryDelay:
+    def test_malformed_retry_after_falls_back_to_backoff(self):
+        assert _retry_delay("soon", attempt=1, backoff_s=1.5) == 1.5
+
+    def test_negative_retry_after_falls_back_to_backoff(self):
+        assert _retry_delay("-5", attempt=2, backoff_s=1.5) == 3.0
+
+    def test_missing_retry_after_uses_exponential_backoff(self):
+        assert _retry_delay(None, attempt=3, backoff_s=1.5) == 6.0
+
+    def test_zero_retry_after_is_respected(self):
+        assert _retry_delay("0", attempt=4, backoff_s=1.5) == 0.0
 
 
 # ===================================================================

@@ -47,10 +47,23 @@ def _build_ssl_context(ca_pem: str) -> ssl.SSLContext:
     The panel issues a private CA and a server cert signed by it. We do
     not want to trust system CAs for this connection, so the context is
     built fresh rather than via ``ssl.create_default_context()``.
+
+    The panel's CA is a minimal self-signed certificate that omits the
+    Authority Key Identifier (AKI) X.509v3 extension. Python 3.13 enabled
+    ``VERIFY_X509_STRICT`` by default, and that flag rejects such a
+    certificate with "Missing Authority Key Identifier", which makes the
+    MQTTS handshake fail on otherwise healthy panels. The flag is cleared
+    here so the library keeps working across Python versions.
+
+    This does not weaken the parts of verification that matter for this
+    connection: the trust anchor is still only the panel's own CA (fetched
+    over the local network immediately before use), hostname checking stays
+    enabled, and signature/expiry validation is unchanged.
     """
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.verify_mode = ssl.CERT_REQUIRED
     ctx.check_hostname = True
+    ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
     ctx.load_verify_locations(cadata=ca_pem)
     return ctx
 

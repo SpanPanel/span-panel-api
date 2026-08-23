@@ -77,6 +77,18 @@ dev = [
     "vulture>=2.14",
     "types-pyyaml>=6.0.12.20250915",
     "coverage",
+    # tests/test_ssl_context.py mints an AKI-less CA to prove the panel's
+    # certificate still handshakes. It reached the environment only as a
+    # transitive of `twine -> keyring -> secretstorage`, which is marked
+    # `sys_platform == 'linux'` -- so the whole module ran in CI and silently
+    # skipped on every macOS checkout, which reads in the summary line exactly
+    # like passing. See DEVELOPMENT.md, "A skip here is not a pass".
+    #
+    # Floored at 50.0.0 rather than at whatever the lock happens to hold: four
+    # advisories cover the range below it (the highest first patched in 50.0.0),
+    # and a floor states that as a constraint the resolver enforces, whereas the
+    # lock is not published and binds nobody who checks this repository out.
+    "cryptography>=50.0.0",
 ]
 
 [build-system]

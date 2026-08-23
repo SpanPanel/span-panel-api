@@ -137,6 +137,13 @@ Everything below is additive. Each field is `None` or empty on a panel that publ
   rows keep flowing unchanged: the same property appears in both surfaces on purpose, joined by its `{node}/{property}` path — a declaration for the maintainer, a reading for the user. It is read-only by construction: it carries `settable` for curation
   triage and no set topic, and there is no member a write path could be built from.
 
+### Fixed
+
+- **A single HTTP 429 from the panel no longer aborts setup.** The panel rate-limits `GET /api/v2/certificate/ca` at roughly seven requests a second, and `download_ca_cert()` raised on any non-200 — so a reconnect storm, or simply a second client polling
+  the same panel, turned a transient condition into a hard failure that needed a manual reload. It now retries a 429 with exponential backoff, honouring `Retry-After` when the panel sends it and falling back to the backoff curve when the header is absent
+  or malformed. Non-429 responses still fail fast. `max_attempts` and `backoff_s` are parameters, so a caller can tune the behaviour or switch it off. Reported and fixed by [@brunocramos](https://github.com/brunocramos) in
+  [#148](https://github.com/SpanPanel/span-panel-api/pull/148).
+
 ## [2.6.4] - 05/2026
 
 ### Fixed

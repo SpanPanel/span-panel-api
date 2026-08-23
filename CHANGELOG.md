@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.0.1]
+
+### Fixed
+
+- **`SpanPanelAdapterIncompatibleError` is exported from the top-level package.** 3.0.0 documented it there — in this changelog, in the README's error table, and in `SpanMqttClient.connect`'s own docstring, which names it as something the caller receives —
+  but it was omitted from `__init__.py`, so the only way to catch it was `from span_panel_api.exceptions import ...`, a path nothing else in the documentation uses. `resolve_adapter` raises it into caller hands rather than logging it, so a consumer
+  following the documented API got an `ImportError` at exactly the point it was trying to handle a real failure. Purely additive: the class, its attributes and its raise sites are unchanged.
+
+### Added
+
+- **A guard that derives the public exception surface from the module instead of transcribing it.** The existing pin compares `__all__` against a hand-written set, which catches the two drifting apart but not a name absent from both — which is precisely
+  how the omission above shipped. The new check enumerates every exception class defined in `span_panel_api.exceptions` and fails if one is not exported.
+- **Python version classifiers in the published metadata**, so the supported version is stated rather than inferred, and so the README's Python badge is read from PyPI rather than hardcoded. The hardcoded badge read `3.10+` for the whole of 3.0.0, five
+  minor versions below the real floor, because nothing connected it to `requires-python`.
+
 ## [3.0.0]
 
 `span-panel-api` becomes a transport and a dispatcher that contains **no parser**. Wire formats ship as separate distributions and register themselves through the `span_panel_api.schema_adapters` entry-point group, so support for a new panel schema arrives
@@ -40,7 +55,7 @@ by installing a package rather than by upgrading the transport.
   where it carried the SKU. That is the deliberate trade: a change scheduled in a library release beats the same change arriving unplanned during a firmware upgrade a user did not choose the timing of.
 - **Consumers reading `product_name` must move to `model` in the same release.** The Home Assistant integration builds its device-registry model from it; left unchanged, device cards go blank.
 - **Dispatch refuses an unreadable `data-model-version` instead of assuming flat.** Absence still means the flat schema — that is a real signal, since the property was introduced by the firmware that introduced parent/child. A value whose major _can_ be
-  read but whose form is non-canonical (`1`, `1.0-beta`) dispatches on that major and logs the deviation. A value with no extractable major raises `SpanPanelSchemaVersionError`. Previously all three fell through to the flat parser, which does not fail — it
+  read but whose form is non-canonical (`1`, `1_0`) dispatches on that major and logs the deviation. A value with no extractable major raises `SpanPanelSchemaVersionError`. Previously all three fell through to the flat parser, which does not fail — it
   produces plausible but wrong power and energy figures.
 - **`get_homie_schema()` tells "not ready yet" apart from "will not fix itself".** Any 5xx raises `SpanPanelServerError`, a transport failure raises `SpanPanelConnectionError`, and a `200` carrying a truncated or empty body raises `SpanPanelServerError`
   rather than surfacing as a parse error. A booting panel brings its network stack and reverse proxy up before the application behind them, so it answers rather than refuses; the distinction is what lets a caller retry that and not retry a 4xx.

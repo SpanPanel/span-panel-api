@@ -18,6 +18,7 @@ from .auth import (
 )
 from .detection import DetectionResult, detect_api_version
 from .exceptions import (
+    SpanPanelAdapterIncompatibleError,
     SpanPanelAdapterMissingError,
     SpanPanelAPIError,
     SpanPanelAuthError,
@@ -148,6 +149,7 @@ __all__ = [  # noqa: RUF022
     "validate_solar_tabs",
     # Exceptions
     "SpanPanelAPIError",
+    "SpanPanelAdapterIncompatibleError",
     "SpanPanelAdapterMissingError",
     "SpanPanelAuthError",
     "SpanPanelSchemaVersionError",

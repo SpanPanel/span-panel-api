@@ -39,7 +39,7 @@ def select_adapter_key(data_model_version: str | None) -> tuple[str, str]:
     unreadable raises instead.
 
     Between those two poles sits a value whose major is unambiguous even though
-    its full form is not canonical ('1', '1.0-beta'). That is not a guess: the
+    its full form is not canonical ('1', '1_0'). That is not a guess: the
     major is what selects the adapter, and it was read, not assumed. Those
     dispatch normally and log the deviation, so a firmware that starts emitting
     a new format is visible before it is an outage.

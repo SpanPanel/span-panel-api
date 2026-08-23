@@ -12,7 +12,10 @@ a parsing implementation to re-export.
 
 from __future__ import annotations
 
+import inspect
+
 import span_panel_api
+from span_panel_api import exceptions
 
 # Source of truth: src/span_panel_api/__init__.py __all__ (transcribed in full,
 # not trimmed, per Phase 0 Task 7's instruction to reconcile against the real file
@@ -99,6 +102,12 @@ EXPECTED_PUBLIC_API = {
     "validate_solar_tabs",
     # Exceptions
     "SpanPanelAPIError",
+    # Added 3.0.1: omitted from `__all__` in 3.0.0 while the README and the
+    # changelog both documented it as a top-level export, and while
+    # `SpanMqttClient.connect` names it in its own docstring as something a
+    # caller receives. Purely additive -- the class and its raise sites are
+    # unchanged, only the path a consumer imports it by.
+    "SpanPanelAdapterIncompatibleError",
     "SpanPanelAdapterMissingError",
     "SpanPanelAuthError",
     "SpanPanelSchemaVersionError",
@@ -122,3 +131,34 @@ def test_all_is_unchanged() -> None:
 def test_every_exported_name_is_importable() -> None:
     for name in span_panel_api.__all__:
         assert hasattr(span_panel_api, name), f"{name} is in __all__ but not importable"
+
+
+def test_every_public_exception_is_exported() -> None:
+    """Every exception this package defines is reachable from the top level.
+
+    The pin above compares `__all__` against a hand-transcribed set, so it only
+    catches the two drifting apart. It cannot catch a name omitted from *both* --
+    which is exactly how `SpanPanelAdapterIncompatibleError` shipped in 3.0.0
+    documented as a top-level export but importable only from
+    `span_panel_api.exceptions`.
+
+    This set is derived from the module instead of transcribed, so a new
+    exception class is exported or this fails. That matters because a consumer
+    cannot catch what it cannot import, and `resolve_adapter` raises these into
+    caller hands rather than logging them.
+    """
+    defined = {
+        name
+        for name, obj in vars(exceptions).items()
+        if not name.startswith("_")
+        and inspect.isclass(obj)
+        and issubclass(obj, Exception)
+        and obj.__module__ == exceptions.__name__
+    }
+    assert defined, "no exception classes found; this guard would pass vacuously"
+
+    unexported = defined - set(span_panel_api.__all__)
+    assert not unexported, (
+        f"defined in span_panel_api.exceptions but not exported from the package: {sorted(unexported)}. "
+        "A consumer cannot catch what it cannot import."
+    )

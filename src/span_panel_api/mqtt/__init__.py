@@ -7,13 +7,15 @@ parser is reached only through the `span_panel_api.schema_adapters` entry point.
 from .async_client import AsyncMQTTClient
 from .client import SpanMqttClient
 from .connection import AsyncMqttBridge
-from .control import ControlDeadlines, PublishOutcome, PublishState
+from .control import ControlCommand, ControlDeadlines, ControlInterceptor, PublishOutcome, PublishState
 from .models import MqttClientConfig
 
 __all__ = [
     "AsyncMQTTClient",
     "AsyncMqttBridge",
+    "ControlCommand",
     "ControlDeadlines",
+    "ControlInterceptor",
     "MqttClientConfig",
     "PublishOutcome",
     "PublishState",

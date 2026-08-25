@@ -54,9 +54,16 @@ EXPECTED_PUBLIC_API = {
     "ADOPTION_TOPOLOGY_NODE",
     "AdoptedDevice",
     "AdoptedProperty",
+    # Added 2026-08-25 (3.1.0): the adapter answers a control request with the
+    # topic *and* the property that reports it, in one value.
+    "ControlTarget",
     "ExtensionProperty",
     "ExtensionSubject",
     "AdoptedControlProtocol",
+    # Added 2026-08-25 (3.1.0): one veto/observe point for every control
+    # command, the consumer-side half of its authorisation gate. A protocol of
+    # its own so the four control protocols are not broken twice in one release.
+    "ControlInterceptionProtocol",
     "is_discovery_path",
     # Snapshots
     "SpanBatterySnapshot",
@@ -103,7 +110,9 @@ EXPECTED_PUBLIC_API = {
     # callers -- a call site that ignores the return value is unaffected -- and
     # breaking for anything type-checked against the control protocols with
     # `-> None`, which the release notes name.
+    "ControlCommand",
     "ControlDeadlines",
+    "ControlInterceptor",
     "PublishOutcome",
     "PublishState",
     # Phase validation

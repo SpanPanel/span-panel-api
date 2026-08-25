@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from .exceptions import SpanPanelError
     from .models import ControlTarget, FieldMetadata, SpanPanelSnapshot, V2HomieSchema
-    from .mqtt.control import PublishOutcome
+    from .mqtt.control import ControlInterceptor, PublishOutcome
 
 
 class PanelCapability(Flag):
@@ -123,6 +123,25 @@ class AdoptedControlProtocol(Protocol):
     """
 
     async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> PublishOutcome: ...
+
+
+@runtime_checkable
+class ControlInterceptionProtocol(Protocol):
+    """Transport that can be given one veto-and-observe point for every command.
+
+    A protocol of its own rather than a member added to the four control
+    protocols or to `StreamingCapableProtocol`. Adding it to the control
+    protocols would break every implementer of them a second time in one
+    release, and streaming has nothing to do with control -- a transport could
+    reasonably offer one and not the other.
+
+    Declared here at all because the consumer's authorisation gate is built on
+    it, and this module's rule is that the consumer codes against protocols,
+    never against transport-specific classes.
+    """
+
+    def set_control_interceptor(self, interceptor: ControlInterceptor | None) -> None:
+        """Install the interceptor, or `None` to remove it. One at a time."""
 
 
 @runtime_checkable

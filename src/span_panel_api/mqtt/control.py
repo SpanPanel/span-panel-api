@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 
 
 class PublishState(StrEnum):
@@ -99,3 +100,67 @@ class ControlDeadlines:
     dominant_power_source: float = 2.0
     evse_charge_limit: float = 2.0
     adopted_property: float = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class ControlCommand:
+    """One control command, described in the terms a policy or an audit needs.
+
+    Built from the `ControlTarget` the adapter produced plus the translated
+    payload, so the identifying fields are the ones actually on the wire rather
+    than the caller's arguments -- a dominant-power-source request of `BATTERY`
+    arrives here as the `OFF_GRID` that will be published under v1.0.
+    """
+
+    device_id: str
+    node_id: str
+    property_id: str
+    value: str
+    topic: str
+
+
+@runtime_checkable
+class ControlInterceptor(Protocol):
+    """One veto-and-observe point covering every control command.
+
+    **This is a boundary against callers of this library, and nothing more.**
+    It does not constrain anything holding the broker credential: a process with
+    the credential publishes to the panel's broker directly and never reaches
+    this code, and neither does another copy of this library in another process.
+    Presenting it as a security boundary around the *panel* would be the most
+    damaging thing this feature could do, because a user would stop looking for
+    the real one.
+
+    What it is good for is the boundary it can actually hold: everything
+    arriving through this client. A consumer with a notion of who is asking --
+    Home Assistant has one, per service call -- can refuse here, and can record
+    every command in one place rather than in five setters that will drift.
+
+    One interceptor at a time, replaceable. Several would raise ordering
+    questions with no principled answer.
+    """
+
+    async def before_publish(self, command: ControlCommand) -> None:
+        """Called before anything is published. Raise to veto.
+
+        **The exception propagates to the caller unchanged.** The library does
+        not translate it: the interceptor raised it, and owns its type and its
+        message. That is load-bearing for a consumer that raises a
+        framework-specific error carrying a translated message and needs it to
+        reach the user intact.
+
+        A veto still produces an `after_publish` with `PublishState.FAILED`, so
+        an audit built on this cannot silently omit the refusals -- which would
+        make it worse than no audit.
+        """
+
+    async def after_publish(self, command: ControlCommand, outcome: PublishOutcome) -> None:
+        """Called with the result of every command, refusals included.
+
+        **Fired as a task and not awaited on the control path.** A sink that
+        merely hangs -- a slow event bus, a blocked writer -- would otherwise
+        stall every control call in the process. The consequences are the price:
+        ordering across commands is not guaranteed, so an audit consumer must
+        not assume it, and an exception raised here is logged and discarded
+        rather than reaching the caller who issued the command.
+        """

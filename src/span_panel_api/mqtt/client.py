@@ -36,7 +36,7 @@ from ..models import AdoptedProperty, ControlTarget, FieldMetadata, HomieSchemaT
 from ..protocol import PanelCapability, SchemaAdapter
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S
-from .control import ControlDeadlines, PublishOutcome, PublishState
+from .control import ControlCommand, ControlDeadlines, ControlInterceptor, PublishOutcome, PublishState
 from .models import MqttClientConfig
 
 if TYPE_CHECKING:
@@ -183,6 +183,8 @@ class SpanMqttClient:
         self._observed_values: dict[tuple[str, str, str], str] = {}
         self._verifications: list[_Verification] = []
         self._unregister_property_observer: Callable[[], None] | None = None
+        # One interceptor, replaceable. See `set_control_interceptor`.
+        self._control_interceptor: ControlInterceptor | None = None
 
     async def _fetch_schema(self) -> V2HomieSchema:
         """One REST schema read, with this client's transport settings applied.
@@ -768,6 +770,22 @@ class SpanMqttClient:
         )
         return await self._publish_control(target, value, self._control_deadlines.adopted_property)
 
+    # -- ControlInterceptionProtocol ----------------------------------------
+
+    def set_control_interceptor(self, interceptor: ControlInterceptor | None) -> None:
+        """Install the one interceptor every control command passes through.
+
+        `None` removes it. Replacing rather than appending is deliberate: two
+        interceptors would raise ordering and precedence questions with no
+        principled answer, and a consumer that needs several composes them on
+        its own side where it knows which wins.
+
+        See `ControlInterceptor` for the contract, and in particular for what
+        this is *not* -- it constrains callers of this client, not anything
+        holding the broker credential.
+        """
+        self._control_interceptor = interceptor
+
     # -- The one place a control command reaches the wire -------------------
 
     def _observe(self, adapter: SchemaAdapter) -> None:
@@ -805,6 +823,79 @@ class SpanMqttClient:
                 verification.observed.set_result(None)
 
     async def _publish_control(self, target: ControlTarget, value: str, deadline: float) -> PublishOutcome:
+        """Run one control command past the interceptor, then deliver it.
+
+        Interception wraps *everything*, including the refusals and the no-op
+        short-circuit, because a consumer's authorisation decision has to be
+        made before this client decides anything -- and because an interceptor
+        that saw only the commands that reached the wire would be an audit with
+        a hole in it exactly where the interesting cases are.
+
+        A veto's exception is re-raised untouched. `after_publish` still fires
+        for it, with `FAILED` and a `vetoed` detail.
+        """
+        interceptor = self._control_interceptor
+        if interceptor is None:
+            return await self._deliver_control(target, value, deadline)
+
+        command = ControlCommand(
+            device_id=target.device_id,
+            node_id=target.node_id,
+            property_id=target.property_id,
+            value=value,
+            topic=target.topic,
+        )
+        try:
+            await interceptor.before_publish(command)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Not caught to handle -- caught to record the refusal, then
+            # re-raised unchanged so the caller sees the interceptor's own
+            # exception type and message. `CancelledError` is a BaseException
+            # and correctly bypasses this: a cancelled call is not a refusal.
+            refusal = PublishOutcome(
+                state=PublishState.FAILED,
+                topic=target.topic,
+                value=value,
+                detail="vetoed",
+            )
+            self._fire_after_publish(interceptor, command, refusal)
+            raise
+
+        outcome = await self._deliver_control(target, value, deadline)
+        self._fire_after_publish(interceptor, command, outcome)
+        return outcome
+
+    def _fire_after_publish(
+        self,
+        interceptor: ControlInterceptor,
+        command: ControlCommand,
+        outcome: PublishOutcome,
+    ) -> None:
+        """Hand the result to the interceptor without waiting for it.
+
+        Awaiting would let a sink that merely hangs -- not raises -- stall every
+        control call in the process, which is a worse failure than a late audit
+        row. Tracked in `_background_tasks` so it is cancelled on `close()`, and
+        so it is not garbage-collected mid-flight.
+        """
+        loop = self._loop or asyncio.get_running_loop()
+        task = loop.create_task(self._run_after_publish(interceptor, command, outcome), name="span_mqtt_after_publish")
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _run_after_publish(
+        self,
+        interceptor: ControlInterceptor,
+        command: ControlCommand,
+        outcome: PublishOutcome,
+    ) -> None:
+        """Await `after_publish`, absorbing whatever it does."""
+        try:
+            await interceptor.after_publish(command, outcome)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _LOGGER.warning("Control interceptor's after_publish raised", exc_info=True)
+
+    async def _deliver_control(self, target: ControlTarget, value: str, deadline: float) -> PublishOutcome:
         """Publish one control command and report how far it got.
 
         Every setter funnels through here, which is what makes the refusals and

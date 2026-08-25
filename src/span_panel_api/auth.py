@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import uuid
 
 import httpx
@@ -24,6 +25,77 @@ from .exceptions import (
     SpanPanelTimeoutError,
 )
 from .models import HomieSchemaTypes, V2AuthResponse, V2HomieSchema, V2StatusInfo
+
+_LOGGER = logging.getLogger(__name__)
+
+#: Keys whose value is a credential wherever it appears in a response body,
+#: compared case-folded because the panel spells them lowerCamelCase and a
+#: proxy or validation layer in between may not.
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "hoppassphrase",
+        "passphrase",
+        "ebusbrokerpassword",
+        "password",
+        "accesstoken",
+        "token",
+    }
+)
+
+_REDACTED = "***"
+
+
+def _redact(value: object) -> object:
+    """Replace every credential-valued key in a JSON-decoded body, at any depth.
+
+    A top-level key scan is not enough, and the case that matters is the exact
+    one this exists for: a FastAPI-style 422 echoes the request that failed
+    validation back under ``detail[].input``, so the passphrase that was just
+    rejected reappears nested two levels down. Scanning only the outermost
+    object would redact nothing in precisely the response most likely to carry a
+    secret.
+
+    Walks dicts and lists; anything else is returned as-is, because a scalar
+    reached here is a value whose key has already been judged.
+    """
+    if isinstance(value, dict):
+        return {key: _REDACTED if str(key).lower() in _CREDENTIAL_KEYS else _redact(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    return value
+
+
+def _log_auth_failure(endpoint: str, response: httpx.Response) -> None:
+    """Record why an auth call failed, at DEBUG and with credentials removed.
+
+    The body is worth keeping — a 422's validation detail is the only thing that
+    says *which* field the panel objected to — but it is not worth putting in an
+    exception message, which Home Assistant surfaces in the UI, writes to the
+    config-flow log, and carries into a diagnostics download. DEBUG is opt-in and
+    is where a user chasing a registration failure is already looking.
+
+    A body that is not JSON is described rather than shown. It could be an HTML
+    error page from a proxy, and it could equally be an echo of the request; with
+    no structure to walk there is no way to redact it, so only its shape is
+    logged.
+    """
+    try:
+        parsed = response.json()
+    except ValueError:
+        _LOGGER.debug(
+            "%s failed with HTTP %d; body not JSON (%d bytes, content-type %r)",
+            endpoint,
+            response.status_code,
+            len(response.content),
+            response.headers.get("content-type", ""),
+        )
+        return
+    _LOGGER.debug(
+        "%s failed with HTTP %d; body (credentials redacted): %s",
+        endpoint,
+        response.status_code,
+        json.dumps(_redact(parsed), sort_keys=True),
+    )
 
 
 def _str(val: object) -> str:
@@ -120,7 +192,13 @@ async def register_v2(
         raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
 
     if response.status_code in (401, 403, 422):
-        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code}): {response.text}")
+        # Status only, matching the shape the branch below already uses. The body
+        # is logged at DEBUG instead: a 422 from the panel's validation layer
+        # echoes the submitted `hopPassphrase` straight back, and interpolating
+        # `response.text` here put that secret into an exception message that
+        # Home Assistant shows in the UI and captures in diagnostics.
+        _log_auth_failure("/api/v2/auth/register", response)
+        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
 
     if response.status_code != 200:
         raise SpanPanelAPIError(f"Unexpected response from /api/v2/auth/register: HTTP {response.status_code}")

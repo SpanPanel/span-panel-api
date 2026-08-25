@@ -434,6 +434,21 @@ class AsyncMqttBridge:
         say the command failed, and the reason the check is here rather than on
         paho's return code afterwards.
 
+        **The gate is only as fresh as paho's disconnect detection**, which is
+        socket close or the keepalive at ``MQTT_KEEPALIVE_S``. A broker that
+        stops answering without closing its socket -- a silent partition, a
+        dropped route -- leaves ``is_connected()`` true for up to a keepalive
+        interval and a half, and a publish in that window is handed over and
+        queued after all, then re-sent as DUP on the next reconnect of this same
+        client. Nothing here lies as a result: such a caller is told
+        ``UNCONFIRMED``, which promises nothing about delivery either way, and
+        ``FAILED``'s promise is unaffected because this path never produces it.
+        What is bounded is the refusal, not the queueing: it catches every
+        disconnect the transport knows about, and knows about a silent one only
+        once the keepalive expires. Closing that window means rebuilding rather
+        than reconnecting whenever un-PUBACKed publishes are in flight, which is
+        a larger change than this one.
+
         **paho queues a QoS-1 publish across a disconnect.** On
         ``MQTT_ERR_NO_CONN`` it keeps the message in ``_out_messages`` with
         ``state = mqtt_ms_publish`` -- its own comment reads "remove from

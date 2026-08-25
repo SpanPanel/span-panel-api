@@ -17,11 +17,16 @@ the adapter distribution does not, and a 1.0.0 adapter against this bootstrap is
 
 - **A control command that was never sent no longer looks like one that succeeded.** All five setters returned `None` on three separate paths that published nothing: after `close()` (the adapter survives, the bridge does not, so the setter returned having
   done nothing at all), with no paho client, and — the one that matters — while the broker was unreachable. A caller had no way to tell any of them from a breaker that actually opened.
-- **A publish while the broker is down is refused instead of queued.** paho keeps a QoS-1 publish in its outbound queue across a disconnect and sends it when the connection returns, reusing the same client, so a relay command issued during an outage fired
-  whenever the broker came back — minutes later, against a panel nobody was watching, with nothing in the UI having said so. The bridge now checks its connection **before** handing the message to paho, which is the only point at which refusing is still
-  possible. A message the transport declines is reported `FAILED`, and `FAILED` is now a promise that nothing will be delivered later.
-- **A transport rebuild settles the commands it discards.** Rebuilding the paho client empties its outbound queue; anything still awaiting acknowledgement used to wait out its full deadline for a PUBACK that could no longer arrive. Those now resolve with
-  an explicit "the transport was rebuilt; delivery is unknown", so an audit trail carries a terminal state rather than a gap.
+- **A publish while the broker is known to be down is refused instead of queued.** paho keeps a QoS-1 publish in its outbound queue across a disconnect and sends it when the connection returns, reusing the same client, so a relay command issued during an
+  outage fired whenever the broker came back — minutes later, against a panel nobody was watching, with nothing in the UI having said so. The bridge now checks its connection **before** handing the message to paho, which is the only point at which refusing
+  is still possible. A message the transport declines is reported `FAILED`, and `FAILED` is a promise that nothing will be delivered later.
+
+  The refusal is bounded by what the transport can know: the check is only as fresh as paho's disconnect detection, which is a socket close or the keepalive. A broker that stops answering _without_ closing its socket leaves the connection looking healthy
+  for up to a keepalive interval and a half, and a publish in that window is still handed over and queued. That caller is told `UNCONFIRMED`, which promises nothing about delivery in either direction, so the outcome remains truthful — but "refused rather
+  than queued" describes a detected disconnect, not every disconnect.
+
+- **A discarded command settles instead of waiting out its deadline.** Rebuilding the paho client — or tearing it down — empties the outbound queue; anything still awaiting acknowledgement used to wait out its full deadline (five seconds, for a relay) for
+  a PUBACK that could no longer arrive. Those now resolve immediately with an explicit "the transport discarded this message; delivery is unknown", so an audit trail carries a terminal state rather than a gap.
 - **A failed authentication no longer puts the rejected passphrase in the exception message.** `register_v2` interpolated the response body into `SpanPanelAuthError`, and the panel's validation layer answers a bad passphrase with a 422 that echoes the
   submitted credential back. Home Assistant shows that message in the UI, writes it to the config-flow log, and captures it in a diagnostics download. The exception now carries the status code only; the body goes to `DEBUG` with every credential-valued key
   replaced, found by a recursive walk rather than a top-level scan — the 422 nests the echo two levels down, so a top-level scan would redact nothing in exactly the response most likely to hold a secret. A body that is not JSON is described by length and
@@ -69,6 +74,10 @@ the adapter distribution does not, and a 1.0.0 adapter against this bootstrap is
 - **BREAKING FOR IMPLEMENTERS: the five control-protocol setters return `PublishOutcome` instead of `None`.** `CircuitControlProtocol`, `PanelControlProtocol`, `EvseControlProtocol` and `AdoptedControlProtocol` all move. **This is additive for callers** —
   a call site that ignores the return value compiles and behaves exactly as before — **and breaking for implementers**: any class type-checked against one of these protocols with `-> None` stops conforming. Test fakes, simulators, and any
   `Callable[..., Awaitable[None]]` typed against a setter are precisely that, and they must be updated in the same upgrade.
+
+- **BREAKING FOR IMPLEMENTERS: `SpanPanelClientProtocol` gains `register_fatal_error_callback`.** Same class of breakage as the setters and it needs the same treatment: additive for callers, but any fake, simulator or alternate transport implementing this
+  protocol stops conforming until it grows the method — under mypy, and at runtime too, since the protocol is `runtime_checkable` and a consumer that asks `isinstance` before offering a feature will silently stop offering it. It is declared on the protocol
+  rather than only on `SpanMqttClient` because the consumer codes against protocols, never against transport-specific classes, and it now depends on this channel.
 
 - **BREAKING FOR ADAPTERS: `set_*_topic` becomes `set_*_target`, returning a `ControlTarget`.** Verifying a write means matching the topic it went to against the property that reports it, and only the adapter knows both — the two schemas spell the same
   control differently (flat's relay is `(serial, circuit_id, "relay")`, parent/child's is `(circuit_id, "switch", "relay")`), and parsing them back out of a topic string would put wire-format knowledge in the transport, which is the one component whose job

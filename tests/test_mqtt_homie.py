@@ -41,7 +41,7 @@ from span_panel_api.mqtt.const import HOMIE_STATE_READY, MQTT_DEFAULT_MQTTS_PORT
 from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.models import MqttClientConfig
 
-from conftest import acking_bridge, flat_schema
+from conftest import FAST_CONTROL_DEADLINES, acking_bridge, flat_schema
 from span_panel_api.protocol import (
     PanelCapability,
 )
@@ -998,7 +998,12 @@ class TestSpanMqttClientProtocol:
         from span_panel_api.mqtt.client import SpanMqttClient
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client = SpanMqttClient(
+            host="192.168.1.1",
+            serial_number=SERIAL,
+            broker_config=config,
+            control_deadlines=FAST_CONTROL_DEADLINES,
+        )
         caps = client.capabilities
         assert PanelCapability.EBUS_MQTT in caps
         assert PanelCapability.PUSH_STREAMING in caps
@@ -1018,7 +1023,12 @@ class TestSpanMqttClientControl:
         from span_panel_api.mqtt.client import SpanMqttClient
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client = SpanMqttClient(
+            host="192.168.1.1",
+            serial_number=SERIAL,
+            broker_config=config,
+            control_deadlines=FAST_CONTROL_DEADLINES,
+        )
         client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         mock_bridge = acking_bridge()
@@ -1036,7 +1046,12 @@ class TestSpanMqttClientControl:
         from span_panel_api.mqtt.client import SpanMqttClient
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client = SpanMqttClient(
+            host="192.168.1.1",
+            serial_number=SERIAL,
+            broker_config=config,
+            control_deadlines=FAST_CONTROL_DEADLINES,
+        )
         client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         mock_bridge = acking_bridge()
@@ -1054,7 +1069,12 @@ class TestSpanMqttClientControl:
         from span_panel_api.mqtt.client import SpanMqttClient
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client = SpanMqttClient(
+            host="192.168.1.1",
+            serial_number=SERIAL,
+            broker_config=config,
+            control_deadlines=FAST_CONTROL_DEADLINES,
+        )
         client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         # Populate the homie description so core node is known
@@ -1078,7 +1098,12 @@ class TestSpanMqttClientControl:
         from span_panel_api.mqtt.client import SpanMqttClient
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client = SpanMqttClient(
+            host="192.168.1.1",
+            serial_number=SERIAL,
+            broker_config=config,
+            control_deadlines=FAST_CONTROL_DEADLINES,
+        )
         client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         # No description loaded — core node not found
@@ -1097,7 +1122,12 @@ class TestSpanMqttClientSnapshot:
         from span_panel_api.mqtt.client import SpanMqttClient
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client = SpanMqttClient(
+            host="192.168.1.1",
+            serial_number=SERIAL,
+            broker_config=config,
+            control_deadlines=FAST_CONTROL_DEADLINES,
+        )
         client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
         client._bridge = _ConnectedBridge()
 
@@ -1115,7 +1145,12 @@ class TestSpanMqttClientSnapshot:
         from span_panel_api.mqtt.client import SpanMqttClient
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client = SpanMqttClient(
+            host="192.168.1.1",
+            serial_number=SERIAL,
+            broker_config=config,
+            control_deadlines=FAST_CONTROL_DEADLINES,
+        )
         assert await client.ping() is False
 
     @pytest.mark.asyncio
@@ -1123,7 +1158,12 @@ class TestSpanMqttClientSnapshot:
         from span_panel_api.mqtt.client import SpanMqttClient
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client = SpanMqttClient(
+            host="192.168.1.1",
+            serial_number=SERIAL,
+            broker_config=config,
+            control_deadlines=FAST_CONTROL_DEADLINES,
+        )
 
         mock_bridge = MagicMock()
         mock_bridge.is_connected.return_value = True
@@ -1150,7 +1190,12 @@ class TestSpanMqttClientStreaming:
         from span_panel_api.mqtt.client import SpanMqttClient
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client = SpanMqttClient(
+            host="192.168.1.1",
+            serial_number=SERIAL,
+            broker_config=config,
+            control_deadlines=FAST_CONTROL_DEADLINES,
+        )
 
         callback = AsyncMock()
         unregister = client.register_snapshot_callback(callback)
@@ -1163,7 +1208,12 @@ class TestSpanMqttClientStreaming:
         from span_panel_api.mqtt.client import SpanMqttClient
 
         config = MqttClientConfig(broker_host="h", username="u", password="p")
-        client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+        client = SpanMqttClient(
+            host="192.168.1.1",
+            serial_number=SERIAL,
+            broker_config=config,
+            control_deadlines=FAST_CONTROL_DEADLINES,
+        )
 
         assert client._streaming is False
         await client.start_streaming()

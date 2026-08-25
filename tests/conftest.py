@@ -17,6 +17,7 @@ from paho.mqtt.reasoncodes import ReasonCode
 
 import span_panel_api._http as _http_mod
 from span_panel_api.models import V2HomieSchema
+from span_panel_api.mqtt.control import ControlDeadlines
 from span_panel_api_schema_0.const import TOPIC_PREFIX, TYPE_CORE
 
 _DOTENV = Path(__file__).parent.parent / ".env"
@@ -223,3 +224,16 @@ def acking_bridge() -> MagicMock:
 
     bridge.publish.side_effect = _publish
     return bridge
+
+
+#: Control deadlines short enough that a test asserting *where* a command went
+#: does not also wait out the real 2--5 second window in which the panel would
+#: have reported it back. The production defaults exist for a physical
+#: contactor; a mock panel that never echoes anything would burn one per setter.
+FAST_CONTROL_DEADLINES = ControlDeadlines(
+    relay=0.05,
+    priority=0.05,
+    dominant_power_source=0.05,
+    evse_charge_limit=0.05,
+    adopted_property=0.05,
+)

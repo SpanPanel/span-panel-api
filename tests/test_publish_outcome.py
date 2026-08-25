@@ -21,6 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from span_panel_api.models import ControlTarget
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.control import ControlDeadlines, PublishOutcome, PublishState
@@ -40,13 +41,31 @@ def _client(*, deadlines: ControlDeadlines | None = None) -> SpanMqttClient:
         control_deadlines=deadlines or FAST,
     )
     adapter = MagicMock()
-    adapter.set_circuit_relay_topic.return_value = f"ebus/5/{SERIAL}/{CIRCUIT}/relay/set"
-    adapter.set_circuit_priority_topic.return_value = f"ebus/5/{SERIAL}/{CIRCUIT}/shed-priority/set"
-    adapter.set_dominant_power_source_topic.return_value = f"ebus/5/{SERIAL}/core/dominant-power-source/set"
+    adapter.set_circuit_relay_target.return_value = ControlTarget(
+        topic=f"ebus/5/{SERIAL}/{CIRCUIT}/relay/set", device_id=SERIAL, node_id=CIRCUIT, property_id="relay"
+    )
+    adapter.set_circuit_priority_target.return_value = ControlTarget(
+        topic=f"ebus/5/{SERIAL}/{CIRCUIT}/shed-priority/set", device_id=SERIAL, node_id=CIRCUIT, property_id="shed-priority"
+    )
+    adapter.set_dominant_power_source_target.return_value = ControlTarget(
+        topic=f"ebus/5/{SERIAL}/core/dominant-power-source/set",
+        device_id=SERIAL,
+        node_id="core",
+        property_id="dominant-power-source",
+    )
     adapter.dominant_power_source_payload.return_value = "BATTERY"
-    adapter.set_evse_charge_limit_topic.return_value = "ebus/5/evse-1/config/user-max-charge-current/set"
+    adapter.set_evse_charge_limit_target.return_value = ControlTarget(
+        topic="ebus/5/evse-1/config/user-max-charge-current/set",
+        device_id="evse-1",
+        node_id="config",
+        property_id="user-max-charge-current",
+    )
     adapter.evse_charge_limit_payload.return_value = "24"
+    # One observer is registered per adapter in `_build_adapter`; these clients
+    # never connect, so wire it here or nothing feeds the no-op check.
+    adapter.register_property_callback.side_effect = lambda cb: lambda: None
     client._adapter = adapter
+    client._observe(adapter)
     return client
 
 
@@ -173,7 +192,7 @@ class TestHandedOver:
         """A rebuilt paho client drops the outbound queue, but the original may
         already have reached the broker -- so this resolves, and does not claim
         the command will never be delivered."""
-        client = _client(deadlines=ControlDeadlines(relay=5.0))
+        client = _client(deadlines=ControlDeadlines(relay=0.2))
         bridge = _bridge(connected=True, paho_client=_paho())
         client._bridge = bridge
 
@@ -230,7 +249,7 @@ class TestHandedOver:
 class TestDisconnectSettlesWaiters:
     @pytest.mark.asyncio
     async def test_teardown_does_not_leave_a_caller_waiting(self) -> None:
-        client = _client(deadlines=ControlDeadlines(relay=5.0))
+        client = _client(deadlines=ControlDeadlines(relay=0.2))
         bridge = _bridge(connected=True, paho_client=_paho())
         client._bridge = bridge
 
@@ -240,3 +259,152 @@ class TestDisconnectSettlesWaiters:
         outcome = await task
 
         assert outcome.state is PublishState.UNCONFIRMED
+
+
+# ---------------------------------------------------------------------------
+# Write-then-verify
+# ---------------------------------------------------------------------------
+
+
+class TestWriteThenVerify:
+    """The panel reporting the value back is the only thing that says it landed."""
+
+    @staticmethod
+    def _observe(client: SpanMqttClient, target: ControlTarget, value: str) -> None:
+        """Feed the observation stream as the adapter would."""
+        client._on_property_value(target.device_id, target.node_id, target.property_id, value)
+
+    @pytest.mark.asyncio
+    async def test_a_transition_yields_confirmed(self) -> None:
+        paho_client = _paho()
+        client = _client(deadlines=ControlDeadlines(relay=1.0))
+        bridge = _bridge(connected=True, paho_client=paho_client)
+        client._bridge = bridge
+        target = client._adapter.set_circuit_relay_target(CIRCUIT)
+
+        task = asyncio.ensure_future(client.set_circuit_relay(CIRCUIT, "OPEN"))
+        await asyncio.sleep(0)
+        self._observe(client, target, "OPEN")
+        outcome = await task
+
+        assert outcome.state is PublishState.CONFIRMED
+        assert outcome.no_op is False
+
+    @pytest.mark.asyncio
+    async def test_a_transition_to_some_other_value_is_not_a_confirmation(self) -> None:
+        """A racing external change is not evidence that this write landed."""
+        client = _client()
+        client._bridge = _bridge(connected=True, paho_client=_paho())
+        target = client._adapter.set_circuit_relay_target(CIRCUIT)
+
+        task = asyncio.ensure_future(client.set_circuit_relay(CIRCUIT, "OPEN"))
+        await asyncio.sleep(0)
+        self._observe(client, target, "CLOSED")
+        outcome = await task
+
+        assert outcome.state is not PublishState.CONFIRMED
+
+    @pytest.mark.asyncio
+    async def test_puback_without_a_transition_is_accepted(self) -> None:
+        paho_client = _paho()
+        client = _client()
+        bridge = _bridge(connected=True, paho_client=paho_client)
+        client._bridge = bridge
+
+        task = asyncio.ensure_future(client.set_circuit_relay(CIRCUIT, "OPEN"))
+        await asyncio.sleep(0)
+        bridge._on_publish(paho_client, None, 7, MagicMock(), None)
+        outcome = await task
+
+        assert outcome.state is PublishState.ACCEPTED
+        assert outcome.detail is not None and "no transition" in outcome.detail
+
+    @pytest.mark.asyncio
+    async def test_nothing_at_all_is_unconfirmed(self) -> None:
+        client = _client()
+        client._bridge = _bridge(connected=True, paho_client=_paho())
+
+        outcome = await client.set_circuit_relay(CIRCUIT, "OPEN")
+
+        assert outcome.state is PublishState.UNCONFIRMED
+        assert outcome.no_op is False
+
+    @pytest.mark.asyncio
+    async def test_a_no_op_short_circuits_without_publishing(self) -> None:
+        """A write whose value is already current would burn the whole deadline."""
+        paho_client = _paho()
+        client = _client(deadlines=ControlDeadlines(relay=30.0))
+        client._bridge = _bridge(connected=True, paho_client=paho_client)
+        target = client._adapter.set_circuit_relay_target(CIRCUIT)
+        self._observe(client, target, "OPEN")
+
+        outcome = await client.set_circuit_relay(CIRCUIT, "OPEN")
+
+        assert outcome.state is PublishState.UNCONFIRMED
+        assert outcome.no_op is True
+        paho_client.publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_no_op_check_compares_wire_vocabulary(self) -> None:
+        """The caller says BATTERY; the wire says OFF_GRID under v1.0.
+
+        Comparing the caller's string against the observed one would compare two
+        different vocabularies, never match, and burn a deadline on every
+        repeated write.
+        """
+        paho_client = _paho()
+        client = _client(deadlines=ControlDeadlines(dominant_power_source=30.0))
+        client._bridge = _bridge(connected=True, paho_client=paho_client)
+        client._adapter.dominant_power_source_payload.return_value = "OFF_GRID"
+        target = client._adapter.set_dominant_power_source_target()
+        self._observe(client, target, "OFF_GRID")
+
+        outcome = await client.set_dominant_power_source("BATTERY")
+
+        assert outcome.no_op is True
+        assert outcome.value == "OFF_GRID"
+        paho_client.publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_different_property_does_not_confirm_this_one(self) -> None:
+        client = _client()
+        client._bridge = _bridge(connected=True, paho_client=_paho())
+
+        task = asyncio.ensure_future(client.set_circuit_relay(CIRCUIT, "OPEN"))
+        await asyncio.sleep(0)
+        client._on_property_value(SERIAL, "some-other-circuit", "relay", "OPEN")
+        outcome = await task
+
+        assert outcome.state is not PublishState.CONFIRMED
+
+    @pytest.mark.asyncio
+    async def test_a_confirmed_write_leaves_nothing_pending(self) -> None:
+        """Neither the verification list nor the bridge's publish map may grow."""
+        paho_client = _paho()
+        client = _client(deadlines=ControlDeadlines(relay=1.0))
+        bridge = _bridge(connected=True, paho_client=paho_client)
+        client._bridge = bridge
+        target = client._adapter.set_circuit_relay_target(CIRCUIT)
+
+        task = asyncio.ensure_future(client.set_circuit_relay(CIRCUIT, "OPEN"))
+        await asyncio.sleep(0)
+        self._observe(client, target, "OPEN")
+        assert (await task).state is PublishState.CONFIRMED
+        await asyncio.sleep(0)
+
+        assert client._verifications == []
+        assert bridge._pending_publishes == {}
+
+    @pytest.mark.asyncio
+    async def test_swapping_the_adapter_drops_stale_observations(self) -> None:
+        """The values describe a tree that is being replaced."""
+        client = _client()
+        target = client._adapter.set_circuit_relay_target(CIRCUIT)
+        self._observe(client, target, "OPEN")
+        assert client._observed_values
+
+        replacement = MagicMock()
+        replacement.register_property_callback.side_effect = lambda cb: lambda: None
+        client._observe(replacement)
+
+        assert client._observed_values == {}

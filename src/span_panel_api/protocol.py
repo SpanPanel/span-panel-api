@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from .exceptions import SpanPanelError
-    from .models import FieldMetadata, SpanPanelSnapshot, V2HomieSchema
+    from .models import ControlTarget, FieldMetadata, SpanPanelSnapshot, V2HomieSchema
     from .mqtt.control import PublishOutcome
 
 
@@ -206,14 +206,27 @@ class SchemaAdapter(Protocol):
 
     def find_node_by_type(self, type_str: str) -> str | None: ...
 
-    def set_circuit_relay_topic(self, circuit_id: str) -> str: ...
+    def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget:
+        """Where a relay command goes, and the property that reports it.
 
-    def set_circuit_priority_topic(self, circuit_id: str) -> str: ...
+        Renamed from `set_circuit_relay_topic`, which returned a bare string.
+        The rename is deliberate rather than a return-type change under the old
+        name: an adapter built against the old contract would still carry the
+        old name, pass discovery on presence, and fail deep inside a setter with
+        an `AttributeError` on a `str`. Under a new name it is rejected at
+        discovery, where the remedy -- upgrade both packages together -- can
+        still be named. That is also why `ADAPTER_CONTRACT_VERSION` does not
+        move: the change is additive plus a removal, not a redefinition.
+        """
 
-    def set_dominant_power_source_topic(self) -> str | None: ...
+    def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget:
+        """Where a shed-priority command goes, and the property that reports it."""
 
-    def set_evse_charge_limit_topic(self, node_id: str) -> str | None:
-        """The topic that writes one charger's charge-current limit, or None.
+    def set_dominant_power_source_target(self) -> ControlTarget | None:
+        """Where a dominant-power-source command goes, or None if the panel has no such control."""
+
+    def set_evse_charge_limit_target(self, node_id: str) -> ControlTarget | None:
+        """The target that writes one charger's charge-current limit, or None.
 
         `node_id` is the key the snapshot's `evse` map uses, so a caller needs
         nothing but the snapshot it already has. Returning None means this
@@ -248,4 +261,16 @@ class SchemaAdapter(Protocol):
         panel will reject.
         """
 
-    def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]: ...
+    def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
+        """Subscribe to per-property updates; returns an unregister callable.
+
+        **The callback receives `(device_id, node_id, property_id, value)`** --
+        the same triple `ControlTarget` carries, spelled the same way, because
+        write-then-verify matches one against the other. `value` is `None` only
+        where the adapter can report a property with no value; a consumer that
+        needs the previous value keeps it itself.
+
+        Under the flat schema every property belongs to the one device, so
+        `device_id` is the panel serial rather than being omitted. Filling it in
+        is what lets a consumer treat both schemas' streams as one shape.
+        """

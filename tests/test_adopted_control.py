@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from conftest import acking_bridge
+from conftest import FAST_CONTROL_DEADLINES, acking_bridge
 from span_panel_api.exceptions import SpanPanelServerError
 from span_panel_api.models import AdoptedDevice, AdoptedProperty
 from span_panel_api.mqtt import MqttClientConfig
@@ -39,7 +39,12 @@ READING = AdoptedProperty(node_id="meter", property_id="active-power", datatype=
 def _client(*properties: AdoptedProperty) -> tuple[SpanMqttClient, MagicMock]:
     """A client whose adapter reports one adopted device carrying `properties`."""
     config = MqttClientConfig(broker_host="h", username="u", password="p")
-    client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+    client = SpanMqttClient(
+        host="192.168.1.1",
+        serial_number=SERIAL,
+        broker_config=config,
+        control_deadlines=FAST_CONTROL_DEADLINES,
+    )
 
     adapter = MagicMock()
     adapter.build_snapshot.return_value = MagicMock(
@@ -130,7 +135,12 @@ def _two_generators() -> tuple[SpanMqttClient, MagicMock]:
     kind is exactly when a device id stops being decoration.
     """
     config = MqttClientConfig(broker_host="h", username="u", password="p")
-    client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
+    client = SpanMqttClient(
+        host="192.168.1.1",
+        serial_number=SERIAL,
+        broker_config=config,
+        control_deadlines=FAST_CONTROL_DEADLINES,
+    )
 
     def control(device_id: str) -> AdoptedProperty:
         return AdoptedProperty(

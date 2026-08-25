@@ -20,7 +20,7 @@ from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.const import MQTT_FULL_REBUILD_AFTER_FAILURES, MQTT_RECONNECT_MIN_DELAY_S
 from span_panel_api.mqtt.models import MqttClientConfig
 
-from conftest import MINIMAL_DESCRIPTION, SERIAL, TOPIC_PREFIX_SERIAL
+from conftest import FAST_CONTROL_DEADLINES, MINIMAL_DESCRIPTION, SERIAL, TOPIC_PREFIX_SERIAL
 
 
 def _make_bridge() -> AsyncMqttBridge:
@@ -298,6 +298,7 @@ def _make_span_client(snapshot_interval: float = 1.0) -> SpanMqttClient:
         serial_number=SERIAL,
         broker_config=config,
         snapshot_interval=snapshot_interval,
+        control_deadlines=FAST_CONTROL_DEADLINES,
     )
 
 

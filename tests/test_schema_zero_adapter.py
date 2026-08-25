@@ -39,8 +39,8 @@ def test_subscribes_to_the_single_panel_wildcard(adapter: SchemaZeroAdapter) -> 
 
 def test_circuit_setter_topics_address_the_panel_device(adapter: SchemaZeroAdapter) -> None:
     circuit = "ac3dccda46a94b98878a227df6fed588"
-    assert adapter.set_circuit_relay_topic(circuit) == f"ebus/5/{SERIAL}/{circuit}/relay/set"
-    assert adapter.set_circuit_priority_topic(circuit) == f"ebus/5/{SERIAL}/{circuit}/shed-priority/set"
+    assert adapter.set_circuit_relay_target(circuit).topic == f"ebus/5/{SERIAL}/{circuit}/relay/set"
+    assert adapter.set_circuit_priority_target(circuit).topic == f"ebus/5/{SERIAL}/{circuit}/shed-priority/set"
 
 
 def test_dominant_power_source_topic_is_none_before_the_core_node_is_known(
@@ -48,7 +48,7 @@ def test_dominant_power_source_topic_is_none_before_the_core_node_is_known(
 ) -> None:
     """The core node id is discovered from $description, so it is unavailable
     until a description has been routed through handle_message."""
-    assert adapter.set_dominant_power_source_topic() is None
+    assert adapter.set_dominant_power_source_target() is None
 
 
 def test_is_not_ready_before_any_message(adapter: SchemaZeroAdapter) -> None:

@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
 from dataclasses import dataclass
+from functools import partial
 from importlib.metadata import version
 import logging
 import ssl
@@ -79,7 +80,33 @@ class _Verification:
 
     key: tuple[str, str, str]
     expected: str
-    observed: asyncio.Future[None]
+    observed: asyncio.Future[bool]
+    """`True` when the property reported the value, `False` when the transport
+    discarded the message and no report can arrive. Both are endings; only the
+    first is a transition, and carrying which in the result is what lets the
+    waiter stop at either without a second future to watch."""
+
+
+def _discard_verification(verification: _Verification, acknowledged: asyncio.Future[bool]) -> None:
+    """End a write's wait when the transport says the message is gone.
+
+    Fired when the bridge settles a publish. `False` there means a rebuild
+    discarded paho's outbound queue, so the panel will never see this write and
+    nothing will ever report a transition for it -- the deadline would expire
+    on a certainty. `True` is an ordinary PUBACK and changes nothing: the broker
+    taking the message is not the panel acting on it, and the write is still
+    waiting on exactly what it was waiting on before.
+
+    This resolves the wait rather than cancelling it. Cancelling would surface
+    in the setter as a `CancelledError` indistinguishable from the caller
+    cancelling the control call itself, and turning one into an outcome would
+    swallow the other.
+    """
+    if acknowledged.cancelled() or acknowledged.exception() is not None:
+        # The setter's own cleanup, or a failure that has its own reporting.
+        return
+    if not acknowledged.result() and not verification.observed.done():
+        verification.observed.set_result(False)
 
 
 def _metadata_for_the_log() -> tuple[list[str], str]:
@@ -820,7 +847,7 @@ class SpanMqttClient:
         self._observed_values[key] = value
         for verification in list(self._verifications):
             if verification.key == key and verification.expected == value and not verification.observed.done():
-                verification.observed.set_result(None)
+                verification.observed.set_result(True)
 
     async def _publish_control(self, target: ControlTarget, value: str, deadline: float) -> PublishOutcome:
         """Run one control command past the interceptor, then deliver it.
@@ -967,9 +994,16 @@ class SpanMqttClient:
                     value=value,
                     detail="broker not connected; refused rather than queued",
                 )
+            # A discarded message ends the wait as surely as a transition does.
+            # Without this the deadline is the only thing that ends it, so a
+            # relay write would sit out its full five seconds against a transport
+            # that had already thrown the message away and can never report back.
+            acknowledged.add_done_callback(partial(_discard_verification, verification))
             try:
-                await asyncio.wait_for(verification.observed, timeout=deadline)
+                transitioned = await asyncio.wait_for(verification.observed, timeout=deadline)
             except TimeoutError:
+                return self._unverified_outcome(target, value, deadline, acknowledged)
+            if not transitioned:
                 return self._unverified_outcome(target, value, deadline, acknowledged)
             return PublishOutcome(state=PublishState.CONFIRMED, topic=target.topic, value=value)
         finally:

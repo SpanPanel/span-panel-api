@@ -363,6 +363,29 @@ def test_an_adapter_predating_contract_versioning_is_rejected_by_age_not_by_shap
     assert "predates contract versioning" in str(exc.value)
 
 
+def test_a_missing_member_names_the_remedy_not_just_the_diagnosis() -> None:
+    """A member-presence rejection is what a mismatched *pair* of packages looks
+    like, in both directions: a new bootstrap misses the member an old adapter
+    has not grown, an old bootstrap misses the one a new adapter has renamed.
+    Listing the absent names reads as a fault in the adapter and sends someone
+    looking for a bug. The remedy is the same either way, so the message says it
+    rather than leaving it to be inferred."""
+    members = _conforming_members()
+    del members["set_circuit_relay_target"]
+
+    _reset_adapter_cache()
+    with patch(
+        "span_panel_api.adapters.entry_points",
+        return_value=[_FakeEntryPoint("schema_9", type("HalfBuilt", (), members))],
+    ):
+        with pytest.raises(SpanPanelAdapterIncompatibleError) as exc:
+            resolve_adapter("schema_9", "test")
+
+    message = str(exc.value)
+    assert "set_circuit_relay_target" in message, "the diagnosis must survive"
+    assert "together" in message, "and the remedy must be stated, not inferred"
+
+
 def test_a_rejected_adapter_is_reported_as_unusable_not_as_missing() -> None:
     """Absent and rejected are opposite remedies. Reporting a stale adapter as
     missing sends someone to install a package they already have."""

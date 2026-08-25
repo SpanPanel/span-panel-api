@@ -167,6 +167,7 @@ class TestHandedOver:
         bridge = _bridge(connected=True, paho_client=paho_client)
         client._bridge = bridge
 
+        started = asyncio.get_running_loop().time()
         task = asyncio.ensure_future(client.set_circuit_relay(CIRCUIT, "OPEN"))
         await asyncio.sleep(0)  # let the publish register its waiter
         bridge._on_publish(paho_client, None, 7, MagicMock(), None)
@@ -175,6 +176,11 @@ class TestHandedOver:
         assert outcome.state is PublishState.ACCEPTED
         assert outcome.no_op is False
         paho_client.publish.assert_called_once()
+        # A PUBACK must NOT end the wait. The broker taking the message says
+        # nothing about the panel acting on it, so the deadline still has to run
+        # its course -- otherwise every write would report ACCEPTED the instant
+        # the broker answered and a transition arriving later would go unseen.
+        assert asyncio.get_running_loop().time() - started >= FAST.relay
 
     @pytest.mark.asyncio
     async def test_deadline_expiry_yields_unconfirmed_and_does_not_raise(self) -> None:
@@ -191,19 +197,30 @@ class TestHandedOver:
     async def test_rebuild_settles_in_flight_publishes_without_calling_them_failed(self) -> None:
         """A rebuilt paho client drops the outbound queue, but the original may
         already have reached the broker -- so this resolves, and does not claim
-        the command will never be delivered."""
-        client = _client(deadlines=ControlDeadlines(relay=0.2))
+        the command will never be delivered.
+
+        The deadline here is a realistic relay deadline rather than a fast one,
+        because the point is that it is never reached: a discarded message ends
+        the wait immediately. Waiting it out would be five seconds spent on a
+        transport that had already thrown the message away.
+        """
+        client = _client(deadlines=ControlDeadlines(relay=5.0))
         bridge = _bridge(connected=True, paho_client=_paho())
         client._bridge = bridge
 
+        started = asyncio.get_running_loop().time()
         task = asyncio.ensure_future(client.set_circuit_relay(CIRCUIT, "OPEN"))
         await asyncio.sleep(0)
         bridge._resolve_pending_publishes(False, "test rebuild")
         outcome = await task
+        elapsed = asyncio.get_running_loop().time() - started
 
         assert outcome.state is PublishState.UNCONFIRMED
         assert outcome.state is not PublishState.FAILED
         assert outcome.detail is not None and "rebuilt" in outcome.detail
+        # Generous enough not to be flaky on a loaded machine, and still two
+        # orders of magnitude below the deadline it would otherwise have burnt.
+        assert elapsed < 1.0
 
     @pytest.mark.asyncio
     async def test_a_settled_publish_is_forgotten(self) -> None:

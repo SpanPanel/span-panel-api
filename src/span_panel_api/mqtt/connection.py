@@ -495,6 +495,13 @@ class AsyncMqttBridge:
         or teardown. Without this a caller waits out its whole deadline for an
         acknowledgement that is now impossible, and an audit trail shows a
         command in limbo with no terminal state.
+
+        Settling the future is what *lets* a waiter stop early; it does not by
+        itself stop one. A caller waiting on something else -- the property
+        transition, in this client's case -- has to watch this future too, and
+        `_discard_verification` is where that is wired up. The distinction is
+        worth keeping straight: this method's job ends at making the evidence
+        available.
         """
         if not self._pending_publishes:
             return

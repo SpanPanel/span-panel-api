@@ -36,6 +36,9 @@ class _FakeBridge(AsyncMqttBridge):
     def __init__(self, connected: bool = True) -> None:
         # Intentionally do not call super().__init__ — avoids I/O setup.
         self._connected = connected
+        # No terminal failure: get_snapshot() and ping() consult this before the
+        # liveness checks, so a stub that omits it is a bridge with no answer.
+        self._fatal_error = None
         self.subscribed_topics: list[tuple[str, int]] = []
 
     def is_connected(self) -> bool:

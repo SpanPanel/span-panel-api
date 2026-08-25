@@ -163,7 +163,7 @@ async def mqtt_client_mock() -> AsyncGenerator[MagicMock, None]:
     with (
         patch("span_panel_api.mqtt.connection.AsyncMQTTClient") as cls,
         patch("span_panel_api.mqtt.connection.download_ca_cert", return_value="FAKE-PEM"),
-        patch("span_panel_api.mqtt.connection._build_ssl_context", return_value=MagicMock()),
+        patch("span_panel_api.mqtt.connection.build_panel_ssl_context", return_value=MagicMock()),
         patch("span_panel_api.mqtt.client.get_homie_schema", return_value=MOCK_SCHEMA),
         patch("span_panel_api.factory.get_homie_schema", return_value=MOCK_SCHEMA),
     ):

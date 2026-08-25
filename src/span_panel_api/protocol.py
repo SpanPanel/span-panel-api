@@ -12,6 +12,7 @@ from enum import Flag, auto
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from .exceptions import SpanPanelError
     from .models import FieldMetadata, SpanPanelSnapshot, V2HomieSchema
 
 
@@ -47,6 +48,20 @@ class SpanPanelClientProtocol(Protocol):
     async def get_snapshot(self) -> SpanPanelSnapshot: ...
 
     def register_connection_callback(self, callback: Callable[[bool], None]) -> Callable[[], None]: ...
+
+    def register_fatal_error_callback(self, callback: Callable[[SpanPanelError], None]) -> Callable[[], None]:
+        """Subscribe to the transport stopping for good.
+
+        Declared here rather than only on the MQTT client because the consumer
+        depends on it and this module's rule is that the consumer codes against
+        protocols, never against transport-specific classes.
+
+        Distinct from `register_connection_callback` because the two say
+        different things and the difference is the whole point. "Disconnected" is
+        what an ordinary outage looks like and a consumer is right to wait
+        through it; this fires only for a failure no amount of waiting fixes,
+        and the consumer is expected to surface it to a person.
+        """
 
 
 @runtime_checkable

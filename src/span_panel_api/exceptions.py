@@ -39,6 +39,43 @@ class SpanPanelServerError(SpanPanelAPIError):
     """
 
 
+class SpanPanelCAChangedError(SpanPanelError):
+    """The panel is presenting a certificate chain from a different CA than the pin.
+
+    Terminal, and deliberately so. Every other connection failure in this library
+    is retried, because every other one is something that fixes itself: a panel
+    rebooting, a broker restarting, a network dropping. This one does not fix
+    itself, and retrying it is the failure mode -- a client that keeps trying is
+    a client waiting to succeed against whatever is answering, which is the
+    outcome pinning exists to prevent.
+
+    It is also not a conclusion drawn from a handshake failure, because that
+    conclusion cannot be drawn: an expired leaf (a panel whose clock reset after
+    a power outage) and a hostname mismatch (a panel whose address moved) both
+    raise the same verification error against a perfectly valid pinned CA, and
+    the ``ssl`` module exposes no peer chain when verification fails. This is
+    raised only after a separate fetch of the panel's advertised CA returned a
+    certificate whose fingerprint differs from the pinned one -- so
+    ``observed_fingerprint`` is what the panel says its anchor is now, not what
+    it presented on the connection that failed.
+
+    The two remedies are opposite and only the user can choose between them, so
+    both fingerprints are carried: re-pin, if the panel's CA was legitimately
+    rotated by a firmware upgrade or a factory reset, or investigate, if it was
+    not.
+    """
+
+    def __init__(self, expected_fingerprint: str, observed_fingerprint: str) -> None:
+        self.expected_fingerprint = expected_fingerprint
+        self.observed_fingerprint = observed_fingerprint
+        super().__init__(
+            "The panel is advertising a different CA certificate than the pinned one. "
+            f"Pinned SHA-256 {expected_fingerprint}, panel now advertises {observed_fingerprint}. "
+            "Refusing to re-anchor: a rotated CA and an intercepted connection look identical "
+            "from here. Re-pin only after confirming the new fingerprint out of band."
+        )
+
+
 class SpanPanelStaleDataError(SpanPanelError):
     """Raised when get_snapshot() is called while the client isn't live.
 

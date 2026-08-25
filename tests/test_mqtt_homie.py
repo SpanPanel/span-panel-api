@@ -52,7 +52,7 @@ class _ConnectedBridge(AsyncMqttBridge):
 
     def __init__(self) -> None:  # noqa: D107
         # Bypass AsyncMqttBridge.__init__ — avoids TLS/network setup.
-        pass
+        self._fatal_error = None
 
     def is_connected(self) -> bool:  # noqa: D102
         return True
@@ -1130,6 +1130,9 @@ class TestSpanMqttClientSnapshot:
 
         mock_bridge = MagicMock()
         mock_bridge.is_connected.return_value = True
+        # ping() consults this first: a MagicMock would answer with a Mock, which
+        # is neither None nor raisable.
+        mock_bridge.fatal_error = None
         client._bridge = mock_bridge
         client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 

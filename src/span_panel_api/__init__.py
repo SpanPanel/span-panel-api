@@ -6,6 +6,7 @@ supporting MQTT/Homie (v2) transport.
 
 from importlib.metadata import version as _pkg_version
 
+from ._ssl import build_panel_ssl_context, ca_fingerprint
 from .auth import (
     delete_fqdn,
     download_ca_cert,
@@ -22,6 +23,7 @@ from .exceptions import (
     SpanPanelAdapterMissingError,
     SpanPanelAPIError,
     SpanPanelAuthError,
+    SpanPanelCAChangedError,
     SpanPanelConnectionError,
     SpanPanelError,
     SpanPanelSchemaVersionError,
@@ -129,6 +131,11 @@ __all__ = [  # noqa: RUF022
     "V2AuthResponse",
     "V2HomieSchema",
     "V2StatusInfo",
+    # Added 2026-08-25 with CA pinning: the consumer builds the same context for
+    # its own HTTPS calls and prints and compares the same fingerprint string, so
+    # both live here rather than being reimplemented on the other side.
+    "build_panel_ssl_context",
+    "ca_fingerprint",
     "delete_fqdn",
     "download_ca_cert",
     "get_fqdn",
@@ -152,6 +159,7 @@ __all__ = [  # noqa: RUF022
     "SpanPanelAdapterIncompatibleError",
     "SpanPanelAdapterMissingError",
     "SpanPanelAuthError",
+    "SpanPanelCAChangedError",
     "SpanPanelSchemaVersionError",
     "SpanPanelConnectionError",
     "SpanPanelError",

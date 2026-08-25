@@ -103,7 +103,7 @@ class TestBridgeConnect:
         """Malformed CA PEM must surface as SpanPanelConnectionError, not ssl.SSLError."""
         bridge = _make_bridge()
         with patch(
-            "span_panel_api.mqtt.connection._build_ssl_context",
+            "span_panel_api.mqtt.connection.build_panel_ssl_context",
             side_effect=ssl.SSLError("malformed PEM"),
         ):
             with pytest.raises(SpanPanelConnectionError, match="Failed to build SSL context"):

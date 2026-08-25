@@ -25,6 +25,7 @@ from ..exceptions import (
     SpanPanelAdapterIncompatibleError,
     SpanPanelAdapterMissingError,
     SpanPanelConnectionError,
+    SpanPanelError,
     SpanPanelSchemaVersionError,
     SpanPanelServerError,
     SpanPanelStaleDataError,
@@ -119,6 +120,7 @@ class SpanMqttClient:
         self._streaming = False
         self._snapshot_callbacks: list[Callable[[SpanPanelSnapshot], Awaitable[None]]] = []
         self._connection_callbacks: list[Callable[[bool], None]] = []
+        self._fatal_error_callbacks: list[Callable[[SpanPanelError], None]] = []
         self._schema_change_callbacks: list[Callable[[str | None, str | None], None]] = []
         self._live = False
         self._ready_event: asyncio.Event | None = None
@@ -388,11 +390,13 @@ class SpanMqttClient:
             use_tls=self._broker_config.use_tls,
             loop=self._loop,
             panel_http_port=self._panel_http_port,
+            ca_pem=self._broker_config.ca_pem,
         )
 
         # Wire message handler
         self._bridge.set_message_callback(self._on_message)
         self._bridge.set_connection_callback(self._on_connection_change)
+        self._bridge.set_fatal_error_callback(self._on_fatal_error)
         # Pre-rebuild hook: reset Homie accumulator before the bridge swaps
         # paho clients, so retained messages on the new subscription start
         # from a clean slate (no stale `$state=disconnected` cached from
@@ -489,9 +493,25 @@ class SpanMqttClient:
         self._live = False
 
     async def ping(self) -> bool:
-        """Check if MQTT connection is alive and device is ready."""
+        """Check if MQTT connection is alive and device is ready.
+
+        Raises rather than returning False when the transport has stopped for
+        good. The two answers are not the same fact: False means "not right now,
+        still trying", and a consumer's correct response to it is to wait. A
+        bridge that will never reconnect answering False would put that consumer
+        in a wait with no end, which is exactly the state the fatal-error channel
+        exists to make impossible — including for a consumer that registered no
+        callback.
+
+        Raises:
+            SpanPanelCAChangedError: the panel is pinned and now advertises a
+                different CA. Terminal; see the bridge's `fatal_error`.
+        """
         if self._bridge is None or self._adapter is None:
             return False
+        fatal = self._bridge.fatal_error
+        if fatal is not None:
+            raise fatal
         return self._bridge.is_connected() and self._adapter.is_ready()
 
     def register_connection_callback(self, callback: Callable[[bool], None]) -> Callable[[], None]:
@@ -512,6 +532,45 @@ class SpanMqttClient:
                 self._connection_callbacks.remove(callback)
 
         return unregister
+
+    def register_fatal_error_callback(self, callback: Callable[[SpanPanelError], None]) -> Callable[[], None]:
+        """Subscribe to the transport stopping for good.
+
+        Fires once, with the error, for a failure that retrying cannot fix. Today
+        that is exactly one condition -- the panel advertising a CA other than
+        the pinned one -- and the reason it needs a channel of its own is that
+        the reconnect loop runs fire-and-forget: raising inside it kills the task
+        silently, and the connection callback can only say "disconnected", which
+        is what a consumer sees during an ordinary outage and correctly waits
+        through.
+
+        This is a notification, not the only notification. `ping()` and
+        `get_snapshot()` re-raise the same error, so a consumer that registers
+        nothing still cannot read a dead transport as a healthy one.
+
+        Returns an unregister function. Calling it twice is safe.
+        """
+        self._fatal_error_callbacks.append(callback)
+
+        def unregister() -> None:
+            with contextlib.suppress(ValueError):
+                self._fatal_error_callbacks.remove(callback)
+
+        return unregister
+
+    def _on_fatal_error(self, error: SpanPanelError) -> None:
+        """Fan the bridge's terminal failure out to subscribers.
+
+        Iterates a copy for the same reason the connection fan-out does: the
+        expected response is to tear this client down, and a subscriber
+        unregistering from inside its own callback must not mutate the list
+        being walked.
+        """
+        for cb in list(self._fatal_error_callbacks):
+            try:
+                cb(error)
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.warning("Fatal-error callback raised", exc_info=True)
 
     def register_schema_change_callback(self, callback: Callable[[str | None, str | None], None]) -> Callable[[], None]:
         """Subscribe to the panel changing schema generation mid-session.
@@ -549,6 +608,13 @@ class SpanMqttClient:
         """
         if self._bridge is None or self._adapter is None:
             raise SpanPanelStaleDataError("Client not connected — call connect() first")
+        # Ahead of the staleness checks, because it is the stronger statement:
+        # `SpanPanelStaleDataError` is documented as "panel currently
+        # unreachable" and consumers poll through it, which is the right response
+        # to a disconnect and the wrong one to a transport that has stopped.
+        fatal = self._bridge.fatal_error
+        if fatal is not None:
+            raise fatal
         if not self._bridge.is_connected():
             raise SpanPanelStaleDataError("MQTT broker disconnected")
         if not self._adapter.is_ready():

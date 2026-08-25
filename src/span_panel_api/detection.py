@@ -8,6 +8,7 @@ or passphrase is required.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ssl
 
 import httpx
 
@@ -32,8 +33,9 @@ class DetectionResult:
 async def detect_api_version(
     host: str,
     timeout: float = 5.0,
-    port: int = 80,
+    port: int | None = None,
     httpx_client: httpx.AsyncClient | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> DetectionResult:
     """Detect SPAN Panel API version.
 
@@ -44,16 +46,21 @@ async def detect_api_version(
     Args:
         host: IP address or hostname of the SPAN Panel
         timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
-        port: HTTP port of the panel bootstrap API
+        port: Port of the panel bootstrap API. ``None`` means "unspecified" and takes
+            the scheme's default -- 80 without ``ssl_context``, 443 with one.
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+            Not used when ``ssl_context`` is supplied -- httpx fixes its trust store at
+            construction, so a pinned CA needs a client built for it. See ``_get_client``.
+        ssl_context: Trust anchor for the panel's HTTPS certificate. Supplying one moves
+            this call to ``https://``; ``None`` is byte-identical to 3.0.1.
 
     Returns:
         DetectionResult indicating which API version is available. On transport
         failures, ``api_version`` is ``"v1"`` and ``probe_failed`` is True.
     """
-    url = _build_url(host, port, "/api/v2/status")
+    url = _build_url(host, port, "/api/v2/status", ssl_context)
     try:
-        async with _get_client(httpx_client, timeout) as client:
+        async with _get_client(httpx_client, timeout, ssl_context) as client:
             response = await client.get(url)
     except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError):
         return DetectionResult(api_version="v1", probe_failed=True)

@@ -87,7 +87,7 @@ class AsyncMqttBridge:
         transport: MqttTransport = "tcp",
         use_tls: bool = True,
         loop: asyncio.AbstractEventLoop | None = None,
-        panel_http_port: int = 80,
+        panel_http_port: int | None = None,
     ) -> None:
         self._host = host
         self._port = port

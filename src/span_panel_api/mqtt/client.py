@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 import contextlib
 from importlib.metadata import version
 import logging
+import ssl
 import time
 from typing import TYPE_CHECKING
 
@@ -85,12 +86,13 @@ class SpanMqttClient:
         serial_number: str,
         broker_config: MqttClientConfig,
         snapshot_interval: float = 1.0,
-        panel_http_port: int = 80,
+        panel_http_port: int | None = None,
         adapter_factory: Callable[[str, V2HomieSchema], SchemaAdapter] | None = None,
         data_model_version: str | None = None,
         schema_dispatch_reason: str | None = None,
         schema: V2HomieSchema | None = None,
         httpx_client: httpx.AsyncClient | None = None,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         self._host = host
         self._serial_number = serial_number
@@ -104,6 +106,13 @@ class SpanMqttClient:
         # the reason this exists at all is that the runtime path was the one place
         # left without it. See `_get_client`.
         self._httpx_client = httpx_client
+        # Anchors this client's own REST calls -- the schema fetch at connect and
+        # every refetch the redispatch path makes. Separate from the broker's
+        # anchor in `MqttClientConfig.ca_pem` because they secure different
+        # transports, and identical in origin because a panel signs both its HTTPS
+        # certificate and its broker's with the one CA. `None` keeps these fetches
+        # on plaintext HTTP, which is 3.0.1's behaviour.
+        self._ssl_context = ssl_context
 
         self._bridge: AsyncMqttBridge | None = None
         self._adapter: SchemaAdapter | None = None
@@ -143,6 +152,21 @@ class SpanMqttClient:
         # One reconsideration at a time. The MQTT trigger can fire repeatedly while a
         # fetch is retrying, and each would otherwise start its own retry loop.
         self._redispatch_in_flight = False
+
+    async def _fetch_schema(self) -> V2HomieSchema:
+        """One REST schema read, with this client's transport settings applied.
+
+        Both callers -- ``connect()`` and the redispatch retry -- had the same
+        four arguments spelled out separately, and adding the trust anchor to one
+        and not the other is exactly how a session ends up bootstrapping over
+        HTTPS and refetching over HTTP for the rest of its life. One call site.
+        """
+        return await get_homie_schema(
+            self._host,
+            port=self._panel_http_port,
+            httpx_client=self._httpx_client,
+            ssl_context=self._ssl_context,
+        )
 
     async def _preload_adapter(self, schema: V2HomieSchema) -> None:
         """Resolve this schema's adapter in a thread, ahead of building it.
@@ -310,11 +334,7 @@ class SpanMqttClient:
         # would be a second call to the same unauthenticated endpoint for a
         # value that cannot have changed. A directly-constructed client has no
         # schema yet, so it fetches here and dispatches in _build_adapter.
-        schema = (
-            self._schema
-            if self._schema is not None
-            else await get_homie_schema(self._host, port=self._panel_http_port, httpx_client=self._httpx_client)
-        )
+        schema = self._schema if self._schema is not None else await self._fetch_schema()
         self._schema = schema
         await self._preload_adapter(schema)
         adapter = self._build_adapter(schema)
@@ -851,7 +871,7 @@ class SpanMqttClient:
         attempts = 0
         while True:
             try:
-                return await get_homie_schema(self._host, port=self._panel_http_port, httpx_client=self._httpx_client)
+                return await self._fetch_schema()
             except (
                 SpanPanelConnectionError,
                 SpanPanelTimeoutError,

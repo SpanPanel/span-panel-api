@@ -473,7 +473,7 @@ _CONSUMED_OFF_SNAPSHOT: dict[tuple[str, str, str], str] = {
     ),
     (TYPE_PANEL, NODE_SHED, "asserted-islanding-state"): (
         "tier 2 of resolve_islanding_state (panel.py), shadowed wherever a MID answers "
-        "at tier 1, and the write target of set_dominant_power_source_topic"
+        "at tier 1, and the write target of set_dominant_power_source_target"
     ),
     (TYPE_LUGS, NODE_CONNECTION, "feeds-device-id"): (
         "the downstream-lugs feedthrough branch of resolve_relative_position "

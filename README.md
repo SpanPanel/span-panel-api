@@ -123,21 +123,25 @@ This ensures that the first `get_snapshot()` after connect returns human-readabl
 
 The library defines structural subtyping protocols (PEP 544). All are `runtime_checkable`, so a consumer asks `isinstance` before offering a control rather than assuming the panel in front of it supports one:
 
-| Protocol                   | Purpose                                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------------------ |
-| `SpanPanelClientProtocol`  | Core lifecycle: `connect`, `close`, `ping`, `get_snapshot`, `register_connection_callback` |
-| `CircuitControlProtocol`   | Relay and shed-priority control: `set_circuit_relay`, `set_circuit_priority`               |
-| `PanelControlProtocol`     | Panel-level control: `set_dominant_power_source`                                           |
-| `EvseControlProtocol`      | Per-charger control: `set_evse_charge_limit(node_id, amps)`                                |
-| `AdoptedControlProtocol`   | Write to a settable property of a device this library models nothing for                   |
-| `StreamingCapableProtocol` | Push-based updates: `register_snapshot_callback`, `start_streaming`, `stop_streaming`      |
+| Protocol                      | Purpose                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------ |
+| `SpanPanelClientProtocol`     | Core lifecycle: `connect`, `close`, `ping`, `get_snapshot`, `register_connection_callback` |
+| `CircuitControlProtocol`      | Relay and shed-priority control: `set_circuit_relay`, `set_circuit_priority`               |
+| `PanelControlProtocol`        | Panel-level control: `set_dominant_power_source`                                           |
+| `EvseControlProtocol`         | Per-charger control: `set_evse_charge_limit(node_id, amps)`                                |
+| `AdoptedControlProtocol`      | Write to a settable property of a device this library models nothing for                   |
+| `ControlInterceptionProtocol` | Install one veto-and-observe point for every control command: `set_control_interceptor`    |
+| `StreamingCapableProtocol`    | Push-based updates: `register_snapshot_callback`, `start_streaming`, `stop_streaming`      |
 
 The first five differ in subject, not just in name. `EvseControlProtocol` is separate from `PanelControlProtocol` because several chargers may be commissioned at once and every call names which one. `AdoptedControlProtocol` differs in kind: the curated
 setters name a control this library understands and translate or bound the value on the way out, while this one names a property by its wire address and passes the value through, because the declaration is all anybody here knows about it. That write is
 authorised by the snapshot rather than by its arguments — the transport resolves the property against the current `adopted_devices` and refuses anything it does not find carrying a set topic, so a device this library _does_ model cannot be addressed
 through it.
 
-A seventh protocol, `SchemaAdapter`, is the bootstrap-to-parser contract rather than a consumer-facing one; it is what an adapter distribution implements and what discovery checks. Integration code programs against the protocols above, not against
+`ControlInterceptionProtocol` is separate from the four control protocols rather than a member of them because adding it there would break every implementer of those protocols a second time in one release, and separate from `StreamingCapableProtocol`
+because a transport could reasonably offer one and not the other.
+
+One further protocol, `SchemaAdapter`, is the bootstrap-to-parser contract rather than a consumer-facing one; it is what an adapter distribution implements and what discovery checks. Integration code programs against the protocols above, not against
 transport-specific classes.
 
 ### Snapshots
@@ -325,12 +329,69 @@ client.set_snapshot_interval(0)
 
 ```python
 # Set circuit relay (OPEN/CLOSED)
-await client.set_circuit_relay("circuit-uuid", "OPEN")
+outcome = await client.set_circuit_relay("circuit-uuid", "OPEN")
 await client.set_circuit_relay("circuit-uuid", "CLOSED")
 
 # Set circuit shed priority (NEVER / SOC_THRESHOLD / OFF_GRID)
 await client.set_circuit_priority("circuit-uuid", "NEVER")
 ```
+
+Every setter returns a `PublishOutcome` saying how far the command got. Ignoring it is fine and behaves as it always did; reading it is how a caller tells a breaker that opened from a command that was never sent.
+
+| `outcome.state`            | What it means                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `PublishState.CONFIRMED`   | The property reported the requested value on its own topic                      |
+| `PublishState.ACCEPTED`    | The broker acknowledged the message; no transition observed before the deadline |
+| `PublishState.UNCONFIRMED` | Handed over, and nothing came back before the deadline                          |
+| `PublishState.FAILED`      | Never handed to the broker, and will not be delivered                           |
+
+`UNCONFIRMED` **is not an error and does not raise.** It is the expected result of writing a value that is already current — that case short-circuits immediately with `outcome.no_op` set rather than burning the deadline — and it is indistinguishable from a
+silent policy rejection by the panel until SPAN ships a reason code. `FAILED` is the one state that is a promise about the future, which is why the transport refuses to publish while the broker is unreachable instead of letting paho queue the message and
+deliver it minutes later. `CONFIRMED` is strong evidence rather than proof: the panel coalesces every API client into a single `USER` requester, so an observed transition cannot be attributed to one specific write. Nothing is retried — a relay write is not
+idempotent in its physical effect.
+
+### Control Interception
+
+A consumer with a notion of who is asking can refuse a command before it is published, and record every command in one place rather than in five setters that will drift:
+
+```python
+class Gate:
+    async def before_publish(self, command: ControlCommand) -> None:
+        if not authorised(command):
+            raise PermissionError(f"not allowed to write {command.property_id}")
+
+    async def after_publish(self, command: ControlCommand, outcome: PublishOutcome) -> None:
+        audit.record(command, outcome.state)
+
+client.set_control_interceptor(Gate())
+```
+
+One interceptor at a time, replaceable; pass `None` to remove it. A veto's exception propagates to the caller **unchanged**, so a consumer raising a framework-specific error with a translated message gets it through intact. `after_publish` fires for
+refusals too — with `FAILED` and a `vetoed` detail — because an audit that silently omits refusals is worse than no audit; it runs as a task rather than being awaited, so a sink that hangs cannot stall every control call, and ordering across commands is
+therefore not guaranteed.
+
+**This is a boundary against callers of this library and nothing more.** Anything holding the broker credential publishes to the panel directly and never reaches this code.
+
+### Pinning the Panel CA
+
+By default the MQTT bridge fetches the panel's CA over unauthenticated HTTP on every connect and trusts whatever answers, which also means a reconnect can silently re-anchor trust to a different CA. Supply the PEM instead and the anchor becomes a
+configured value — no network call on connect or on rebuild:
+
+```python
+config = MqttClientConfig(..., ca_pem=stored_pem)
+
+# The same context and the same fingerprint string the library uses, so a
+# consumer's own HTTPS calls and its own pin cannot drift from the library's.
+context = build_panel_ssl_context(stored_pem)
+fingerprint = ca_fingerprint(stored_pem)
+```
+
+Leaving `ca_pem` unset keeps the previous behaviour, with one `WARNING` per bridge recording that the anchor was obtained unauthenticated. With it set, a certificate-verification failure is diagnosed rather than assumed: an expired leaf after a panel's
+clock reset and a hostname mismatch after the panel moved both produce the identical error, so the library refetches the advertised CA for comparison only and keeps retrying unless the fingerprint has actually changed — at which point it raises
+`SpanPanelCAChangedError` carrying both fingerprints and stops. Register `register_fatal_error_callback` to be told; a consumer that registers nothing still cannot mistake a dead bridge for a healthy one, because `ping()` and `get_snapshot()` re-raise.
+
+The bootstrap REST calls take an `ssl_context` for the same purpose. `download_ca_cert` is the one exception and stays on plain HTTP — it fetches the anchor everything else is checked against, so it has nothing to check itself against, and its result must
+be fingerprint-confirmed out of band before it is trusted.
 
 ### Pending-State Detection
 

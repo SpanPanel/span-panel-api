@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api-schema-0"
-version = "1.0.0"
+version = "1.1.0"
 description = "Flat-schema (data-model-version absent) parser for span-panel-api"
 authors = [
     {name = "SpanPanel"}
@@ -12,7 +12,11 @@ dependencies = [
     # Stated as a stable version rather than as the prerelease the floor tracked
     # during development: naming a prerelease in a specifier is pip's own signal
     # that prereleases are acceptable for that requirement.
-    "span-panel-api>=3.0.0,<4.0",
+    # 3.1.0 is the first bootstrap that defines `ControlTarget` and asks adapters
+    # for `set_*_target` instead of `set_*_topic`. Against 3.0.x this wheel is
+    # rejected at discovery for carrying names that bootstrap does not require —
+    # so the floor moves with the rename rather than trailing it.
+    "span-panel-api>=3.1.0,<4.0",
 ]
 
 [project.urls]

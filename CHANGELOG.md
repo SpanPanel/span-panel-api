@@ -7,6 +7,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.1.0]
+
+A security release. Three things a caller could not previously find out — whether a control command was delivered, whether the panel's bootstrap traffic was encrypted, and whether the CA behind the MQTT broker is still the one that was there yesterday —
+now have answers. **Install the matching adapter**: this release replaces four `SchemaAdapter` members, so `span-panel-api-schema-0` / `-1` must move to 1.1.0 at the same time. The extras (`span-panel-api[schema-0]`) carry the floor; a direct install of
+the adapter distribution does not, and a 1.0.0 adapter against this bootstrap is rejected at discovery with a named error rather than misbehaving.
+
+### Fixed
+
+- **A control command that was never sent no longer looks like one that succeeded.** All five setters returned `None` on three separate paths that published nothing: after `close()` (the adapter survives, the bridge does not, so the setter returned having
+  done nothing at all), with no paho client, and — the one that matters — while the broker was unreachable. A caller had no way to tell any of them from a breaker that actually opened.
+- **A publish while the broker is down is refused instead of queued.** paho keeps a QoS-1 publish in its outbound queue across a disconnect and sends it when the connection returns, reusing the same client, so a relay command issued during an outage fired
+  whenever the broker came back — minutes later, against a panel nobody was watching, with nothing in the UI having said so. The bridge now checks its connection **before** handing the message to paho, which is the only point at which refusing is still
+  possible. A message the transport declines is reported `FAILED`, and `FAILED` is now a promise that nothing will be delivered later.
+- **A transport rebuild settles the commands it discards.** Rebuilding the paho client empties its outbound queue; anything still awaiting acknowledgement used to wait out its full deadline for a PUBACK that could no longer arrive. Those now resolve with
+  an explicit "the transport was rebuilt; delivery is unknown", so an audit trail carries a terminal state rather than a gap.
+- **A failed authentication no longer puts the rejected passphrase in the exception message.** `register_v2` interpolated the response body into `SpanPanelAuthError`, and the panel's validation layer answers a bad passphrase with a 422 that echoes the
+  submitted credential back. Home Assistant shows that message in the UI, writes it to the config-flow log, and captures it in a diagnostics download. The exception now carries the status code only; the body goes to `DEBUG` with every credential-valued key
+  replaced, found by a recursive walk rather than a top-level scan — the 422 nests the echo two levels down, so a top-level scan would redact nothing in exactly the response most likely to hold a secret. A body that is not JSON is described by length and
+  content-type rather than shown.
+- **A TLS failure during reconnect no longer re-anchors trust to whatever is answering.** The reconnect path refetched the panel's CA over unauthenticated HTTP and built its trust store from the result, so a panel presenting a certificate from a
+  _different_ CA was silently accepted. With `ca_pem` configured (below) neither connect nor rebuild fetches anything.
+
+### Added
+
+- **`PublishOutcome`, returned by every setter, saying how far a command got.** Four states, because the differences are ones a person acts on differently: `CONFIRMED` (the property reported the requested value on its own topic), `ACCEPTED` (the broker
+  acknowledged it, no transition seen), `UNCONFIRMED` (handed over, nothing came back before the deadline) and `FAILED` (never handed to the broker, and will not be delivered).
+
+  `UNCONFIRMED` **is not an error and does not raise.** It is the expected result of writing a value that is already current, and it is indistinguishable from a silent policy rejection until SPAN ships a reason code. A write whose value already matches
+  short-circuits to `UNCONFIRMED` with `no_op=True` immediately, compared in the panel's vocabulary rather than the caller's, so an automation that rewrites the same value on every run does not burn a deadline discovering that.
+
+  `CONFIRMED` is strong evidence and not proof: the panel coalesces every API client into a single `USER` requester, so an observed transition cannot be attributed to one specific write. Nothing is retried — a relay write is not idempotent in its physical
+  effect, and a racing external change may have legitimately reverted it.
+
+- **`ca_pem` on `MqttClientConfig` — pin the panel CA instead of refetching it.** Supply it and the trust anchor is a configured value: no network call on connect, none on rebuild. Left unset, the previous behaviour stands (so this remains a minor release)
+  with one `WARNING` per bridge saying the anchor was obtained unauthenticated.
+
+  A pinned handshake that fails is **not** assumed to mean the CA rotated, because it usually does not: an expired leaf after a panel's clock reset, or a hostname mismatch after the panel moved, produce the identical `SSLCertVerificationError`, and `ssl`
+  exposes no peer chain on a verification failure. The library performs a separate, display-only fetch of the panel's advertised CA and compares fingerprints. Same fingerprint, or the fetch failed — keep retrying, because a panel reachable on 8883 and not
+  on its HTTP port is a panel mid-reboot and declaring a permanent failure on missing evidence would convert a transient into an outage. Different fingerprint — `SpanPanelCAChangedError`, on the initial connect as well as in the reconnect loop.
+
+- **`build_panel_ssl_context(ca_pem)` and `ca_fingerprint(ca_pem)` are public.** A consumer that pins the CA needs the identical context and the identical fingerprint string on its own side of the pin; two implementations would drift, and the one that
+  drifted would be the security check.
+
+- **`register_fatal_error_callback` — a typed channel for a transport that has stopped for good.** The reconnect loop is fire-and-forget, so an exception raised inside it killed the task invisibly and a consumer learned nothing. Distinct from the
+  connection callback on purpose: "disconnected" is what an ordinary outage looks like and waiting through it is correct, while this fires only for a failure no amount of waiting fixes. A consumer that registers nothing is still not left guessing —
+  `ping()` and `get_snapshot()` re-raise the terminal error.
+
+- **`ControlInterceptor` — one veto-and-observe point covering all five setters.** `before_publish` may raise to refuse a command, and **the exception propagates unchanged**: the interceptor owns its type and its message, which is what lets a consumer
+  raise a framework-specific error with a translated message and have it reach the user intact. `after_publish` receives every command including the refusals (an audit that silently omits refusals is worse than no audit) and is fired as a task rather than
+  awaited, so a sink that merely hangs cannot stall every control call — the price being that ordering across commands is not guaranteed.
+
+  **This is a boundary against callers of this library and nothing more.** It does not constrain anything holding the broker credential: such a process publishes to the panel's broker directly and never reaches this code.
+
+- **HTTPS for the bootstrap REST calls.** Every `auth.py` and `detection.py` function taking `host`/`port` now accepts `ssl_context`, as do `create_span_client` and `MqttClientConfig` (the MQTT client refetches the schema over HTTP at connect and on every
+  redispatch). Supplying one moves the call to `https://`; omitting it is byte-identical to 3.0.1. `download_ca_cert` is the one exception and stays on `http://` — it is the bootstrap, fetching the anchor everything else is checked against, so it has
+  nothing to check itself against. Its docstring now says so plainly, and it takes an `ssl_context` only for the caller that _already_ holds the anchor and wants a verified second copy.
+
+### Changed
+
+- **BREAKING FOR IMPLEMENTERS: the five control-protocol setters return `PublishOutcome` instead of `None`.** `CircuitControlProtocol`, `PanelControlProtocol`, `EvseControlProtocol` and `AdoptedControlProtocol` all move. **This is additive for callers** —
+  a call site that ignores the return value compiles and behaves exactly as before — **and breaking for implementers**: any class type-checked against one of these protocols with `-> None` stops conforming. Test fakes, simulators, and any
+  `Callable[..., Awaitable[None]]` typed against a setter are precisely that, and they must be updated in the same upgrade.
+
+- **BREAKING FOR ADAPTERS: `set_*_topic` becomes `set_*_target`, returning a `ControlTarget`.** Verifying a write means matching the topic it went to against the property that reports it, and only the adapter knows both — the two schemas spell the same
+  control differently (flat's relay is `(serial, circuit_id, "relay")`, parent/child's is `(circuit_id, "switch", "relay")`), and parsing them back out of a topic string would put wire-format knowledge in the transport, which is the one component whose job
+  is not to have any. `ControlTarget` carries the topic and that triple together, produced by one call so they cannot disagree.
+
+  The rename is deliberate rather than a return-type change under the old name. An adapter built for the old contract would keep the old name, pass discovery on presence, and then fail deep inside a setter with an `AttributeError` on a `str`; under a new
+  name it is rejected at discovery, where the remedy — upgrade the bootstrap and the adapter together — can still be named. `ADAPTER_CONTRACT_VERSION` stays **1**: the contract gained members and lost members, which discovery already detects by name,
+  rather than redefining one.
+
+- **`port` is `int | None` on every bootstrap call, defaulting to `None`.** With a plain `int = 80` there is no way to distinguish an omitted port from one a caller deliberately set to 80, and the two need opposite answers once a scheme is in play: `None`
+  resolves to 80 without an `ssl_context` and 443 with one. An explicit `port=80` **together with** an `ssl_context` raises `SpanPanelValidationError` naming both values rather than guessing — it is exactly what a consumer that stored a port before it
+  pinned a CA produces, and both readings are defensible.
+
+- **A supplied `ssl_context` now takes precedence over an injected `httpx.AsyncClient`.** httpx fixes `verify=` at construction, so a context cannot be applied to a client somebody else built; the previous behaviour of yielding an injected client untouched
+  would have meant a caller passing both got system trust while believing it had pinned the panel CA — a security control that appears to be on and is off. When both are supplied, a dedicated client is built for the call and closed after it. The cost is
+  named rather than hidden: those calls lose the injected client's connection pool, timeout and header policy. Acceptable because every caller here is bootstrap — registration, detection, schema, FQDN, status — a handful of calls per config entry.
+
 ## [3.0.1]
 
 ### Fixed

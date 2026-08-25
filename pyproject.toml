@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "3.0.1"
+version = "3.1.0"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -53,8 +53,13 @@ dependencies = [
 # is pip's own signal that prereleases are acceptable for that requirement, so a
 # `>=1.0.0b5` floor here would leave a released install willing to resolve a
 # future beta of the adapter without anyone asking for one.
-schema-0 = ["span-panel-api-schema-0>=1.0.0"]
-schema-1 = ["span-panel-api-schema-1>=1.0.0"]
+# Raised to 1.1.0 for 3.1.0, and this floor is not cosmetic. The `SchemaAdapter`
+# protocol replaced `set_*_topic` with `set_*_target`, and `_derive_required_members`
+# makes every public protocol member mandatory of every adapter wheel — so a 1.0.0
+# adapter installed against this bootstrap is rejected at discovery rather than
+# working in a degraded way. The two must move together.
+schema-0 = ["span-panel-api-schema-0>=1.1.0"]
+schema-1 = ["span-panel-api-schema-1>=1.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/SpanPanel/span-panel-api"

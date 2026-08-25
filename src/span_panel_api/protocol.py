@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from .exceptions import SpanPanelError
     from .models import FieldMetadata, SpanPanelSnapshot, V2HomieSchema
+    from .mqtt.control import PublishOutcome
 
 
 class PanelCapability(Flag):
@@ -66,18 +67,29 @@ class SpanPanelClientProtocol(Protocol):
 
 @runtime_checkable
 class CircuitControlProtocol(Protocol):
-    """Control protocol for relay and priority changes."""
+    """Control protocol for relay and priority changes.
 
-    async def set_circuit_relay(self, circuit_id: str, state: str) -> None: ...
+    Every setter across the four control protocols returns a `PublishOutcome`
+    rather than `None`. **Additive for callers, breaking for implementers**: an
+    existing call site that ignores the return value is unaffected, but a class
+    type-checked against one of these protocols with `-> None` stops conforming.
+    Test fakes and simulators are exactly that.
 
-    async def set_circuit_priority(self, circuit_id: str, priority: str) -> None: ...
+    The change exists because `None` could not distinguish a breaker that opened
+    from a command that was never handed to the broker, and the transport had
+    three separate paths that returned `None` having published nothing.
+    """
+
+    async def set_circuit_relay(self, circuit_id: str, state: str) -> PublishOutcome: ...
+
+    async def set_circuit_priority(self, circuit_id: str, priority: str) -> PublishOutcome: ...
 
 
 @runtime_checkable
 class PanelControlProtocol(Protocol):
     """Control protocol for panel-level settable properties."""
 
-    async def set_dominant_power_source(self, value: str) -> None: ...
+    async def set_dominant_power_source(self, value: str) -> PublishOutcome: ...
 
 
 @runtime_checkable
@@ -90,7 +102,7 @@ class EvseControlProtocol(Protocol):
     the control, exactly as it does for circuit and panel control.
     """
 
-    async def set_evse_charge_limit(self, node_id: str, amps: int) -> None: ...
+    async def set_evse_charge_limit(self, node_id: str, amps: int) -> PublishOutcome: ...
 
 
 @runtime_checkable
@@ -110,7 +122,7 @@ class AdoptedControlProtocol(Protocol):
     what stops this becoming a generic write around the curated setters.
     """
 
-    async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> None: ...
+    async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> PublishOutcome: ...
 
 
 @runtime_checkable

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import os
 from pathlib import Path
@@ -146,6 +147,30 @@ async def mqtt_client_mock() -> AsyncGenerator[MagicMock, None]:
         )
         return 0
 
+    mids = itertools.count(1)
+
+    def _publish(topic: str, payload: object = None, qos: int = 0, **_kwargs: object) -> MagicMock:
+        """Simulate a QoS-1 publish, PUBACK included.
+
+        The acknowledgement is scheduled rather than fired inline for two
+        reasons, and both are how a real broker behaves: a PUBACK is a round
+        trip, and `AsyncMqttBridge.publish` registers its waiter after
+        `client.publish()` returns, so an inline callback would arrive before
+        there was anything to resolve. Without this every setter test waits out
+        a real deadline for an acknowledgement that never comes.
+        """
+        info = MagicMock(rc=0, mid=next(mids))
+        if qos > 0:
+            loop.call_soon(
+                mock_client.on_publish,
+                mock_client,
+                None,
+                info.mid,
+                ReasonCode(packetType=4, aName="Success"),
+                None,
+            )
+        return info
+
     def _reconnect() -> int:
         """Simulate paho reconnect."""
         mock_client.on_socket_open(mock_client, None, fake_sock)
@@ -171,10 +196,30 @@ async def mqtt_client_mock() -> AsyncGenerator[MagicMock, None]:
         mock_client.connect.side_effect = _connect
         mock_client.reconnect.side_effect = _reconnect
         mock_client.subscribe.return_value = (0, 1)
-        mock_client.publish.return_value = MagicMock(rc=0, mid=1)
+        mock_client.publish.side_effect = _publish
         mock_client.disconnect.return_value = 0
         mock_client.loop_read.return_value = 0
         mock_client.loop_write.return_value = 0
         mock_client.loop_misc.return_value = paho.MQTT_ERR_SUCCESS
 
         yield mock_client
+
+
+def acking_bridge() -> MagicMock:
+    """A bridge stub whose publishes are acknowledged immediately.
+
+    `AsyncMqttBridge.publish` hands back a future that resolves when the broker
+    PUBACKs, and `SpanMqttClient._publish_control` awaits it to decide between
+    `ACCEPTED` and `UNCONFIRMED`. A bare `MagicMock` answers with a `Mock`, which
+    cannot be awaited, so every control test needs a real future -- and would
+    otherwise each grow its own.
+    """
+    bridge = MagicMock()
+
+    def _publish(_topic: str, _payload: str) -> asyncio.Future[bool]:
+        acknowledged: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        acknowledged.set_result(True)
+        return acknowledged
+
+    bridge.publish.side_effect = _publish
+    return bridge

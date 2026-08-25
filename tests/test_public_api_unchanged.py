@@ -99,6 +99,13 @@ EXPECTED_PUBLIC_API = {
     # Transport
     "MqttClientConfig",
     "SpanMqttClient",
+    # Added 2026-08-25 (3.1.0): the control-outcome vocabulary. Additive for
+    # callers -- a call site that ignores the return value is unaffected -- and
+    # breaking for anything type-checked against the control protocols with
+    # `-> None`, which the release notes name.
+    "ControlDeadlines",
+    "PublishOutcome",
+    "PublishState",
     # Phase validation
     "PhaseDistribution",
     "are_tabs_opposite_phase",

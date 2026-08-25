@@ -41,7 +41,7 @@ from span_panel_api.mqtt.const import HOMIE_STATE_READY, MQTT_DEFAULT_MQTTS_PORT
 from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.models import MqttClientConfig
 
-from conftest import flat_schema
+from conftest import acking_bridge, flat_schema
 from span_panel_api.protocol import (
     PanelCapability,
 )
@@ -1021,7 +1021,7 @@ class TestSpanMqttClientControl:
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
         client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
-        mock_bridge = MagicMock()
+        mock_bridge = acking_bridge()
         client._bridge = mock_bridge
 
         await client.set_circuit_relay("aabbccdd112233445566778899001122", "OPEN")
@@ -1029,7 +1029,6 @@ class TestSpanMqttClientControl:
         mock_bridge.publish.assert_called_once_with(
             f"{TOPIC_PREFIX}/{SERIAL}/aabbccdd112233445566778899001122/relay/set",
             "OPEN",
-            qos=1,
         )
 
     @pytest.mark.asyncio
@@ -1040,7 +1039,7 @@ class TestSpanMqttClientControl:
         client = SpanMqttClient(host="192.168.1.1", serial_number=SERIAL, broker_config=config)
         client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
-        mock_bridge = MagicMock()
+        mock_bridge = acking_bridge()
         client._bridge = mock_bridge
 
         await client.set_circuit_priority("aabbccdd112233445566778899001122", "NEVER")
@@ -1048,7 +1047,6 @@ class TestSpanMqttClientControl:
         mock_bridge.publish.assert_called_once_with(
             f"{TOPIC_PREFIX}/{SERIAL}/aabbccdd112233445566778899001122/shed-priority/set",
             "NEVER",
-            qos=1,
         )
 
     @pytest.mark.asyncio
@@ -1064,7 +1062,7 @@ class TestSpanMqttClientControl:
         client._adapter.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
         client._adapter.handle_message(f"{PREFIX}/$description", desc)
 
-        mock_bridge = MagicMock()
+        mock_bridge = acking_bridge()
         client._bridge = mock_bridge
 
         await client.set_dominant_power_source("BATTERY")
@@ -1072,7 +1070,6 @@ class TestSpanMqttClientControl:
         mock_bridge.publish.assert_called_once_with(
             f"{TOPIC_PREFIX}/{SERIAL}/core/dominant-power-source/set",
             "BATTERY",
-            qos=1,
         )
 
     @pytest.mark.asyncio

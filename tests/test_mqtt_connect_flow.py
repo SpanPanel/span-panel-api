@@ -153,8 +153,11 @@ class TestBridgeSubscribePublish:
         bridge = _make_bridge()
         await bridge.connect()
 
-        bridge.publish("test/topic", "hello", qos=1)
+        acknowledged = bridge.publish("test/topic", "hello")
         mqtt_client_mock.publish.assert_called_once_with("test/topic", payload="hello", qos=1)
+        # Handed over, and still waiting: the PUBACK has not arrived.
+        assert acknowledged is not None
+        assert not acknowledged.done()
 
 
 # ---------------------------------------------------------------------------

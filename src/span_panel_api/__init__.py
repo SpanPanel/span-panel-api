@@ -56,7 +56,7 @@ from .models import (
     V2StatusInfo,
     is_discovery_path,
 )
-from .mqtt import MqttClientConfig, SpanMqttClient
+from .mqtt import ControlDeadlines, MqttClientConfig, PublishOutcome, PublishState, SpanMqttClient
 from .phase_validation import (
     PhaseDistribution,
     are_tabs_opposite_phase,
@@ -147,6 +147,12 @@ __all__ = [  # noqa: RUF022
     # Transport
     "MqttClientConfig",
     "SpanMqttClient",
+    # Added 2026-08-25 (3.1.0): what a control command did. The five setters
+    # returned None, which could not distinguish a breaker that opened from a
+    # command the transport never handed to the broker.
+    "ControlDeadlines",
+    "PublishOutcome",
+    "PublishState",
     # Phase validation
     "PhaseDistribution",
     "are_tabs_opposite_phase",

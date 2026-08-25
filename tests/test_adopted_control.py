@@ -13,6 +13,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+
+from conftest import acking_bridge
 from span_panel_api.exceptions import SpanPanelServerError
 from span_panel_api.models import AdoptedDevice, AdoptedProperty
 from span_panel_api.mqtt import MqttClientConfig
@@ -44,7 +46,7 @@ def _client(*properties: AdoptedProperty) -> tuple[SpanMqttClient, MagicMock]:
         adopted_devices=(AdoptedDevice(device_id=DEVICE, device_type="energy.ebus.device.generator", properties=properties),)
     )
     client._adapter = adapter
-    bridge = MagicMock()
+    bridge = acking_bridge()
     client._bridge = bridge
     return client, bridge
 
@@ -62,7 +64,7 @@ async def test_a_settable_adopted_property_publishes_to_its_own_topic() -> None:
 
     await client.set_adopted_property(DEVICE, "generator", "mode", "OFF")
 
-    bridge.publish.assert_called_once_with(f"ebus/5/{DEVICE}/generator/mode/set", "OFF", qos=1)
+    bridge.publish.assert_called_once_with(f"ebus/5/{DEVICE}/generator/mode/set", "OFF")
 
 
 @pytest.mark.asyncio
@@ -153,7 +155,7 @@ def _two_generators() -> tuple[SpanMqttClient, MagicMock]:
         )
     )
     client._adapter = adapter
-    bridge = MagicMock()
+    bridge = acking_bridge()
     client._bridge = bridge
     return client, bridge
 

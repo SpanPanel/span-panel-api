@@ -20,6 +20,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from conftest import acking_bridge
+
 from ebus_sdk.homie import DiscoveredDevice
 
 from span_panel_api.exceptions import SpanPanelServerError
@@ -443,7 +445,7 @@ def _client(adapter: SchemaOneAdapter) -> tuple[object, MagicMock]:
     config = MqttClientConfig(broker_host="h", username="u", password="p")
     client = SpanMqttClient(host="192.168.1.1", serial_number=PANEL, broker_config=config)
     client._adapter = adapter
-    bridge = MagicMock()
+    bridge = acking_bridge()
     client._bridge = bridge
     return client, bridge
 
@@ -457,7 +459,7 @@ async def test_the_transport_publishes_the_topic_and_payload_the_adapter_named()
 
     await client.set_evse_charge_limit(key, asked)
 
-    bridge.publish.assert_called_once_with(f"ebus/5/{EVSE}/config/user-max-charge-current/set", str(asked), qos=1)
+    bridge.publish.assert_called_once_with(f"ebus/5/{EVSE}/config/user-max-charge-current/set", str(asked))
 
 
 @pytest.mark.asyncio

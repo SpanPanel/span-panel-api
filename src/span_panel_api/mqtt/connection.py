@@ -93,6 +93,11 @@ class AsyncMqttBridge:
         self._fatal_error: SpanPanelError | None = None
         self._fatal_error_callback: Callable[[SpanPanelError], None] | None = None
 
+        # QoS-1 publishes awaiting a PUBACK, keyed by paho message id. Emptied
+        # by `_on_publish` one at a time, and wholesale by
+        # `_resolve_pending_publishes` when the outbound queue ceases to exist.
+        self._pending_publishes: dict[int, asyncio.Future[bool]] = {}
+
         self._connected = False
         self._client: AsyncMQTTClient | None = None
         self._connect_event: asyncio.Event | None = None
@@ -292,6 +297,7 @@ class AsyncMqttBridge:
         client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect
         client.on_message = self._on_message
+        client.on_publish = self._on_publish
         if ssl_context is not None:
             client.tls_set_context(ssl_context)
         return client
@@ -406,6 +412,8 @@ class AsyncMqttBridge:
             self._misc_timer.cancel()
             self._misc_timer = None
 
+        self._resolve_pending_publishes(False, "bridge disconnected")
+
         client = self._client
         if client is not None:
             client.disconnect()
@@ -418,10 +426,98 @@ class AsyncMqttBridge:
         if self._client is not None:
             self._client.subscribe(topic, qos=qos)
 
-    def publish(self, topic: str, payload: str, qos: int = 1) -> None:
-        """Publish a message. Must be called after connect()."""
-        if self._client is not None:
-            self._client.publish(topic, payload=payload, qos=qos)
+    def publish(self, topic: str, payload: str) -> asyncio.Future[bool] | None:
+        """Hand one QoS-1 control message to paho, or refuse to hand it over.
+
+        Returns ``None`` when the message was **not** handed over -- no client,
+        or not connected. That is the only condition under which a caller may
+        say the command failed, and the reason the check is here rather than on
+        paho's return code afterwards.
+
+        **paho queues a QoS-1 publish across a disconnect.** On
+        ``MQTT_ERR_NO_CONN`` it keeps the message in ``_out_messages`` with
+        ``state = mqtt_ms_publish`` -- its own comment reads "remove from
+        inflight messages so it will be send after a connection is made" -- and
+        the reconnect path reuses the same client object. So a relay command
+        published while the broker is down is not discarded: it fires whenever
+        the broker returns, which on a firmware upgrade is minutes later and
+        unannounced. Reading paho's return code and calling it a failure would
+        tell a user their breaker command failed while the command was still
+        pending delivery, and a user told that acts on it. The message must not
+        reach paho at all.
+
+        Otherwise returns a future that resolves:
+
+        - ``True`` when the broker PUBACKs, and
+        - ``False`` when a transport rebuild discards paho's outbound queue
+          before that happens.
+
+        ``False`` is genuinely ambiguous and the caller must treat it as such: a
+        rebuilt client drops the message from this side, but the original may
+        already have reached the broker and been acted on. It resolves the
+        future rather than leaving it pending so nothing waits on a message no
+        longer in flight -- it does not license reporting a failure.
+        """
+        client = self._client
+        if client is None or not self._connected:
+            return None
+
+        info = client.publish(topic, payload=payload, qos=1)
+
+        loop = self._loop
+        if loop is None:
+            loop = asyncio.get_running_loop()
+            self._loop = loop
+        acknowledged: asyncio.Future[bool] = loop.create_future()
+        # Registered after `publish()` returns, which is safe only because paho's
+        # callbacks here are driven by the event loop's reader callback: no
+        # `loop_read` can run between the line above and this one, so the PUBACK
+        # for this mid cannot arrive before there is a future to resolve. It
+        # would be a real race under paho's own threaded loop.
+        self._pending_publishes[info.mid] = acknowledged
+        # Cleans up when the caller's deadline cancels the future, which is the
+        # ordinary end for a message the broker never answers. Without it the
+        # entry outlives every waiter and the map grows for the life of the
+        # bridge. Guarded by identity in `_forget_publish` because paho's message
+        # ids wrap.
+        acknowledged.add_done_callback(partial(self._forget_publish, info.mid))
+        return acknowledged
+
+    def _forget_publish(self, mid: int, future: asyncio.Future[bool]) -> None:
+        """Drop a settled publish, but only if it is still the one we recorded."""
+        if self._pending_publishes.get(mid) is future:
+            del self._pending_publishes[mid]
+
+    def _resolve_pending_publishes(self, acknowledged: bool, reason: str) -> None:
+        """Settle every publish still awaiting a PUBACK.
+
+        Called when the outbound queue stops existing -- a rebuilt paho client,
+        or teardown. Without this a caller waits out its whole deadline for an
+        acknowledgement that is now impossible, and an audit trail shows a
+        command in limbo with no terminal state.
+        """
+        if not self._pending_publishes:
+            return
+        _LOGGER.debug(
+            "Settling %d in-flight publish(es) as acknowledged=%s: %s", len(self._pending_publishes), acknowledged, reason
+        )
+        for future in list(self._pending_publishes.values()):
+            if not future.done():
+                future.set_result(acknowledged)
+        self._pending_publishes.clear()
+
+    def _on_publish(
+        self,
+        _client: paho.Client,
+        _userdata: object,
+        mid: int,
+        _reason_code: ReasonCode,
+        _properties: Properties | None,
+    ) -> None:
+        """Handle PUBACK — resolve whoever is waiting on this message id."""
+        future = self._pending_publishes.get(mid)
+        if future is not None and not future.done():
+            future.set_result(True)
 
     # -- Socket callbacks (event-loop-driven I/O) ---------------------------
 
@@ -626,6 +722,12 @@ class AsyncMqttBridge:
             ) as exc:
                 _LOGGER.warning("Client rebuild — CA fetch failed: %s", exc)
                 return False
+
+        # The new paho client has an empty outbound queue, so anything the old
+        # one was still holding is gone. Settle those waiters now rather than
+        # letting each burn its full deadline on an acknowledgement that can no
+        # longer arrive. See `publish` for why `False` is not a failure.
+        self._resolve_pending_publishes(False, "transport rebuild discarded the outbound queue")
 
         # Fire pre-rebuild hook before we touch any state. SpanMqttClient
         # uses this to discard its stale Homie accumulator so retained

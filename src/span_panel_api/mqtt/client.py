@@ -35,6 +35,7 @@ from ..models import AdoptedProperty, FieldMetadata, HomieSchemaTypes, SpanPanel
 from ..protocol import PanelCapability, SchemaAdapter
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S
+from .control import ControlDeadlines, PublishOutcome, PublishState
 from .models import MqttClientConfig
 
 if TYPE_CHECKING:
@@ -94,6 +95,7 @@ class SpanMqttClient:
         schema: V2HomieSchema | None = None,
         httpx_client: httpx.AsyncClient | None = None,
         ssl_context: ssl.SSLContext | None = None,
+        control_deadlines: ControlDeadlines | None = None,
     ) -> None:
         self._host = host
         self._serial_number = serial_number
@@ -114,6 +116,9 @@ class SpanMqttClient:
         # certificate and its broker's with the one CA. `None` keeps these fetches
         # on plaintext HTTP, which is 3.0.1's behaviour.
         self._ssl_context = ssl_context
+        # How long each setter waits for the panel to report the change back.
+        # Injectable so a test asserting a refusal does not pay a real deadline.
+        self._control_deadlines = control_deadlines or ControlDeadlines()
 
         self._bridge: AsyncMqttBridge | None = None
         self._adapter: SchemaAdapter | None = None
@@ -623,31 +628,36 @@ class SpanMqttClient:
 
     # -- CircuitControlProtocol --------------------------------------------
 
-    async def set_circuit_relay(self, circuit_id: str, state: str) -> None:
+    async def set_circuit_relay(self, circuit_id: str, state: str) -> PublishOutcome:
         """Publish relay state change for a circuit.
 
         Args:
             circuit_id: Dashless UUID (matches wire format)
             state: "OPEN" or "CLOSED"
+
+        Returns:
+            What happened to the command. `PublishState.UNCONFIRMED` is not an
+            error -- see `PublishState`.
         """
         topic = self._require_adapter().set_circuit_relay_topic(circuit_id)
-        if self._bridge is not None:
-            self._bridge.publish(topic, state, qos=1)
+        return await self._publish_control(topic, state, self._control_deadlines.relay)
 
-    async def set_circuit_priority(self, circuit_id: str, priority: str) -> None:
+    async def set_circuit_priority(self, circuit_id: str, priority: str) -> PublishOutcome:
         """Publish a circuit priority change.
 
         Args:
             circuit_id: Dashless UUID (matches wire format)
             priority: v2 enum value (NEVER, SOC_THRESHOLD, OFF_GRID)
+
+        Returns:
+            What happened to the command. See `PublishState`.
         """
         topic = self._require_adapter().set_circuit_priority_topic(circuit_id)
-        if self._bridge is not None:
-            self._bridge.publish(topic, priority, qos=1)
+        return await self._publish_control(topic, priority, self._control_deadlines.priority)
 
     # -- PanelControlProtocol ----------------------------------------------
 
-    async def set_dominant_power_source(self, value: str) -> None:
+    async def set_dominant_power_source(self, value: str) -> PublishOutcome:
         """Publish a dominant power source change for the panel.
 
         Args:
@@ -666,12 +676,11 @@ class SpanMqttClient:
         payload = adapter.dominant_power_source_payload(value)
         if payload is None:
             raise SpanPanelServerError(f"{value!r} has no representation on this schema's control")
-        if self._bridge is not None:
-            self._bridge.publish(topic, payload, qos=1)
+        return await self._publish_control(topic, payload, self._control_deadlines.dominant_power_source)
 
     # -- EvseControlProtocol -----------------------------------------------
 
-    async def set_evse_charge_limit(self, node_id: str, amps: int) -> None:
+    async def set_evse_charge_limit(self, node_id: str, amps: int) -> PublishOutcome:
         """Publish a charge-current limit for one commissioned EV charger.
 
         Args:
@@ -692,12 +701,11 @@ class SpanMqttClient:
         payload = adapter.evse_charge_limit_payload(node_id, amps)
         if payload is None:
             raise SpanPanelServerError(f"{amps} A is outside what EVSE {node_id!r} accepts")
-        if self._bridge is not None:
-            self._bridge.publish(topic, payload, qos=1)
+        return await self._publish_control(topic, payload, self._control_deadlines.evse_charge_limit)
 
     # -- AdoptedControlProtocol --------------------------------------------
 
-    async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> None:
+    async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> PublishOutcome:
         """Publish a write to one settable property of an adopted device.
 
         Args:
@@ -727,8 +735,68 @@ class SpanMqttClient:
         surface = self._adopted_property(device_id, node_id, property_id)
         if surface is None or surface.set_topic is None:
             raise SpanPanelServerError(f"No settable adopted property {node_id}/{property_id} on device {device_id!r}")
-        if self._bridge is not None:
-            self._bridge.publish(surface.set_topic, value, qos=1)
+        return await self._publish_control(surface.set_topic, value, self._control_deadlines.adopted_property)
+
+    # -- The one place a control command reaches the wire -------------------
+
+    async def _publish_control(self, topic: str, value: str, deadline: float) -> PublishOutcome:
+        """Publish one control command and report how far it got.
+
+        Every setter funnels through here, which is what makes the refusals
+        below true of all of them rather than of whichever were remembered.
+
+        Two refusals, both of which used to be silent successes:
+
+        - **No bridge.** `close()` clears `_bridge` and leaves `_adapter` in
+          place, so `_require_adapter()` passed and the setter returned `None`
+          having done nothing at all.
+        - **Not connected.** The bridge declines to hand the message to paho at
+          all, because paho would queue it and deliver it whenever the broker
+          returns. See `AsyncMqttBridge.publish`.
+
+        Anything past those was handed over and may still arrive, so no outcome
+        beyond this point is `FAILED`.
+
+        **No retry, deliberately.** A relay write is not idempotent in its
+        physical effect, and a racing external change may have legitimately
+        reverted it. The state is reported and the caller decides.
+        """
+        bridge = self._bridge
+        if bridge is None:
+            return PublishOutcome(
+                state=PublishState.FAILED,
+                topic=topic,
+                value=value,
+                detail="transport is closed",
+            )
+
+        acknowledged = bridge.publish(topic, value)
+        if acknowledged is None:
+            return PublishOutcome(
+                state=PublishState.FAILED,
+                topic=topic,
+                value=value,
+                detail="broker not connected; refused rather than queued",
+            )
+
+        try:
+            acked = await asyncio.wait_for(acknowledged, timeout=deadline)
+        except TimeoutError:
+            return PublishOutcome(
+                state=PublishState.UNCONFIRMED,
+                topic=topic,
+                value=value,
+                detail=f"no broker acknowledgement within {deadline}s",
+            )
+
+        if acked:
+            return PublishOutcome(state=PublishState.ACCEPTED, topic=topic, value=value)
+        return PublishOutcome(
+            state=PublishState.UNCONFIRMED,
+            topic=topic,
+            value=value,
+            detail="the transport was rebuilt before the broker acknowledged; delivery is unknown",
+        )
 
     def _adopted_property(self, device_id: str, node_id: str, property_id: str) -> AdoptedProperty | None:
         """The named property of the named adopted device in the current snapshot.

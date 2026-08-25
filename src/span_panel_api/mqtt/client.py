@@ -1029,7 +1029,7 @@ class SpanMqttClient:
         separates them. Folding them together would discard information the
         transport is already holding: "the broker took it and the panel did not
         act" points at the panel, "nothing acknowledged it" points at the link,
-        and "the transport was rebuilt" points at neither.
+        and "the transport discarded it" points at neither.
         """
         if not acknowledged.done() or acknowledged.cancelled():
             acknowledged.cancel()
@@ -1050,7 +1050,10 @@ class SpanMqttClient:
             state=PublishState.UNCONFIRMED,
             topic=target.topic,
             value=value,
-            detail="the transport was rebuilt before the broker acknowledged; delivery is unknown",
+            # Says what happened, not which of the two causes caused it. The
+            # bridge discards its outbound queue on a rebuild and on teardown
+            # alike, and naming one here reported a `close()` as a rebuild.
+            detail="the transport discarded this message before the broker acknowledged; delivery is unknown",
         )
 
     def _adopted_property(self, device_id: str, node_id: str, property_id: str) -> AdoptedProperty | None:

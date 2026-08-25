@@ -217,7 +217,10 @@ class TestHandedOver:
 
         assert outcome.state is PublishState.UNCONFIRMED
         assert outcome.state is not PublishState.FAILED
-        assert outcome.detail is not None and "rebuilt" in outcome.detail
+        # "discarded", not "rebuilt": the bridge empties its outbound queue on a
+        # rebuild and on teardown alike, and naming one cause reported a close()
+        # as a rebuild.
+        assert outcome.detail is not None and "discarded" in outcome.detail
         # Generous enough not to be flaky on a loaded machine, and still two
         # orders of magnitude below the deadline it would otherwise have burnt.
         assert elapsed < 1.0
@@ -266,16 +269,24 @@ class TestHandedOver:
 class TestDisconnectSettlesWaiters:
     @pytest.mark.asyncio
     async def test_teardown_does_not_leave_a_caller_waiting(self) -> None:
-        client = _client(deadlines=ControlDeadlines(relay=0.2))
+        """A close() empties the same outbound queue a rebuild does, so it takes
+        the same path out -- and must not be described as the other one."""
+        client = _client(deadlines=ControlDeadlines(relay=5.0))
         bridge = _bridge(connected=True, paho_client=_paho())
         client._bridge = bridge
 
+        started = asyncio.get_running_loop().time()
         task = asyncio.ensure_future(client.set_circuit_relay(CIRCUIT, "OPEN"))
         await asyncio.sleep(0)
         await bridge.disconnect()
         outcome = await task
+        elapsed = asyncio.get_running_loop().time() - started
 
         assert outcome.state is PublishState.UNCONFIRMED
+        assert elapsed < 1.0, "a torn-down transport must not hold the caller to its deadline"
+        assert outcome.detail is not None
+        assert "discarded" in outcome.detail
+        assert "rebuilt" not in outcome.detail, "this was a teardown, not a rebuild"
 
 
 # ---------------------------------------------------------------------------

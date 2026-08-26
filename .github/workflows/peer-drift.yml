@@ -62,7 +62,7 @@ jobs:
             echo "\`$PIN\` is not an ancestor of \`$BRANCH\` (\`${head:0:12}\`)."
             echo
             echo "The pin names a commit this branch does not contain — a branch that was"
-            echo "rebased, squash-merged or deleted. \`peer.ref\` in \`spec_lock.json\` needs"
+            echo "rebased, squash-merged or deleted. \`peers.panelbench.ref\` in \`spec_lock.json\` needs"
             echo "to name a ref the pinned commit is actually on."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
@@ -122,7 +122,7 @@ jobs:
           echo "   packages/schema-1/spec/fixtures/simulator_wire.json"
           echo '```'
           echo
-          echo "then set \`peer.commit\` in \`packages/schema-1/src/span_panel_api_schema_1/spec_lock.json\`"
+          echo "then set \`peers.panelbench.commit\` in \`packages/schema-1/src/span_panel_api_schema_1/spec_lock.json\`"
           echo "to the commit you copied from. A capture without a commit bump records where the"
           echo "bytes came from as a guess."
           echo
@@ -140,6 +140,9 @@ jobs:
     # records -- so regenerating the reference tree is gated on a *release*, not on a
     # commit. Commits on main are reported too, because they are what a release will
     # be made of and seeing them early is free, but they are not a call to action.
+    #
+    # So the release comparison is the verdict and fails the job; the commit distance
+    # runs either way and only ever reports.
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
@@ -197,12 +200,21 @@ jobs:
         print("bytes and the claim about them from drifting apart. Read the emitter's")
         print("CHANGELOG for the wire changes before accepting the new capture: a diff")
         print("confined to each `$description`'s `version` means nothing moved.")
+
+        # Red, deliberately. A scheduled run that succeeds notifies nobody, and this
+        # job exists because the last drift of this kind "took nine days to be noticed
+        # by hand" -- a step summary nobody is told to read would repeat that. It gates
+        # no pull request, so failing costs a notification and nothing else. It stays
+        # red until the capture is regenerated or the pin is moved, which is the honest
+        # state of a reference tree that describes a superseded producer.
+        raise SystemExit(1)
         PY
 
     # Reported after the release comparison because it is context for it, not the
     # verdict. "N commits behind" with the subjects is what makes the result readable;
     # a red check with no names is a chore.
     - name: Report the distance from the pinned commit
+      if: always()
       env:
         PIN: ${{ steps.peers.outputs.panel-sim-pin }}
         REPO: ${{ steps.peers.outputs.panel-sim-repo }}

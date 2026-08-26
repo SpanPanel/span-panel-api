@@ -20,7 +20,14 @@ from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.const import MQTT_FULL_REBUILD_AFTER_FAILURES, MQTT_RECONNECT_MIN_DELAY_S
 from span_panel_api.mqtt.models import MqttClientConfig
 
-from conftest import FAST_CONTROL_DEADLINES, MINIMAL_DESCRIPTION, SERIAL, TOPIC_PREFIX_SERIAL
+from conftest import (
+    DESCRIBED_CIRCUIT,
+    DESCRIPTION_WITH_CIRCUIT,
+    FAST_CONTROL_DEADLINES,
+    MINIMAL_DESCRIPTION,
+    SERIAL,
+    TOPIC_PREFIX_SERIAL,
+)
 
 
 def _make_bridge() -> AsyncMqttBridge:
@@ -410,13 +417,17 @@ class TestSpanMqttClientConnect:
         connect_task = asyncio.create_task(client.connect())
         await asyncio.sleep(0.05)
 
-        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
+        # With the circuit declared: a command aimed at an id the panel never
+        # published is refused, so a publishing test needs a panel that carries
+        # the circuit it is commanding.
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", DESCRIPTION_WITH_CIRCUIT)
+        # Named, or connect() spends its whole circuit-name wait on this one.
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/{DESCRIBED_CIRCUIT}/name", "Kitchen Lights")
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
         await asyncio.wait_for(connect_task, timeout=5.0)
 
         # Publish relay command
-        circuit_id = "aabbccdd11223344556677889900aabb"
-        await client.set_circuit_relay(circuit_id, "OPEN")
+        await client.set_circuit_relay(DESCRIBED_CIRCUIT, "OPEN")
         mqtt_client_mock.publish.assert_called()
 
     @pytest.mark.asyncio
@@ -426,12 +437,13 @@ class TestSpanMqttClientConnect:
         connect_task = asyncio.create_task(client.connect())
         await asyncio.sleep(0.05)
 
-        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", DESCRIPTION_WITH_CIRCUIT)
+        # Named, or connect() spends its whole circuit-name wait on this one.
+        client._on_message(f"{TOPIC_PREFIX_SERIAL}/{DESCRIBED_CIRCUIT}/name", "Kitchen Lights")
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
         await asyncio.wait_for(connect_task, timeout=5.0)
 
-        circuit_id = "aabbccdd11223344556677889900aabb"
-        await client.set_circuit_priority(circuit_id, "NEVER")
+        await client.set_circuit_priority(DESCRIBED_CIRCUIT, "NEVER")
         mqtt_client_mock.publish.assert_called()
 
     @pytest.mark.asyncio

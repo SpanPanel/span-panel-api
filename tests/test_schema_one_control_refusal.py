@@ -293,3 +293,88 @@ def test_an_unannounced_priority_settable_is_still_writable() -> None:
     adapter = _adapter(_redeclared(CONTROLLABLE_CIRCUIT, "load-shed", "priority", settable=None))
 
     assert adapter.set_circuit_priority_target(CONTROLLABLE_CIRCUIT) is not None
+
+
+# ---------------------------------------------------------------------------
+# An undeclared property is not an unannounced attribute
+# ---------------------------------------------------------------------------
+
+_NON_CIRCUITS = ("bess", "bess-mid", "pv", "lugs-upstream", "lugs-downstream")
+"""Devices in the capture that carry no `load-shed` node at all."""
+
+
+def test_the_capture_carries_devices_with_no_shed_priority(adapter: SchemaOneAdapter) -> None:
+    """The premise, asserted rather than assumed: these devices declare nothing
+    about a shed priority, so there is a property-undeclared case to refuse."""
+    tree = parent_child_tree()
+
+    for device_id in _NON_CIRCUITS:
+        nodes = json.loads(tree[device_id]["$description"])["nodes"]
+        assert "load-shed" not in nodes, device_id
+
+
+@pytest.mark.parametrize("device_id", _NON_CIRCUITS)
+def test_a_device_that_declares_no_priority_yields_no_priority_target(adapter: SchemaOneAdapter, device_id: str) -> None:
+    """The permissive default is for a *declared* property, and these declare none.
+
+    `priority_is_settable` reads an absent `$settable` as permission, which is
+    right for the documented case where firmware declares `load-shed/priority`
+    and omits the attribute. A BESS, a MID or the lugs declare no `load-shed`
+    node at all — they have offered no shed priority for anything to be settable
+    on — and answering them with the same default resolved a write topic for a
+    control the device never published. The relay avoided this incidentally,
+    because its default is refusal.
+    """
+    assert adapter.set_circuit_priority_target(device_id) is None
+    assert adapter.set_circuit_relay_target(device_id) is None
+
+
+def test_a_priority_target_exists_exactly_on_the_circuits(adapter: SchemaOneAdapter) -> None:
+    """Over the whole capture at once, the way the relay invariant is asserted.
+
+    Every device in the tree is addressable by id, and only the circuits declare
+    a shed priority — so a target on anything else is a target for a control
+    that device never offered, whatever its `$settable` would have defaulted to.
+    """
+    tree = parent_child_tree()
+
+    for device_id, topics in tree.items():
+        is_circuit = json.loads(topics["$description"])["type"].endswith(".circuit")
+        assert (adapter.set_circuit_priority_target(device_id) is not None) is is_circuit, device_id
+
+
+def test_a_declared_priority_missing_from_its_node_is_undeclared_too(adapter: SchemaOneAdapter) -> None:
+    """The narrower half of the same case: the node is there, the property is not.
+
+    Removing `priority` leaves `load-shed` declared, so nothing but the property
+    lookup distinguishes this from the capture's ordinary circuit. It has to
+    refuse for the same reason the BESS does -- there is no property to be
+    settable.
+    """
+    tree = _copy()
+    description = json.loads(tree[CONTROLLABLE_CIRCUIT]["$description"])
+    del description["nodes"]["load-shed"]["properties"]["priority"]
+    tree[CONTROLLABLE_CIRCUIT]["$description"] = json.dumps(description)
+
+    assert _adapter(tree).set_circuit_priority_target(CONTROLLABLE_CIRCUIT) is None
+
+
+# ---------------------------------------------------------------------------
+# Telling "no such circuit" apart from "the circuit says no"
+# ---------------------------------------------------------------------------
+
+
+def test_has_circuit_answers_for_the_circuits_and_nothing_else(adapter: SchemaOneAdapter) -> None:
+    """Membership of the circuit set, not of the topology.
+
+    The transport asks this to name the refusal it is raising, and a BESS
+    reported as a circuit would have its refusal read as "declares its relay
+    non-commandable" -- a claim about a relay that device does not have.
+    """
+    assert adapter.has_circuit(CONTROLLABLE_CIRCUIT) is True
+    assert adapter.has_circuit(LOCKED_CIRCUIT) is True, "locked is not absent"
+
+    for device_id in _NON_CIRCUITS:
+        assert adapter.has_circuit(device_id) is False, device_id
+    assert adapter.has_circuit(PANEL) is False
+    assert adapter.has_circuit("0" * 32) is False

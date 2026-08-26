@@ -694,15 +694,18 @@ class SpanMqttClient:
             error -- see `PublishState`.
 
         Raises:
-            SpanPanelServerError: the panel declares this circuit's relay
-                non-commandable, so there is nothing to publish to. Raised the
-                way `set_evse_charge_limit` raises for a charger with no
-                settable limit, and recorded through the interceptor first.
+            SpanPanelServerError: the panel carries no such circuit, or declares
+                this circuit's relay non-commandable, so there is nothing to
+                publish to. Raised the way `set_evse_charge_limit` raises for a
+                charger with no settable limit, and recorded through the
+                interceptor first.
         """
-        target = self._require_adapter().set_circuit_relay_target(circuit_id)
+        adapter = self._require_adapter()
+        target = adapter.set_circuit_relay_target(circuit_id)
         if target is None:
-            await self._refuse_control(
-                device_id=circuit_id,
+            await self._refuse_circuit_control(
+                adapter,
+                circuit_id=circuit_id,
                 value=state,
                 detail="relay not commandable",
                 message=f"Circuit {circuit_id!r} declares its relay non-commandable",
@@ -720,18 +723,58 @@ class SpanMqttClient:
             What happened to the command. See `PublishState`.
 
         Raises:
-            SpanPanelServerError: the circuit is commissioned never-backup, so
-                its priority is not writable.
+            SpanPanelServerError: the panel carries no such circuit, or the
+                circuit is commissioned never-backup, so its priority is not
+                writable.
         """
-        target = self._require_adapter().set_circuit_priority_target(circuit_id)
+        adapter = self._require_adapter()
+        target = adapter.set_circuit_priority_target(circuit_id)
         if target is None:
-            await self._refuse_control(
-                device_id=circuit_id,
+            await self._refuse_circuit_control(
+                adapter,
+                circuit_id=circuit_id,
                 value=priority,
                 detail="priority not settable",
                 message=f"Circuit {circuit_id!r} declares its shed priority not settable",
             )
         return await self._publish_control(target, priority, self._control_deadlines.priority)
+
+    async def _refuse_circuit_control(
+        self,
+        adapter: SchemaAdapter,
+        *,
+        circuit_id: str,
+        value: str,
+        detail: str,
+        message: str,
+    ) -> NoReturn:
+        """Refuse a circuit command under the reason that is actually true of it.
+
+        A circuit target builder returns None for two unrelated reasons, and
+        this picks between them. `detail` and `message` describe the *control*
+        being locked, which is the caller's case; an id the panel carries no
+        circuit under is this method's case, and it says so instead.
+
+        The distinction is not cosmetic in either direction. "Declares its relay
+        non-commandable" reads as a statement about a circuit that exists, so it
+        sends whoever is debugging a mistyped id off to look at a panel's
+        commissioning. And `detail` reaches a consumer's `after_publish` -- the
+        Home Assistant integration writes it into a security log -- where it is
+        read as a fact about the panel rather than as this library's best guess.
+
+        `has_circuit` is asked only once a target has already been refused, so a
+        panel that answers it strangely cannot turn a permitted command into a
+        refused one; the worst it can do is mislabel a refusal that was going to
+        happen either way.
+        """
+        if not adapter.has_circuit(circuit_id):
+            await self._refuse_control(
+                device_id=circuit_id,
+                value=value,
+                detail="no such circuit",
+                message=f"Panel carries no circuit {circuit_id!r}",
+            )
+        await self._refuse_control(device_id=circuit_id, value=value, detail=detail, message=message)
 
     # -- PanelControlProtocol ----------------------------------------------
 

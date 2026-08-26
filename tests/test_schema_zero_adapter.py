@@ -8,9 +8,12 @@ is fixed by shipped firmware and must not drift.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from span_panel_api_schema_0 import SchemaZeroAdapter
+from span_panel_api_schema_0.const import TYPE_CIRCUIT, TYPE_CORE
 
 from conftest import flat_schema
 from span_panel_api.protocol import SchemaAdapter
@@ -40,51 +43,102 @@ def test_subscribes_to_the_single_panel_wildcard(adapter: SchemaZeroAdapter) -> 
 CIRCUIT = "ac3dccda46a94b98878a227df6fed588"
 
 
-def test_circuit_setter_topics_address_the_panel_device(adapter: SchemaZeroAdapter) -> None:
-    relay = adapter.set_circuit_relay_target(CIRCUIT)
-    priority = adapter.set_circuit_priority_target(CIRCUIT)
+def _describe(adapter: SchemaZeroAdapter, nodes: dict[str, str]) -> None:
+    """Publish a `$description` declaring `nodes` as node id → type."""
+    adapter.handle_message(
+        f"ebus/5/{SERIAL}/$description",
+        json.dumps({"nodes": {node_id: {"type": node_type} for node_id, node_type in nodes.items()}}),
+    )
+
+
+@pytest.fixture
+def described(adapter: SchemaZeroAdapter) -> SchemaZeroAdapter:
+    """An adapter whose panel has declared `CIRCUIT` as a circuit.
+
+    Every settability test below needs this. The flat schema answers "may this
+    be commanded" out of published values, and an unpublished value is the empty
+    string — so on a panel that has declared nothing, both flags read as
+    permission and every id looks writable. Declaring the node is what makes the
+    subsequent value assertions about the values.
+    """
+    _describe(adapter, {CIRCUIT: TYPE_CIRCUIT})
+    return adapter
+
+
+def test_circuit_setter_topics_address_the_panel_device(described: SchemaZeroAdapter) -> None:
+    relay = described.set_circuit_relay_target(CIRCUIT)
+    priority = described.set_circuit_priority_target(CIRCUIT)
 
     assert relay is not None and relay.topic == f"ebus/5/{SERIAL}/{CIRCUIT}/relay/set"
     assert priority is not None and priority.topic == f"ebus/5/{SERIAL}/{CIRCUIT}/shed-priority/set"
+
+
+def test_a_circuit_the_panel_never_declared_yields_no_target(described: SchemaZeroAdapter) -> None:
+    """The refusal `schema_1` already made, from the lookup flat has for it.
+
+    `get_prop` answers `""` for an id nothing published, `""` parses as `false`,
+    and `not false` is permission — so an unknown circuit produced a well-formed
+    topic aimed at nothing, on a panel that had declared one real circuit beside
+    it. Two adapters answering the same question differently is the bug; the
+    question is "does this panel carry a circuit by this name", and the flat
+    schema answers it from the node type in `$description`.
+    """
+    unknown = "0" * 32
+
+    assert described.set_circuit_relay_target(unknown) is None
+    assert described.set_circuit_priority_target(unknown) is None
+    assert described.has_circuit(unknown) is False
+    # And the declared sibling is untouched: the refusal is about the id.
+    assert described.has_circuit(CIRCUIT) is True
+
+
+def test_a_node_of_another_type_is_not_a_circuit(adapter: SchemaZeroAdapter) -> None:
+    """A node the panel published under a non-circuit type carries no circuit
+    controls, and is refused as an absent circuit rather than as a locked one."""
+    _describe(adapter, {"core": TYPE_CORE})
+
+    assert adapter.has_circuit("core") is False
+    assert adapter.set_circuit_relay_target("core") is None
+    assert adapter.set_circuit_priority_target("core") is None
 
 
 def _publish(adapter: SchemaZeroAdapter, node: str, prop: str, value: str) -> None:
     adapter.handle_message(f"ebus/5/{SERIAL}/{node}/{prop}", value)
 
 
-def test_an_always_on_circuit_yields_no_relay_target(adapter: SchemaZeroAdapter) -> None:
+def test_an_always_on_circuit_yields_no_relay_target(described: SchemaZeroAdapter) -> None:
     """The same refusal the v1.0 side makes, from the value flat publishes for it.
 
     `always-on` is already read into `is_user_controllable`, so the panel had
     told this adapter the relay was locked and only the snapshot listened; the
     topic builder was pure string formatting from a node id.
     """
-    _publish(adapter, CIRCUIT, "always-on", "true")
+    _publish(described, CIRCUIT, "always-on", "true")
 
-    assert adapter.set_circuit_relay_target(CIRCUIT) is None
+    assert described.set_circuit_relay_target(CIRCUIT) is None
     # Only the relay. Always-on is not never-backup, on either schema.
-    assert adapter.set_circuit_priority_target(CIRCUIT) is not None
+    assert described.set_circuit_priority_target(CIRCUIT) is not None
 
 
-def test_a_never_backup_circuit_yields_no_priority_target(adapter: SchemaZeroAdapter) -> None:
-    _publish(adapter, CIRCUIT, "never-backup", "true")
+def test_a_never_backup_circuit_yields_no_priority_target(described: SchemaZeroAdapter) -> None:
+    _publish(described, CIRCUIT, "never-backup", "true")
 
-    assert adapter.set_circuit_priority_target(CIRCUIT) is None
-    assert adapter.set_circuit_relay_target(CIRCUIT) is not None
+    assert described.set_circuit_priority_target(CIRCUIT) is None
+    assert described.set_circuit_relay_target(CIRCUIT) is not None
 
 
-def test_a_published_false_reads_as_permission(adapter: SchemaZeroAdapter) -> None:
+def test_a_published_false_reads_as_permission(described: SchemaZeroAdapter) -> None:
     """A panel that publishes the flags as `false` must not be refused.
 
     Absence already reads as permission; this is the other half, and it is the
     one a producer actually exercises -- a clone of a real panel writes
     `always-on: "false"` out rather than omitting it.
     """
-    _publish(adapter, CIRCUIT, "always-on", "false")
-    _publish(adapter, CIRCUIT, "never-backup", "false")
+    _publish(described, CIRCUIT, "always-on", "false")
+    _publish(described, CIRCUIT, "never-backup", "false")
 
-    assert adapter.set_circuit_relay_target(CIRCUIT) is not None
-    assert adapter.set_circuit_priority_target(CIRCUIT) is not None
+    assert described.set_circuit_relay_target(CIRCUIT) is not None
+    assert described.set_circuit_priority_target(CIRCUIT) is not None
 
 
 def test_dominant_power_source_topic_is_none_before_the_core_node_is_known(

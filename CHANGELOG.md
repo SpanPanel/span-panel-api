@@ -10,8 +10,8 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 ## [3.1.0]
 
 A security release. Three things a caller could not previously find out — whether a control command was delivered, whether the panel's bootstrap traffic was encrypted, and whether the CA behind the MQTT broker is still the one that was there yesterday —
-now have answers. **Install the matching adapter**: this release replaces four `SchemaAdapter` members, so `span-panel-api-schema-0` / `-1` must move to 1.1.0 at the same time. The extras (`span-panel-api[schema-0]`) carry the floor; a direct install of
-the adapter distribution does not, and a 1.0.0 adapter against this bootstrap is rejected at discovery with a named error rather than misbehaving.
+now have answers. **Install the matching adapter**: this release replaces four `SchemaAdapter` members and adds one, so `span-panel-api-schema-0` / `-1` must move to 1.1.0 at the same time. The extras (`span-panel-api[schema-0]`) carry the floor; a direct
+install of the adapter distribution does not, and a 1.0.0 adapter against this bootstrap is rejected at discovery with a named error rather than misbehaving.
 
 ### Fixed
 
@@ -31,6 +31,18 @@ the adapter distribution does not, and a 1.0.0 adapter against this bootstrap is
   snapshot already exposes.
 
   A locked relay keeps a settable priority, which is the combination real panels publish and which `switch` 0.3 and `load-shed` 0.3 scope separately.
+
+  **Both adapters also refuse a circuit id the panel never published**, where the flat one used to build a topic for it. Its lookup read an unpublished value as the empty string, which parses as "not always-on" and read as permission, so any id at all was
+  writable on any panel — including the synthetic `unmapped_tab_*` keys the snapshot itself invents. The two adapters answer the same question and now answer it the same way, and `SchemaAdapter` states the guarantee rather than leaving it to each
+  implementation.
+
+  **And a device that declares no such property is refused as well**, which is not the same absence as a declared property carrying no `$settable`. Under the parent/child schema an absent `$settable` on `load-shed/priority` means settable — that is the
+  documented case where firmware declares the property and omits the attribute — but a BESS, a MID or the lugs declare no `load-shed` node at all, and reading their silence as permission resolved a write topic for a control those devices never offered.
+
+- **A refused circuit command names the refusal it actually made.** An id the panel carries no circuit under was refused with "declares its relay non-commandable" and audited as `relay not commandable`, which asserts something about a circuit that does not
+  exist: it sends whoever reads it to a panel's commissioning to explain a mistyped id. The two cases now carry distinct messages and distinct `detail` values (`no such circuit`), and the distinction matters most in the audit trail, because `detail`
+  reaches `after_publish` and the Home Assistant integration writes it into a security log where it is read as a fact about the panel. `SchemaAdapter` gains `has_circuit` for it — consulted only once a target has already been refused, so it can relabel a
+  refusal but never cause one.
 
 - **A control the library refused before resolving an address is no longer invisible to `ControlInterceptor`.** `after_publish` is contracted to see every command, refusals included, but five refusals happened while resolving the target and therefore never
   reached the publish path at all: a relay declared non-commandable, a priority declared locked, a charger with no settable limit, a panel with no islanding control, and an adopted property that is not settable. A consumer building a security audit on

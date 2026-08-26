@@ -18,7 +18,7 @@ from paho.mqtt.reasoncodes import ReasonCode
 import span_panel_api._http as _http_mod
 from span_panel_api.models import V2HomieSchema
 from span_panel_api.mqtt.control import ControlDeadlines
-from span_panel_api_schema_0.const import TOPIC_PREFIX, TYPE_CORE
+from span_panel_api_schema_0.const import TOPIC_PREFIX, TYPE_CIRCUIT, TYPE_CORE
 
 _DOTENV = Path(__file__).parent.parent / ".env"
 
@@ -65,6 +65,15 @@ TOPIC_PREFIX_SERIAL = f"{TOPIC_PREFIX}/{SERIAL}"
 
 # Minimal Homie description that makes the device "ready"
 MINIMAL_DESCRIPTION = json.dumps({"nodes": {"core": {"type": TYPE_CORE}}})
+
+DESCRIBED_CIRCUIT = "aabbccdd11223344556677889900aabb"
+"""A circuit id that `DESCRIPTION_WITH_CIRCUIT` actually declares."""
+
+# The same panel plus one circuit, for tests that command one. A circuit the
+# panel never declared yields no target and is refused, so `MINIMAL_DESCRIPTION`
+# cannot stand in: a control test on it would be asserting that a write to an
+# unknown circuit reaches the broker.
+DESCRIPTION_WITH_CIRCUIT = json.dumps({"nodes": {"core": {"type": TYPE_CORE}, DESCRIBED_CIRCUIT: {"type": TYPE_CIRCUIT}}})
 
 
 def flat_schema(panel_size: int = 32) -> V2HomieSchema:

@@ -6,6 +6,7 @@ supporting MQTT/Homie (v2) transport.
 
 from importlib.metadata import version as _pkg_version
 
+from ._ssl import build_panel_ssl_context, ca_fingerprint
 from .auth import (
     delete_fqdn,
     download_ca_cert,
@@ -22,6 +23,7 @@ from .exceptions import (
     SpanPanelAdapterMissingError,
     SpanPanelAPIError,
     SpanPanelAuthError,
+    SpanPanelCAChangedError,
     SpanPanelConnectionError,
     SpanPanelError,
     SpanPanelSchemaVersionError,
@@ -37,6 +39,7 @@ from .models import (
     DISCOVERY_NAMESPACE,
     AdoptedDevice,
     AdoptedProperty,
+    ControlTarget,
     DiscoveredMetadata,
     ExtensionProperty,
     ExtensionSubject,
@@ -54,7 +57,15 @@ from .models import (
     V2StatusInfo,
     is_discovery_path,
 )
-from .mqtt import MqttClientConfig, SpanMqttClient
+from .mqtt import (
+    ControlCommand,
+    ControlDeadlines,
+    ControlInterceptor,
+    MqttClientConfig,
+    PublishOutcome,
+    PublishState,
+    SpanMqttClient,
+)
 from .phase_validation import (
     PhaseDistribution,
     are_tabs_opposite_phase,
@@ -66,6 +77,7 @@ from .phase_validation import (
 from .protocol import (
     AdoptedControlProtocol,
     CircuitControlProtocol,
+    ControlInterceptionProtocol,
     EvseControlProtocol,
     PanelCapability,
     PanelControlProtocol,
@@ -89,6 +101,11 @@ __all__ = [  # noqa: RUF022
     # snapshot rather than by its arguments -- a device the adapter models
     # produces no AdoptedDevice and so cannot be addressed through it.
     "AdoptedControlProtocol",
+    # Added 2026-08-25 (3.1.0): one veto/observe point for every control
+    # command. A protocol of its own rather than a member on the four control
+    # protocols, which would break their implementers a second time in one
+    # release.
+    "ControlInterceptionProtocol",
     "PanelCapability",
     "PanelControlProtocol",
     "SpanPanelClientProtocol",
@@ -110,6 +127,9 @@ __all__ = [  # noqa: RUF022
     "ADOPTION_TOPOLOGY_NODE",
     "AdoptedDevice",
     "AdoptedProperty",
+    # Added 2026-08-25 (3.1.0): where a control command goes and which
+    # property reports it landing, produced by the adapter as one value.
+    "ControlTarget",
     "ExtensionProperty",
     "ExtensionSubject",
     # Snapshots
@@ -129,6 +149,11 @@ __all__ = [  # noqa: RUF022
     "V2AuthResponse",
     "V2HomieSchema",
     "V2StatusInfo",
+    # Added 2026-08-25 with CA pinning: the consumer builds the same context for
+    # its own HTTPS calls and prints and compares the same fingerprint string, so
+    # both live here rather than being reimplemented on the other side.
+    "build_panel_ssl_context",
+    "ca_fingerprint",
     "delete_fqdn",
     "download_ca_cert",
     "get_fqdn",
@@ -140,6 +165,14 @@ __all__ = [  # noqa: RUF022
     # Transport
     "MqttClientConfig",
     "SpanMqttClient",
+    # Added 2026-08-25 (3.1.0): what a control command did. The five setters
+    # returned None, which could not distinguish a breaker that opened from a
+    # command the transport never handed to the broker.
+    "ControlCommand",
+    "ControlDeadlines",
+    "ControlInterceptor",
+    "PublishOutcome",
+    "PublishState",
     # Phase validation
     "PhaseDistribution",
     "are_tabs_opposite_phase",
@@ -152,6 +185,7 @@ __all__ = [  # noqa: RUF022
     "SpanPanelAdapterIncompatibleError",
     "SpanPanelAdapterMissingError",
     "SpanPanelAuthError",
+    "SpanPanelCAChangedError",
     "SpanPanelSchemaVersionError",
     "SpanPanelConnectionError",
     "SpanPanelError",

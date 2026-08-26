@@ -78,7 +78,7 @@ class ControllerRoutes:
         """Not supported, and deliberately loud about it.
 
         Commands do not travel this way. `SchemaAdapter` exposes
-        ``set_circuit_relay_topic`` and friends, and the transport publishes to
+        ``set_circuit_relay_target`` and friends, and the transport publishes to
         the topic it is handed — so an adapter never needs a socket to command a
         panel, and neither does this class.
 

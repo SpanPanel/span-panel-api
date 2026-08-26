@@ -9,6 +9,19 @@ rather than by this version number. A release here means this parser changed, ne
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [1.1.0]
+
+Requires `span-panel-api` **3.1.0 or newer**, and the two must be upgraded together in both directions: this wheel is rejected at discovery by a 3.0.x bootstrap, and a 1.0.0 wheel is rejected by 3.1.0.
+
+### Changed
+
+- **BREAKING: `set_circuit_relay_topic`, `set_circuit_priority_topic`, `set_dominant_power_source_topic` and `set_evse_charge_limit_topic` become `set_*_target`, returning a `ControlTarget` instead of a topic string.** 3.1.0 verifies a control write by
+  matching the topic it published to against the property that reports the change, and only an adapter knows both — flat spells this control `(serial, circuit_id, "relay")` where parent/child spells it `(circuit_id, "switch", "relay")`, so the transport
+  cannot derive one from the other without learning two topic grammars. `ControlTarget` returns the topic and that triple from a single call, in the same spelling `_on_property_changed` reports under, so the two cannot disagree.
+
+  Renamed rather than re-typed under the old name so that the mismatch is caught at discovery, where the remedy can be named, instead of surfacing as an `AttributeError` on a `str` deep inside a setter. `ADAPTER_CONTRACT` stays **1** — the contract's
+  member list changed, which discovery already checks by name.
+
 ## [1.0.0]
 
 First release as a standalone distribution. Requires `span-panel-api` 3.0.0 or newer.

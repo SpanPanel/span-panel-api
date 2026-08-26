@@ -12,7 +12,9 @@ from enum import Flag, auto
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from .models import FieldMetadata, SpanPanelSnapshot, V2HomieSchema
+    from .exceptions import SpanPanelError
+    from .models import ControlTarget, FieldMetadata, SpanPanelSnapshot, V2HomieSchema
+    from .mqtt.control import ControlInterceptor, PublishOutcome
 
 
 class PanelCapability(Flag):
@@ -48,21 +50,46 @@ class SpanPanelClientProtocol(Protocol):
 
     def register_connection_callback(self, callback: Callable[[bool], None]) -> Callable[[], None]: ...
 
+    def register_fatal_error_callback(self, callback: Callable[[SpanPanelError], None]) -> Callable[[], None]:
+        """Subscribe to the transport stopping for good.
+
+        Declared here rather than only on the MQTT client because the consumer
+        depends on it and this module's rule is that the consumer codes against
+        protocols, never against transport-specific classes.
+
+        Distinct from `register_connection_callback` because the two say
+        different things and the difference is the whole point. "Disconnected" is
+        what an ordinary outage looks like and a consumer is right to wait
+        through it; this fires only for a failure no amount of waiting fixes,
+        and the consumer is expected to surface it to a person.
+        """
+
 
 @runtime_checkable
 class CircuitControlProtocol(Protocol):
-    """Control protocol for relay and priority changes."""
+    """Control protocol for relay and priority changes.
 
-    async def set_circuit_relay(self, circuit_id: str, state: str) -> None: ...
+    Every setter across the four control protocols returns a `PublishOutcome`
+    rather than `None`. **Additive for callers, breaking for implementers**: an
+    existing call site that ignores the return value is unaffected, but a class
+    type-checked against one of these protocols with `-> None` stops conforming.
+    Test fakes and simulators are exactly that.
 
-    async def set_circuit_priority(self, circuit_id: str, priority: str) -> None: ...
+    The change exists because `None` could not distinguish a breaker that opened
+    from a command that was never handed to the broker, and the transport had
+    three separate paths that returned `None` having published nothing.
+    """
+
+    async def set_circuit_relay(self, circuit_id: str, state: str) -> PublishOutcome: ...
+
+    async def set_circuit_priority(self, circuit_id: str, priority: str) -> PublishOutcome: ...
 
 
 @runtime_checkable
 class PanelControlProtocol(Protocol):
     """Control protocol for panel-level settable properties."""
 
-    async def set_dominant_power_source(self, value: str) -> None: ...
+    async def set_dominant_power_source(self, value: str) -> PublishOutcome: ...
 
 
 @runtime_checkable
@@ -75,7 +102,7 @@ class EvseControlProtocol(Protocol):
     the control, exactly as it does for circuit and panel control.
     """
 
-    async def set_evse_charge_limit(self, node_id: str, amps: int) -> None: ...
+    async def set_evse_charge_limit(self, node_id: str, amps: int) -> PublishOutcome: ...
 
 
 @runtime_checkable
@@ -95,7 +122,26 @@ class AdoptedControlProtocol(Protocol):
     what stops this becoming a generic write around the curated setters.
     """
 
-    async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> None: ...
+    async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> PublishOutcome: ...
+
+
+@runtime_checkable
+class ControlInterceptionProtocol(Protocol):
+    """Transport that can be given one veto-and-observe point for every command.
+
+    A protocol of its own rather than a member added to the four control
+    protocols or to `StreamingCapableProtocol`. Adding it to the control
+    protocols would break every implementer of them a second time in one
+    release, and streaming has nothing to do with control -- a transport could
+    reasonably offer one and not the other.
+
+    Declared here at all because the consumer's authorisation gate is built on
+    it, and this module's rule is that the consumer codes against protocols,
+    never against transport-specific classes.
+    """
+
+    def set_control_interceptor(self, interceptor: ControlInterceptor | None) -> None:
+        """Install the interceptor, or `None` to remove it. One at a time."""
 
 
 @runtime_checkable
@@ -179,14 +225,27 @@ class SchemaAdapter(Protocol):
 
     def find_node_by_type(self, type_str: str) -> str | None: ...
 
-    def set_circuit_relay_topic(self, circuit_id: str) -> str: ...
+    def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget:
+        """Where a relay command goes, and the property that reports it.
 
-    def set_circuit_priority_topic(self, circuit_id: str) -> str: ...
+        Renamed from `set_circuit_relay_topic`, which returned a bare string.
+        The rename is deliberate rather than a return-type change under the old
+        name: an adapter built against the old contract would still carry the
+        old name, pass discovery on presence, and fail deep inside a setter with
+        an `AttributeError` on a `str`. Under a new name it is rejected at
+        discovery, where the remedy -- upgrade both packages together -- can
+        still be named. That is also why `ADAPTER_CONTRACT_VERSION` does not
+        move: the change is additive plus a removal, not a redefinition.
+        """
 
-    def set_dominant_power_source_topic(self) -> str | None: ...
+    def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget:
+        """Where a shed-priority command goes, and the property that reports it."""
 
-    def set_evse_charge_limit_topic(self, node_id: str) -> str | None:
-        """The topic that writes one charger's charge-current limit, or None.
+    def set_dominant_power_source_target(self) -> ControlTarget | None:
+        """Where a dominant-power-source command goes, or None if the panel has no such control."""
+
+    def set_evse_charge_limit_target(self, node_id: str) -> ControlTarget | None:
+        """The target that writes one charger's charge-current limit, or None.
 
         `node_id` is the key the snapshot's `evse` map uses, so a caller needs
         nothing but the snapshot it already has. Returning None means this
@@ -221,4 +280,16 @@ class SchemaAdapter(Protocol):
         panel will reject.
         """
 
-    def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]: ...
+    def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
+        """Subscribe to per-property updates; returns an unregister callable.
+
+        **The callback receives `(device_id, node_id, property_id, value)`** --
+        the same triple `ControlTarget` carries, spelled the same way, because
+        write-then-verify matches one against the other. `value` is `None` only
+        where the adapter can report a property with no value; a consumer that
+        needs the previous value keeps it itself.
+
+        Under the flat schema every property belongs to the one device, so
+        `device_id` is the panel serial rather than being omitted. Filling it in
+        is what lets a consumer treat both schemas' streams as one shape.
+        """

@@ -20,6 +20,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from conftest import FAST_CONTROL_DEADLINES, acking_bridge
+
 from ebus_sdk.homie import DiscoveredDevice
 
 from span_panel_api.exceptions import SpanPanelServerError
@@ -299,7 +301,7 @@ def test_the_catalogued_spelling_is_written_to_its_own_topic() -> None:
     adapter = _adapter(_renamed_to_catalog(EVSE))
     key = _key(adapter, EVSE)
 
-    assert adapter.set_evse_charge_limit_topic(key) == f"ebus/5/{EVSE}/charge-limit/owner-limit/set"
+    assert adapter.set_evse_charge_limit_target(key).topic == f"ebus/5/{EVSE}/charge-limit/owner-limit/set"
 
 
 def test_the_catalogued_spelling_wins_where_both_are_declared() -> None:
@@ -340,14 +342,16 @@ def test_the_set_topic_addresses_the_device_and_the_declared_property() -> None:
     key = _key(adapter, EVSE)
 
     assert key != EVSE
-    assert adapter.set_evse_charge_limit_topic(key) == f"ebus/5/{EVSE}/config/user-max-charge-current/set"
+    assert adapter.set_evse_charge_limit_target(key).topic == f"ebus/5/{EVSE}/config/user-max-charge-current/set"
 
 
 def test_each_charger_gets_its_own_set_topic() -> None:
     adapter = _adapter()
 
-    assert adapter.set_evse_charge_limit_topic(_key(adapter, EVSE)) == (f"ebus/5/{EVSE}/config/user-max-charge-current/set")
-    assert adapter.set_evse_charge_limit_topic(_key(adapter, EVSE_2)) == (
+    assert adapter.set_evse_charge_limit_target(_key(adapter, EVSE)).topic == (
+        f"ebus/5/{EVSE}/config/user-max-charge-current/set"
+    )
+    assert adapter.set_evse_charge_limit_target(_key(adapter, EVSE_2)).topic == (
         f"ebus/5/{EVSE_2}/config/user-max-charge-current/set"
     )
 
@@ -358,7 +362,7 @@ def test_no_topic_for_a_charger_that_does_not_declare_the_limit_settable() -> No
     adapter = _adapter(_without_settable(EVSE))
     key = _key(adapter, EVSE)
 
-    assert adapter.set_evse_charge_limit_topic(key) is None
+    assert adapter.set_evse_charge_limit_target(key) is None
     assert adapter.evse_charge_limit_payload(key, 16) is None
 
 
@@ -366,14 +370,14 @@ def test_no_topic_for_a_charger_with_no_charge_limit_node() -> None:
     adapter = _adapter(_without_node(EVSE))
     key = _key(adapter, EVSE)
 
-    assert adapter.set_evse_charge_limit_topic(key) is None
+    assert adapter.set_evse_charge_limit_target(key) is None
     assert adapter.evse_charge_limit_payload(key, 16) is None
 
 
 def test_no_topic_for_a_charger_the_panel_does_not_have() -> None:
     adapter = _adapter()
 
-    assert adapter.set_evse_charge_limit_topic("not-a-charger") is None
+    assert adapter.set_evse_charge_limit_target("not-a-charger") is None
     assert adapter.evse_charge_limit_payload("not-a-charger", 16) is None
 
 
@@ -429,7 +433,7 @@ def test_a_charger_with_no_ceiling_is_not_second_guessed() -> None:
     key = _key(adapter, EVSE)
 
     assert adapter.evse_charge_limit_payload(key, 1000) == "1000"
-    assert adapter.set_evse_charge_limit_topic(key) == f"ebus/5/{EVSE}/config/user-max-charge-current/set"
+    assert adapter.set_evse_charge_limit_target(key).topic == f"ebus/5/{EVSE}/config/user-max-charge-current/set"
 
 
 # ---------------------------------------------------------------------------
@@ -441,9 +445,14 @@ def _client(adapter: SchemaOneAdapter) -> tuple[object, MagicMock]:
     from span_panel_api.mqtt.client import MqttClientConfig, SpanMqttClient
 
     config = MqttClientConfig(broker_host="h", username="u", password="p")
-    client = SpanMqttClient(host="192.168.1.1", serial_number=PANEL, broker_config=config)
+    client = SpanMqttClient(
+        host="192.168.1.1",
+        serial_number=PANEL,
+        broker_config=config,
+        control_deadlines=FAST_CONTROL_DEADLINES,
+    )
     client._adapter = adapter
-    bridge = MagicMock()
+    bridge = acking_bridge()
     client._bridge = bridge
     return client, bridge
 
@@ -457,7 +466,7 @@ async def test_the_transport_publishes_the_topic_and_payload_the_adapter_named()
 
     await client.set_evse_charge_limit(key, asked)
 
-    bridge.publish.assert_called_once_with(f"ebus/5/{EVSE}/config/user-max-charge-current/set", str(asked), qos=1)
+    bridge.publish.assert_called_once_with(f"ebus/5/{EVSE}/config/user-max-charge-current/set", str(asked))
 
 
 @pytest.mark.asyncio

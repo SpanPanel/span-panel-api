@@ -107,7 +107,16 @@ def _is_adapter_class(loaded: object) -> TypeGuard[type[SchemaAdapter]]:
 
 
 def _describe_defect(loaded: object) -> str:
-    """Explain why `loaded` failed _is_adapter_class. Only called on the error path."""
+    """Explain why `loaded` failed _is_adapter_class, and say what to do about it.
+
+    Naming the absent members is the diagnosis, not the remedy, and on its own it
+    reads as a fault in the adapter. It usually is not one: the ordinary cause is
+    two packages from different releases installed together, which is the one
+    thing member presence catches cleanly in both directions -- a new bootstrap
+    misses the members the adapter has not grown yet, an old one misses the
+    members the adapter has already renamed. Either way the answer is the same
+    and the reader should not have to infer it, so this says it.
+    """
     if not isinstance(loaded, type):
         return f"expected a class, got {type(loaded).__name__}"
     missing = [member for member in _REQUIRED_MEMBERS if not hasattr(loaded, member)]
@@ -120,7 +129,13 @@ def _describe_defect(loaded: object) -> str:
             f"versioning and was built against an older span-panel-api. Install an adapter "
             f"release built for contract {ADAPTER_CONTRACT_VERSION}."
         )
-    return f"{loaded.__name__} does not implement SchemaAdapter (missing: {', '.join(missing)})."
+    return (
+        f"{loaded.__name__} does not implement SchemaAdapter (missing: {', '.join(missing)}). "
+        f"This is what a mismatched pair of packages looks like: the bootstrap and its adapter "
+        f"are versioned separately and a member added or renamed in one release is absent until "
+        f"both move. Upgrade span-panel-api and the adapter distribution together — installing "
+        f"via the extra (span-panel-api[schema-N]) is what keeps their floors honest."
+    )
 
 
 def _contract_defect(adapter_cls: type[SchemaAdapter]) -> str | None:

@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+import ssl
 import uuid
 
 import httpx
@@ -24,6 +26,77 @@ from .exceptions import (
     SpanPanelTimeoutError,
 )
 from .models import HomieSchemaTypes, V2AuthResponse, V2HomieSchema, V2StatusInfo
+
+_LOGGER = logging.getLogger(__name__)
+
+#: Keys whose value is a credential wherever it appears in a response body,
+#: compared case-folded because the panel spells them lowerCamelCase and a
+#: proxy or validation layer in between may not.
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "hoppassphrase",
+        "passphrase",
+        "ebusbrokerpassword",
+        "password",
+        "accesstoken",
+        "token",
+    }
+)
+
+_REDACTED = "***"
+
+
+def _redact(value: object) -> object:
+    """Replace every credential-valued key in a JSON-decoded body, at any depth.
+
+    A top-level key scan is not enough, and the case that matters is the exact
+    one this exists for: a FastAPI-style 422 echoes the request that failed
+    validation back under ``detail[].input``, so the passphrase that was just
+    rejected reappears nested two levels down. Scanning only the outermost
+    object would redact nothing in precisely the response most likely to carry a
+    secret.
+
+    Walks dicts and lists; anything else is returned as-is, because a scalar
+    reached here is a value whose key has already been judged.
+    """
+    if isinstance(value, dict):
+        return {key: _REDACTED if str(key).lower() in _CREDENTIAL_KEYS else _redact(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    return value
+
+
+def _log_auth_failure(endpoint: str, response: httpx.Response) -> None:
+    """Record why an auth call failed, at DEBUG and with credentials removed.
+
+    The body is worth keeping — a 422's validation detail is the only thing that
+    says *which* field the panel objected to — but it is not worth putting in an
+    exception message, which Home Assistant surfaces in the UI, writes to the
+    config-flow log, and carries into a diagnostics download. DEBUG is opt-in and
+    is where a user chasing a registration failure is already looking.
+
+    A body that is not JSON is described rather than shown. It could be an HTML
+    error page from a proxy, and it could equally be an echo of the request; with
+    no structure to walk there is no way to redact it, so only its shape is
+    logged.
+    """
+    try:
+        parsed = response.json()
+    except ValueError:
+        _LOGGER.debug(
+            "%s failed with HTTP %d; body not JSON (%d bytes, content-type %r)",
+            endpoint,
+            response.status_code,
+            len(response.content),
+            response.headers.get("content-type", ""),
+        )
+        return
+    _LOGGER.debug(
+        "%s failed with HTTP %d; body (credentials redacted): %s",
+        endpoint,
+        response.status_code,
+        json.dumps(_redact(parsed), sort_keys=True),
+    )
 
 
 def _str(val: object) -> str:
@@ -69,8 +142,9 @@ async def register_v2(
     name: str,
     passphrase: str | None = None,
     timeout: float = 10.0,
-    port: int = 80,
+    port: int | None = None,
     httpx_client: httpx.AsyncClient | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> V2AuthResponse:
     """Register with the SPAN Panel v2 API and obtain access + MQTT credentials.
 
@@ -90,8 +164,13 @@ async def register_v2(
         passphrase: Panel passphrase (printed on label or set by owner). None for door bypass.
         timeout: Request timeout in seconds for the internally created client when
             ``httpx_client`` is None; ignored when a client is injected (caller configures timeouts).
-        port: HTTP port of the panel bootstrap API
+        port: Port of the panel bootstrap API. ``None`` means "unspecified" and takes
+            the scheme's default -- 80 without ``ssl_context``, 443 with one.
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+            Not used when ``ssl_context`` is supplied -- httpx fixes its trust store at
+            construction, so a pinned CA needs a client built for it. See ``_get_client``.
+        ssl_context: Trust anchor for the panel's HTTPS certificate. Supplying one moves
+            this call to ``https://``; ``None`` is byte-identical to 3.0.1.
 
     Returns:
         V2AuthResponse with access token and MQTT broker credentials
@@ -102,7 +181,7 @@ async def register_v2(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = _build_url(host, port, "/api/v2/auth/register")
+    url = _build_url(host, port, "/api/v2/auth/register", ssl_context)
     # The panel requires unique client names — append a random suffix.
     # The passphrase field must be "hopPassphrase" per the SPAN v2 API spec.
     suffix = uuid.uuid4().hex[:8]
@@ -112,7 +191,7 @@ async def register_v2(
         payload["hopPassphrase"] = passphrase
 
     try:
-        async with _get_client(httpx_client, timeout) as client:
+        async with _get_client(httpx_client, timeout, ssl_context) as client:
             response = await client.post(url, json=payload)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -120,7 +199,13 @@ async def register_v2(
         raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
 
     if response.status_code in (401, 403, 422):
-        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code}): {response.text}")
+        # Status only, matching the shape the branch below already uses. The body
+        # is logged at DEBUG instead: a 422 from the panel's validation layer
+        # echoes the submitted `hopPassphrase` straight back, and interpolating
+        # `response.text` here put that secret into an exception message that
+        # Home Assistant shows in the UI and captures in diagnostics.
+        _log_auth_failure("/api/v2/auth/register", response)
+        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
 
     if response.status_code != 200:
         raise SpanPanelAPIError(f"Unexpected response from /api/v2/auth/register: HTTP {response.status_code}")
@@ -145,12 +230,29 @@ async def register_v2(
 async def download_ca_cert(
     host: str,
     timeout: float = 10.0,
-    port: int = 80,
+    port: int | None = None,
     httpx_client: httpx.AsyncClient | None = None,
     max_attempts: int = CA_CERT_MAX_ATTEMPTS,
     backoff_s: float = CA_CERT_BACKOFF_S,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> str:
     """Download the PEM CA certificate from the SPAN Panel.
+
+    **This call is unauthenticated and unverified by construction, and its
+    result must be fingerprint-confirmed by the caller before it is trusted.**
+    It is the bootstrap: it fetches the very anchor everything else is checked
+    against, so there is nothing for it to check itself against. Anything on the
+    path between here and the panel can answer it with a CA of its own, and the
+    response carries no evidence that would distinguish that from the real one.
+    Whoever calls this owes the trust decision -- comparing the fingerprint
+    against one recorded out of band, or against one pinned on a previous
+    install -- and until that is done the PEM is a candidate, not an anchor.
+
+    ``ssl_context`` exists here for the caller that *already holds* the anchor
+    and wants a second copy over a verified channel: refetching to compare
+    fingerprints, which is how a suspected CA rotation is told apart from an
+    ordinary TLS failure. It does not make the first fetch trustworthy, because
+    the first fetch has no context to pass.
 
     The panel rate-limits this endpoint and replies with HTTP 429 once the
     limit is hit. A single reconnect storm — or another client polling the
@@ -161,8 +263,13 @@ async def download_ca_cert(
     Args:
         host: IP address or hostname of the SPAN Panel
         timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
-        port: HTTP port of the panel bootstrap API
+        port: Port of the panel bootstrap API. ``None`` means "unspecified" and takes
+            the scheme's default -- 80 without ``ssl_context``, 443 with one.
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+            Not used when ``ssl_context`` is supplied -- httpx fixes its trust store at
+            construction, so a pinned CA needs a client built for it. See ``_get_client``.
+        ssl_context: Trust anchor for a *re*-fetch by a caller that already holds one.
+            ``None`` -- the bootstrap case -- is plaintext HTTP, and has to be.
         max_attempts: Total attempts made when the panel replies HTTP 429.
         backoff_s: Base delay for exponential backoff between 429 retries.
 
@@ -174,12 +281,12 @@ async def download_ca_cert(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response or invalid PEM
     """
-    url = _build_url(host, port, "/api/v2/certificate/ca")
+    url = _build_url(host, port, "/api/v2/certificate/ca", ssl_context)
     last_status: int | None = None
 
     for attempt in range(1, max_attempts + 1):
         try:
-            async with _get_client(httpx_client, timeout) as client:
+            async with _get_client(httpx_client, timeout, ssl_context) as client:
                 response = await client.get(url)
         except httpx.ConnectError as exc:
             raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -206,8 +313,9 @@ async def download_ca_cert(
 async def get_homie_schema(
     host: str,
     timeout: float = 10.0,
-    port: int = 80,
+    port: int | None = None,
     httpx_client: httpx.AsyncClient | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> V2HomieSchema:
     """Fetch the Homie property schema from the SPAN Panel.
 
@@ -216,8 +324,13 @@ async def get_homie_schema(
     Args:
         host: IP address or hostname of the SPAN Panel
         timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
-        port: HTTP port of the panel bootstrap API
+        port: Port of the panel bootstrap API. ``None`` means "unspecified" and takes
+            the scheme's default -- 80 without ``ssl_context``, 443 with one.
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+            Not used when ``ssl_context`` is supplied -- httpx fixes its trust store at
+            construction, so a pinned CA needs a client built for it. See ``_get_client``.
+        ssl_context: Trust anchor for the panel's HTTPS certificate. Supplying one moves
+            this call to ``https://``; ``None`` is byte-identical to 3.0.1.
 
     Returns:
         V2HomieSchema with firmware version, schema hash, and type definitions
@@ -227,10 +340,10 @@ async def get_homie_schema(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = _build_url(host, port, "/api/v2/homie/schema")
+    url = _build_url(host, port, "/api/v2/homie/schema", ssl_context)
 
     try:
-        async with _get_client(httpx_client, timeout) as client:
+        async with _get_client(httpx_client, timeout, ssl_context) as client:
             response = await client.get(url)
     except httpx.TimeoutException as exc:
         raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
@@ -315,8 +428,9 @@ async def regenerate_passphrase(
     host: str,
     token: str,
     timeout: float = 10.0,
-    port: int = 80,
+    port: int | None = None,
     httpx_client: httpx.AsyncClient | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> str:
     """Rotate the MQTT broker password on the SPAN Panel.
 
@@ -328,8 +442,13 @@ async def regenerate_passphrase(
         host: IP address or hostname of the SPAN Panel
         token: Valid JWT access token
         timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
-        port: HTTP port of the panel bootstrap API
+        port: Port of the panel bootstrap API. ``None`` means "unspecified" and takes
+            the scheme's default -- 80 without ``ssl_context``, 443 with one.
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+            Not used when ``ssl_context`` is supplied -- httpx fixes its trust store at
+            construction, so a pinned CA needs a client built for it. See ``_get_client``.
+        ssl_context: Trust anchor for the panel's HTTPS certificate. Supplying one moves
+            this call to ``https://``; ``None`` is byte-identical to 3.0.1.
 
     Returns:
         New MQTT broker password
@@ -340,11 +459,11 @@ async def regenerate_passphrase(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = _build_url(host, port, "/api/v2/auth/passphrase")
+    url = _build_url(host, port, "/api/v2/auth/passphrase", ssl_context)
     headers = {"Authorization": f"Bearer {token}"}
 
     try:
-        async with _get_client(httpx_client, timeout) as client:
+        async with _get_client(httpx_client, timeout, ssl_context) as client:
             response = await client.put(url, headers=headers)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -366,8 +485,9 @@ async def register_fqdn(
     token: str,
     fqdn: str,
     timeout: float = 10.0,
-    port: int = 80,
+    port: int | None = None,
     httpx_client: httpx.AsyncClient | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> None:
     """Register an FQDN with the SPAN Panel for TLS certificate SAN inclusion.
 
@@ -380,8 +500,13 @@ async def register_fqdn(
         token: Valid JWT access token from register_v2
         fqdn: Fully qualified domain name to register
         timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
-        port: HTTP port of the panel bootstrap API
+        port: Port of the panel bootstrap API. ``None`` means "unspecified" and takes
+            the scheme's default -- 80 without ``ssl_context``, 443 with one.
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+            Not used when ``ssl_context`` is supplied -- httpx fixes its trust store at
+            construction, so a pinned CA needs a client built for it. See ``_get_client``.
+        ssl_context: Trust anchor for the panel's HTTPS certificate. Supplying one moves
+            this call to ``https://``; ``None`` is byte-identical to 3.0.1.
 
     Raises:
         SpanPanelAuthError: Token invalid or expired
@@ -389,12 +514,12 @@ async def register_fqdn(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response (including 404 if unsupported)
     """
-    url = _build_url(host, port, "/api/v2/dns/fqdn")
+    url = _build_url(host, port, "/api/v2/dns/fqdn", ssl_context)
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"ebusTlsFqdn": fqdn}
 
     try:
-        async with _get_client(httpx_client, timeout) as client:
+        async with _get_client(httpx_client, timeout, ssl_context) as client:
             response = await client.post(url, json=payload, headers=headers)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -412,8 +537,9 @@ async def get_fqdn(
     host: str,
     token: str,
     timeout: float = 10.0,
-    port: int = 80,
+    port: int | None = None,
     httpx_client: httpx.AsyncClient | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> str | None:
     """Retrieve the currently registered FQDN from the SPAN Panel.
 
@@ -421,8 +547,13 @@ async def get_fqdn(
         host: IP address or hostname of the SPAN Panel
         token: Valid JWT access token from register_v2
         timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
-        port: HTTP port of the panel bootstrap API
+        port: Port of the panel bootstrap API. ``None`` means "unspecified" and takes
+            the scheme's default -- 80 without ``ssl_context``, 443 with one.
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+            Not used when ``ssl_context`` is supplied -- httpx fixes its trust store at
+            construction, so a pinned CA needs a client built for it. See ``_get_client``.
+        ssl_context: Trust anchor for the panel's HTTPS certificate. Supplying one moves
+            this call to ``https://``; ``None`` is byte-identical to 3.0.1.
 
     Returns:
         The registered FQDN string, or ``None`` when no FQDN is configured
@@ -435,11 +566,11 @@ async def get_fqdn(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = _build_url(host, port, "/api/v2/dns/fqdn")
+    url = _build_url(host, port, "/api/v2/dns/fqdn", ssl_context)
     headers = {"Authorization": f"Bearer {token}"}
 
     try:
-        async with _get_client(httpx_client, timeout) as client:
+        async with _get_client(httpx_client, timeout, ssl_context) as client:
             response = await client.get(url, headers=headers)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -466,8 +597,9 @@ async def delete_fqdn(
     host: str,
     token: str,
     timeout: float = 10.0,
-    port: int = 80,
+    port: int | None = None,
     httpx_client: httpx.AsyncClient | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> None:
     """Remove the registered FQDN from the SPAN Panel.
 
@@ -478,8 +610,13 @@ async def delete_fqdn(
         host: IP address or hostname of the SPAN Panel
         token: Valid JWT access token from register_v2
         timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
-        port: HTTP port of the panel bootstrap API
+        port: Port of the panel bootstrap API. ``None`` means "unspecified" and takes
+            the scheme's default -- 80 without ``ssl_context``, 443 with one.
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+            Not used when ``ssl_context`` is supplied -- httpx fixes its trust store at
+            construction, so a pinned CA needs a client built for it. See ``_get_client``.
+        ssl_context: Trust anchor for the panel's HTTPS certificate. Supplying one moves
+            this call to ``https://``; ``None`` is byte-identical to 3.0.1.
 
     Raises:
         SpanPanelAuthError: Token invalid or expired
@@ -487,11 +624,11 @@ async def delete_fqdn(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = _build_url(host, port, "/api/v2/dns/fqdn")
+    url = _build_url(host, port, "/api/v2/dns/fqdn", ssl_context)
     headers = {"Authorization": f"Bearer {token}"}
 
     try:
-        async with _get_client(httpx_client, timeout) as client:
+        async with _get_client(httpx_client, timeout, ssl_context) as client:
             response = await client.delete(url, headers=headers)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
@@ -508,16 +645,22 @@ async def delete_fqdn(
 async def get_v2_status(
     host: str,
     timeout: float = 5.0,
-    port: int = 80,
+    port: int | None = None,
     httpx_client: httpx.AsyncClient | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> V2StatusInfo:
     """Lightweight v2 status probe (unauthenticated).
 
     Args:
         host: IP address or hostname of the SPAN Panel
         timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
-        port: HTTP port of the panel bootstrap API
+        port: Port of the panel bootstrap API. ``None`` means "unspecified" and takes
+            the scheme's default -- 80 without ``ssl_context``, 443 with one.
         httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+            Not used when ``ssl_context`` is supplied -- httpx fixes its trust store at
+            construction, so a pinned CA needs a client built for it. See ``_get_client``.
+        ssl_context: Trust anchor for the panel's HTTPS certificate. Supplying one moves
+            this call to ``https://``; ``None`` is byte-identical to 3.0.1.
 
     Returns:
         V2StatusInfo with serial number and firmware version
@@ -527,10 +670,10 @@ async def get_v2_status(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response or non-v2 panel
     """
-    url = _build_url(host, port, "/api/v2/status")
+    url = _build_url(host, port, "/api/v2/status", ssl_context)
 
     try:
-        async with _get_client(httpx_client, timeout) as client:
+        async with _get_client(httpx_client, timeout, ssl_context) as client:
             response = await client.get(url)
     except httpx.ConnectError as exc:
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc

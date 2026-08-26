@@ -20,7 +20,7 @@ from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.const import MQTT_FULL_REBUILD_AFTER_FAILURES, MQTT_RECONNECT_MIN_DELAY_S
 from span_panel_api.mqtt.models import MqttClientConfig
 
-from conftest import MINIMAL_DESCRIPTION, SERIAL, TOPIC_PREFIX_SERIAL
+from conftest import FAST_CONTROL_DEADLINES, MINIMAL_DESCRIPTION, SERIAL, TOPIC_PREFIX_SERIAL
 
 
 def _make_bridge() -> AsyncMqttBridge:
@@ -103,7 +103,7 @@ class TestBridgeConnect:
         """Malformed CA PEM must surface as SpanPanelConnectionError, not ssl.SSLError."""
         bridge = _make_bridge()
         with patch(
-            "span_panel_api.mqtt.connection._build_ssl_context",
+            "span_panel_api.mqtt.connection.build_panel_ssl_context",
             side_effect=ssl.SSLError("malformed PEM"),
         ):
             with pytest.raises(SpanPanelConnectionError, match="Failed to build SSL context"):
@@ -153,8 +153,11 @@ class TestBridgeSubscribePublish:
         bridge = _make_bridge()
         await bridge.connect()
 
-        bridge.publish("test/topic", "hello", qos=1)
+        acknowledged = bridge.publish("test/topic", "hello")
         mqtt_client_mock.publish.assert_called_once_with("test/topic", payload="hello", qos=1)
+        # Handed over, and still waiting: the PUBACK has not arrived.
+        assert acknowledged is not None
+        assert not acknowledged.done()
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +298,7 @@ def _make_span_client(snapshot_interval: float = 1.0) -> SpanMqttClient:
         serial_number=SERIAL,
         broker_config=config,
         snapshot_interval=snapshot_interval,
+        control_deadlines=FAST_CONTROL_DEADLINES,
     )
 
 

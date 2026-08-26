@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from ebus_sdk import Controller
 
+from span_panel_api.models import ControlTarget
 from span_panel_api_schema_1.charge_limit import ChargeLimitProperty, ChargeLimitSurface, resolve_charge_limit
 from span_panel_api_schema_1.const import (
     HOMIE_DOMAIN,
@@ -195,13 +196,13 @@ class SchemaOneAdapter:
     # The adapter names the topic and the transport publishes it, so commanding
     # a panel needs no connection here either.
 
-    def set_circuit_relay_topic(self, circuit_id: str) -> str:
-        return self._set_topic(circuit_id, NODE_SWITCH, PROP_RELAY)
+    def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget:
+        return self._target(circuit_id, NODE_SWITCH, PROP_RELAY)
 
-    def set_circuit_priority_topic(self, circuit_id: str) -> str:
-        return self._set_topic(circuit_id, NODE_LOAD_SHED, PROP_PRIORITY)
+    def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget:
+        return self._target(circuit_id, NODE_LOAD_SHED, PROP_PRIORITY)
 
-    def set_dominant_power_source_topic(self) -> str | None:
+    def set_dominant_power_source_target(self) -> ControlTarget | None:
         """The settable successor: `shed/asserted-islanding-state` on the panel.
 
         `dominant-power-source` split in two. The read half became
@@ -219,7 +220,7 @@ class SchemaOneAdapter:
         Payload translation is not optional: the flat enum this protocol speaks
         is not the one the panel accepts. See `dominant_power_source_payload`.
         """
-        return self._set_topic(self._serial_number, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
+        return self._target(self._serial_number, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
 
     def dominant_power_source_payload(self, value: str) -> str | None:
         """Translate a flat `dominant-power-source` value into an assertion.
@@ -245,8 +246,8 @@ class SchemaOneAdapter:
             "UNKNOWN": "NONE",
         }.get(value.strip().upper())
 
-    def set_evse_charge_limit_topic(self, node_id: str) -> str | None:
-        """The set topic for one charger's charge-current limit, or None.
+    def set_evse_charge_limit_target(self, node_id: str) -> ControlTarget | None:
+        """Where one charger's charge-current limit is written, or None.
 
         Every part of the topic is resolved at runtime. The device id comes from
         matching `node_id` — the snapshot's harmonised key, which is the
@@ -266,7 +267,7 @@ class SchemaOneAdapter:
         if writable is None:
             return None
         device, surface, limit = writable
-        return self._set_topic(device.device_id, surface.node, limit.property_id)
+        return self._target(device.device_id, surface.node, limit.property_id)
 
     def evse_charge_limit_payload(self, node_id: str, amps: int) -> str | None:
         """The payload to publish for `amps`, or None if it may not be published.
@@ -297,7 +298,7 @@ class SchemaOneAdapter:
         return str(amps)
 
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
-        """Subscribe to per-property updates; returns an unregister callable."""
+        """Subscribe to per-property updates: `(device_id, node_id, property_id, value)`."""
         self._property_callbacks.append(callback)
 
         def _unregister() -> None:
@@ -333,8 +334,24 @@ class SchemaOneAdapter:
             return device, surface, surface.limit
         return None
 
-    def _set_topic(self, device_id: str, node: str, prop: str) -> str:
-        return f"{HOMIE_DOMAIN}/{HOMIE_VERSION}/{device_id}/{node}/{prop}/set"
+    def _target(self, device_id: str, node: str, prop: str) -> ControlTarget:
+        """One device/node/property address as both a set topic and an observation key.
+
+        The triple is returned alongside the topic rather than left for the
+        transport to parse back out of it: the transport is the one component
+        that is supposed to know nothing about this schema's topic grammar, and
+        under parent/child the device is a peer of the panel rather than a node
+        beneath it, so the grammar is not even the flat one.
+
+        The spelling here is the spelling `_on_property_changed` reports under,
+        because a write is verified by matching one against the other.
+        """
+        return ControlTarget(
+            topic=f"{HOMIE_DOMAIN}/{HOMIE_VERSION}/{device_id}/{node}/{prop}/set",
+            device_id=device_id,
+            node_id=node,
+            property_id=prop,
+        )
 
     def _require_root(self) -> DiscoveredDevice:
         """The root, or a clear error if discovery has not finished.

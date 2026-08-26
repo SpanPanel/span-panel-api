@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from span_panel_api.mqtt.connection import _build_ssl_context
+from span_panel_api._ssl import build_panel_ssl_context
 
 cryptography = pytest.importorskip("cryptography", reason="cryptography needed to mint a test CA")
 
@@ -176,7 +176,7 @@ def _tls_server(leaf_pem: str, leaf_key_pem: str):
 class TestBuildSslContext:
     def test_loads_ca_without_authority_key_identifier(self) -> None:
         """The panel's AKI-less CA must load — this is the actual regression."""
-        ctx = _build_ssl_context(_self_signed_ca(with_aki=False))
+        ctx = build_panel_ssl_context(_self_signed_ca(with_aki=False))
 
         assert ctx.verify_mode is ssl.CERT_REQUIRED
         assert ctx.check_hostname is True
@@ -185,7 +185,7 @@ class TestBuildSslContext:
     def test_handshake_succeeds_against_panel_style_cert(self) -> None:
         """End-to-end proof: a TLS handshake completes against an AKI-less chain."""
         ca_pem, leaf_pem, leaf_key_pem = _ca_and_leaf(with_aki=False)
-        ctx = _build_ssl_context(ca_pem)
+        ctx = build_panel_ssl_context(ca_pem)
 
         with _tls_server(leaf_pem, leaf_key_pem) as (host, port):
             with socket.create_connection((host, port), timeout=5) as raw:
@@ -201,7 +201,7 @@ class TestBuildSslContext:
         no longer needed.
         """
         ca_pem, leaf_pem, leaf_key_pem = _ca_and_leaf(with_aki=False)
-        strict = _build_ssl_context(ca_pem)
+        strict = build_panel_ssl_context(ca_pem)
         strict.verify_flags |= ssl.VERIFY_X509_STRICT
 
         with _tls_server(leaf_pem, leaf_key_pem) as (host, port):
@@ -210,25 +210,25 @@ class TestBuildSslContext:
                     strict.wrap_socket(raw, server_hostname="localhost")
 
     def test_strict_flag_is_cleared(self) -> None:
-        ctx = _build_ssl_context(_self_signed_ca(with_aki=False))
+        ctx = build_panel_ssl_context(_self_signed_ca(with_aki=False))
         assert not (ctx.verify_flags & ssl.VERIFY_X509_STRICT)
 
     def test_hostname_and_peer_verification_stay_enabled(self) -> None:
         """Clearing the strict flag must not weaken the checks that matter."""
-        ctx = _build_ssl_context(_self_signed_ca(with_aki=True))
+        ctx = build_panel_ssl_context(_self_signed_ca(with_aki=True))
 
         assert ctx.check_hostname is True
         assert ctx.verify_mode is ssl.CERT_REQUIRED
 
     def test_system_ca_bundle_is_not_trusted(self) -> None:
         """Only the panel CA is a trust anchor — no system roots."""
-        ctx = _build_ssl_context(_self_signed_ca(with_aki=False))
+        ctx = build_panel_ssl_context(_self_signed_ca(with_aki=False))
         assert len(ctx.get_ca_certs()) == 1
 
     def test_conventional_ca_still_loads(self) -> None:
-        ctx = _build_ssl_context(_self_signed_ca(with_aki=True))
+        ctx = build_panel_ssl_context(_self_signed_ca(with_aki=True))
         assert ctx.get_ca_certs()
 
     def test_malformed_pem_raises(self) -> None:
         with pytest.raises((ssl.SSLError, ValueError)):
-            _build_ssl_context("-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n")
+            build_panel_ssl_context("-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n")

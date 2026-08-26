@@ -601,6 +601,45 @@ A node is what the vocabulary defines, so keying on it cannot go stale that way.
 
 
 @dataclass(frozen=True, slots=True)
+class ControlTarget:
+    """Where a control command goes, and which property will report it landing.
+
+    Produced by the adapter and by nothing else. Verifying a write means
+    watching the property that reports it, and the transport holds only a topic
+    string -- it cannot derive the triple from that without learning two
+    schemas' topic grammars, which is exactly the wire knowledge the bootstrap
+    is supposed to be free of. The two are also schema-private and differ:
+    flat's relay is `(serial, circuit_id, "relay")`, v1.0's is
+    `(circuit_id, "switch", "relay")`.
+
+    One value rather than two calls, so the topic a command is published to and
+    the property watched for its effect cannot come from different resolutions
+    of the same request -- which is how a control ends up confirming itself
+    against the wrong charger the day a harmonisation rule changes.
+
+    `device_id`, `node_id` and `property_id` are the triple
+    `SchemaAdapter.register_property_callback` reports values under, and must be
+    spelled exactly as that stream spells them or nothing will ever match.
+    """
+
+    topic: str
+    """The topic the command is published to, ready to use."""
+
+    device_id: str
+    """The Homie device, as the observation stream names it.
+
+    Under the flat schema every property belongs to the panel, so this is the
+    panel serial. Under parent/child it is whichever device owns the node.
+    """
+
+    node_id: str
+    """The Homie node the property lives on."""
+
+    property_id: str
+    """The Homie property that reports this control's value."""
+
+
+@dataclass(frozen=True, slots=True)
 class AdoptedProperty:
     """One property of a device this library models no snapshot field for.
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
 from typing import TYPE_CHECKING
 
 from .adapters import resolve_adapter
@@ -31,8 +32,9 @@ async def create_span_client(
     passphrase: str | None = None,
     mqtt_config: MqttClientConfig | None = None,
     serial_number: str | None = None,
-    port: int = 80,
+    port: int | None = None,
     httpx_client: httpx.AsyncClient | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> SpanMqttClient:
     """Create a SPAN Panel MQTT client.
 
@@ -41,11 +43,26 @@ async def create_span_client(
         passphrase: Panel passphrase for v2 registration.
         mqtt_config: Pre-built MQTT broker configuration.
         serial_number: Panel serial number (extracted from detection/registration if omitted).
-        port: HTTP port of the panel bootstrap API used for registration and detection.
+        port: Port of the panel bootstrap API used for registration, detection and the
+            schema fetch. ``None`` takes the scheme default -- 80 plaintext, 443 with a
+            context.
         httpx_client: Optional shared ``httpx.AsyncClient``, used for every request this
             makes and handed to the client it builds. Not closed here; its timeouts and
             limits are the caller's, which is why the per-call ``timeout`` defaults are
-            ignored when one is given.
+            ignored when one is given. Superseded by ``ssl_context`` where one is given,
+            because httpx cannot have a trust store applied after construction.
+        ssl_context: Trust anchor for the panel's HTTPS certificate, applied to every
+            bootstrap call this makes and carried into the client it returns for the
+            schema refetches that client does on its own.
+
+            ``register_v2`` is the reason this is not optional in practice: it carries
+            the panel passphrase up and brings the broker password back, which makes it
+            the most sensitive request this library issues. The schema fetches carry no
+            credential, but a plaintext one still hands an observer the panel's
+            topology, and one HTTP path left open is where the next one gets added.
+
+            Separate from ``MqttClientConfig.ca_pem``, which anchors the *broker*
+            connection. Both are the same panel CA; supply both, from one PEM.
 
     Returns:
         A connected-ready SpanMqttClient instance.
@@ -63,7 +80,9 @@ async def create_span_client(
     if mqtt_config is None:
         if passphrase is None:
             raise SpanPanelAuthError("Neither mqtt_config nor passphrase provided")
-        auth_response = await register_v2(host, _V2_CLIENT_NAME, passphrase, port=port, httpx_client=httpx_client)
+        auth_response = await register_v2(
+            host, _V2_CLIENT_NAME, passphrase, port=port, httpx_client=httpx_client, ssl_context=ssl_context
+        )
         mqtt_config = MqttClientConfig(
             broker_host=auth_response.ebus_broker_host,
             username=auth_response.ebus_broker_username,
@@ -77,7 +96,7 @@ async def create_span_client(
 
     if serial_number is None:
         # Try to detect from panel status
-        result = await detect_api_version(host, port=port, httpx_client=httpx_client)
+        result = await detect_api_version(host, port=port, httpx_client=httpx_client, ssl_context=ssl_context)
         if result.status_info is not None:
             serial_number = result.status_info.serial_number
 
@@ -89,7 +108,7 @@ async def create_span_client(
     # flat-versus-parent/child signal, mirroring MQTT's `info/data-model-version`
     # — so the parser is chosen before a single message is consumed, rather than
     # a wrong parser being discovered by its output.
-    schema = await get_homie_schema(host, port=port, httpx_client=httpx_client)
+    schema = await get_homie_schema(host, port=port, httpx_client=httpx_client, ssl_context=ssl_context)
     adapter_key, dispatch_reason = select_adapter_key(schema.data_model_version)
     # In a thread: resolution reads distribution metadata and imports the adapter
     # package, and this is the first call in the process to do either. See
@@ -106,6 +125,7 @@ async def create_span_client(
         schema_dispatch_reason=dispatch_reason,
         schema=schema,
         httpx_client=httpx_client,
+        ssl_context=ssl_context,
     )
     await client.connect()
     return client

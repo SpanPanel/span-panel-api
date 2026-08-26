@@ -10,8 +10,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
+from dataclasses import dataclass
+from functools import partial
 from importlib.metadata import version
 import logging
+import ssl
 import time
 from typing import TYPE_CHECKING
 
@@ -24,15 +27,17 @@ from ..exceptions import (
     SpanPanelAdapterIncompatibleError,
     SpanPanelAdapterMissingError,
     SpanPanelConnectionError,
+    SpanPanelError,
     SpanPanelSchemaVersionError,
     SpanPanelServerError,
     SpanPanelStaleDataError,
     SpanPanelTimeoutError,
 )
-from ..models import AdoptedProperty, FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot, V2HomieSchema
+from ..models import AdoptedProperty, ControlTarget, FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot, V2HomieSchema
 from ..protocol import PanelCapability, SchemaAdapter
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S
+from .control import ControlCommand, ControlDeadlines, ControlInterceptor, PublishOutcome, PublishState
 from .models import MqttClientConfig
 
 if TYPE_CHECKING:
@@ -65,6 +70,45 @@ single GET, and the panel is the only thing that can end the wait.
 """
 
 
+@dataclass(slots=True)
+class _Verification:
+    """One control command waiting for its property to report the value written.
+
+    Not a `PublishOutcome`: this is the machinery underneath one, alive only
+    between a publish and its deadline.
+    """
+
+    key: tuple[str, str, str]
+    expected: str
+    observed: asyncio.Future[bool]
+    """`True` when the property reported the value, `False` when the transport
+    discarded the message and no report can arrive. Both are endings; only the
+    first is a transition, and carrying which in the result is what lets the
+    waiter stop at either without a second future to watch."""
+
+
+def _discard_verification(verification: _Verification, acknowledged: asyncio.Future[bool]) -> None:
+    """End a write's wait when the transport says the message is gone.
+
+    Fired when the bridge settles a publish. `False` there means a rebuild
+    discarded paho's outbound queue, so the panel will never see this write and
+    nothing will ever report a transition for it -- the deadline would expire
+    on a certainty. `True` is an ordinary PUBACK and changes nothing: the broker
+    taking the message is not the panel acting on it, and the write is still
+    waiting on exactly what it was waiting on before.
+
+    This resolves the wait rather than cancelling it. Cancelling would surface
+    in the setter as a `CancelledError` indistinguishable from the caller
+    cancelling the control call itself, and turning one into an outcome would
+    swallow the other.
+    """
+    if acknowledged.cancelled() or acknowledged.exception() is not None:
+        # The setter's own cleanup, or a failure that has its own reporting.
+        return
+    if not acknowledged.result() and not verification.observed.done():
+        verification.observed.set_result(False)
+
+
 def _metadata_for_the_log() -> tuple[list[str], str]:
     """Every distribution-metadata read connect() needs, in one place.
 
@@ -85,12 +129,14 @@ class SpanMqttClient:
         serial_number: str,
         broker_config: MqttClientConfig,
         snapshot_interval: float = 1.0,
-        panel_http_port: int = 80,
+        panel_http_port: int | None = None,
         adapter_factory: Callable[[str, V2HomieSchema], SchemaAdapter] | None = None,
         data_model_version: str | None = None,
         schema_dispatch_reason: str | None = None,
         schema: V2HomieSchema | None = None,
         httpx_client: httpx.AsyncClient | None = None,
+        ssl_context: ssl.SSLContext | None = None,
+        control_deadlines: ControlDeadlines | None = None,
     ) -> None:
         self._host = host
         self._serial_number = serial_number
@@ -104,12 +150,23 @@ class SpanMqttClient:
         # the reason this exists at all is that the runtime path was the one place
         # left without it. See `_get_client`.
         self._httpx_client = httpx_client
+        # Anchors this client's own REST calls -- the schema fetch at connect and
+        # every refetch the redispatch path makes. Separate from the broker's
+        # anchor in `MqttClientConfig.ca_pem` because they secure different
+        # transports, and identical in origin because a panel signs both its HTTPS
+        # certificate and its broker's with the one CA. `None` keeps these fetches
+        # on plaintext HTTP, which is 3.0.1's behaviour.
+        self._ssl_context = ssl_context
+        # How long each setter waits for the panel to report the change back.
+        # Injectable so a test asserting a refusal does not pay a real deadline.
+        self._control_deadlines = control_deadlines or ControlDeadlines()
 
         self._bridge: AsyncMqttBridge | None = None
         self._adapter: SchemaAdapter | None = None
         self._streaming = False
         self._snapshot_callbacks: list[Callable[[SpanPanelSnapshot], Awaitable[None]]] = []
         self._connection_callbacks: list[Callable[[bool], None]] = []
+        self._fatal_error_callbacks: list[Callable[[SpanPanelError], None]] = []
         self._schema_change_callbacks: list[Callable[[str | None, str | None], None]] = []
         self._live = False
         self._ready_event: asyncio.Event | None = None
@@ -143,6 +200,33 @@ class SpanMqttClient:
         # One reconsideration at a time. The MQTT trigger can fire repeatedly while a
         # fetch is retrying, and each would otherwise start its own retry loop.
         self._redispatch_in_flight = False
+        # The observation half of write-then-verify. `_observed_values` is the last
+        # value seen for each `(device_id, node_id, property_id)`, which is what
+        # answers "is this write a no-op" without a round trip; `_verifications`
+        # holds the writes currently waiting for their property to report back.
+        # Both are fed by one callback registered on the adapter in
+        # `_build_adapter`, so there is a single subscription rather than one per
+        # command.
+        self._observed_values: dict[tuple[str, str, str], str] = {}
+        self._verifications: list[_Verification] = []
+        self._unregister_property_observer: Callable[[], None] | None = None
+        # One interceptor, replaceable. See `set_control_interceptor`.
+        self._control_interceptor: ControlInterceptor | None = None
+
+    async def _fetch_schema(self) -> V2HomieSchema:
+        """One REST schema read, with this client's transport settings applied.
+
+        Both callers -- ``connect()`` and the redispatch retry -- had the same
+        four arguments spelled out separately, and adding the trust anchor to one
+        and not the other is exactly how a session ends up bootstrapping over
+        HTTPS and refetching over HTTP for the rest of its life. One call site.
+        """
+        return await get_homie_schema(
+            self._host,
+            port=self._panel_http_port,
+            httpx_client=self._httpx_client,
+            ssl_context=self._ssl_context,
+        )
 
     async def _preload_adapter(self, schema: V2HomieSchema) -> None:
         """Resolve this schema's adapter in a thread, ahead of building it.
@@ -206,6 +290,7 @@ class SpanMqttClient:
             self._schema_dispatch_reason = dispatch_reason
             factory = resolve_adapter(adapter_key, dispatch_reason)
         self._adapter = factory(self._serial_number, schema)
+        self._observe(self._adapter)
         return self._adapter
 
     @property
@@ -310,11 +395,7 @@ class SpanMqttClient:
         # would be a second call to the same unauthenticated endpoint for a
         # value that cannot have changed. A directly-constructed client has no
         # schema yet, so it fetches here and dispatches in _build_adapter.
-        schema = (
-            self._schema
-            if self._schema is not None
-            else await get_homie_schema(self._host, port=self._panel_http_port, httpx_client=self._httpx_client)
-        )
+        schema = self._schema if self._schema is not None else await self._fetch_schema()
         self._schema = schema
         await self._preload_adapter(schema)
         adapter = self._build_adapter(schema)
@@ -368,11 +449,13 @@ class SpanMqttClient:
             use_tls=self._broker_config.use_tls,
             loop=self._loop,
             panel_http_port=self._panel_http_port,
+            ca_pem=self._broker_config.ca_pem,
         )
 
         # Wire message handler
         self._bridge.set_message_callback(self._on_message)
         self._bridge.set_connection_callback(self._on_connection_change)
+        self._bridge.set_fatal_error_callback(self._on_fatal_error)
         # Pre-rebuild hook: reset Homie accumulator before the bridge swaps
         # paho clients, so retained messages on the new subscription start
         # from a clean slate (no stale `$state=disconnected` cached from
@@ -469,9 +552,25 @@ class SpanMqttClient:
         self._live = False
 
     async def ping(self) -> bool:
-        """Check if MQTT connection is alive and device is ready."""
+        """Check if MQTT connection is alive and device is ready.
+
+        Raises rather than returning False when the transport has stopped for
+        good. The two answers are not the same fact: False means "not right now,
+        still trying", and a consumer's correct response to it is to wait. A
+        bridge that will never reconnect answering False would put that consumer
+        in a wait with no end, which is exactly the state the fatal-error channel
+        exists to make impossible — including for a consumer that registered no
+        callback.
+
+        Raises:
+            SpanPanelCAChangedError: the panel is pinned and now advertises a
+                different CA. Terminal; see the bridge's `fatal_error`.
+        """
         if self._bridge is None or self._adapter is None:
             return False
+        fatal = self._bridge.fatal_error
+        if fatal is not None:
+            raise fatal
         return self._bridge.is_connected() and self._adapter.is_ready()
 
     def register_connection_callback(self, callback: Callable[[bool], None]) -> Callable[[], None]:
@@ -492,6 +591,45 @@ class SpanMqttClient:
                 self._connection_callbacks.remove(callback)
 
         return unregister
+
+    def register_fatal_error_callback(self, callback: Callable[[SpanPanelError], None]) -> Callable[[], None]:
+        """Subscribe to the transport stopping for good.
+
+        Fires once, with the error, for a failure that retrying cannot fix. Today
+        that is exactly one condition -- the panel advertising a CA other than
+        the pinned one -- and the reason it needs a channel of its own is that
+        the reconnect loop runs fire-and-forget: raising inside it kills the task
+        silently, and the connection callback can only say "disconnected", which
+        is what a consumer sees during an ordinary outage and correctly waits
+        through.
+
+        This is a notification, not the only notification. `ping()` and
+        `get_snapshot()` re-raise the same error, so a consumer that registers
+        nothing still cannot read a dead transport as a healthy one.
+
+        Returns an unregister function. Calling it twice is safe.
+        """
+        self._fatal_error_callbacks.append(callback)
+
+        def unregister() -> None:
+            with contextlib.suppress(ValueError):
+                self._fatal_error_callbacks.remove(callback)
+
+        return unregister
+
+    def _on_fatal_error(self, error: SpanPanelError) -> None:
+        """Fan the bridge's terminal failure out to subscribers.
+
+        Iterates a copy for the same reason the connection fan-out does: the
+        expected response is to tear this client down, and a subscriber
+        unregistering from inside its own callback must not mutate the list
+        being walked.
+        """
+        for cb in list(self._fatal_error_callbacks):
+            try:
+                cb(error)
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.warning("Fatal-error callback raised", exc_info=True)
 
     def register_schema_change_callback(self, callback: Callable[[str | None, str | None], None]) -> Callable[[], None]:
         """Subscribe to the panel changing schema generation mid-session.
@@ -529,6 +667,13 @@ class SpanMqttClient:
         """
         if self._bridge is None or self._adapter is None:
             raise SpanPanelStaleDataError("Client not connected — call connect() first")
+        # Ahead of the staleness checks, because it is the stronger statement:
+        # `SpanPanelStaleDataError` is documented as "panel currently
+        # unreachable" and consumers poll through it, which is the right response
+        # to a disconnect and the wrong one to a transport that has stopped.
+        fatal = self._bridge.fatal_error
+        if fatal is not None:
+            raise fatal
         if not self._bridge.is_connected():
             raise SpanPanelStaleDataError("MQTT broker disconnected")
         if not self._adapter.is_ready():
@@ -537,31 +682,36 @@ class SpanMqttClient:
 
     # -- CircuitControlProtocol --------------------------------------------
 
-    async def set_circuit_relay(self, circuit_id: str, state: str) -> None:
+    async def set_circuit_relay(self, circuit_id: str, state: str) -> PublishOutcome:
         """Publish relay state change for a circuit.
 
         Args:
             circuit_id: Dashless UUID (matches wire format)
             state: "OPEN" or "CLOSED"
-        """
-        topic = self._require_adapter().set_circuit_relay_topic(circuit_id)
-        if self._bridge is not None:
-            self._bridge.publish(topic, state, qos=1)
 
-    async def set_circuit_priority(self, circuit_id: str, priority: str) -> None:
+        Returns:
+            What happened to the command. `PublishState.UNCONFIRMED` is not an
+            error -- see `PublishState`.
+        """
+        target = self._require_adapter().set_circuit_relay_target(circuit_id)
+        return await self._publish_control(target, state, self._control_deadlines.relay)
+
+    async def set_circuit_priority(self, circuit_id: str, priority: str) -> PublishOutcome:
         """Publish a circuit priority change.
 
         Args:
             circuit_id: Dashless UUID (matches wire format)
             priority: v2 enum value (NEVER, SOC_THRESHOLD, OFF_GRID)
+
+        Returns:
+            What happened to the command. See `PublishState`.
         """
-        topic = self._require_adapter().set_circuit_priority_topic(circuit_id)
-        if self._bridge is not None:
-            self._bridge.publish(topic, priority, qos=1)
+        target = self._require_adapter().set_circuit_priority_target(circuit_id)
+        return await self._publish_control(target, priority, self._control_deadlines.priority)
 
     # -- PanelControlProtocol ----------------------------------------------
 
-    async def set_dominant_power_source(self, value: str) -> None:
+    async def set_dominant_power_source(self, value: str) -> PublishOutcome:
         """Publish a dominant power source change for the panel.
 
         Args:
@@ -574,18 +724,17 @@ class SpanMqttClient:
         would put a string outside that enum on the wire.
         """
         adapter = self._require_adapter()
-        topic = adapter.set_dominant_power_source_topic()
-        if topic is None:
+        target = adapter.set_dominant_power_source_target()
+        if target is None:
             raise SpanPanelServerError("Core node not found in panel topology")
         payload = adapter.dominant_power_source_payload(value)
         if payload is None:
             raise SpanPanelServerError(f"{value!r} has no representation on this schema's control")
-        if self._bridge is not None:
-            self._bridge.publish(topic, payload, qos=1)
+        return await self._publish_control(target, payload, self._control_deadlines.dominant_power_source)
 
     # -- EvseControlProtocol -----------------------------------------------
 
-    async def set_evse_charge_limit(self, node_id: str, amps: int) -> None:
+    async def set_evse_charge_limit(self, node_id: str, amps: int) -> PublishOutcome:
         """Publish a charge-current limit for one commissioned EV charger.
 
         Args:
@@ -600,18 +749,17 @@ class SpanMqttClient:
         facts and a user can act on only one of them.
         """
         adapter = self._require_adapter()
-        topic = adapter.set_evse_charge_limit_topic(node_id)
-        if topic is None:
+        target = adapter.set_evse_charge_limit_target(node_id)
+        if target is None:
             raise SpanPanelServerError(f"No settable charge-current limit on EVSE {node_id!r}")
         payload = adapter.evse_charge_limit_payload(node_id, amps)
         if payload is None:
             raise SpanPanelServerError(f"{amps} A is outside what EVSE {node_id!r} accepts")
-        if self._bridge is not None:
-            self._bridge.publish(topic, payload, qos=1)
+        return await self._publish_control(target, payload, self._control_deadlines.evse_charge_limit)
 
     # -- AdoptedControlProtocol --------------------------------------------
 
-    async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> None:
+    async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> PublishOutcome:
         """Publish a write to one settable property of an adopted device.
 
         Args:
@@ -641,8 +789,272 @@ class SpanMqttClient:
         surface = self._adopted_property(device_id, node_id, property_id)
         if surface is None or surface.set_topic is None:
             raise SpanPanelServerError(f"No settable adopted property {node_id}/{property_id} on device {device_id!r}")
-        if self._bridge is not None:
-            self._bridge.publish(surface.set_topic, value, qos=1)
+        target = ControlTarget(
+            topic=surface.set_topic,
+            device_id=device_id,
+            node_id=node_id,
+            property_id=property_id,
+        )
+        return await self._publish_control(target, value, self._control_deadlines.adopted_property)
+
+    # -- ControlInterceptionProtocol ----------------------------------------
+
+    def set_control_interceptor(self, interceptor: ControlInterceptor | None) -> None:
+        """Install the one interceptor every control command passes through.
+
+        `None` removes it. Replacing rather than appending is deliberate: two
+        interceptors would raise ordering and precedence questions with no
+        principled answer, and a consumer that needs several composes them on
+        its own side where it knows which wins.
+
+        See `ControlInterceptor` for the contract, and in particular for what
+        this is *not* -- it constrains callers of this client, not anything
+        holding the broker credential.
+        """
+        self._control_interceptor = interceptor
+
+    # -- The one place a control command reaches the wire -------------------
+
+    def _observe(self, adapter: SchemaAdapter) -> None:
+        """Watch every property this adapter reports, for write-then-verify.
+
+        One subscription for the life of an adapter, rather than one per command:
+        registering per write would mean the no-op check had nothing to read,
+        because the *pre*-write value has to already be known when the write
+        arrives.
+
+        Re-registered whenever the adapter is replaced -- a transport rebuild or
+        a schema-generation change -- because the old instance's callback list
+        does not survive it. The observed values are dropped at the same moment:
+        they describe a tree that is being replaced, and a stale one would answer
+        the no-op check for a panel that no longer exists.
+
+        In-flight verifications are deliberately *not* dropped. A write whose
+        deadline outlives the rebuild is re-armed against the new tree for free,
+        and if the value never arrives it expires into `UNCONFIRMED`, which is
+        the honest answer.
+        """
+        if self._unregister_property_observer is not None:
+            self._unregister_property_observer()
+        self._observed_values.clear()
+        self._unregister_property_observer = adapter.register_property_callback(self._on_property_value)
+
+    def _on_property_value(self, device_id: str, node_id: str, property_id: str, value: str | None) -> None:
+        """Record one property's value and resolve any write waiting for it."""
+        if value is None:
+            return
+        key = (device_id, node_id, property_id)
+        self._observed_values[key] = value
+        for verification in list(self._verifications):
+            if verification.key == key and verification.expected == value and not verification.observed.done():
+                verification.observed.set_result(True)
+
+    async def _publish_control(self, target: ControlTarget, value: str, deadline: float) -> PublishOutcome:
+        """Run one control command past the interceptor, then deliver it.
+
+        Interception wraps *everything*, including the refusals and the no-op
+        short-circuit, because a consumer's authorisation decision has to be
+        made before this client decides anything -- and because an interceptor
+        that saw only the commands that reached the wire would be an audit with
+        a hole in it exactly where the interesting cases are.
+
+        A veto's exception is re-raised untouched. `after_publish` still fires
+        for it, with `FAILED` and a `vetoed` detail.
+        """
+        interceptor = self._control_interceptor
+        if interceptor is None:
+            return await self._deliver_control(target, value, deadline)
+
+        command = ControlCommand(
+            device_id=target.device_id,
+            node_id=target.node_id,
+            property_id=target.property_id,
+            value=value,
+            topic=target.topic,
+        )
+        try:
+            await interceptor.before_publish(command)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Not caught to handle -- caught to record the refusal, then
+            # re-raised unchanged so the caller sees the interceptor's own
+            # exception type and message. `CancelledError` is a BaseException
+            # and correctly bypasses this: a cancelled call is not a refusal.
+            refusal = PublishOutcome(
+                state=PublishState.FAILED,
+                topic=target.topic,
+                value=value,
+                detail="vetoed",
+            )
+            self._fire_after_publish(interceptor, command, refusal)
+            raise
+
+        outcome = await self._deliver_control(target, value, deadline)
+        self._fire_after_publish(interceptor, command, outcome)
+        return outcome
+
+    def _fire_after_publish(
+        self,
+        interceptor: ControlInterceptor,
+        command: ControlCommand,
+        outcome: PublishOutcome,
+    ) -> None:
+        """Hand the result to the interceptor without waiting for it.
+
+        Awaiting would let a sink that merely hangs -- not raises -- stall every
+        control call in the process, which is a worse failure than a late audit
+        row. Tracked in `_background_tasks` so it is cancelled on `close()`, and
+        so it is not garbage-collected mid-flight.
+        """
+        loop = self._loop or asyncio.get_running_loop()
+        task = loop.create_task(self._run_after_publish(interceptor, command, outcome), name="span_mqtt_after_publish")
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _run_after_publish(
+        self,
+        interceptor: ControlInterceptor,
+        command: ControlCommand,
+        outcome: PublishOutcome,
+    ) -> None:
+        """Await `after_publish`, absorbing whatever it does."""
+        try:
+            await interceptor.after_publish(command, outcome)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _LOGGER.warning("Control interceptor's after_publish raised", exc_info=True)
+
+    async def _deliver_control(self, target: ControlTarget, value: str, deadline: float) -> PublishOutcome:
+        """Publish one control command and report how far it got.
+
+        Every setter funnels through here, which is what makes the refusals and
+        the verification below true of all of them rather than of whichever were
+        remembered.
+
+        Two refusals, both of which used to be silent successes:
+
+        - **No bridge.** `close()` clears `_bridge` and leaves `_adapter` in
+          place, so `_require_adapter()` passed and the setter returned `None`
+          having done nothing at all.
+        - **Not connected.** The bridge declines to hand the message to paho at
+          all, because paho would queue it and deliver it whenever the broker
+          returns. See `AsyncMqttBridge.publish`.
+
+        Anything past those was handed over and may still arrive, so no outcome
+        beyond this point is `FAILED`.
+
+        **The no-op short-circuit compares wire vocabulary, not the caller's.**
+        `value` here is already the adapter's translation -- a dominant-power-
+        source request of `BATTERY` reaches this as `OFF_GRID` under v1.0 -- and
+        the observed value is what the panel published. Comparing the caller's
+        string would compare two different vocabularies and never match, which
+        would burn a full deadline on every no-op write.
+
+        **`CONFIRMED` is strong evidence, not proof.** The panel coalesces every
+        API client into a single `USER` requester, so an observed transition to
+        the value just written cannot be attributed to this write specifically.
+        A second client writing the same value at the same moment is
+        indistinguishable.
+
+        **No retry, deliberately.** A relay write is not idempotent in its
+        physical effect, and a racing external change may have legitimately
+        reverted it. The state is reported and the caller decides.
+        """
+        bridge = self._bridge
+        if bridge is None:
+            return PublishOutcome(
+                state=PublishState.FAILED,
+                topic=target.topic,
+                value=value,
+                detail="transport is closed",
+            )
+
+        key = (target.device_id, target.node_id, target.property_id)
+        if self._observed_values.get(key) == value:
+            # Nothing will transition, because nothing has to. Waiting out the
+            # deadline to discover that is the common case for an automation that
+            # writes the same value on every run.
+            return PublishOutcome(
+                state=PublishState.UNCONFIRMED,
+                topic=target.topic,
+                value=value,
+                no_op=True,
+                detail="the property already reports this value",
+            )
+
+        # Armed before the publish, so a panel that answers immediately cannot
+        # transition in the window between the two.
+        verification = _Verification(key=key, expected=value, observed=asyncio.get_running_loop().create_future())
+        self._verifications.append(verification)
+        acknowledged: asyncio.Future[bool] | None = None
+        try:
+            acknowledged = bridge.publish(target.topic, value)
+            if acknowledged is None:
+                return PublishOutcome(
+                    state=PublishState.FAILED,
+                    topic=target.topic,
+                    value=value,
+                    detail="broker not connected; refused rather than queued",
+                )
+            # A discarded message ends the wait as surely as a transition does.
+            # Without this the deadline is the only thing that ends it, so a
+            # relay write would sit out its full five seconds against a transport
+            # that had already thrown the message away and can never report back.
+            acknowledged.add_done_callback(partial(_discard_verification, verification))
+            try:
+                transitioned = await asyncio.wait_for(verification.observed, timeout=deadline)
+            except TimeoutError:
+                return self._unverified_outcome(target, value, deadline, acknowledged)
+            if not transitioned:
+                return self._unverified_outcome(target, value, deadline, acknowledged)
+            return PublishOutcome(state=PublishState.CONFIRMED, topic=target.topic, value=value)
+        finally:
+            with contextlib.suppress(ValueError):
+                self._verifications.remove(verification)
+            # A transition can land before the PUBACK does, leaving this future
+            # pending with nobody left to read it. Cancelling settles it, which
+            # is what triggers the bridge to forget the message id -- otherwise
+            # the pending map grows by one for every confirmed write.
+            if acknowledged is not None and not acknowledged.done():
+                acknowledged.cancel()
+
+    def _unverified_outcome(
+        self,
+        target: ControlTarget,
+        value: str,
+        deadline: float,
+        acknowledged: asyncio.Future[bool],
+    ) -> PublishOutcome:
+        """What to say when the deadline passed without the property reporting back.
+
+        Three different facts, and the broker's QoS-1 acknowledgement is what
+        separates them. Folding them together would discard information the
+        transport is already holding: "the broker took it and the panel did not
+        act" points at the panel, "nothing acknowledged it" points at the link,
+        and "the transport discarded it" points at neither.
+        """
+        if not acknowledged.done() or acknowledged.cancelled():
+            acknowledged.cancel()
+            return PublishOutcome(
+                state=PublishState.UNCONFIRMED,
+                topic=target.topic,
+                value=value,
+                detail=f"no broker acknowledgement and no transition within {deadline}s",
+            )
+        if acknowledged.result():
+            return PublishOutcome(
+                state=PublishState.ACCEPTED,
+                topic=target.topic,
+                value=value,
+                detail=f"acknowledged by the broker; no transition within {deadline}s",
+            )
+        return PublishOutcome(
+            state=PublishState.UNCONFIRMED,
+            topic=target.topic,
+            value=value,
+            # Says what happened, not which of the two causes caused it. The
+            # bridge discards its outbound queue on a rebuild and on teardown
+            # alike, and naming one here reported a `close()` as a rebuild.
+            detail="the transport discarded this message before the broker acknowledged; delivery is unknown",
+        )
 
     def _adopted_property(self, device_id: str, node_id: str, property_id: str) -> AdoptedProperty | None:
         """The named property of the named adopted device in the current snapshot.
@@ -851,7 +1263,7 @@ class SpanMqttClient:
         attempts = 0
         while True:
             try:
-                return await get_homie_schema(self._host, port=self._panel_http_port, httpx_client=self._httpx_client)
+                return await self._fetch_schema()
             except (
                 SpanPanelConnectionError,
                 SpanPanelTimeoutError,

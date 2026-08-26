@@ -382,8 +382,8 @@ def test_field_metadata_is_empty_before_discovery() -> None:
 def test_command_topics_address_the_child_device(adapter: SchemaOneAdapter) -> None:
     """Under parent/child a circuit is its own device, so its command topic is
     rooted at the circuit rather than nested under the panel."""
-    assert adapter.set_circuit_relay_topic(SOLAR_CIRCUIT) == f"ebus/5/{SOLAR_CIRCUIT}/switch/relay/set"
-    assert adapter.set_circuit_priority_topic(SOLAR_CIRCUIT) == f"ebus/5/{SOLAR_CIRCUIT}/load-shed/priority/set"
+    assert adapter.set_circuit_relay_target(SOLAR_CIRCUIT).topic == f"ebus/5/{SOLAR_CIRCUIT}/switch/relay/set"
+    assert adapter.set_circuit_priority_target(SOLAR_CIRCUIT).topic == f"ebus/5/{SOLAR_CIRCUIT}/load-shed/priority/set"
 
 
 def test_dominant_power_source_writes_the_panel_assertion(adapter: SchemaOneAdapter) -> None:
@@ -395,7 +395,7 @@ def test_dominant_power_source_writes_the_panel_assertion(adapter: SchemaOneAdap
     the whole time — `shed/asserted-islanding-state`, `settable=True` — and the
     adapter simply never named it.
     """
-    assert adapter.set_dominant_power_source_topic() == f"ebus/5/{PANEL}/shed/asserted-islanding-state/set"
+    assert adapter.set_dominant_power_source_target().topic == f"ebus/5/{PANEL}/shed/asserted-islanding-state/set"
 
 
 def test_the_flat_vocabulary_is_translated_not_forwarded(adapter: SchemaOneAdapter) -> None:

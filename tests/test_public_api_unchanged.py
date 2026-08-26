@@ -54,9 +54,16 @@ EXPECTED_PUBLIC_API = {
     "ADOPTION_TOPOLOGY_NODE",
     "AdoptedDevice",
     "AdoptedProperty",
+    # Added 2026-08-25 (3.1.0): the adapter answers a control request with the
+    # topic *and* the property that reports it, in one value.
+    "ControlTarget",
     "ExtensionProperty",
     "ExtensionSubject",
     "AdoptedControlProtocol",
+    # Added 2026-08-25 (3.1.0): one veto/observe point for every control
+    # command, the consumer-side half of its authorisation gate. A protocol of
+    # its own so the four control protocols are not broken twice in one release.
+    "ControlInterceptionProtocol",
     "is_discovery_path",
     # Snapshots
     "SpanBatterySnapshot",
@@ -82,6 +89,12 @@ EXPECTED_PUBLIC_API = {
     "V2AuthResponse",
     "V2HomieSchema",
     "V2StatusInfo",
+    # Added 2026-08-25 with CA pinning (3.1.0). Deliberate additions: the
+    # integration builds the same SSL context for its own HTTPS calls and stores
+    # and compares the same fingerprint string, so both live here rather than
+    # being reimplemented on the far side of the pin where they could drift.
+    "build_panel_ssl_context",
+    "ca_fingerprint",
     "delete_fqdn",
     "download_ca_cert",
     "get_fqdn",
@@ -93,6 +106,15 @@ EXPECTED_PUBLIC_API = {
     # Transport
     "MqttClientConfig",
     "SpanMqttClient",
+    # Added 2026-08-25 (3.1.0): the control-outcome vocabulary. Additive for
+    # callers -- a call site that ignores the return value is unaffected -- and
+    # breaking for anything type-checked against the control protocols with
+    # `-> None`, which the release notes name.
+    "ControlCommand",
+    "ControlDeadlines",
+    "ControlInterceptor",
+    "PublishOutcome",
+    "PublishState",
     # Phase validation
     "PhaseDistribution",
     "are_tabs_opposite_phase",
@@ -110,6 +132,11 @@ EXPECTED_PUBLIC_API = {
     "SpanPanelAdapterIncompatibleError",
     "SpanPanelAdapterMissingError",
     "SpanPanelAuthError",
+    # Added 2026-08-25 (3.1.0): the one connection failure this library will not
+    # retry, because retrying it means waiting to succeed against whatever is
+    # answering. Additive -- nothing raised it before, so no caller's except
+    # clause changes meaning.
+    "SpanPanelCAChangedError",
     "SpanPanelSchemaVersionError",
     "SpanPanelConnectionError",
     "SpanPanelError",

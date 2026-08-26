@@ -24,6 +24,8 @@ only once the new panel is publishing, so it is the first moment the answer exis
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import asyncio
 from typing import Any
 from unittest.mock import patch
@@ -57,6 +59,7 @@ class _Adapter:
         self.serial = serial
         self.schema = schema
         self.schema_major = f"schema_for_{schema.data_model_version}"
+        self.property_callback: Callable[[str, str, str, str | None], None] | None = None
 
     def topics_to_subscribe(self) -> list[str]:
         return [f"topics/for/{self.schema.data_model_version}"]
@@ -69,6 +72,16 @@ class _Adapter:
 
     def handle_message(self, topic: str, payload: str) -> None:
         return None
+
+    def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
+        """The transport subscribes once per adapter, for write-then-verify.
+
+        Recorded rather than ignored: the swap must leave the transport observing
+        the *new* parser, and a stub that silently accepted the registration
+        could not show that.
+        """
+        self.property_callback = callback
+        return lambda: None
 
 
 class _Bridge:

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from span_panel_api.models import ControlTarget
 from span_panel_api_schema_0.accumulator import HomiePropertyAccumulator
 from span_panel_api_schema_0.const import PROPERTY_SET_TOPIC_FMT, TYPE_CORE, WILDCARD_TOPIC_FMT
 from span_panel_api_schema_0.consumer import HomieDeviceConsumer
@@ -62,17 +63,32 @@ class SchemaZeroAdapter:
     def find_node_by_type(self, type_str: str) -> str | None:
         return self._consumer.find_node_by_type(type_str)
 
-    def set_circuit_relay_topic(self, circuit_id: str) -> str:
-        return PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=circuit_id, prop="relay")
+    def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget:
+        return self._target(circuit_id, "relay")
 
-    def set_circuit_priority_topic(self, circuit_id: str) -> str:
-        return PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=circuit_id, prop="shed-priority")
+    def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget:
+        return self._target(circuit_id, "shed-priority")
 
-    def set_dominant_power_source_topic(self) -> str | None:
+    def set_dominant_power_source_target(self) -> ControlTarget | None:
         core_node = self._consumer.find_node_by_type(TYPE_CORE)
         if core_node is None:
             return None
-        return PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=core_node, prop="dominant-power-source")
+        return self._target(core_node, "dominant-power-source")
+
+    def _target(self, node: str, prop: str) -> ControlTarget:
+        """One node/property pair as both a topic and an observation address.
+
+        `device_id` is the panel serial for every flat control, because the flat
+        schema is a single Homie device and its nodes hang directly off it. That
+        is the same string `register_property_callback` reports under, which is
+        what lets the transport match a write against the value that comes back.
+        """
+        return ControlTarget(
+            topic=PROPERTY_SET_TOPIC_FMT.format(serial=self._serial_number, node=node, prop=prop),
+            device_id=self._serial_number,
+            node_id=node,
+            property_id=prop,
+        )
 
     def dominant_power_source_payload(self, value: str) -> str | None:
         """Flat speaks this vocabulary already, so the caller's value passes through.
@@ -91,7 +107,7 @@ class SchemaZeroAdapter:
         candidate = value.strip().upper()
         return candidate if candidate in allowed else None
 
-    def set_evse_charge_limit_topic(self, node_id: str) -> str | None:  # pylint: disable=unused-argument
+    def set_evse_charge_limit_target(self, node_id: str) -> ControlTarget | None:  # pylint: disable=unused-argument
         """None: flat firmware publishes no charge-current ceiling to write.
 
         The flat `energy.ebus.device.evse` type carries `advertised-current` —
@@ -101,7 +117,7 @@ class SchemaZeroAdapter:
         generation subscribes to.
 
         `node_id` is accepted and unused for the same reason
-        `set_dominant_power_source_topic` takes no arguments and still returns
+        `set_dominant_power_source_target` takes no arguments and still returns
         None on a panel with no core node: the answer does not depend on which
         charger is asked.
         """
@@ -112,4 +128,23 @@ class SchemaZeroAdapter:
         return None
 
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
-        return self._consumer.register_property_callback(callback)
+        """Subscribe to per-property updates; returns an unregister callable.
+
+        Adapts the accumulator's `(node_id, property_id, new_value, old_value)`
+        to the protocol's `(device_id, node_id, property_id, value)`, the same
+        way `SchemaOneAdapter` adapts the SDK's five arguments to the same four.
+
+        This used to be a bare delegation, which handed the accumulator's tuple
+        straight to a consumer expecting the protocol's. The two agree on arity
+        and on nothing else: the fourth argument was the *previous* value where
+        the protocol wants the current one, and the device was missing entirely.
+        A consumer written against the protocol therefore read a flat panel's
+        node id as a device id and its old value as its new one, and could not
+        have noticed -- both are strings. The protocol has no place for the
+        previous value; a consumer that needs one keeps it.
+        """
+
+        def _adapt(node_id: str, property_id: str, value: str, _old_value: str | None) -> None:
+            callback(self._serial_number, node_id, property_id, value)
+
+        return self._consumer.register_property_callback(_adapt)

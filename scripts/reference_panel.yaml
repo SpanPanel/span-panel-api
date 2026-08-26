@@ -1,0 +1,155 @@
+# The panel the reference capture describes.
+#
+# Read by `scripts/capture_parent_child_reference.py`, which drives the eBus
+# emitter (`ebus-panel-sim`) with it and records the retained topics as
+# `packages/schema-1/src/span_panel_api_schema_1/reference_payloads/parent_child_tree.json`.
+# Recorded in `spec_lock.json` as `peers.ebus-panel-sim.manifest`, so the capture's
+# input is pinned the same way its producer is: a capture whose input is not in the
+# tree is the same class of problem as one whose producer version is not written down.
+#
+# Laid out to mirror the emitter's own `examples/forty_tab_minimal.yaml` key for key,
+# so the two can be read side by side and `diff`ed. Every difference is deliberate and
+# is marked ==> below. There are two kinds.
+#
+# ==> DIVERGENCE 1: shed priorities.
+# The emitter's example commissions the two ordinary loads as `NICE_TO_HAVE`. That is
+# a REST-generation value with no representation in the v1.0 `load-shed` vocabulary,
+# and the emitter degrades it to `UNKNOWN` on the wire
+# (electrification-bus/distribution-enclosure-simulator#51, open). `UNKNOWN` is a
+# legal enum member and this library must parse it -- that obligation is covered by a
+# synthetic test built from the catalog's declared `$format`, in
+# `tests/test_schema_one_circuits.py`. But it is not a commissioning: across the two
+# production enclosures we hold captures from, 27 circuits, no panel has ever
+# published it. A reference capture's job is to represent a real panel, so this
+# manifest uses values a real panel publishes. When #51 is fixed, someone can decide
+# whether to converge with the example again.
+#
+# ==> DIVERGENCE 2: identity properties.
+# Real panels publish serials, part numbers and firmware versions on the BESS, the
+# MID and the PV. The emitter's example leaves them unset, so a capture taken from it
+# understates what a consumer has to parse -- which is exactly the gap that had four
+# library tests injecting those values by hand, reading as coverage while asking
+# nothing about what a panel sends. Every value here is synthetic (`example-*`),
+# because these bytes ship inside a wheel.
+
+panel_config:
+  serial_number: example-40t-001
+  display_name: Example 40-tab Panel
+  total_tabs: 40
+  main_size: 200
+  postal_code: "94103"
+  time_zone: America/Los_Angeles
+  islandable: true
+  # ==> DIVERGENCE 2. The enclosure's own identity, and the SSID whose absence hid a
+  # flat -> v1.0 regression: nothing read `status/wifi-ssid` because nothing published
+  # it, and nothing published it because the capture had never been refreshed.
+  firmware_version: example/v0.1.0
+  hardware_version: rev2
+  service_voltage_v: 240.0
+  line_voltage_v: 120.0
+  wifi_ssid: example-wifi
+
+bess:
+  enabled: true
+  instance_id: bess
+  vendor: Span
+  product_name: Example BESS
+  nameplate_capacity_kwh: 13.5
+  initial_soe_kwh: 6.75
+  relative_position: UPSTREAM
+  charge_mode: backup-only
+  max_charge_w: 3500.0
+  max_discharge_w: 3500.0
+  # ==> DIVERGENCE 2. The battery's identity, and its integrated MID's.
+  part_number: SPN-BESS-001
+  serial_number: EXAMPLE-BESS-40T-001
+  firmware_version: example-bess/v0.1.0
+  mid_product_name: SPAN MID
+  mid_firmware_version: example-mid/v0.1.0
+  mid_hardware_version: rev1
+
+circuit_templates:
+  lighting:
+    relay_behavior: controllable
+    # ==> DIVERGENCE 1. The example says NICE_TO_HAVE.
+    priority: SOC_THRESHOLD
+    breaker_rating: 15
+  outlet:
+    relay_behavior: controllable
+    # ==> DIVERGENCE 1. The example says NICE_TO_HAVE.
+    priority: SOC_THRESHOLD
+    breaker_rating: 20
+  span_drive:
+    relay_behavior: controllable
+    priority: OFF_GRID
+    breaker_rating: 50
+    device_type: evse
+  solar:
+    # The locked circuit, and the reason this capture can test a refusal at all: a
+    # non-controllable relay publishes no `$settable` and reports requester
+    # CONFIGURATION.
+    relay_behavior: non-controllable
+    priority: NEVER
+    breaker_rating: 30
+    device_type: pv
+    nameplate_capacity_w: 10000.0
+    # ==> DIVERGENCE 2.
+    firmware_version: example-pv/v0.1.0
+
+circuits:
+  - id: kitchen_lights
+    name: Kitchen Lights
+    template: lighting
+    tabs: [1]
+  - id: garage_outlet
+    name: Garage Outlet
+    template: outlet
+    tabs: [2]
+  - id: span_drive_garage
+    name: SPAN Drive - Garage
+    template: span_drive
+    tabs: [32, 34]
+  - id: span_drive_driveway
+    name: SPAN Drive - Driveway
+    template: span_drive
+    tabs: [35, 37]
+  - id: solar_inverter
+    name: Solar Inverter
+    template: solar
+    tabs: [36, 38]
+
+# Three ticks, which is two integration intervals, and the count is forced by what a
+# lugs device measures. Since `ebus-panel-sim` 0.6.0 the lugs register their own meter
+# rather than the gross sum of the circuits behind them, so one interval can only ever
+# advance one of `imported-energy` / `exported-energy` -- the lugs carry power in one
+# direction at a time. The first interval imports from the utility and the second
+# exports a PV surplus, so both registers carry a value and both mappings are
+# answerable. The emitter's example runs two ticks, which is the last two here.
+ticks:
+  - name: night load, importing from the utility
+    current_time: 0.0
+    grid_online: true
+    circuits:
+      kitchen_lights: 121.0
+      garage_outlet: 122.0
+      span_drive_garage: 2410.0
+      span_drive_driveway: 2420.0
+      solar_inverter: 0.0
+  - name: loads and EVSE with some PV
+    current_time: 60.0
+    grid_online: true
+    circuits:
+      kitchen_lights: 121.0
+      garage_outlet: 122.0
+      span_drive_garage: 2410.0
+      span_drive_driveway: 2420.0
+      solar_inverter: -2430.0
+  - name: PV surplus charges BESS and exports
+    current_time: 120.0
+    grid_online: true
+    circuits:
+      kitchen_lights: 121.0
+      garage_outlet: 122.0
+      span_drive_garage: 2410.0
+      span_drive_driveway: 0.0
+      solar_inverter: -8500.0

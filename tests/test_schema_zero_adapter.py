@@ -37,10 +37,54 @@ def test_subscribes_to_the_single_panel_wildcard(adapter: SchemaZeroAdapter) -> 
     assert adapter.topics_to_subscribe() == [f"ebus/5/{SERIAL}/#"]
 
 
+CIRCUIT = "ac3dccda46a94b98878a227df6fed588"
+
+
 def test_circuit_setter_topics_address_the_panel_device(adapter: SchemaZeroAdapter) -> None:
-    circuit = "ac3dccda46a94b98878a227df6fed588"
-    assert adapter.set_circuit_relay_target(circuit).topic == f"ebus/5/{SERIAL}/{circuit}/relay/set"
-    assert adapter.set_circuit_priority_target(circuit).topic == f"ebus/5/{SERIAL}/{circuit}/shed-priority/set"
+    relay = adapter.set_circuit_relay_target(CIRCUIT)
+    priority = adapter.set_circuit_priority_target(CIRCUIT)
+
+    assert relay is not None and relay.topic == f"ebus/5/{SERIAL}/{CIRCUIT}/relay/set"
+    assert priority is not None and priority.topic == f"ebus/5/{SERIAL}/{CIRCUIT}/shed-priority/set"
+
+
+def _publish(adapter: SchemaZeroAdapter, node: str, prop: str, value: str) -> None:
+    adapter.handle_message(f"ebus/5/{SERIAL}/{node}/{prop}", value)
+
+
+def test_an_always_on_circuit_yields_no_relay_target(adapter: SchemaZeroAdapter) -> None:
+    """The same refusal the v1.0 side makes, from the value flat publishes for it.
+
+    `always-on` is already read into `is_user_controllable`, so the panel had
+    told this adapter the relay was locked and only the snapshot listened; the
+    topic builder was pure string formatting from a node id.
+    """
+    _publish(adapter, CIRCUIT, "always-on", "true")
+
+    assert adapter.set_circuit_relay_target(CIRCUIT) is None
+    # Only the relay. Always-on is not never-backup, on either schema.
+    assert adapter.set_circuit_priority_target(CIRCUIT) is not None
+
+
+def test_a_never_backup_circuit_yields_no_priority_target(adapter: SchemaZeroAdapter) -> None:
+    _publish(adapter, CIRCUIT, "never-backup", "true")
+
+    assert adapter.set_circuit_priority_target(CIRCUIT) is None
+    assert adapter.set_circuit_relay_target(CIRCUIT) is not None
+
+
+def test_a_published_false_reads_as_permission(adapter: SchemaZeroAdapter) -> None:
+    """A panel that publishes the flags as `false` must not be refused.
+
+    Absence already reads as permission; this is the other half, and it is the
+    one a producer actually exercises -- a clone of a real panel writes
+    `always-on: "false"` out rather than omitting it.
+    """
+    _publish(adapter, CIRCUIT, "always-on", "false")
+    _publish(adapter, CIRCUIT, "never-backup", "false")
+
+    assert adapter.set_circuit_relay_target(CIRCUIT) is not None
+    assert adapter.set_circuit_priority_target(CIRCUIT) is not None
 
 
 def test_dominant_power_source_topic_is_none_before_the_core_node_is_known(

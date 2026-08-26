@@ -139,27 +139,86 @@ def _tabs(device: DiscoveredDevice) -> list[int]:
     return tabs
 
 
-def _priority_is_settable(device: DiscoveredDevice) -> bool:
-    """Whether ``load-shed/priority`` is user-settable on this circuit.
+def _declared_settable(device: DiscoveredDevice, node: str, prop: str, *, when_absent: bool) -> bool:
+    """Read the Homie ``$settable`` attribute off one property's definition.
 
-    This is the successor to the flat ``never-backup`` boolean, and it is read
-    from the description rather than from a value topic — v1.0 expresses
-    never-backup as *mutability*, so the signal is the Homie ``$settable``
-    attribute on the property definition.
-
-    Absent means settable: locking is the exception a panel announces, so
-    treating an unannounced circuit as locked would mark every circuit
-    never-backup on a panel that does not publish the attribute.
+    ``when_absent`` is the answer for a property that carries no such attribute,
+    and it is a per-property judgement rather than one rule — which is why it is
+    a parameter instead of a default. See the two callers below for why they
+    answer it differently.
     """
-    definition = device.get_node_properties(NODE_LOAD_SHED).get(PROP_PRIORITY)
+    definition = device.get_node_properties(node).get(prop)
     if not isinstance(definition, dict):
-        return True
+        return when_absent
     settable = definition.get(ATTR_SETTABLE)
     if settable is None:
-        return True
+        return when_absent
     if isinstance(settable, bool):
         return settable
     return str(settable).strip().lower() != "false"
+
+
+def priority_is_settable(device: DiscoveredDevice) -> bool:
+    """Whether ``load-shed/priority`` is user-settable on this circuit.
+
+    ``load-shed`` 0.3 declares ``priority`` settable and states no condition on
+    it, so mutability is the property's ordinary state and a lock is something a
+    panel announces. This is the successor to the flat ``never-backup`` boolean,
+    and it is read from the description rather than from a value topic — v1.0
+    expresses never-backup as *mutability*, so the signal is the Homie
+    ``$settable`` attribute on the property definition.
+
+    Absent therefore means settable: treating an unannounced circuit as locked
+    would mark every circuit never-backup on a panel that does not publish the
+    attribute.
+    """
+    return _declared_settable(device, NODE_LOAD_SHED, PROP_PRIORITY, when_absent=True)
+
+
+def relay_is_settable(device: DiscoveredDevice) -> bool:
+    """Whether this circuit's relay may be commanded.
+
+    **The rule is the specification's, not an inference from what a producer
+    does.** ``switch`` 0.3 — vendored at ``packages/schema-1/spec/catalogs/
+    switch.json`` — declares ``relay`` as *"Settable when ``relay-controllable =
+    true``"*, and defines ``relay-controllable`` as *"True = the relay can be
+    opened and closed by command or automatic shed. False = locked (for example
+    a circuit commissioned as permanently on)."* A consumer that published to a
+    circuit whose ``relay-controllable`` is ``false`` would be writing to a
+    property the specification says is not settable on that device.
+
+    The condition is stated in the catalog's *prose*, where ``settable: true``
+    stands unconditionally in the JSON beside it — the machine-readable field
+    describes the property across the capability, and the condition that narrows
+    it per device is not expressible there. So this reads the catalog and
+    encodes the rule; it cannot derive it. `test_schema_one_control_refusal.py`
+    pins the clause this depends on, so a specification that stops saying it
+    fails here rather than leaving a stale rule in force.
+
+    **Both signals, and it refuses when either says no.** The declaration and
+    the value answer the same question, and SPAN reports a firmware defect in
+    which the ``$settable`` re-toggle on the runtime re-commissioning path is
+    skipped until the service restarts — so a consumer can meet a panel whose
+    declaration is stale while the published value is current. The panel rejects
+    an out-of-policy write regardless of what ``$settable`` last advertised, so
+    the conjunction only ever refuses a write the panel would have refused.
+
+    **Absent ``$settable`` reads as locked here, the opposite of
+    `priority_is_settable`.** Homie 5 defaults the attribute to false, and the
+    catalog's condition means a locked relay is *not* settable, so a publisher
+    describing one correctly omits the attribute rather than publishing
+    ``false``. Absence is therefore the announcement. Priority answers the other
+    way because its catalog entry carries no condition at all. The two
+    properties are not making the same kind of claim.
+
+    Across the two production enclosures we hold captures from — 27 circuits —
+    ``$settable`` is present on ``switch/relay`` exactly when
+    ``relay-controllable`` is ``true``, without exception, which is the
+    specification's rule showing up in hardware.
+    """
+    return _declared_settable(device, NODE_SWITCH, PROP_RELAY, when_absent=False) and _flag(
+        device, NODE_SWITCH, PROP_RELAY_CONTROLLABLE, default=True
+    )
 
 
 def build_circuit(
@@ -173,7 +232,7 @@ def build_circuit(
 
     relay_controllable = _flag(device, NODE_SWITCH, PROP_RELAY_CONTROLLABLE, default=True)
     priority = _text(device, NODE_LOAD_SHED, PROP_PRIORITY, UNKNOWN)
-    priority_settable = _priority_is_settable(device)
+    priority_settable = priority_is_settable(device)
 
     return SpanCircuitSnapshot(
         circuit_id=device.device_id,

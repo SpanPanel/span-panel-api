@@ -17,14 +17,14 @@ value asks whether the mapper can read a property, never whether the panel sends
 one. The drift was found by comparing the two artifacts by hand, which is a
 thing nobody does twice — hence this.
 
-**Compared at device-type granularity, and it has to be.** This capture is
-`sim-*` renamed to `example-*` and cut from 28 circuits to 5, with two of them
-renamed in passing (`kitchen Lights` -> `Kitchen Lights`, `Garage Outlets` ->
-`Garage Outlet`), so a per-device comparison would fail on the rename rather
-than on a value. Type granularity is also the granularity the question is asked
-at: five circuits declare the same properties, and the same one going unvalued
-on all five is one gap, not five. The same choice the integration's
-`test_declared_but_unread` makes, for the same reason.
+**Compared at device-type granularity, and it has to be.** The two artifacts
+describe different panels: this one is a five-circuit synthetic enclosure with
+`example-*` identifiers, panelbench's is a twenty-eight-circuit one, so a
+per-device comparison would fail on the names rather than on a value. Type
+granularity is also the granularity the question is asked at: five circuits
+declare the same properties, and the same one going unvalued on all five is one
+gap, not five. The same choice the integration's `test_declared_but_unread`
+makes, for the same reason.
 
 The reduction loses nothing here, and that is measured rather than assumed:
 reduced the same way, panelbench's baseline is exactly the declared-but-unvalued
@@ -38,6 +38,16 @@ Refresh the vendored copy with:
 It is vendored verbatim rather than pre-reduced so that refreshing it is a copy
 whose correctness a reader can check with `diff`, and so the reduction stays
 here where it is explained.
+
+**A failure here does not say which side moved, and both have.** Refreshing the
+vendored baseline is the fix when panelbench has already re-captured, which was
+the case the first time this fired: the copy carried 32 `connection/count`
+entries that the pinned panelbench commit had itself already dropped, so the two
+artifacts agreed only because both were stale. Regenerating the reference tree
+is the fix when the producer this side follows has moved -- see
+`scripts/capture_parent_child_reference.py`, which reproduces every identifier
+and every device in this capture, so the old instruction to port values in by
+hand rather than recapture no longer applies.
 """
 
 from __future__ import annotations
@@ -109,10 +119,11 @@ def test_the_reference_tree_values_everything_the_producer_values() -> None:
 
     assert fixture == producer, (
         "the reference tree and the producer disagree about what stays unvalued.\n"
-        f"  unvalued here, valued by the producer (port the value in):\n    {missing}\n"
-        f"  unvalued by the producer, valued here (the capture invented it):\n    {invented}\n\n"
-        "Port values into the existing artifact rather than recapturing it: the ids are "
-        "synthetic, the circuit set is trimmed, and the meter values are not reproducible."
+        f"  unvalued here, valued by the producer (this capture is behind):\n    {missing}\n"
+        f"  unvalued by the producer, valued here (the baseline may be behind):\n    {invented}\n\n"
+        "Decide which side moved: refresh tests/fixtures/panelbench_unvalued_by_both.json from "
+        "the panelbench commit spec_lock.json pins, or recapture the reference tree with "
+        "scripts/capture_parent_child_reference.py."
     )
 
 

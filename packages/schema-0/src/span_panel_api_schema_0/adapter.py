@@ -63,10 +63,26 @@ class SchemaZeroAdapter:
     def find_node_by_type(self, type_str: str) -> str | None:
         return self._consumer.find_node_by_type(type_str)
 
-    def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget:
+    def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget | None:
+        """Where this circuit's relay is commanded, or None if it may not be.
+
+        None on an always-on circuit. `_target` is pure string formatting from a
+        node id, so without the lookup this aimed a write at a relay the panel
+        commissioned as permanently closed — and the refusal was already in the
+        values this adapter parses, as `is_user_controllable`.
+        """
+        if not self._consumer.relay_is_settable(circuit_id):
+            return None
         return self._target(circuit_id, "relay")
 
-    def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget:
+    def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget | None:
+        """Where this circuit's shed priority is written, or None if it may not be.
+
+        None on a never-backup circuit, which is the flat spelling of the
+        `$settable` lock v1.0 publishes on `load-shed/priority`.
+        """
+        if not self._consumer.priority_is_settable(circuit_id):
+            return None
         return self._target(circuit_id, "shed-priority")
 
     def set_dominant_power_source_target(self) -> ControlTarget | None:

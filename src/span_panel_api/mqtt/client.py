@@ -16,7 +16,7 @@ from importlib.metadata import version
 import logging
 import ssl
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from span_panel_api.schema_drift import log_schema_drift
 
@@ -692,8 +692,21 @@ class SpanMqttClient:
         Returns:
             What happened to the command. `PublishState.UNCONFIRMED` is not an
             error -- see `PublishState`.
+
+        Raises:
+            SpanPanelServerError: the panel declares this circuit's relay
+                non-commandable, so there is nothing to publish to. Raised the
+                way `set_evse_charge_limit` raises for a charger with no
+                settable limit, and recorded through the interceptor first.
         """
         target = self._require_adapter().set_circuit_relay_target(circuit_id)
+        if target is None:
+            await self._refuse_control(
+                device_id=circuit_id,
+                value=state,
+                detail="relay not commandable",
+                message=f"Circuit {circuit_id!r} declares its relay non-commandable",
+            )
         return await self._publish_control(target, state, self._control_deadlines.relay)
 
     async def set_circuit_priority(self, circuit_id: str, priority: str) -> PublishOutcome:
@@ -705,8 +718,19 @@ class SpanMqttClient:
 
         Returns:
             What happened to the command. See `PublishState`.
+
+        Raises:
+            SpanPanelServerError: the circuit is commissioned never-backup, so
+                its priority is not writable.
         """
         target = self._require_adapter().set_circuit_priority_target(circuit_id)
+        if target is None:
+            await self._refuse_control(
+                device_id=circuit_id,
+                value=priority,
+                detail="priority not settable",
+                message=f"Circuit {circuit_id!r} declares its shed priority not settable",
+            )
         return await self._publish_control(target, priority, self._control_deadlines.priority)
 
     # -- PanelControlProtocol ----------------------------------------------
@@ -726,10 +750,21 @@ class SpanMqttClient:
         adapter = self._require_adapter()
         target = adapter.set_dominant_power_source_target()
         if target is None:
-            raise SpanPanelServerError("Core node not found in panel topology")
+            await self._refuse_control(
+                device_id=self._serial_number,
+                value=value,
+                detail="no such control",
+                message="Core node not found in panel topology",
+            )
         payload = adapter.dominant_power_source_payload(value)
         if payload is None:
-            raise SpanPanelServerError(f"{value!r} has no representation on this schema's control")
+            await self._refuse_control(
+                target=target,
+                device_id=target.device_id,
+                value=value,
+                detail="value has no representation",
+                message=f"{value!r} has no representation on this schema's control",
+            )
         return await self._publish_control(target, payload, self._control_deadlines.dominant_power_source)
 
     # -- EvseControlProtocol -----------------------------------------------
@@ -751,10 +786,21 @@ class SpanMqttClient:
         adapter = self._require_adapter()
         target = adapter.set_evse_charge_limit_target(node_id)
         if target is None:
-            raise SpanPanelServerError(f"No settable charge-current limit on EVSE {node_id!r}")
+            await self._refuse_control(
+                device_id=node_id,
+                value=str(amps),
+                detail="no such control",
+                message=f"No settable charge-current limit on EVSE {node_id!r}",
+            )
         payload = adapter.evse_charge_limit_payload(node_id, amps)
         if payload is None:
-            raise SpanPanelServerError(f"{amps} A is outside what EVSE {node_id!r} accepts")
+            await self._refuse_control(
+                target=target,
+                device_id=target.device_id,
+                value=str(amps),
+                detail="value out of range",
+                message=f"{amps} A is outside what EVSE {node_id!r} accepts",
+            )
         return await self._publish_control(target, payload, self._control_deadlines.evse_charge_limit)
 
     # -- AdoptedControlProtocol --------------------------------------------
@@ -788,7 +834,14 @@ class SpanMqttClient:
         """
         surface = self._adopted_property(device_id, node_id, property_id)
         if surface is None or surface.set_topic is None:
-            raise SpanPanelServerError(f"No settable adopted property {node_id}/{property_id} on device {device_id!r}")
+            await self._refuse_control(
+                device_id=device_id,
+                node_id=node_id,
+                property_id=property_id,
+                value=value,
+                detail="no settable property",
+                message=f"No settable adopted property {node_id}/{property_id} on device {device_id!r}",
+            )
         target = ControlTarget(
             topic=surface.set_topic,
             device_id=device_id,
@@ -848,6 +901,64 @@ class SpanMqttClient:
         for verification in list(self._verifications):
             if verification.key == key and verification.expected == value and not verification.observed.done():
                 verification.observed.set_result(True)
+
+    async def _refuse_control(
+        self,
+        *,
+        device_id: str,
+        value: str,
+        detail: str,
+        message: str,
+        target: ControlTarget | None = None,
+        node_id: str = "",
+        property_id: str = "",
+    ) -> NoReturn:
+        """Record a command this library refused, then raise it to the caller.
+
+        The one place a refusal that happens *before* `_publish_control` becomes
+        visible. Every such refusal is an address that did not resolve -- a relay
+        the panel declares non-commandable, a charger with no settable limit, a
+        value with no representation on this schema -- and it therefore never
+        reached the interceptor at all. `after_publish` is contracted to see
+        every command, and the commands it was missing were precisely the ones a
+        panel refused, which is the half of an audit worth having.
+
+        `before_publish` is deliberately not consulted. It exists to authorise a
+        command that would otherwise be published, and this one would not be
+        under any answer it could give; running it would let a veto replace a
+        specific reason with "vetoed", and would ask a consumer's policy to rule
+        on something the library has already ruled out.
+
+        `target` is passed where the refusal happened *after* the address
+        resolved -- a payload this schema cannot represent -- so the audit row
+        carries the real topic. Where it is absent the row says so with None
+        rather than a topic nothing would have been published to, and
+        `node_id` / `property_id` stay empty unless the caller knew them without
+        the adapter, which only `set_adopted_property` does.
+
+        Raises:
+            SpanPanelServerError: always. The refusal is the point.
+        """
+        interceptor = self._control_interceptor
+        if interceptor is not None:
+            command = ControlCommand(
+                device_id=target.device_id if target is not None else device_id,
+                node_id=target.node_id if target is not None else node_id,
+                property_id=target.property_id if target is not None else property_id,
+                value=value,
+                topic=target.topic if target is not None else None,
+            )
+            self._fire_after_publish(
+                interceptor,
+                command,
+                PublishOutcome(
+                    state=PublishState.FAILED,
+                    topic=command.topic,
+                    value=value,
+                    detail=detail,
+                ),
+            )
+        raise SpanPanelServerError(message)
 
     async def _publish_control(self, target: ControlTarget, value: str, deadline: float) -> PublishOutcome:
         """Run one control command past the interceptor, then deliver it.

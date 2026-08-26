@@ -1,13 +1,19 @@
 name: Peer drift
 
-# Deliberately never `pull_request`. This asks whether the *producer* has moved past
-# the commit we pin, and the answer changes because someone else pushed to panelbench.
-# Failing an author's unrelated change for that would teach everyone to ignore it,
-# which is how a check stops being a check.
+# Deliberately never `pull_request`. This asks whether a *producer* has moved past the
+# commit we pin, and the answer changes because someone else pushed. Failing an
+# author's unrelated change for that would teach everyone to ignore it, which is how a
+# check stops being a check.
 #
 # ci.yml asks the other half of the question -- do our vendored bytes still match the
-# commit we claim they came from -- against the pinned commit, where the answer is
+# commits we claim they came from -- against the pinned commits, where the answer is
 # deterministic and blocking a merge on it is fair.
+#
+# Two producers, one job each, and they are not the same shape. panelbench is a
+# repository we byte-copy captures out of, so "has it moved" is a commit count. The
+# eBus emitter is a released PyPI distribution that we *run* to generate a capture, so
+# it has moved in two senses -- commits on main, and a newer release -- and only the
+# second is a reason to regenerate.
 on:
   schedule:
     # Daily. The drift this exists to catch took nine days to be noticed by hand.
@@ -35,7 +41,7 @@ jobs:
       id: peers
       uses: ./.github/actions/peer-checkouts
       with:
-        panelbench-ref: default
+        peer-ref: default
 
     # Ahead of the comparison, so the summary names the distance whichever way the job
     # goes. "N commits behind" with the subjects is what makes the result actionable;
@@ -122,4 +128,116 @@ jobs:
           echo
           echo "For the specification commit, the two sides are reading different vocabularies"
           echo "until \`synced_commit\` and the vendored catalogs move together."
+        } >> "$GITHUB_STEP_SUMMARY"
+
+  emitter:
+    name: Has the eBus emitter released past the pin?
+    runs-on: ubuntu-latest
+
+    # Two answers, and the release is the one that matters. `ebus-panel-sim` is a
+    # published distribution, and `scripts/capture_parent_child_reference.py` refuses
+    # to write a capture taken from any version other than the one spec_lock.json
+    # records -- so regenerating the reference tree is gated on a *release*, not on a
+    # commit. Commits on main are reported too, because they are what a release will
+    # be made of and seeing them early is free, but they are not a call to action.
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Check out the emitter's own branch, and the specification at its pin
+      id: peers
+      uses: ./.github/actions/peer-checkouts
+      with:
+        peer-ref: default
+
+    # The question that decides whether to recapture. PyPI's JSON API is public and
+    # unauthenticated; a failure to reach it reports as unknown rather than as drift,
+    # because "we could not ask" and "there is a new release" are different facts and
+    # only one of them is actionable.
+    - name: Compare the pinned release against PyPI
+      env:
+        DISTRIBUTION: ${{ steps.peers.outputs.panel-sim-distribution }}
+        PINNED: ${{ steps.peers.outputs.panel-sim-version }}
+      run: |
+        python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+        import json
+        import os
+        import urllib.error
+        import urllib.request
+
+        distribution = os.environ["DISTRIBUTION"]
+        pinned = os.environ["PINNED"]
+        print(f"## {distribution}\n")
+
+        try:
+            with urllib.request.urlopen(
+                f"https://pypi.org/pypi/{distribution}/json", timeout=30
+            ) as response:
+                latest = json.load(response)["info"]["version"]
+        except (urllib.error.URLError, TimeoutError, KeyError, json.JSONDecodeError) as error:
+            print(f"Could not ask PyPI for the latest release (`{error}`).\n")
+            print("Reported as unknown rather than as drift: not having asked is not the")
+            print("same fact as there being nothing new.")
+            raise SystemExit(0)
+
+        if latest == pinned:
+            print(f"Latest release is `{latest}`, which is what we pin. The reference tree is current.")
+            raise SystemExit(0)
+
+        print(f"Latest release is `{latest}`, we pin `{pinned}`.\n")
+        print("The reference tree was captured from the pinned release, so it now describes a")
+        print("producer that has been superseded. To follow:\n")
+        print("```bash")
+        print(f"# in a checkout of the emitter at v{latest}, from its own environment")
+        print("uv run python ../span-panel-api/scripts/capture_parent_child_reference.py \\")
+        print("  ../span-panel-api/packages/schema-1/src/span_panel_api_schema_1/reference_payloads/parent_child_tree.json")
+        print("```\n")
+        print("The script refuses until `peers.ebus-panel-sim.version` and `.commit` in")
+        print("`spec_lock.json` name the release you captured from, which is what keeps the")
+        print("bytes and the claim about them from drifting apart. Read the emitter's")
+        print("CHANGELOG for the wire changes before accepting the new capture: a diff")
+        print("confined to each `$description`'s `version` means nothing moved.")
+        PY
+
+    # Reported after the release comparison because it is context for it, not the
+    # verdict. "N commits behind" with the subjects is what makes the result readable;
+    # a red check with no names is a chore.
+    - name: Report the distance from the pinned commit
+      env:
+        PIN: ${{ steps.peers.outputs.panel-sim-pin }}
+        REPO: ${{ steps.peers.outputs.panel-sim-repo }}
+        BRANCH: ${{ steps.peers.outputs.panel-sim-checkout }}
+      run: |
+        git() { command git -C "$GITHUB_WORKSPACE/peers/panel-sim" "$@"; }
+        head="$(git rev-parse HEAD)"
+
+        if ! git merge-base --is-ancestor "$PIN" HEAD 2>/dev/null; then
+          {
+            echo
+            echo "### $REPO commits"
+            echo
+            echo "\`$PIN\` is not an ancestor of \`$BRANCH\` (\`${head:0:12}\`)."
+            echo
+            echo "The pin names a commit this branch does not contain — a branch that was"
+            echo "rebased, squash-merged or deleted. \`peers.ebus-panel-sim.ref\` in"
+            echo "\`spec_lock.json\` needs to name a ref the pinned commit is actually on."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        behind="$(git rev-list --count "$PIN"..HEAD)"
+        {
+          echo
+          echo "### $REPO commits"
+          echo
+          echo "\`$BRANCH\` is at \`${head:0:12}\`, we pin \`${PIN:0:12}\` — **$behind commits behind**."
+          if [ "$behind" -gt 0 ]; then
+            echo
+            echo "Unreleased work, so not itself a reason to recapture — the release comparison"
+            echo "above is."
+            echo
+            echo '```'
+            git log --oneline --no-decorate "$PIN"..HEAD
+            echo '```'
+          fi
         } >> "$GITHUB_STEP_SUMMARY"

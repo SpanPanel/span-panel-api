@@ -192,13 +192,14 @@ def test_the_capture_is_a_charging_battery() -> None:
     A sign convention can only be tested against a known physical state, and
     "negative means charging" is the claim under test, so reading the state off
     the sign would be circular. The enclosure's four power flows balance instead
-    -- ``pv + battery + grid == site``, with ``grid`` positive when importing --
-    and solving that identity says which way the battery is going without
-    appealing to any convention this library chose.
+    -- ``pv + battery + grid + site == 0``, the node balance `power-flows` 0.3
+    describes, in which every term is positive when power flows *into* the thing
+    it names -- and solving that identity says which way the battery is going
+    without appealing to any convention this library chose.
 
     In this capture 8500 W of PV meets 2653 W of site load and exports 2347 W;
     the 3500 W left over is going into the battery. So the battery is charging,
-    and both the enclosure and the BESS publish that as a negative number.
+    and both the enclosure and the BESS publish that as a positive number.
 
     Were the capture ever retaken with the battery discharging, this fails first
     and says so, rather than the negation tests failing and reading as a mapper
@@ -206,13 +207,13 @@ def test_the_capture_is_a_charging_battery() -> None:
     """
     flows = {name: float(_published("example-40t-001", f"power-flows/{name}")) for name in ("pv", "battery", "grid", "site")}
 
-    assert flows["pv"] + flows["battery"] + flows["grid"] == pytest.approx(flows["site"])
+    assert flows["pv"] + flows["battery"] + flows["grid"] + flows["site"] == pytest.approx(0.0, abs=1e-9)
     # PV alone exceeds the site load, so the surplus has nowhere to go but the
     # battery and the grid -- and the grid term is an export.
-    assert flows["pv"] > flows["site"]
-    assert flows["grid"] < 0
-    assert flows["battery"] < 0
-    assert float(_published("bess", BESS_POWER_TOPIC)) < 0
+    assert -flows["pv"] > flows["site"]
+    assert flows["grid"] > 0
+    assert flows["battery"] > 0
+    assert float(_published("bess", BESS_POWER_TOPIC)) > 0
 
 
 def test_battery_power_is_the_negation_of_the_wire() -> None:
@@ -234,13 +235,22 @@ def test_battery_power_is_the_negation_of_the_wire() -> None:
     -- a producer in self-consumption with the grid at zero, PV and battery
     together meeting the load, leaves no room to argue which way the battery is
     going.
+
+    The *wire* input flipped under the producer at `ebus-panel-sim` 0.6.0, which
+    is why the asserted sign moved without the mapper changing: what an enclosure
+    proxies for a battery it hosts is the enclosure's reading of that battery,
+    positive while charging, and `power-flows/battery` in the same capture says
+    the same thing about the same instant. The reference tree carried the earlier
+    frame until it was recaptured, so this assertion used to read `> 0` on a
+    capture the test above calls a charging battery -- the two contradicted each
+    other, and only the fixture was wrong.
     """
     raw = float(_published("bess", BESS_POWER_TOPIC))
 
     battery = build_battery(_device("bess"), [])
 
     assert battery.power_w == -raw
-    assert battery.power_w is not None and battery.power_w > 0
+    assert battery.power_w is not None and battery.power_w < 0
 
 
 def test_battery_power_follows_a_republished_value() -> None:
@@ -252,7 +262,7 @@ def test_battery_power_follows_a_republished_value() -> None:
 
     # Charging became discharging, so the snapshot's sign flips with it.
     assert battery.power_w == -discharging
-    assert battery.power_w is not None and battery.power_w < 0
+    assert battery.power_w is not None and battery.power_w > 0
 
 
 def test_a_battery_at_rest_reports_zero_and_not_negative_zero() -> None:

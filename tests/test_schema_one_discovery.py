@@ -357,7 +357,10 @@ def test_retained_says_whether_a_value_has_arrived_and_never_what_it_is() -> Non
     """`retained` is the declared-but-never-valued signal, and the only value question asked."""
     rows = _discovered()
     assert rows["discovered.distribution-enclosure/status/time-zone"].retained is True
-    assert rows["discovered.circuit/connection/count"].retained is False
+    # The PV's serial, which `test_the_held_pv_serial_is_still_the_only_singleton_left`
+    # pins as deliberately declared and never published. `connection/count` used to
+    # stand here, until the producer removed a property no configuration could value.
+    assert rows["discovered.pv/info/serial-number"].retained is False
 
     tree = _tree()
     del tree[PANEL_DEVICE_ID]["status/time-zone"]
@@ -533,7 +536,7 @@ def test_a_subtyped_device_does_not_report_its_parents_mapped_properties() -> No
 
     rows = build_discovery(_devices(tree))
     assert not [path for path in rows if path.startswith("discovered.lugs.upstream/meter/")]
-    assert "discovered.lugs.upstream/connection/count" in rows
+    assert "discovered.lugs.upstream/connection/feeds-device-type" in rows
 
 
 def test_the_charge_current_pair_is_addressed_by_resolution_not_by_a_table() -> None:

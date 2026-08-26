@@ -7,6 +7,11 @@ still produces an audit record (an audit that omits refusals is worse than
 none); the observation half is fired as a task (a sink that merely hangs must
 not stall control); and the interceptor sees the refusals and the no-op, not
 only the commands that reached the wire.
+
+The fifth edge is the one that was missing rather than merely untested: a
+refusal made while *resolving the address* -- a relay the panel declares
+non-commandable, a charger with no settable limit -- happens before the publish
+path and so was invisible here entirely. See `TestRefusalBeforeATopicExists`.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from span_panel_api.exceptions import SpanPanelServerError
 from span_panel_api.models import ControlTarget
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
@@ -27,6 +33,7 @@ from conftest import SERIAL
 
 CIRCUIT = "aabbccdd112233445566778899001122"
 RELAY_TOPIC = f"ebus/5/{SERIAL}/{CIRCUIT}/relay/set"
+DPS_TOPIC = f"ebus/5/{SERIAL}/core/dominant-power-source/set"
 
 
 class _Recorder:
@@ -233,3 +240,125 @@ class TestObservation:
 
     def test_a_conforming_object_satisfies_the_protocol(self) -> None:
         assert isinstance(_Recorder(), ControlInterceptor)
+
+
+class TestRefusalBeforeATopicExists:
+    """The refusals that happen while resolving the address, not while publishing.
+
+    These never reach `_publish_control`, so before this they were invisible to
+    the interceptor entirely -- and they are the highest-consequence commands in
+    the system, a relay the panel declares non-commandable among them. An audit
+    whose hole is exactly the commands a panel refused is worse than one with no
+    hole and less coverage.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_relay_with_no_target_raises(self) -> None:
+        client = _client()
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_circuit_relay_target.return_value = None
+
+        with pytest.raises(SpanPanelServerError, match="non-commandable"):
+            await client.set_circuit_relay(CIRCUIT, "OPEN")
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_published(self) -> None:
+        client = _client()
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_circuit_relay_target.return_value = None
+        assert client._bridge is not None
+
+        with pytest.raises(SpanPanelServerError):
+            await client.set_circuit_relay(CIRCUIT, "OPEN")
+
+        client._bridge._client.publish.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_interceptor_records_it(self) -> None:
+        """With no topic, because there is none -- naming one would put a string
+        in the audit that nothing was ever going to publish to."""
+        client = _client()
+        recorder = _Recorder()
+        client.set_control_interceptor(recorder)
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_circuit_relay_target.return_value = None
+
+        with pytest.raises(SpanPanelServerError):
+            await client.set_circuit_relay(CIRCUIT, "OPEN")
+        await _settle()
+
+        assert len(recorder.after) == 1
+        command, outcome = recorder.after[0]
+        assert command.device_id == CIRCUIT
+        assert command.value == "OPEN"
+        assert command.topic is None
+        assert outcome.state is PublishState.FAILED
+        assert outcome.topic is None
+        assert outcome.detail == "relay not commandable"
+
+    @pytest.mark.asyncio
+    async def test_before_publish_is_not_consulted(self) -> None:
+        """There is nothing to authorise, and a veto would replace a specific
+        reason with "vetoed"."""
+        client = _client()
+        recorder = _Recorder(veto=_Refusal("only admins may do that"))
+        client.set_control_interceptor(recorder)
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_circuit_relay_target.return_value = None
+
+        with pytest.raises(SpanPanelServerError):
+            await client.set_circuit_relay(CIRCUIT, "OPEN")
+        await _settle()
+
+        assert recorder.before == []
+        assert recorder.after[0][1].detail == "relay not commandable"
+
+    @pytest.mark.asyncio
+    async def test_a_priority_with_no_target_is_recorded_the_same_way(self) -> None:
+        client = _client()
+        recorder = _Recorder()
+        client.set_control_interceptor(recorder)
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_circuit_priority_target.return_value = None
+
+        with pytest.raises(SpanPanelServerError, match="not settable"):
+            await client.set_circuit_priority(CIRCUIT, "NEVER")
+        await _settle()
+
+        assert recorder.after[0][1].detail == "priority not settable"
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_after_the_address_resolved_keeps_its_topic(self) -> None:
+        """A payload this schema cannot represent is refused with the real topic.
+
+        The distinction is worth keeping: "there is no such control" and "that
+        value may not be written to this control" send an investigation in
+        different directions, and only the second has an address to name.
+        """
+        client = _client()
+        recorder = _Recorder()
+        client.set_control_interceptor(recorder)
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_dominant_power_source_target.return_value = ControlTarget(
+            topic=DPS_TOPIC, device_id=SERIAL, node_id="core", property_id="dominant-power-source"
+        )
+        client._adapter.dominant_power_source_payload.return_value = None
+
+        with pytest.raises(SpanPanelServerError, match="no representation"):
+            await client.set_dominant_power_source("NONSENSE")
+        await _settle()
+
+        command, outcome = recorder.after[0]
+        assert command.topic == DPS_TOPIC
+        assert command.node_id == "core"
+        assert outcome.detail == "value has no representation"
+
+    @pytest.mark.asyncio
+    async def test_no_interceptor_installed_still_raises(self) -> None:
+        """The refusal is the contract; the audit record is a side effect of it."""
+        client = _client()
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_circuit_relay_target.return_value = None
+
+        with pytest.raises(SpanPanelServerError):
+            await client.set_circuit_relay(CIRCUIT, "OPEN")

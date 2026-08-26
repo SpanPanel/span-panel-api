@@ -2,7 +2,7 @@
   "$schema": "https://ebus.energy/schemas/ebus-spec.json",
   "role": "consumer",
   "firmware": {
-    "family": "spanos2",
+    "family": "spanos3",
     "range": "r202633+",
     "data_model_version": ">=1.0,<2.0"
   },

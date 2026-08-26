@@ -165,11 +165,19 @@ def test_lugs_are_found_by_declared_direction_not_device_id() -> None:
     assert find_lugs(devices, upstream=False).device_id == "lugs-downstream"
 
 
-def test_missing_lugs_yield_zeros_not_errors() -> None:
-    """A panel without lugs devices must still produce a snapshot."""
+def test_missing_lugs_report_nothing_rather_than_erroring() -> None:
+    """A panel without lugs devices must still produce a snapshot.
+
+    It reports `None` rather than `0.0` for the readings those lugs would have
+    carried. The lugs are resolved by their `direction` property, so "no lugs
+    yet" is an ordinary moment in a retained-topic replay rather than a broken
+    panel — and answering it with zero states a site import of nothing on the
+    sensors that carry the whole panel's energy. See
+    `test_absent_readings_are_not_zero`.
+    """
     fields = PanelFields(panel=_device(PANEL), upstream_lugs=None, downstream_lugs=None, mid=None)
 
-    assert fields.instant_grid_power_w == 0.0
+    assert fields.instant_grid_power_w is None
     assert fields.upstream_l1_current_a is None
     assert fields.grid_state is None
 

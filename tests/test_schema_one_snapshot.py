@@ -134,7 +134,9 @@ def test_a_panel_with_no_children_still_builds() -> None:
     snapshot = build_snapshot(_device(PANEL), [])
 
     assert snapshot.serial_number == "example-40t-001"
-    assert snapshot.instant_grid_power_w == 0.0
+    # Nothing has reported a reading yet, which is not the same as a reading of
+    # zero — see `test_absent_readings_are_not_zero`.
+    assert snapshot.instant_grid_power_w is None
     assert snapshot.battery.soe_percentage is None
     # Every position is unoccupied, so all 40 are synthesised.
     assert len(snapshot.circuits) == 40

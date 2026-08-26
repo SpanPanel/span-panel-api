@@ -15,6 +15,21 @@ install of the adapter distribution does not, and a 1.0.0 adapter against this b
 
 ### Fixed
 
+- **A meter reading the panel has not sent is reported as absent instead of as zero.** Every energy and power field on `SpanCircuitSnapshot` and the six panel-level ones read off the lugs were filled with `0.0` whenever the property behind them carried no
+  value. A retained-topic replay hands a subscriber `$description` before the values it declares, so there is a window — on every connect, and again after every broker reconnect, because the adapter is rebuilt from a clean accumulator — in which every
+  circuit on the panel exists, is described, and has reported nothing. Throughout that window the snapshot stated that each of them was drawing no power and had accumulated no energy since it was installed.
+
+  **On a cumulative counter that is destructive rather than cosmetic.** A consumer cannot tell the fabricated zero from a meter that genuinely reads zero, and the reading a lifetime counter drops to when firmware resets it _is_ zero — so a consumer
+  compensating for counter resets books the entire counter as a compensation offset, and does it again on the next replay. `SpanPanel/span#259` is that failure on real hardware: an "energy dip" reported against essentially every circuit on each restart,
+  each dip equal to that circuit's whole lifetime counter, offsets reaching 8.18 MWh on a single circuit and roughly 10 MWh of fictional energy pushed into long-term statistics across one panel.
+
+  The fix is the discrimination rather than a new default: an unreported reading is `None`, a reported `0` is `0.0`, and the two no longer collapse into each other. It is per-property, so a circuit that has published half its meter reports the half it has.
+  **A synthesised `unmapped_tab_*` entry still reads zero** — an unoccupied breaker position genuinely draws nothing, and that is an assertion the adapter is entitled to make rather than a reading it failed to receive.
+
+  Two further consequences fall out of the same rule. **The panel-level fields were the worst case, not an edge case**: both lugs devices declare the same type and are told apart by the `info/direction` value they publish, so until that one property
+  arrives neither role resolves and all six fields — the whole site's import and export — were fabricated together. And **`dsm_state` no longer infers islanding from silence**: its fallback heuristic asks whether power is crossing the service entrance and
+  read "no power" out of "nothing has reported", declaring a site off-grid on the strength of a measurement nobody had made. With neither grid signal reported it now answers `UNKNOWN`, which the same function already returns when it cannot tell.
+
 - **A relay or shed-priority command aimed at a circuit the panel declares non-commandable is refused instead of published.** `set_circuit_relay_target` and `set_circuit_priority_target` were pure string formatting from a circuit id and consulted no
   declaration at all, so both setters published to a circuit commissioned always-on or never-backup — while the same adapters were already reading exactly that refusal into `SpanCircuitSnapshot.is_user_controllable` and `.is_never_backup`. Both now return
   `ControlTarget | None`, matching the two controls that already refused, and `set_circuit_relay` / `set_circuit_priority` raise `SpanPanelServerError` the way `set_evse_charge_limit` does.
@@ -110,6 +125,14 @@ install of the adapter distribution does not, and a 1.0.0 adapter against this b
   nothing to check itself against. Its docstring now says so plainly, and it takes an `ssl_context` only for the caller that _already_ holds the anchor and wants a verified second copy.
 
 ### Changed
+
+- **BREAKING FOR CONSUMERS: the energy and power fields on `SpanCircuitSnapshot` and `SpanPanelSnapshot` become `float | None`.** `instant_power_w`, `produced_energy_wh` and `consumed_energy_wh` on a circuit; `instant_grid_power_w`, `feedthrough_power_w`
+  and the four `*_energy_*_wh` on the panel. `None` means the panel has not reported that reading — see the entry under **Fixed** for why the previous `0.0` was not a safe stand-in. Anything doing arithmetic straight off one of these fields is the code
+  that has to change, and mypy names every site rather than leaving it to a runtime `TypeError`. Coalescing with `or 0` is rarely the right repair: it reintroduces exactly the fabrication this removes, one layer further out. A consumer rendering a value
+  should render "unknown"; a consumer accumulating one should skip the sample.
+
+  `ADAPTER_CONTRACT_VERSION` does not move. It guards the bootstrap-to-adapter calling convention — an `__init__` arity or a member whose meaning changed under its own name — and both adapters ship this change with the bootstrap in the same unpublished
+  release, so no adapter carrying the old behaviour is reachable. The already-published 1.0.0 adapters are refused at discovery on the existing floor.
 
 - **`ControlCommand.topic` and `PublishOutcome.topic` become `str | None`.** A refusal made while resolving the address has no topic, and a command reported with one would name a string nothing was ever going to publish to. `None` appears only alongside
   `PublishState.FAILED`. Additive for a consumer that only reads `state` and `detail`; an interceptor that passes `command.topic` somewhere expecting a `str` is the one that has to change, and does so under mypy rather than silently.

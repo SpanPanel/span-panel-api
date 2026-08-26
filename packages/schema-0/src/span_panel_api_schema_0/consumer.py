@@ -56,6 +56,27 @@ def _parse_float(value: str, default: float = 0.0) -> float:
         return default
 
 
+def _reading(value: str) -> float | None:
+    """Parse a meter reading, or `None` when the panel has not reported one.
+
+    `get_prop` answers `""` for a property whose retained value has not arrived,
+    and a replay hands over `$description` before the values it declares — so
+    every circuit exists, briefly, with nothing behind its meter. Parsing that
+    to `0.0` asserts a reading the panel never made, and on a cumulative counter
+    a consumer cannot tell the fabrication from a genuine reset to zero. That is
+    `SpanPanel/span#259`.
+
+    Distinct from `_parse_float` because most flat properties do want a
+    substituted default; only readings must keep absence tellable from zero.
+    """
+    if not value:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
 def _parse_int(value: str, default: int = 0) -> int:
     """Parse an integer string, returning default on failure."""
     try:
@@ -298,13 +319,13 @@ class HomieDeviceConsumer:
 
         # active-power is in watts; negate so positive = consumption.
         # Guard against -0.0 creeping in when raw_power_w is 0.0.
-        raw_power_w = _parse_float(self._acc.get_prop(node_id, "active-power"))
-        instant_power_w = 0.0 if raw_power_w == 0.0 else -raw_power_w
+        raw_power_w = _reading(self._acc.get_prop(node_id, "active-power"))
+        instant_power_w = None if raw_power_w is None else (0.0 if raw_power_w == 0.0 else -raw_power_w)
 
         # Energy: exported-energy = consumption (panel exports TO circuit)
-        consumed_wh = _parse_float(self._acc.get_prop(node_id, "exported-energy"))
+        consumed_wh = _reading(self._acc.get_prop(node_id, "exported-energy"))
         # imported-energy = production (panel imports FROM circuit)
-        produced_wh = _parse_float(self._acc.get_prop(node_id, "imported-energy"))
+        produced_wh = _reading(self._acc.get_prop(node_id, "imported-energy"))
 
         # Tabs: derived from space + dipole
         # Dipole circuits occupy two consecutive spaces on the same bus bar
@@ -435,14 +456,20 @@ class HomieDeviceConsumer:
             )
         return result
 
-    def _derive_dsm_state(self, core_node: str | None, grid_power: float, power_flow_grid: float | None) -> str:
+    def _derive_dsm_state(self, core_node: str | None, grid_power: float | None, power_flow_grid: float | None) -> str:
         """Derive dsm_state from multiple signals.
 
         Priority:
         1. bess/grid-state — authoritative when BESS is commissioned
         2. dominant-power-source == GRID — grid is the primary source
         3. grid_power or power_flow_grid non-zero — grid exchanging power
-        4. both grid signals zero AND DPS != GRID — islanded
+        4. both grid signals *reported* and zero AND DPS != GRID — islanded
+
+        Step 4 needs a reading, not merely the absence of one. Both signals are
+        `None` until the meter reports, and reading "no power is crossing the
+        service entrance" out of "nothing has told me yet" declares the site
+        islanded on the strength of a measurement nobody made. Unknown is the
+        honest answer, and this function already had a word for it.
         """
         # 1. BESS grid-state is authoritative when available
         bess_node = self._acc.find_node_by_type(TYPE_BESS)
@@ -460,9 +487,10 @@ class HomieDeviceConsumer:
                 return "DSM_ON_GRID"
 
             if dps in ("BATTERY", "PV", "GENERATOR"):
-                grid_exchanging = abs(grid_power) > _GRID_POWER_EPSILON_W or (
-                    power_flow_grid is not None and abs(power_flow_grid) > _GRID_POWER_EPSILON_W
-                )
+                reported = [signal for signal in (grid_power, power_flow_grid) if signal is not None]
+                if not reported:
+                    return "UNKNOWN"
+                grid_exchanging = any(abs(signal) > _GRID_POWER_EPSILON_W for signal in reported)
                 return "DSM_ON_GRID" if grid_exchanging else "DSM_OFF_GRID"
 
         return "UNKNOWN"
@@ -577,15 +605,15 @@ class HomieDeviceConsumer:
         # Upstream lugs → main meter (grid connection)
         # imported-energy = energy imported from the grid = consumed by the house
         # exported-energy = energy exported to the grid = produced (solar)
-        grid_power = 0.0
-        main_consumed = 0.0
-        main_produced = 0.0
+        grid_power: float | None = None
+        main_consumed: float | None = None
+        main_produced: float | None = None
         upstream_l1_current: float | None = None
         upstream_l2_current: float | None = None
         if upstream_lugs is not None:
-            grid_power = _parse_float(self._acc.get_prop(upstream_lugs, "active-power"))
-            main_consumed = _parse_float(self._acc.get_prop(upstream_lugs, "imported-energy"))
-            main_produced = _parse_float(self._acc.get_prop(upstream_lugs, "exported-energy"))
+            grid_power = _reading(self._acc.get_prop(upstream_lugs, "active-power"))
+            main_consumed = _reading(self._acc.get_prop(upstream_lugs, "imported-energy"))
+            main_produced = _reading(self._acc.get_prop(upstream_lugs, "exported-energy"))
 
             l1_i = self._acc.get_prop(upstream_lugs, "l1-current")
             upstream_l1_current = _parse_float(l1_i) if l1_i else None
@@ -593,15 +621,15 @@ class HomieDeviceConsumer:
             upstream_l2_current = _parse_float(l2_i) if l2_i else None
 
         # Downstream lugs → feedthrough
-        feedthrough_power = 0.0
-        feedthrough_consumed = 0.0
-        feedthrough_produced = 0.0
+        feedthrough_power: float | None = None
+        feedthrough_consumed: float | None = None
+        feedthrough_produced: float | None = None
         downstream_l1_current: float | None = None
         downstream_l2_current: float | None = None
         if downstream_lugs is not None:
-            feedthrough_power = _parse_float(self._acc.get_prop(downstream_lugs, "active-power"))
-            feedthrough_consumed = _parse_float(self._acc.get_prop(downstream_lugs, "imported-energy"))
-            feedthrough_produced = _parse_float(self._acc.get_prop(downstream_lugs, "exported-energy"))
+            feedthrough_power = _reading(self._acc.get_prop(downstream_lugs, "active-power"))
+            feedthrough_consumed = _reading(self._acc.get_prop(downstream_lugs, "imported-energy"))
+            feedthrough_produced = _reading(self._acc.get_prop(downstream_lugs, "exported-energy"))
 
             dl1_i = self._acc.get_prop(downstream_lugs, "l1-current")
             downstream_l1_current = _parse_float(dl1_i) if dl1_i else None

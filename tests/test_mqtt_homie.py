@@ -1257,13 +1257,22 @@ class TestHomieEdgeCases:
         assert not consumer.is_ready()
 
     def test_empty_property_values(self):
-        """Circuit with no properties should still build with defaults."""
+        """Circuit with no properties should still build, reporting absence.
+
+        This is the `SpanPanel/span#259` window itself: the device has described
+        its nodes and published no value behind any of them. Descriptive fields
+        fall back to a placeholder a consumer can render, but a *reading* has no
+        honest placeholder — `0.0` is a measurement the panel never made, and a
+        consumer compensating for counter resets cannot tell it from one.
+        """
         acc, consumer = _build_ready_consumer()
         snapshot = consumer.build_snapshot()
         circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
         assert circuit.name == ""
         assert circuit.relay_state == "UNKNOWN"
-        assert circuit.instant_power_w == 0.0
+        assert circuit.instant_power_w is None
+        assert circuit.consumed_energy_wh is None
+        assert circuit.produced_energy_wh is None
         assert circuit.tabs == []
 
     def test_multiple_circuits(self):

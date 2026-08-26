@@ -23,9 +23,18 @@ class SpanCircuitSnapshot:
     circuit_id: str  # UUID (dashless, normalized)
     name: str
     relay_state: str  # OPEN | CLOSED | UNKNOWN
-    instant_power_w: float  # Positive = consumption
-    produced_energy_wh: float  # Generation/backfeed (Wh)
-    consumed_energy_wh: float  # Consumption (Wh)
+    # `None` means the meter has not reported, which is not the same as a meter
+    # reporting zero. A retained-topic replay delivers a device's description
+    # before its values, so a circuit is known to exist for a window in which it
+    # has said nothing; filling that window with `0.0` publishes a reading the
+    # panel never made. On a cumulative counter that is destructive rather than
+    # cosmetic — a consumer compensating for firmware counter resets reads the
+    # fabricated zero as a reset and books the whole counter as an offset
+    # (`SpanPanel/span#259`). A new circuit legitimately reads `0.0`, and the
+    # two must stay tellable apart.
+    instant_power_w: float | None  # Positive = consumption
+    produced_energy_wh: float | None  # Generation/backfeed (Wh)
+    consumed_energy_wh: float | None  # Consumption (Wh)
     tabs: list[int]
     priority: str  # v1: MUST_HAVE | NICE_TO_HAVE | NON_ESSENTIAL | UNKNOWN
     #                 v2: NEVER | SOC_THRESHOLD | OFF_GRID | UNKNOWN
@@ -931,14 +940,18 @@ class SpanPanelSnapshot:
     serial_number: str
     firmware_version: str
 
-    # Panel-level power and energy
+    # Panel-level power and energy. `None` for the same reason it appears on
+    # `SpanCircuitSnapshot`, plus one more that is specific to these six: they
+    # are read off the lugs devices, which are resolved by their `direction`
+    # property. Until that property arrives there is no lugs device to read at
+    # all, so these were the panel's whole import and export fabricated as zero.
     main_relay_state: str
-    instant_grid_power_w: float
-    feedthrough_power_w: float
-    main_meter_energy_consumed_wh: float
-    main_meter_energy_produced_wh: float
-    feedthrough_energy_consumed_wh: float
-    feedthrough_energy_produced_wh: float
+    instant_grid_power_w: float | None
+    feedthrough_power_w: float | None
+    main_meter_energy_consumed_wh: float | None
+    main_meter_energy_produced_wh: float | None
+    feedthrough_energy_consumed_wh: float | None
+    feedthrough_energy_produced_wh: float | None
 
     # v1 field names preserved — MQTT transport derives these from v2 data
     dsm_state: str  # v1: direct | v2: multi-signal heuristic

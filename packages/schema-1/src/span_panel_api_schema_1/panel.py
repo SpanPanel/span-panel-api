@@ -444,15 +444,15 @@ class PanelFields:
         # `power_flow_grid` is the site-level figure; `lugs_at_service_entrance`
         # above is how a consumer tells the two apart. The reading itself is
         # correct in either topology -- it is the label that is conditional.
-        self.instant_grid_power_w = number(upstream_lugs, NODE_METER, PROP_ACTIVE_POWER) or 0.0
-        self.main_meter_energy_consumed_wh = number(upstream_lugs, NODE_METER, PROP_IMPORTED_ENERGY) or 0.0
-        self.main_meter_energy_produced_wh = number(upstream_lugs, NODE_METER, PROP_EXPORTED_ENERGY) or 0.0
+        self.instant_grid_power_w = number(upstream_lugs, NODE_METER, PROP_ACTIVE_POWER)
+        self.main_meter_energy_consumed_wh = number(upstream_lugs, NODE_METER, PROP_IMPORTED_ENERGY)
+        self.main_meter_energy_produced_wh = number(upstream_lugs, NODE_METER, PROP_EXPORTED_ENERGY)
         self.upstream_l1_current_a = number(upstream_lugs, NODE_METER, PROP_CURRENT_A)
         self.upstream_l2_current_a = number(upstream_lugs, NODE_METER, PROP_CURRENT_B)
 
-        self.feedthrough_power_w = number(downstream_lugs, NODE_METER, PROP_ACTIVE_POWER) or 0.0
-        self.feedthrough_energy_consumed_wh = number(downstream_lugs, NODE_METER, PROP_IMPORTED_ENERGY) or 0.0
-        self.feedthrough_energy_produced_wh = number(downstream_lugs, NODE_METER, PROP_EXPORTED_ENERGY) or 0.0
+        self.feedthrough_power_w = number(downstream_lugs, NODE_METER, PROP_ACTIVE_POWER)
+        self.feedthrough_energy_consumed_wh = number(downstream_lugs, NODE_METER, PROP_IMPORTED_ENERGY)
+        self.feedthrough_energy_produced_wh = number(downstream_lugs, NODE_METER, PROP_EXPORTED_ENERGY)
         self.downstream_l1_current_a = number(downstream_lugs, NODE_METER, PROP_CURRENT_A)
         self.downstream_l2_current_a = number(downstream_lugs, NODE_METER, PROP_CURRENT_B)
 

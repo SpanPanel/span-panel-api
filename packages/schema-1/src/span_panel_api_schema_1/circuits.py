@@ -250,10 +250,12 @@ def build_circuit(
     device: DiscoveredDevice, device_type: str = "circuit", relative_position: str = ""
 ) -> SpanCircuitSnapshot:
     """Build one circuit snapshot from its v1.0 device."""
-    raw_power = _number(device, NODE_METER, PROP_ACTIVE_POWER) or 0.0
+    raw_power = _number(device, NODE_METER, PROP_ACTIVE_POWER)
     # Negate so positive means consumption. The guard keeps -0.0 out of the
     # snapshot, where it would compare equal to 0.0 but format as "-0.0".
-    instant_power_w = 0.0 if raw_power == 0.0 else -raw_power
+    # A meter that has not reported stays `None` rather than becoming 0.0 W —
+    # see `SpanCircuitSnapshot` for why absent and zero must not collapse.
+    instant_power_w = None if raw_power is None else (0.0 if raw_power == 0.0 else -raw_power)
 
     relay_controllable = _flag(device, NODE_SWITCH, PROP_RELAY_CONTROLLABLE, default=True)
     priority = _text(device, NODE_LOAD_SHED, PROP_PRIORITY, UNKNOWN)
@@ -267,8 +269,8 @@ def build_circuit(
         # The panel *imported* this energy from the circuit, so the circuit
         # produced it. Named from the panel's perspective, reported from the
         # circuit's.
-        produced_energy_wh=_number(device, NODE_METER, PROP_IMPORTED_ENERGY) or 0.0,
-        consumed_energy_wh=_number(device, NODE_METER, PROP_EXPORTED_ENERGY) or 0.0,
+        produced_energy_wh=_number(device, NODE_METER, PROP_IMPORTED_ENERGY),
+        consumed_energy_wh=_number(device, NODE_METER, PROP_EXPORTED_ENERGY),
         tabs=_tabs(device),
         priority=priority,
         # `always-on` is `not relay-controllable`, and the flat schema derived

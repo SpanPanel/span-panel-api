@@ -127,6 +127,19 @@ def _mappings(value: object, where: str) -> list[dict[str, object]]:
     return [_mapping(item, f"{where}[{index}]") for index, item in enumerate(_sequence(value, where))]
 
 
+def _required(source: Mapping[str, object], key: str, where: str) -> object:
+    """One key that has to be there, reported the way everything else here is.
+
+    Indexing straight into the mapping says the same thing as a bare `KeyError`
+    traceback, which is the one failure mode in this file that makes a reader
+    work out what the script wanted. Every other malformed input exits with a
+    sentence naming it.
+    """
+    if key not in source:
+        raise SystemExit(f"{where} has no {key!r} entry")
+    return source[key]
+
+
 def _text(source: Mapping[str, object], key: str, default: str) -> str:
     value = source.get(key)
     return default if value is None else str(value)
@@ -177,8 +190,9 @@ def pinned_release() -> str:
     """
     with LOCK.open(encoding="utf-8") as handle:
         lock: object = json.load(handle)
-    peers = _mapping(_mapping(lock, "spec_lock.json")["peers"], "peers")
-    return _text(_mapping(peers[PEER], f"peers.{PEER}"), "version", "")
+    document = _mapping(lock, "spec_lock.json")
+    peers = _mapping(_required(document, "peers", "spec_lock.json"), "peers")
+    return _text(_mapping(_required(peers, PEER, "peers"), f"peers.{PEER}"), "version", "")
 
 
 # ---------------------------------------------------------------------------

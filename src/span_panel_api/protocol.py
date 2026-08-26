@@ -249,6 +249,15 @@ class SchemaAdapter(Protocol):
         authorisation, and a topic built by string formatting alone authorises
         nothing.
 
+        **None also where the panel carries no circuit under that id.** Both
+        adapters resolve the id before they build anything, so an id nothing
+        published yields no target rather than a well-formed topic aimed at
+        nothing. The flat adapter's lookup used to default an unpublished value
+        to the empty string, which parses as "not always-on" and reads as
+        permission; the two adapters answer the same question and now answer it
+        the same way. `has_circuit` reports this case separately, so a transport
+        can say which of the two refusals it is raising.
+
         Widening the return type does not move `ADAPTER_CONTRACT_VERSION`
         either, and the direction is why. An older adapter returns a
         `ControlTarget` where this now permits `ControlTarget | None`, which is
@@ -265,6 +274,29 @@ class SchemaAdapter(Protocol):
         None where the panel declares the priority locked -- `never-backup`
         under the flat schema, `$settable` on `load-shed/priority` under v1.0 --
         which is the same reading `SpanCircuitSnapshot.is_never_backup` reports.
+
+        None also where the panel carries no circuit under that id, and where
+        the device carries no shed priority to write: under v1.0 an absent
+        `$settable` on a *declared* `load-shed/priority` means settable, but a
+        device that declares no such property has offered no such control, and
+        the two are not the same absence.
+        """
+
+    def has_circuit(self, circuit_id: str) -> bool:
+        """Whether this panel carries a circuit under that id at all.
+
+        Exists so a refused command can name the right refusal. Both circuit
+        target builders return None for two unrelated reasons -- the panel has
+        no such circuit, or it has one and declares the control locked -- and a
+        transport that cannot tell them apart has to pick one message for both.
+        Picking "declares its relay non-commandable" for an id no circuit
+        answers to states a fact about a device that does not exist, and the
+        transport's audit trail carries that reason to whoever reads it.
+
+        Membership of the *circuit* set, not of the topology: a device this
+        schema models some other way -- a battery, a MID, the lugs -- is not a
+        circuit whose controls happen to be locked, so it answers False and its
+        refusal reads as the absence it is.
         """
 
     def set_dominant_power_source_target(self) -> ControlTarget | None:

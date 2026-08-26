@@ -139,20 +139,33 @@ def _tabs(device: DiscoveredDevice) -> list[int]:
     return tabs
 
 
-def _declared_settable(device: DiscoveredDevice, node: str, prop: str, *, when_absent: bool) -> bool:
+def _declared_settable(device: DiscoveredDevice, node: str, prop: str, *, when_unannotated: bool) -> bool:
     """Read the Homie ``$settable`` attribute off one property's definition.
 
-    ``when_absent`` is the answer for a property that carries no such attribute,
-    and it is a per-property judgement rather than one rule — which is why it is
-    a parameter instead of a default. See the two callers below for why they
-    answer it differently.
+    **An undeclared property is never settable, whatever ``when_unannotated``
+    says.** The two absences are different claims and were once collapsed onto
+    one answer: a device that declares ``load-shed/priority`` and omits
+    ``$settable`` has left a mutable property unannotated, while a device with no
+    ``load-shed`` node at all — a BESS, a MID, the lugs — has not declared the
+    property, and there is nothing on it to be settable. Answering the second
+    with the first's default produced a write target for a control the device
+    never offered, which is the defect the refusal exists to prevent.
+
+    ``when_unannotated`` is therefore the narrower question it now names: what a
+    *declared* property means when it carries no ``$settable``. That is a
+    per-property judgement rather than one rule — which is why it is a parameter
+    instead of a default. See the two callers below for why they answer it
+    differently.
+
+    A definition that is not a mapping is treated as undeclared for the same
+    reason: a malformed declaration has not said the property is settable.
     """
     definition = device.get_node_properties(node).get(prop)
     if not isinstance(definition, dict):
-        return when_absent
+        return False
     settable = definition.get(ATTR_SETTABLE)
     if settable is None:
-        return when_absent
+        return when_unannotated
     if isinstance(settable, bool):
         return settable
     return str(settable).strip().lower() != "false"
@@ -168,11 +181,21 @@ def priority_is_settable(device: DiscoveredDevice) -> bool:
     expresses never-backup as *mutability*, so the signal is the Homie
     ``$settable`` attribute on the property definition.
 
-    Absent therefore means settable: treating an unannounced circuit as locked
-    would mark every circuit never-backup on a panel that does not publish the
-    attribute.
+    An unannounced ``$settable`` therefore means settable: treating an
+    unannounced circuit as locked would mark every circuit never-backup on a
+    panel that does not publish the attribute.
+
+    **An unannounced attribute is not an undeclared property**, and only the
+    first of those means settable. A device carrying no ``load-shed`` node, or a
+    ``load-shed`` node with no ``priority`` on it, has not published a shed
+    priority for anything to be settable *on* — every non-circuit device in the
+    tree is in that position, the BESS and the MID and the lugs among them. The
+    permissive default is for the documented case where firmware declares the
+    property and omits the attribute, and reading it as permission for a device
+    that declared neither produced a write target for a control that device
+    never offered. `_declared_settable` separates the two.
     """
-    return _declared_settable(device, NODE_LOAD_SHED, PROP_PRIORITY, when_absent=True)
+    return _declared_settable(device, NODE_LOAD_SHED, PROP_PRIORITY, when_unannotated=True)
 
 
 def relay_is_settable(device: DiscoveredDevice) -> bool:
@@ -209,14 +232,16 @@ def relay_is_settable(device: DiscoveredDevice) -> bool:
     describing one correctly omits the attribute rather than publishing
     ``false``. Absence is therefore the announcement. Priority answers the other
     way because its catalog entry carries no condition at all. The two
-    properties are not making the same kind of claim.
+    properties are not making the same kind of claim. Both refuse a device that
+    declares no such property at all, which is a third case and not either
+    default.
 
     Across the two production enclosures we hold captures from — 27 circuits —
     ``$settable`` is present on ``switch/relay`` exactly when
     ``relay-controllable`` is ``true``, without exception, which is the
     specification's rule showing up in hardware.
     """
-    return _declared_settable(device, NODE_SWITCH, PROP_RELAY, when_absent=False) and _flag(
+    return _declared_settable(device, NODE_SWITCH, PROP_RELAY, when_unannotated=False) and _flag(
         device, NODE_SWITCH, PROP_RELAY_CONTROLLABLE, default=True
     )
 

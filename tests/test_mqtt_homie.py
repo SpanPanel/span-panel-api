@@ -1017,6 +1017,22 @@ class TestSpanMqttClientProtocol:
 # ---------------------------------------------------------------------------
 
 
+CONTROLLED_CIRCUIT = "aabbccdd112233445566778899001122"
+
+
+def _adapter_carrying_the_controlled_circuit() -> SchemaZeroAdapter:
+    """A flat adapter whose panel has actually declared the circuit under test.
+
+    The description matters: a circuit the panel never published is refused, so
+    a publishing test that skipped it would be asserting that a write to an
+    unknown id reaches the wire.
+    """
+    adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
+    adapter.handle_message(f"{PREFIX}/$description", _make_description({CONTROLLED_CIRCUIT: {"type": TYPE_CIRCUIT}}))
+    adapter.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
+    return adapter
+
+
 class TestSpanMqttClientControl:
     @pytest.mark.asyncio
     async def test_set_circuit_relay_publishes(self):
@@ -1029,12 +1045,12 @@ class TestSpanMqttClientControl:
             broker_config=config,
             control_deadlines=FAST_CONTROL_DEADLINES,
         )
-        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
+        client._adapter = _adapter_carrying_the_controlled_circuit()
 
         mock_bridge = acking_bridge()
         client._bridge = mock_bridge
 
-        await client.set_circuit_relay("aabbccdd112233445566778899001122", "OPEN")
+        await client.set_circuit_relay(CONTROLLED_CIRCUIT, "OPEN")
 
         mock_bridge.publish.assert_called_once_with(
             f"{TOPIC_PREFIX}/{SERIAL}/aabbccdd112233445566778899001122/relay/set",
@@ -1052,12 +1068,12 @@ class TestSpanMqttClientControl:
             broker_config=config,
             control_deadlines=FAST_CONTROL_DEADLINES,
         )
-        client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
+        client._adapter = _adapter_carrying_the_controlled_circuit()
 
         mock_bridge = acking_bridge()
         client._bridge = mock_bridge
 
-        await client.set_circuit_priority("aabbccdd112233445566778899001122", "NEVER")
+        await client.set_circuit_priority(CONTROLLED_CIRCUIT, "NEVER")
 
         mock_bridge.publish.assert_called_once_with(
             f"{TOPIC_PREFIX}/{SERIAL}/aabbccdd112233445566778899001122/shed-priority/set",

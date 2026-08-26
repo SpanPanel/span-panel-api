@@ -71,6 +71,10 @@ def _client(*, connected: bool = True, deadline: float = 0.05) -> SpanMqttClient
     adapter.set_circuit_relay_target.return_value = ControlTarget(
         topic=RELAY_TOPIC, device_id=SERIAL, node_id=CIRCUIT, property_id="relay"
     )
+    # The panel has this circuit. Stated rather than left to a MagicMock's
+    # truthiness, because it is what makes every refusal below the "this control
+    # is locked" case rather than the "no such circuit" one.
+    adapter.has_circuit.return_value = True
     adapter.register_property_callback.side_effect = lambda cb: lambda: None
     client._adapter = adapter
     client._observe(adapter)
@@ -362,3 +366,104 @@ class TestRefusalBeforeATopicExists:
 
         with pytest.raises(SpanPanelServerError):
             await client.set_circuit_relay(CIRCUIT, "OPEN")
+
+
+class TestARefusedCommandNamesTheRefusalItActuallyMade:
+    """Two reasons produce no target, and they are not interchangeable.
+
+    "Declares its relay non-commandable" asserts something about a circuit that
+    exists -- that it was commissioned always-on -- and sends whoever reads it to
+    a panel's commissioning to find out why. An id no circuit answers to has
+    nothing to do with commissioning, and a mistyped id investigated as a
+    commissioning question costs the whole investigation.
+
+    The `detail` matters more than the message, because it travels further: it
+    lands in `after_publish`, which the Home Assistant integration writes into a
+    security log, where "relay not commandable" is read as a fact about the
+    panel rather than as this library's best guess at one.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_circuit_is_refused_as_an_unknown_circuit(self) -> None:
+        client = _client()
+        recorder = _Recorder()
+        client.set_control_interceptor(recorder)
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_circuit_relay_target.return_value = None
+        client._adapter.has_circuit.return_value = False
+
+        with pytest.raises(SpanPanelServerError, match="carries no circuit"):
+            await client.set_circuit_relay(CIRCUIT, "OPEN")
+        await _settle()
+
+        assert recorder.after[0][1].detail == "no such circuit"
+
+    @pytest.mark.asyncio
+    async def test_a_known_circuit_is_refused_as_a_locked_relay(self) -> None:
+        """The other half, so neither test can pass on the other's account."""
+        client = _client()
+        recorder = _Recorder()
+        client.set_control_interceptor(recorder)
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_circuit_relay_target.return_value = None
+        client._adapter.has_circuit.return_value = True
+
+        with pytest.raises(SpanPanelServerError, match="non-commandable"):
+            await client.set_circuit_relay(CIRCUIT, "OPEN")
+        await _settle()
+
+        assert recorder.after[0][1].detail == "relay not commandable"
+
+    @pytest.mark.asyncio
+    async def test_the_priority_makes_the_same_distinction(self) -> None:
+        """A shed priority refused for an id nothing published is not a circuit
+        "commissioned never-backup" either."""
+        client = _client()
+        recorder = _Recorder()
+        client.set_control_interceptor(recorder)
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_circuit_priority_target.return_value = None
+        client._adapter.has_circuit.return_value = False
+
+        with pytest.raises(SpanPanelServerError, match="carries no circuit"):
+            await client.set_circuit_priority(CIRCUIT, "NEVER")
+        await _settle()
+
+        assert recorder.after[0][1].detail == "no such circuit"
+
+    @pytest.mark.asyncio
+    async def test_the_absent_circuit_is_still_a_refusal_with_no_topic(self) -> None:
+        """Everything else about the record is what it was: no topic, FAILED,
+        and `before_publish` not consulted."""
+        client = _client()
+        recorder = _Recorder(veto=_Refusal("only admins may do that"))
+        client.set_control_interceptor(recorder)
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.set_circuit_relay_target.return_value = None
+        client._adapter.has_circuit.return_value = False
+        assert client._bridge is not None
+
+        with pytest.raises(SpanPanelServerError):
+            await client.set_circuit_relay(CIRCUIT, "OPEN")
+        await _settle()
+
+        client._bridge._client.publish.assert_not_called()
+        assert recorder.before == []
+        command, outcome = recorder.after[0]
+        assert command.device_id == CIRCUIT
+        assert command.topic is None
+        assert outcome.state is PublishState.FAILED
+        assert outcome.topic is None
+
+    @pytest.mark.asyncio
+    async def test_a_permitted_command_never_asks(self) -> None:
+        """The lookup is consulted only once a target has already been refused,
+        so a panel that answers it strangely cannot turn a permitted command
+        into a refused one."""
+        client = _client()
+        assert isinstance(client._adapter, MagicMock)
+        client._adapter.has_circuit.return_value = False
+
+        await client.set_circuit_relay(CIRCUIT, "OPEN")
+
+        client._adapter.has_circuit.assert_not_called()

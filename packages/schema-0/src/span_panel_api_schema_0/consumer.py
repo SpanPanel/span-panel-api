@@ -121,7 +121,16 @@ class HomieDeviceConsumer:
         Absent reads as commandable, for the reason the flag exists — it marks
         the exception, and defaulting to locked would refuse every relay on a
         panel that omits it.
+
+        **That default is why the node has to exist first.** ``get_prop``
+        answers ``""`` for a node nothing ever published, which parses as
+        ``always-on = false`` and reads as permission, so an id no circuit
+        answers to produced a write target — the same defect the parent/child
+        adapter refuses by finding no such device in its tree. Both adapters
+        answer this question, and they have to answer it the same way.
         """
+        if not self.is_circuit_node(node_id):
+            return False
         return not _parse_bool(self._acc.get_prop(node_id, "always-on"))
 
     def priority_is_settable(self, node_id: str) -> bool:
@@ -130,7 +139,13 @@ class HomieDeviceConsumer:
         ``never-backup`` is the flat spelling of what v1.0 expresses as
         mutability of ``load-shed/priority``, and it is already read into
         ``SpanCircuitSnapshot.is_never_backup``. Same reading, second surface.
+
+        Gated on the node existing for the reason ``relay_is_settable`` gives:
+        an unpublished property reads ``""``, which is indistinguishable from a
+        published ``false`` and would make every unknown id writable.
         """
+        if not self.is_circuit_node(node_id):
+            return False
         return not _parse_bool(self._acc.get_prop(node_id, "never-backup"))
 
     def circuit_nodes_missing_names(self) -> list[str]:
@@ -191,7 +206,7 @@ class HomieDeviceConsumer:
                 continue  # drop old unmapped entries; will recompute below
             updated_circuits[cid] = circ
         for node_id in dirty:
-            if self._is_circuit_node(node_id):
+            if self.is_circuit_node(node_id):
                 meta = feed_metadata.get(node_id, {})
                 device_type = meta.get("device_type", "circuit")
                 relative_position = meta.get("relative_position", "")
@@ -245,8 +260,16 @@ class HomieDeviceConsumer:
         TYPE_EVSE: "evse",
     }
 
-    def _is_circuit_node(self, node_id: str) -> bool:
-        """Check if node is a circuit device."""
+    def is_circuit_node(self, node_id: str) -> bool:
+        """Whether the panel published a circuit under this node id.
+
+        False for an id nothing published and for a node of any other type, and
+        those are the same answer: the panel carries no circuit by that name.
+        Public because it is the flat schema's whole answer to "is there
+        anything here to command" — the command path asks it before building a
+        target, and the adapter asks it again to tell an unknown id apart from a
+        circuit that declares its control locked.
+        """
         return self._acc.get_node_type(node_id) in self._CIRCUIT_LIKE_TYPES
 
     def _build_feed_metadata(self) -> dict[str, dict[str, str]]:
@@ -607,7 +630,7 @@ class HomieDeviceConsumer:
         # Circuits
         circuits: dict[str, SpanCircuitSnapshot] = {}
         for node_id in self._acc.all_node_types():
-            if self._is_circuit_node(node_id):
+            if self.is_circuit_node(node_id):
                 meta = feed_metadata.get(node_id, {})
                 device_type = meta.get("device_type", "circuit")
                 relative_position = meta.get("relative_position", "")

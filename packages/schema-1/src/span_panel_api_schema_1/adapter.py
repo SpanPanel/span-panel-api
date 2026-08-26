@@ -38,6 +38,7 @@ from span_panel_api_schema_1.const import (
     PROP_PRIORITY,
     PROP_RELAY,
     STATE_READY,
+    TYPE_CIRCUIT,
 )
 from span_panel_api_schema_1.description import device_type
 from span_panel_api_schema_1.field_metadata import build_field_metadata
@@ -236,6 +237,28 @@ class SchemaOneAdapter:
         if device is None or not priority_is_settable(device):
             return None
         return self._target(circuit_id, NODE_LOAD_SHED, PROP_PRIORITY)
+
+    def has_circuit(self, circuit_id: str) -> bool:
+        """Whether the tree carries a circuit under this id.
+
+        The type is the question, not mere membership. Every device in the tree
+        is addressable by id — the BESS, the MID, the lugs, a charger — and none
+        of them is a circuit, so answering on membership alone would report a
+        BESS as a circuit whose relay the panel declares non-commandable. It
+        declares no relay at all.
+
+        A child that has not described itself yet reads as absent, because it
+        has declared nothing: type, nodes and properties all arrive together in
+        one `$description`, so there is no state in which it is known to be a
+        circuit and unknown whether its controls are settable.
+
+        This is a diagnostic, deliberately not a gate on the two target builders
+        above. Those refuse on the *declaration*, which is the specification's
+        rule and is what authorises a write; adding a type check in front of it
+        would put a second, weaker rule where the authorisation lives.
+        """
+        device = self._child(circuit_id)
+        return device is not None and device_type(device) == TYPE_CIRCUIT
 
     def set_dominant_power_source_target(self) -> ControlTarget | None:
         """The settable successor: `shed/asserted-islanding-state` on the panel.

@@ -67,6 +67,7 @@ def test_schema_adapter_declares_its_methods() -> None:
         "find_node_by_type",
         "set_circuit_relay_target",
         "set_circuit_priority_target",
+        "has_circuit",
         "set_dominant_power_source_target",
         "dominant_power_source_payload",
         "set_evse_charge_limit_target",

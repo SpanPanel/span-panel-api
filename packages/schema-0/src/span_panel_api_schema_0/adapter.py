@@ -66,10 +66,11 @@ class SchemaZeroAdapter:
     def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget | None:
         """Where this circuit's relay is commanded, or None if it may not be.
 
-        None on an always-on circuit. `_target` is pure string formatting from a
-        node id, so without the lookup this aimed a write at a relay the panel
-        commissioned as permanently closed — and the refusal was already in the
-        values this adapter parses, as `is_user_controllable`.
+        None on an always-on circuit, and None on an id the panel published no
+        circuit under. `_target` is pure string formatting from a node id, so
+        without the lookup this aimed a write at a relay the panel commissioned
+        as permanently closed — and the refusal was already in the values this
+        adapter parses, as `is_user_controllable`.
         """
         if not self._consumer.relay_is_settable(circuit_id):
             return None
@@ -79,11 +80,23 @@ class SchemaZeroAdapter:
         """Where this circuit's shed priority is written, or None if it may not be.
 
         None on a never-backup circuit, which is the flat spelling of the
-        `$settable` lock v1.0 publishes on `load-shed/priority`.
+        `$settable` lock v1.0 publishes on `load-shed/priority`, and None on an
+        id the panel published no circuit under.
         """
         if not self._consumer.priority_is_settable(circuit_id):
             return None
         return self._target(circuit_id, "shed-priority")
+
+    def has_circuit(self, circuit_id: str) -> bool:
+        """Whether the panel carries a circuit under this id.
+
+        The same lookup the two target builders make before they build anything,
+        asked separately so the transport can say which of the two refusals it
+        is reporting. One reading: a change to what counts as a circuit here
+        moves both answers together, and the pair cannot drift into a refusal
+        whose stated reason is the other one's.
+        """
+        return self._consumer.is_circuit_node(circuit_id)
 
     def set_dominant_power_source_target(self) -> ControlTarget | None:
         core_node = self._consumer.find_node_by_type(TYPE_CORE)

@@ -350,6 +350,10 @@ silent policy rejection by the panel until SPAN ships a reason code. `FAILED` is
 deliver it minutes later. `CONFIRMED` is strong evidence rather than proof: the panel coalesces every API client into a single `USER` requester, so an observed transition cannot be attributed to one specific write. Nothing is retried — a relay write is not
 idempotent in its physical effect.
 
+**A control the panel declares non-commandable raises rather than returning an outcome**, because there is no topic to publish to and so nothing to report on. `SpanPanelServerError` is raised for a relay on a circuit commissioned always-on, for the shed
+priority of a circuit commissioned never-backup, and for a charger with no settable charge-current limit. The same facts are on the snapshot ahead of the call — `SpanCircuitSnapshot.is_user_controllable` and `.is_never_backup` — so a consumer that offers
+the control only where the panel offers it will not meet this; it is the backstop for the case a setup-time gate cannot see, since re-commissioning a circuit in place changes its settability while an entity built from the earlier snapshot is still alive.
+
 ### Control Interception
 
 A consumer with a notion of who is asking can refuse a command before it is published, and record every command in one place rather than in five setters that will drift:
@@ -369,6 +373,9 @@ client.set_control_interceptor(Gate())
 One interceptor at a time, replaceable; pass `None` to remove it. A veto's exception propagates to the caller **unchanged**, so a consumer raising a framework-specific error with a translated message gets it through intact. `after_publish` fires for
 refusals too — with `FAILED` and a `vetoed` detail — because an audit that silently omits refusals is worse than no audit; it runs as a task rather than being awaited, so a sink that hangs cannot stall every control call, and ordering across commands is
 therefore not guaranteed.
+
+That includes the refusals this library makes on the panel's behalf, which never reach a topic at all: a relay the panel declares non-commandable arrives at `after_publish` with `FAILED`, a `detail` naming the refusal, and `command.topic` set to `None`.
+`before_publish` is not consulted for those — there is nothing to authorise, and a veto would replace a specific reason with "vetoed" — so an interceptor must treat `topic` as optional and read `state` and `detail` as the machine-readable half.
 
 **This is a boundary against callers of this library and nothing more.** Anything holding the broker credential publishes to the panel directly and never reaches this code.
 

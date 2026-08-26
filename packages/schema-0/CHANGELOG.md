@@ -22,6 +22,15 @@ Requires `span-panel-api` **3.1.0 or newer**, and the two must be upgraded toget
   Renamed rather than re-typed under the old name so that the mismatch is caught at discovery, where the remedy can be named, instead of surfacing as an `AttributeError` on a `str` deep inside a setter. `ADAPTER_CONTRACT` stays **1** — the contract's
   member list changed, which discovery already checks by name.
 
+- **`set_circuit_relay_target` and `set_circuit_priority_target` return `ControlTarget | None`, and refuse a circuit the panel declares non-commandable.** Both formatted a topic from a node id and consulted nothing, so a command aimed at an always-on relay
+  or a never-backup priority was published — while `consumer.py` was already reading `always-on` into `is_user_controllable` and `never-backup` into `is_never_backup` for the snapshot. `HomieDeviceConsumer` gains `relay_is_settable` and
+  `priority_is_settable`, so the command path and the snapshot make one reading rather than two.
+
+  Absence reads as permission on both flags, which is what they mean: each marks the exception, and defaulting to locked would refuse every circuit on a panel that omits them. Flat publishes no `$settable`, so there is one signal here where the
+  parent/child adapter reads two — a statement about the schema rather than a weaker rule.
+
+  A locked relay keeps a settable priority: always-on is not never-backup on either schema.
+
 ## [1.0.0]
 
 First release as a standalone distribution. Requires `span-panel-api` 3.0.0 or newer.

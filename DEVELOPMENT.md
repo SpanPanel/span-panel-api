@@ -41,22 +41,23 @@ python scripts/coverage.py --full
 
 ## Conformance against the specification and the producer
 
-Some tests verify this library against two things it does not contain: the eBus **specification** (the capability catalogs vendored under `packages/schema-1/spec/catalogs/`) and **panelbench**, the producer whose captures are vendored as reference
-payloads. Both are reached through a local checkout named by an environment variable. Locally, both **skip when the variable is unset or wrong** — not every developer keeps sibling checkouts. **Under `CI` they fail instead**, because CI clones both, so an
-absent path there means the wiring came undone rather than that the checkout is unavailable.
+Some tests verify this library against things it does not contain: the eBus **specification** (the capability catalogs vendored under `packages/schema-1/spec/catalogs/`) and the two **producers** whose output is vendored here — panelbench, whose captures
+are byte-copied, and the eBus emitter, which produces the reference tree. All are reached through a local checkout named by an environment variable. Locally, they **skip when the variable is unset or wrong** — not every developer keeps sibling checkouts.
+**Under `CI` they fail instead**, because CI clones all three, so an absent path there means the wiring came undone rather than that the checkout is unavailable.
 
 Copy `.env.example` to `.env` and point them at real checkouts:
 
 ```bash
 EBUS_SPEC_DIR=/path/to/ebus/specification
 PANELBENCH_DIR=/path/to/span/panelbench
+PANEL_SIM_DIR=/path/to/distribution-enclosure-simulator
 ```
 
 ### A skip here is not a pass
 
-This is worth stating plainly because it has already cost us. `test_the_vendored_captures_match_the_simulator` compares the vendored capture byte-for-byte against panelbench's `golden_tree.json` and pins `peer.commit` in `spec_lock.json`. It is the check
-that catches the vendored fixture going stale while the producer moves on — which is exactly what happened during the v1.0 capability catch-up, where the reference tree left MID `info/*`, BESS `info/{part,serial,firmware}` and PV `info/firmware-version`
-unvalued long after panelbench published all of them. The drift was found by hand.
+This is worth stating plainly because it has already cost us. `test_the_vendored_captures_match_the_simulator` compares the vendored capture byte-for-byte against panelbench's `golden_tree.json` and pins `peers.panelbench.commit` in `spec_lock.json`. It is
+the check that catches the vendored fixture going stale while the producer moves on — which is exactly what happened during the v1.0 capability catch-up, where the reference tree left MID `info/*`, BESS `info/{part,serial,firmware}` and PV
+`info/firmware-version` unvalued long after panelbench published all of them. The drift was found by hand.
 
 The test did not fail, because it never ran: `PANELBENCH_DIR` named a directory that did not exist, so it skipped, and a skip renders in a summary line exactly like a pass.
 
@@ -73,16 +74,47 @@ It cost us a second time on 2026-08-20, in the other vendored capture. `tests/fi
 lower-case, which is the flat half of a change panelbench made on the v1.0 side the same week. Nothing compared the capture to its source, so for nine days the two vendored captures named the same charger differently. `scripts/capture_flat_reference.py`
 now records the simulator commit its output came from, for the same reason `spec_lock.json` records the other two.
 
+### Regenerating a vendored capture
+
+Two scripts, one per producer, and neither is run automatically — a capture is a deliberate act.
+
+| Artifact                                                          | Producer         | Script                                      |
+| ----------------------------------------------------------------- | ---------------- | ------------------------------------------- |
+| `tests/fixtures/flat_wire.json`                                   | `simulator`      | `scripts/capture_flat_reference.py`         |
+| `packages/schema-1/.../reference_payloads/parent_child_tree.json` | `ebus-panel-sim` | `scripts/capture_parent_child_reference.py` |
+
+Both run from the **producer's** environment rather than this one — each producer caps a dependency this repo installs above — and both substitute the transport rather than reassembling the emitter, because a capture taken through different wiring than a
+real panel uses is a capture of the wiring. Point them at a checkout with `SIMULATOR_DIR` / `PANEL_SIM_DIR`.
+
+`capture_parent_child_reference.py` goes one step further than documenting its producer: it reads the release it is a capture of out of `spec_lock.json` (`peers.ebus-panel-sim.version`) and **refuses to write** when the installed package disagrees. The pin
+therefore has exactly one home, and re-capturing against a newer emitter is a two-place change made together — that peer block, and the provenance section of `reference_payloads/README.md`. That is what stops the bytes and the claim about them drifting
+apart, and the drift is not hypothetical: it is how a producer defect in `$settable` on a locked relay reached about thirty test files across two repositories with no conformance gate objecting.
+
+Its input is committed too, as `scripts/reference_panel.yaml`, pinned as `peers.ebus-panel-sim.manifest` — a capture whose input is not in the tree is the same class of problem as one whose producer is not recorded. That manifest is a synthetic `example-*`
+panel that mirrors the emitter's own `examples/forty_tab_minimal.yaml` key for key and marks its two deliberate divergences at the head of the file: spec-legal shed priorities in place of a value the emitter degrades to `UNKNOWN`
+(electrification-bus/distribution-enclosure-simulator#51), and the identity properties a real panel publishes. Read that file before assuming ours has drifted from theirs.
+
+Expect a recapture to move every `$description`'s `version`, which is minted from the wall clock. A diff confined to those thirteen lines means the producer did not move.
+
+### The producer is the specification, executable
+
+`ebus-panel-sim` is not a third-party imitation to be second-guessed. It is published by electrification-bus, the organisation that writes the eBus specification, and is conformed against live panel output — the designated checkpoint for whether a consumer
+reads a conforming tree correctly. Its `.ebus-spec.json` names the specification commit it implements, `spec_lock.json` records ours, and `test_the_emitters_pin_matches_ours` compares them, so a disagreement between this parser and the reference capture is
+a disagreement about one document rather than about two.
+
+So the lesson from the stale capture is not "depend on it less". It is that a dependency nobody can see cannot be maintained: the capture was taken once, nothing recorded what made it, and three emitter releases went by while this repository asserted a
+producer defect as fact. Both producers are now tracked the same way — pinned in `spec_lock.json`, cloned by the same composite action, and watched by `peer-drift.yml`.
+
 ### Two questions, two workflows
 
-The peer checks answer a question whose shape depends on which panelbench you point them at, and the two answers belong in different places.
+The peer checks answer a question whose shape depends on which producer revision you point them at, and the two answers belong in different places.
 
 - **`.github/workflows/ci.yml`** clones both peers at the commits `spec_lock.json` pins, via the `.github/actions/peer-checkouts` composite action, and runs the whole suite against them. The question is _do our vendored bytes match the commit we claim they
   came from?_ — deterministic, answerable on any commit, and fair to block a merge on. It catches an accidental local edit to a vendored file.
-- **`.github/workflows/peer-drift.yml`** runs on a schedule, never on a pull request, and clones panelbench at `peer.ref` — the branch the producer develops on. The question is _has the producer moved past the pin?_ Its answer changes because someone else
-  pushed, so it must not fail an author's unrelated change. It reports the distance from the pin in the job summary either way, and goes red only when the comparison itself fails, so panelbench advancing with a change we do not vendor stays green.
+- **`.github/workflows/peer-drift.yml`** runs on a schedule, never on a pull request, and clones each producer at its `ref` — the branch that producer develops on. The question is _has the producer moved past the pin?_ Its answer changes because someone
+  else pushed, so it must not fail an author's unrelated change. It reports the distance from the pin in the job summary either way, and goes red only when the comparison itself fails, so panelbench advancing with a change we do not vendor stays green.
 
-Both repositories are public, so neither checkout needs a token. If either ever goes private, the checkout step in the composite action is what starts failing, and the fix is a read-scoped PAT in its `token:` — the pin is not involved.
+All three repositories are public, so no checkout needs a token. If either ever goes private, the checkout step in the composite action is what starts failing, and the fix is a read-scoped PAT in its `token:` — the pin is not involved.
 
 The commits come out of `packages/schema-1/src/span_panel_api_schema_1/spec_lock.json` at run time rather than being written into the workflows, so the pin keeps exactly one home. A workflow that restated a commit would agree with the lock file right up
 until the day someone re-vendored and updated only one of them.
@@ -91,7 +123,8 @@ until the day someone re-vendored and updated only one of them.
 
 A failure means the vendored capture and panelbench have diverged. That is information, not an obstacle — decide which side is right:
 
-- **Panelbench moved and we should follow**: re-capture the fixture, and update `peer.commit` in `spec_lock.json` to the panelbench commit you captured from. Both, together — a capture without a commit bump records where the bytes came from as a guess.
+- **Panelbench moved and we should follow**: re-capture the fixture, and update `peers.panelbench.commit` in `spec_lock.json` to the panelbench commit you captured from. Both, together — a capture without a commit bump records where the bytes came from as
+  a guess.
 - **We diverged deliberately** (the reference tree is trimmed and renamed to synthetic `example-*` identifiers, so it is not a verbatim copy): the comparison covers the artifacts that _are_ meant to match. Do not loosen it to accommodate a local edit.
 
 ### Catalogs are pinned by commit, not version

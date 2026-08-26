@@ -15,6 +15,30 @@ the adapter distribution does not, and a 1.0.0 adapter against this bootstrap is
 
 ### Fixed
 
+- **A relay or shed-priority command aimed at a circuit the panel declares non-commandable is refused instead of published.** `set_circuit_relay_target` and `set_circuit_priority_target` were pure string formatting from a circuit id and consulted no
+  declaration at all, so both setters published to a circuit commissioned always-on or never-backup — while the same adapters were already reading exactly that refusal into `SpanCircuitSnapshot.is_user_controllable` and `.is_never_backup`. Both now return
+  `ControlTarget | None`, matching the two controls that already refused, and `set_circuit_relay` / `set_circuit_priority` raise `SpanPanelServerError` the way `set_evse_charge_limit` does.
+
+  Nothing was user-visible, because the Home Assistant integration gates entity creation on `is_user_controllable`. That is not sufficient for two reasons. **Settability changes at runtime** — re-commissioning a circuit in place cycles that child device's
+  `$state` and republishes its `$description` with a new `$settable`, so an entity can outlive its own controllability and a setup-time gate cannot see it. And `set_circuit_relay` is **public API**: any caller can reach it without an entity, and the
+  library is where the refusal contract belongs.
+
+  **The refusal is the eBus specification's rule, not either adapter's.** `switch` 0.3 declares `relay` "Settable when `relay-controllable = true`" and defines `relay-controllable` false as "locked (for example a circuit commissioned as permanently on)",
+  so a consumer publishing to a locked circuit is writing to a property the specification says is not settable on that device. Under the parent/child schema both halves of the condition are on the wire and the relay refuses when **either** says no —
+  `$settable` absent from `switch/relay`, or `switch/relay-controllable` published `false`. The redundancy is deliberate: SPAN reports a firmware defect in which the `$settable` re-toggle on the runtime re-commissioning path is skipped until the service
+  restarts, so a consumer can meet a panel whose declaration is stale while the value is current, and the panel rejects an out-of-policy write regardless of what `$settable` last advertised. Across the two production enclosures captured — 27 circuits — the
+  two agree without exception. The flat schema predates capability nodes and declares settability per device _type_, so it cannot vary per circuit; it spells the same fact `always-on`, and the priority's `never-backup`. Each is the same reading the
+  snapshot already exposes.
+
+  A locked relay keeps a settable priority, which is the combination real panels publish and which `switch` 0.3 and `load-shed` 0.3 scope separately.
+
+- **A control the library refused before resolving an address is no longer invisible to `ControlInterceptor`.** `after_publish` is contracted to see every command, refusals included, but five refusals happened while resolving the target and therefore never
+  reached the publish path at all: a relay declared non-commandable, a priority declared locked, a charger with no settable limit, a panel with no islanding control, and an adopted property that is not settable. A consumer building a security audit on
+  `after_publish` — which is what the Home Assistant integration does — would have had a hole in it exactly where the interesting cases are, the highest-consequence control in the system among them.
+
+  Those now produce an `after_publish` record with `PublishState.FAILED` and a `detail` naming the refusal, before the `SpanPanelServerError` is raised. `before_publish` is deliberately **not** consulted for them: there is nothing to authorise, and a veto
+  would replace a specific reason with "vetoed".
+
 - **A control command that was never sent no longer looks like one that succeeded.** All five setters returned `None` on three separate paths that published nothing: after `close()` (the adapter survives, the bridge does not, so the setter returned having
   done nothing at all), with no paho client, and — the one that matters — while the broker was unreachable. A caller had no way to tell any of them from a breaker that actually opened.
 - **A publish while the broker is known to be down is refused instead of queued.** paho keeps a QoS-1 publish in its outbound queue across a disconnect and sends it when the connection returns, reusing the same client, so a relay command issued during an
@@ -70,6 +94,13 @@ the adapter distribution does not, and a 1.0.0 adapter against this bootstrap is
   nothing to check itself against. Its docstring now says so plainly, and it takes an `ssl_context` only for the caller that _already_ holds the anchor and wants a verified second copy.
 
 ### Changed
+
+- **`ControlCommand.topic` and `PublishOutcome.topic` become `str | None`.** A refusal made while resolving the address has no topic, and a command reported with one would name a string nothing was ever going to publish to. `None` appears only alongside
+  `PublishState.FAILED`. Additive for a consumer that only reads `state` and `detail`; an interceptor that passes `command.topic` somewhere expecting a `str` is the one that has to change, and does so under mypy rather than silently.
+
+- **BREAKING FOR IMPLEMENTERS: `set_circuit_relay_target` and `set_circuit_priority_target` return `ControlTarget | None`.** `SchemaAdapter` declares the wider type, joining `set_dominant_power_source_target` and `set_evse_charge_limit_target`, which have
+  always refused this way. `ADAPTER_CONTRACT_VERSION` does not move, and the direction is why: an adapter still returning a bare `ControlTarget` satisfies the wider declaration — a narrower return is a valid implementation — and simply never exercises the
+  refusal, which is the pre-fix behaviour and no worse than it. The direction the contract version does not protect, a newer adapter against an older bootstrap, is unchanged by this.
 
 - **BREAKING FOR IMPLEMENTERS: the five control-protocol setters return `PublishOutcome` instead of `None`.** `CircuitControlProtocol`, `PanelControlProtocol`, `EvseControlProtocol` and `AdoptedControlProtocol` all move. **This is additive for callers** —
   a call site that ignores the return value compiles and behaves exactly as before — **and breaking for implementers**: any class type-checked against one of these protocols with `-> None` stops conforming. Test fakes, simulators, and any

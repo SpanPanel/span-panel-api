@@ -1,13 +1,21 @@
 """Mapping a v1.0 circuit device onto SpanCircuitSnapshot.
 
-Driven from the tree this distribution ships as package data, captured off a
-real `panel_sim` parent/child tree rather than hand-written, so the shapes are
-the firmware's rather than my idea of them.
+Driven from the tree this distribution ships as package data, captured off the
+eBus emitter rather than hand-written, so the shapes are a conforming
+publisher's rather than my idea of them. See
+`scripts/capture_parent_child_reference.py` and the manifest beside it.
+
+Two kinds of question live here and they take their inputs from different
+places. What a real panel *looks like* comes from the capture. What this parser
+is *obliged* to handle comes from the vendored catalogs, which is why the
+priority-value tests below read `load-shed.json` and mutate a device rather than
+expecting the capture to carry every enum member.
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +25,7 @@ from span_panel_api_schema_1.reference_payloads import device_from_topics, paren
 from span_panel_api_schema_1.circuits import build_circuit
 
 _TREE = parent_child_tree()
+_CATALOGS = Path(__file__).parent.parent / "packages" / "schema-1" / "spec" / "catalogs"
 
 # From the fixture: a 1-pole load, and a 2-pole backfeeding PV breaker.
 KITCHEN_LIGHTS = "0ab966b95f92a6a51ec548485aa85f54"
@@ -69,8 +78,8 @@ def test_energy_accumulators_are_swapped_to_the_circuit_perspective(solar: Disco
     *from* the circuit, which the circuit produced."""
     circuit = build_circuit(solar)
 
-    assert solar.get_property("meter", "imported-energy") == "141.66666666666666"
-    assert circuit.produced_energy_wh == pytest.approx(141.666666, rel=1e-6)
+    assert solar.get_property("meter", "imported-energy") == "182.16666666666666"
+    assert circuit.produced_energy_wh == pytest.approx(182.166666, rel=1e-6)
     assert circuit.consumed_energy_wh == 0.0
 
 
@@ -128,7 +137,7 @@ def test_relay_controllable_defaults_to_controllable_when_absent(kitchen: Discov
 def test_sheddable_is_computed_not_read(kitchen: DiscoveredDevice, solar: DiscoveredDevice) -> None:
     """Retired with no replacement property: the guide defines it as
     `priority != NEVER and relay-controllable`."""
-    # Kitchen: priority UNKNOWN (not NEVER) and controllable -> sheddable
+    # Kitchen: priority SOC_THRESHOLD (not NEVER) and controllable -> sheddable
     assert build_circuit(kitchen).is_sheddable is True
     # Solar: priority NEVER and not controllable -> not sheddable
     assert solar.get_property("load-shed", "priority") == "NEVER"
@@ -160,6 +169,56 @@ def test_an_unannounced_settable_means_settable(kitchen: DiscoveredDevice) -> No
     kitchen.update_description(json.dumps(description))
 
     assert build_circuit(kitchen).is_never_backup is False
+
+
+def _catalogued_priorities() -> list[str]:
+    """Every value `load-shed` 0.3 declares for `priority`, in catalog order.
+
+    Read from the vendored catalog rather than listed here, so the obligation
+    this drives is the specification's current one. A value added upstream
+    arrives in this test the moment the catalog is re-vendored, which is the
+    only way a contract test stays a contract test.
+    """
+    with (_CATALOGS / "load-shed.json").open(encoding="utf-8") as handle:
+        catalog = json.load(handle)
+    declared = str(catalog["properties"]["priority"]["format"])
+    return [value.strip() for value in declared.split(",") if value.strip()]
+
+
+def test_the_catalogued_priority_values_are_the_ones_worth_testing() -> None:
+    """The premise, so a catalog that loses `UNKNOWN` does not quietly end the test below."""
+    values = _catalogued_priorities()
+
+    assert "UNKNOWN" in values, "`load-shed` no longer declares UNKNOWN; the contract below has changed"
+    assert set(values) >= {"UNKNOWN", "NEVER", "OFF_GRID"}, "the baseline every host must publish has moved"
+
+
+@pytest.mark.parametrize("declared", _catalogued_priorities())
+def test_every_catalogued_priority_is_carried_through_rather_than_repaired(kitchen: DiscoveredDevice, declared: str) -> None:
+    """Each declared enum member reaches the snapshot as itself.
+
+    **Synthetic, and from the catalog rather than from the capture, on purpose.**
+    These are two different obligations and only one of them is about panels.
+    `load-shed` 0.3 declares the format and calls `UNKNOWN`, `NEVER` and
+    `OFF_GRID` the baseline for every host, so a parser that mishandles any of
+    them is broken against the specification no matter what hardware emits. The
+    reference capture answers the other question -- what a real panel looks like
+    -- and no production capture has ever published `UNKNOWN` (27 circuits,
+    two enclosures), so putting one in the fixture would misrepresent a panel in
+    order to test a contract. Contract obligations come from the catalog;
+    representativeness comes from the capture.
+
+    Sheddability is asserted alongside because it is the derivation that would
+    hide a repaired value: `priority != NEVER and relay-controllable` makes every
+    member except `NEVER` sheddable, which is the answer the rule gives and not
+    one this reader should soften.
+    """
+    kitchen.update_property("load-shed", "priority", declared)
+
+    circuit = build_circuit(kitchen)
+
+    assert circuit.priority == declared
+    assert circuit.is_sheddable is (declared != "NEVER")
 
 
 # ---------------------------------------------------------------------------

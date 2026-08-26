@@ -24,6 +24,7 @@ from ebus_sdk import Controller
 
 from span_panel_api.models import ControlTarget
 from span_panel_api_schema_1.charge_limit import ChargeLimitProperty, ChargeLimitSurface, resolve_charge_limit
+from span_panel_api_schema_1.circuits import priority_is_settable, relay_is_settable
 from span_panel_api_schema_1.const import (
     HOMIE_DOMAIN,
     HOMIE_VERSION,
@@ -196,10 +197,44 @@ class SchemaOneAdapter:
     # The adapter names the topic and the transport publishes it, so commanding
     # a panel needs no connection here either.
 
-    def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget:
+    def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget | None:
+        """Where this circuit's relay is commanded, or None if it may not be.
+
+        **None where the panel declares the relay non-commandable**, by either of
+        the two signals `relay_is_settable` reads. `_target` is pure string
+        formatting from a device id, so building the topic unconditionally aimed
+        a write at a circuit the panel commissioned as always-on — every part of
+        the refusal was already in the tree, and nothing consulted it.
+
+        The consumer gating entity creation on `is_user_controllable` is not a
+        substitute. Settability changes at runtime — re-commissioning a circuit
+        in place cycles that child's `$state` and republishes its `$description`
+        — so an entity can outlive its own controllability, and this is a public
+        method any caller can reach without an entity at all.
+
+        None also where no such device is in the tree, rather than formatting a
+        topic for a circuit id nothing published.
+        """
+        device = self._child(circuit_id)
+        if device is None or not relay_is_settable(device):
+            return None
         return self._target(circuit_id, NODE_SWITCH, PROP_RELAY)
 
-    def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget:
+    def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget | None:
+        """Where this circuit's shed priority is written, or None if it may not be.
+
+        The signal is `$settable` on `load-shed/priority` — the same attribute
+        `priority_is_settable` reads for `SpanCircuitSnapshot.is_never_backup`,
+        so a circuit this refuses is exactly one the snapshot already reports as
+        never-backup. One reading, two surfaces.
+
+        Deliberately independent of the relay: a locked relay keeps a settable
+        priority on real panels, and `switch` 0.3 and `load-shed` 0.3 scope the
+        two separately.
+        """
+        device = self._child(circuit_id)
+        if device is None or not priority_is_settable(device):
+            return None
         return self._target(circuit_id, NODE_LOAD_SHED, PROP_PRIORITY)
 
     def set_dominant_power_source_target(self) -> ControlTarget | None:
@@ -367,6 +402,19 @@ class SchemaOneAdapter:
 
     def _children(self) -> list[DiscoveredDevice]:
         return list(self._controller.get_descendants(self._serial_number))
+
+    def _child(self, device_id: str) -> DiscoveredDevice | None:
+        """One descendant by wire id, or None if the tree carries no such device.
+
+        Searched rather than indexed because the tree is repopulated on every
+        reconnect and a cached map would answer for a panel that is being
+        replaced. Thirteen devices on a full enclosure makes the linear scan
+        irrelevant beside a broker round trip.
+        """
+        for device in self._children():
+            if device.device_id == device_id:
+                return device
+        return None
 
     def _awaiting_descriptions(self, root: DiscoveredDevice) -> tuple[str, ...]:
         """Devices the tree declares that have not described themselves yet.

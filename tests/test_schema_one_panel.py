@@ -108,9 +108,13 @@ def test_voltages_come_from_the_panel_meter(fields: PanelFields) -> None:
 
 
 def test_power_flows(fields: PanelFields) -> None:
-    assert fields.power_flow_pv == 8500.0
-    assert fields.power_flow_battery == -3500.0
-    assert fields.power_flow_grid == -2347.0
+    """Relayed in the panel's own frame, which `power-flows` 0.3 defines as the
+    node balance: every term positive when power flows into the thing it names,
+    so `pv` is negative while producing and the four sum to zero. The adapter
+    negates none of them, and this is what says so."""
+    assert fields.power_flow_pv == -8500.0
+    assert fields.power_flow_battery == 3500.0
+    assert fields.power_flow_grid == 2347.0
     assert fields.power_flow_site == 2653.0
 
 
@@ -133,10 +137,10 @@ def test_main_meter_energy_maps_imported_to_consumed(fields: PanelFields) -> Non
     """Opposite of a circuit: the panel imports from the grid, so imported
     energy is what the house consumed."""
     upstream = _device("lugs-upstream")
-    assert upstream.get_property("meter", "imported-energy") == "44.21666666666666"
+    assert upstream.get_property("meter", "imported-energy") == "44.05"
 
-    assert fields.main_meter_energy_consumed_wh == pytest.approx(44.2166, rel=1e-4)
-    assert fields.main_meter_energy_produced_wh == pytest.approx(141.6666, rel=1e-4)
+    assert fields.main_meter_energy_consumed_wh == pytest.approx(44.05, rel=1e-4)
+    assert fields.main_meter_energy_produced_wh == pytest.approx(97.45, rel=1e-4)
 
 
 def test_per_phase_currents(fields: PanelFields) -> None:
@@ -149,7 +153,7 @@ def test_per_phase_currents(fields: PanelFields) -> None:
 
 def test_feedthrough_comes_from_the_downstream_lugs(fields: PanelFields) -> None:
     assert fields.feedthrough_power_w == -5847.0
-    assert fields.feedthrough_energy_consumed_wh == pytest.approx(44.2166, rel=1e-4)
+    assert fields.feedthrough_energy_consumed_wh == pytest.approx(44.05, rel=1e-4)
 
 
 def test_lugs_are_found_by_declared_direction_not_device_id() -> None:

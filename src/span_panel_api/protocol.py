@@ -225,8 +225,8 @@ class SchemaAdapter(Protocol):
 
     def find_node_by_type(self, type_str: str) -> str | None: ...
 
-    def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget:
-        """Where a relay command goes, and the property that reports it.
+    def set_circuit_relay_target(self, circuit_id: str) -> ControlTarget | None:
+        """Where a relay command goes, and the property that reports it, or None.
 
         Renamed from `set_circuit_relay_topic`, which returned a bare string.
         The rename is deliberate rather than a return-type change under the old
@@ -236,10 +236,36 @@ class SchemaAdapter(Protocol):
         discovery, where the remedy -- upgrade both packages together -- can
         still be named. That is also why `ADAPTER_CONTRACT_VERSION` does not
         move: the change is additive plus a removal, not a redefinition.
+
+        **None means the panel declares this circuit's relay non-commandable.**
+        The rule is the eBus `switch` capability's rather than either adapter's:
+        `relay` is *"Settable when `relay-controllable = true`"*, and
+        `relay-controllable` false means "locked (for example a circuit
+        commissioned as permanently on)". Under v1.0 both halves of that are on
+        the wire and either saying no is a refusal; the flat schema, which
+        predates capability nodes, spells the same fact `always-on`. The
+        transport must refuse rather than publish, the same contract
+        `set_evse_charge_limit_target` states: an address that resolves is the
+        authorisation, and a topic built by string formatting alone authorises
+        nothing.
+
+        Widening the return type does not move `ADAPTER_CONTRACT_VERSION`
+        either, and the direction is why. An older adapter returns a
+        `ControlTarget` where this now permits `ControlTarget | None`, which is
+        a *narrower* return and therefore still a valid implementation -- it
+        simply never exercises the refusal, which is exactly the pre-fix
+        behaviour and no worse than it. A newer adapter against an older
+        bootstrap is the case that would break, and the contract version has
+        never protected that direction: the bootstrap is the one that reads it.
         """
 
-    def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget:
-        """Where a shed-priority command goes, and the property that reports it."""
+    def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget | None:
+        """Where a shed-priority command goes, and the property that reports it, or None.
+
+        None where the panel declares the priority locked -- `never-backup`
+        under the flat schema, `$settable` on `load-shed/priority` under v1.0 --
+        which is the same reading `SpanCircuitSnapshot.is_never_backup` reports.
+        """
 
     def set_dominant_power_source_target(self) -> ControlTarget | None:
         """Where a dominant-power-source command goes, or None if the panel has no such control."""

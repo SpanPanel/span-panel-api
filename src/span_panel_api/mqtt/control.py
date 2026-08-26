@@ -72,10 +72,16 @@ class PublishOutcome:
     `detail` is free text for a human reading a log or an audit row -- which
     refusal, which deadline. **It never carries a credential**, and nothing
     should parse it; `state` is the machine-readable half.
+
+    `topic` is None for a command that never had one: a refusal made while
+    resolving the address -- a relay the panel declares non-commandable, a
+    charger with no settable limit -- happens before any topic exists, and
+    naming one anyway would put a string in an audit row that nothing was ever
+    going to publish to. `state` is `FAILED` whenever it is None.
     """
 
     state: PublishState
-    topic: str
+    topic: str | None
     value: str
     no_op: bool = False
     detail: str | None = None
@@ -110,13 +116,24 @@ class ControlCommand:
     payload, so the identifying fields are the ones actually on the wire rather
     than the caller's arguments -- a dominant-power-source request of `BATTERY`
     arrives here as the `OFF_GRID` that will be published under v1.0.
+
+    **A command the library refused before resolving an address still arrives
+    here**, because `after_publish` is contracted to see every command and an
+    audit missing exactly the commands a panel declared unsafe is worse than no
+    audit. Such a command carries what is known and no more: `topic` is None,
+    and the identifying fields fall back to the caller's arguments, since the
+    wire spellings the adapter would have supplied are the very thing that did
+    not resolve. `node_id` and `property_id` are empty strings where even those
+    are unknown -- under the flat schema a relay lives at
+    `<serial>/<circuit>/relay` and under v1.0 at `<circuit>/switch/relay`, and
+    the bootstrap is the one component that must not know which.
     """
 
     device_id: str
     node_id: str
     property_id: str
     value: str
-    topic: str
+    topic: str | None
 
 
 @runtime_checkable
@@ -156,6 +173,16 @@ class ControlInterceptor(Protocol):
 
     async def after_publish(self, command: ControlCommand, outcome: PublishOutcome) -> None:
         """Called with the result of every command, refusals included.
+
+        Every command, including one this library refused before it had a topic
+        to publish to -- a relay the panel declares non-commandable is the
+        highest-consequence control in the system, and an audit that recorded
+        the attempts that reached the wire and not the ones that were stopped
+        would have its hole exactly where the interesting cases are. Those
+        arrive with `PublishState.FAILED`, a `detail` naming the refusal, and
+        `command.topic` / `outcome.topic` set to None. `before_publish` is not
+        consulted for them: there is nothing to authorise, and a veto would
+        replace a specific reason with "vetoed".
 
         **Fired as a task and not awaited on the control path.** A sink that
         merely hangs -- a slow event bus, a blocked writer -- would otherwise

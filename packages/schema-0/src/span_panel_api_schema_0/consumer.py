@@ -101,6 +101,38 @@ class HomieDeviceConsumer:
         """Delegate to accumulator.register_property_callback()."""
         return self._acc.register_property_callback(callback)
 
+    def relay_is_settable(self, node_id: str) -> bool:
+        """Whether this circuit's relay may be commanded.
+
+        The rule is the eBus ``switch`` capability's — a relay is settable only
+        while it is controllable, and a circuit commissioned permanently on is
+        locked — and it predates the vocabulary that states it. Flat has no
+        capability nodes and no per-circuit ``$settable`` to read: its schema
+        document declares ``relay`` settable once, for the *device type*, which
+        cannot vary per circuit. So the whole signal here is the published
+        ``always-on`` boolean, which is the flat spelling of
+        ``relay-controllable`` inverted, and the same one ``_build_circuit``
+        already reads into ``is_user_controllable``.
+
+        One signal rather than the parent/child adapter's two, and that is a
+        statement about the schema rather than a weaker rule: flat publishes no
+        second opinion to consult.
+
+        Absent reads as commandable, for the reason the flag exists — it marks
+        the exception, and defaulting to locked would refuse every relay on a
+        panel that omits it.
+        """
+        return not _parse_bool(self._acc.get_prop(node_id, "always-on"))
+
+    def priority_is_settable(self, node_id: str) -> bool:
+        """Whether this circuit's shed priority may be written.
+
+        ``never-backup`` is the flat spelling of what v1.0 expresses as
+        mutability of ``load-shed/priority``, and it is already read into
+        ``SpanCircuitSnapshot.is_never_backup``. Same reading, second surface.
+        """
+        return not _parse_bool(self._acc.get_prop(node_id, "never-backup"))
+
     def circuit_nodes_missing_names(self) -> list[str]:
         """Return circuit-like node IDs that have no ``name`` property yet."""
         missing: list[str] = []

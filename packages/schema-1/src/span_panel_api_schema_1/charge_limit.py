@@ -30,7 +30,7 @@ mentions either name.
 **Settability is read, never assumed.** The two properties of a spelling differ
 by exactly one Homie attribute — the ceiling declares no ``settable``, the limit
 declares ``settable: true`` — so a reader that treated an absent attribute as
-"settable", the way :func:`circuits._priority_is_settable` correctly does for
+"settable", the way :func:`circuits.priority_is_settable` correctly does for
 ``load-shed/priority``, would offer to write the installer's ceiling. The
 defaults are opposite because the questions are: there, locking is the exception
 a panel announces; here, writability is.

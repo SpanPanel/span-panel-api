@@ -21,10 +21,11 @@ Three checks with different reach, deliberately:
   a vendored copy, so it needs neither network nor a sibling checkout.
 - **Coverage** — this adapter against a captured tree from the SPAN simulator,
   the producer our development is done against. Always runs, from a vendored copy.
-- **Provenance** — the vendored copies against their sources, which need
-  `EBUS_SPEC_DIR` / `PANELBENCH_DIR` to name checkouts. Skipped without them on a
-  developer machine and **failed** without them under `CI`, where the workflow
-  clones both: see `_unconfigured`, and DEVELOPMENT.md's "A skip here is not a pass".
+- **Provenance** — the vendored copies and the recorded pins against their
+  sources, which need `EBUS_SPEC_DIR` / `PANELBENCH_DIR` / `PANEL_SIM_DIR` to name
+  checkouts. Skipped without them on a developer machine and **failed** without
+  them under `CI`, where the workflow clones all three: see `_unconfigured`, and
+  DEVELOPMENT.md's "A skip here is not a pass".
 
 Provenance proves we copied the right bytes; it cannot prove we understood them.
 The first two are where the understanding gets checked, which is why they are the
@@ -68,20 +69,43 @@ def _lock() -> dict[str, object]:
     return loaded
 
 
-def _peer() -> dict[str, object]:
-    peer = _lock()["peer"]
-    assert isinstance(peer, dict)
+PANELBENCH = "panelbench"
+"""The SPAN-side publisher this parser is developed against."""
+
+PANEL_SIM = "ebus-panel-sim"
+"""The eBus specification's own executable publisher, and the producer of the
+reference tree. Same organisation as the specification, conformed against live
+panel output — the spec in runnable form rather than a third-party imitation of
+it. Pinned here for the reason panelbench is: an unrecorded producer is a
+dependency nobody can see, and this one went stale for exactly that reason."""
+
+
+def _peers() -> dict[str, object]:
+    peers = _lock()["peers"]
+    assert isinstance(peers, dict)
+    return peers
+
+
+def _peer(name: str = PANELBENCH) -> dict[str, object]:
+    """One peer by name.
+
+    Keyed rather than positional: both readers of this block — this module and
+    `.github/actions/peer-checkouts` — want a specific peer, never "the first
+    one", so a list would make every call site restate a lookup.
+    """
+    peer = _peers()[name]
+    assert isinstance(peer, dict), f"peers.{name} should be an object"
     return peer
 
 
-def _peer_str(key: str) -> str:
-    value = _peer()[key]
-    assert isinstance(value, str), f"peer.{key} should be a string"
+def _peer_str(key: str, name: str = PANELBENCH) -> str:
+    value = _peer(name)[key]
+    assert isinstance(value, str), f"peers.{name}.{key} should be a string"
     return value
 
 
 def _peer_fixtures() -> dict[str, str]:
-    """The captures vendored from the peer, by kind.
+    """The captures vendored from panelbench, by kind.
 
     Two of them, answering different questions: `tree` is `$description`
     documents and is what the conformance profile is computed from; `wire` adds
@@ -89,8 +113,13 @@ def _peer_fixtures() -> dict[str, str]:
     parser end to end. A consumer checked against declarations alone has been
     checked for understanding the shape of a panel, not for building the right
     snapshot from one.
+
+    Paths *inside panelbench*, because these are byte copies of files that live
+    there. The other peer's artifact is generated rather than copied, so it is
+    recorded under `produces` with paths inside this repository — one key would
+    have meant two things depending on which peer you read it from.
     """
-    fixtures = _peer()["fixtures"]
+    fixtures = _peer(PANELBENCH)["fixtures"]
     assert isinstance(fixtures, dict)
     return {str(kind): str(path) for kind, path in fixtures.items()}
 
@@ -101,8 +130,8 @@ def _unconfigured(reason: str) -> NoReturn:
     Locally, skipping is right — not every developer keeps sibling checkouts, and a
     provenance check is not what they are running the suite for.
 
-    In CI it is the opposite. The workflow clones both peers and exports both
-    variables, so an unset or wrong path there does not mean "unavailable", it means
+    In CI it is the opposite. The workflow clones every peer and exports every
+    variable, so an unset or wrong path there does not mean "unavailable", it means
     the wiring that makes these checks run has come undone. Skipping on that reads in
     the summary line exactly like passing, which is how these checks stayed silent for
     the nine days it took the vendored capture to go stale. A check that can be
@@ -115,7 +144,7 @@ def _unconfigured(reason: str) -> NoReturn:
     """
     if os.environ.get("CI"):
         pytest.fail(
-            f"{reason}. CI configures both peer checkouts, so this is the provenance "
+            f"{reason}. CI configures every peer checkout, so this is the provenance "
             "wiring being broken rather than a check that is unavailable — and a skip "
             "here is indistinguishable from a pass."
         )
@@ -677,6 +706,60 @@ def test_the_peer_record_matches_the_simulator_lockfile() -> None:
     assert theirs["synced_commit"] == _peer_str("synced_commit"), (
         f"the simulator now pins {theirs['synced_commit']}, we recorded {_peer_str('synced_commit')}. "
         "Re-vendor and update both, or the two sides are reading different vocabularies."
+    )
+
+
+def test_the_emitters_pin_matches_ours() -> None:
+    """The producer of the reference tree reads the same specification we do.
+
+    `ebus-panel-sim` publishes an `.ebus-spec.json` of exactly this shape, from
+    the same organisation that writes the specification — so this is not two
+    third parties happening to agree, it is the executable form of the spec
+    stating which commit it implements. When the two pins match, a divergence
+    between our parser and that capture is a disagreement about the same
+    document rather than about two different ones, which is the only condition
+    under which the capture is evidence at all.
+
+    That is the whole reason the pin belongs in a lockfile instead of only in a
+    README: the reference tree went stale precisely because nothing could ask
+    this question mechanically.
+    """
+    sim_dir = _checkout("PANEL_SIM_DIR", "an ebus-panel-sim checkout to verify the emitter pin")
+
+    with (sim_dir / ".ebus-spec.json").open() as handle:
+        theirs = json.load(handle)
+    assert theirs["role"] == _peer_str(
+        "role", PANEL_SIM
+    ), "the emitter is not publishing; this pairing is not what it claims"
+    assert theirs["synced_commit"] == _peer_str("synced_commit", PANEL_SIM), (
+        f"the emitter now pins {theirs['synced_commit']}, we recorded {_peer_str('synced_commit', PANEL_SIM)}. "
+        "Re-capture and update both, or the capture was produced against a vocabulary this parser is not reading."
+    )
+
+
+def test_the_captured_tree_names_the_emitter_release_that_made_it() -> None:
+    """The capture script, the lockfile and the checkout agree on one version.
+
+    Three places could disagree, and the failure mode of each is the same: bytes
+    in the wheel attributed to a producer that did not make them. The script
+    reads its expected version *out of this lockfile* rather than carrying a
+    constant of its own, so there is one pin and this test proves the checkout
+    is on it.
+
+    Skipped without a checkout like every other provenance check, and failed
+    under CI for the same reason — a skip reads in a summary line exactly like a
+    pass.
+    """
+    sim_dir = _checkout("PANEL_SIM_DIR", "an ebus-panel-sim checkout to verify the capture's producer")
+
+    recorded = _peer_str("version", PANEL_SIM)
+    source = (sim_dir / "src" / "ebus_panel_sim" / "__init__.py").read_text(encoding="utf-8")
+    installed = re.search(r'^__version__ = "([^"]+)"', source, re.MULTILINE)
+
+    assert installed is not None, f"{sim_dir} carries no __version__; is it an ebus-panel-sim checkout?"
+    assert installed.group(1) == recorded, (
+        f"{sim_dir} is ebus-panel-sim {installed.group(1)}, and spec_lock.json records the reference "
+        f"tree as a capture of {recorded}. Move the checkout, or re-capture and re-pin together."
     )
 
 

@@ -21,6 +21,10 @@ _TREE = parent_child_tree()
 
 PANEL = "example-40t-001"
 SOLAR_CIRCUIT = "573066aaddd7b75114c4563ce3af18c4"
+KITCHEN_CIRCUIT = "0ab966b95f92a6a51ec548485aa85f54"
+"""A controllable circuit. `SOLAR_CIRCUIT` is the capture's locked one, so it is
+the wrong circuit to ask a question about topic *shape* -- it has no relay topic
+at all. See `test_schema_one_control_refusal.py`."""
 
 
 def _schema() -> V2HomieSchema:
@@ -382,8 +386,11 @@ def test_field_metadata_is_empty_before_discovery() -> None:
 def test_command_topics_address_the_child_device(adapter: SchemaOneAdapter) -> None:
     """Under parent/child a circuit is its own device, so its command topic is
     rooted at the circuit rather than nested under the panel."""
-    assert adapter.set_circuit_relay_target(SOLAR_CIRCUIT).topic == f"ebus/5/{SOLAR_CIRCUIT}/switch/relay/set"
-    assert adapter.set_circuit_priority_target(SOLAR_CIRCUIT).topic == f"ebus/5/{SOLAR_CIRCUIT}/load-shed/priority/set"
+    relay = adapter.set_circuit_relay_target(KITCHEN_CIRCUIT)
+    priority = adapter.set_circuit_priority_target(KITCHEN_CIRCUIT)
+
+    assert relay is not None and relay.topic == f"ebus/5/{KITCHEN_CIRCUIT}/switch/relay/set"
+    assert priority is not None and priority.topic == f"ebus/5/{KITCHEN_CIRCUIT}/load-shed/priority/set"
 
 
 def test_dominant_power_source_writes_the_panel_assertion(adapter: SchemaOneAdapter) -> None:

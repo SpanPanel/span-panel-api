@@ -24,13 +24,13 @@ from conftest import FAST_CONTROL_DEADLINES, acking_bridge
 
 from ebus_sdk.homie import DiscoveredDevice
 
+from reference_payloads.schema_one import device_from_topics, parent_child_tree
 from span_panel_api.exceptions import SpanPanelServerError
 from span_panel_api.models import V2HomieSchema
 from span_panel_api_schema_1 import SchemaOneAdapter
 from span_panel_api_schema_1.charge_limit import resolve_charge_limit
 from span_panel_api_schema_1.devices import build_evse
 from span_panel_api_schema_1.field_metadata import build_field_metadata
-from span_panel_api_schema_1.reference_payloads import device_from_topics, parent_child_tree
 
 _TREE = parent_child_tree()
 

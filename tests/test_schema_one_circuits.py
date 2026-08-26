@@ -1,6 +1,6 @@
 """Mapping a v1.0 circuit device onto SpanCircuitSnapshot.
 
-Driven from the tree this distribution ships as package data, captured off the
+Driven from the reference tree in `tests/reference_payloads`, captured off the
 eBus emitter rather than hand-written, so the shapes are a conforming
 publisher's rather than my idea of them. See
 `scripts/capture_parent_child_reference.py` and the manifest beside it.
@@ -21,7 +21,7 @@ import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
-from span_panel_api_schema_1.reference_payloads import device_from_topics, parent_child_tree
+from reference_payloads.schema_one import device_from_topics, parent_child_tree
 from span_panel_api_schema_1.circuits import build_circuit
 
 _TREE = parent_child_tree()

@@ -1,7 +1,7 @@
 """Drive the parser end to end from what the simulator actually publishes.
 
-Every other schema_1 test runs on the tree this distribution ships as package
-data, which was captured off the upstream *generic* eBus panel simulator. That fixture is fine
+Every other schema_1 test runs on the reference tree in
+`tests/reference_payloads`, which was captured off the upstream *generic* eBus panel simulator. That fixture is fine
 for exercising the mapper, but it is not SPAN: it has never carried the
 extensions and divergences that are SPAN's own vocabulary, which is precisely
 the part a generic panel cannot produce.

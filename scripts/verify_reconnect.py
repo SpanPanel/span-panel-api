@@ -39,7 +39,7 @@ tree. schema_1 registers no entry point yet, so its factory is named outright:
         --broker-host 127.0.0.1 --broker-port 1883 --no-tls \
         --data-model-version 1.0 \
         --adapter span_panel_api_schema_1:SchemaOneAdapter \
-        --seed packages/schema-1/src/span_panel_api_schema_1/reference_payloads/parent_child_tree.json
+        --seed tests/reference_payloads/parent_child_tree.json
 
 Exits non-zero if any check fails.
 """

@@ -22,6 +22,7 @@ import json
 from ebus_sdk.homie import DiscoveredDevice
 import pytest
 
+from reference_payloads.schema_one import device_from_topics, parent_child_tree
 from span_panel_api.models import (
     ADOPTION_IDENTITY_NODE,
     ADOPTION_TOPOLOGY_NODE,
@@ -33,7 +34,6 @@ from span_panel_api.models import (
 )
 from span_panel_api_schema_1.extension import build_extension_properties
 from span_panel_api_schema_1.field_metadata import addressed_rows, build_discovery
-from span_panel_api_schema_1.reference_payloads import device_from_topics, parent_child_tree
 from span_panel_api_schema_1.snapshot import build_snapshot
 
 PANEL_DEVICE_ID = "example-40t-001"

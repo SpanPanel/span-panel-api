@@ -35,7 +35,7 @@
       "capture_script": "scripts/capture_parent_child_reference.py",
       "manifest": "scripts/reference_panel.yaml",
       "produces": {
-        "tree": "packages/schema-1/src/span_panel_api_schema_1/reference_payloads/parent_child_tree.json"
+        "tree": "tests/reference_payloads/parent_child_tree.json"
       }
     }
   },

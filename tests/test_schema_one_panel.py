@@ -1,6 +1,6 @@
 """Panel-level mapping from the v1.0 tree.
 
-Driven from the tree this distribution ships as package data, captured off a
+Driven from the reference tree in `tests/reference_payloads`, captured off a
 real `panel_sim` parent/child tree.
 """
 
@@ -12,8 +12,8 @@ import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
+from reference_payloads.schema_one import device_from_topics, parent_child_tree
 from span_panel_api_schema_1.const import NODE_GRID, TYPE_BESS, TYPE_PV
-from span_panel_api_schema_1.reference_payloads import device_from_topics, parent_child_tree
 from span_panel_api_schema_1.panel import (
     PanelFields,
     build_unmapped_tabs,

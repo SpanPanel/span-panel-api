@@ -2,7 +2,7 @@
 #
 # Read by `scripts/capture_parent_child_reference.py`, which drives the eBus
 # emitter (`ebus-panel-sim`) with it and records the retained topics as
-# `packages/schema-1/src/span_panel_api_schema_1/reference_payloads/parent_child_tree.json`.
+# `tests/reference_payloads/parent_child_tree.json`.
 # Recorded in `spec_lock.json` as `peers.ebus-panel-sim.manifest`, so the capture's
 # input is pinned the same way its producer is: a capture whose input is not in the
 # tree is the same class of problem as one whose producer version is not written down.

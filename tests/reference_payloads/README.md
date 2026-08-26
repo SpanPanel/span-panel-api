@@ -1,13 +1,39 @@
 # Reference payloads
 
-Shipped as package data and read through `span_panel_api_schema_1.reference_payloads`, never by path — a consumer that installs this distribution gets these bytes, and a consumer that pins a version gets the bytes that version's parser was written against.
+Captures of what a panel actually serves, read by this repository's test suite through `reference_payloads.bootstrap` and `reference_payloads.schema_one`.
+
+**These are repository fixtures, not package data.** Until 3.1.0 they sat inside `src/span_panel_api/` and `packages/schema-1/src/span_panel_api_schema_1/`, so both wheels carried them — not through any packaging declaration, but because a directory inside
+a package directory ships. Nothing at runtime read them, and nothing does now. `tests/test_packaging.py` fails if a payload directory reappears inside a shipped package, and CI asserts the same against the built wheels.
+
+## `homie_schema.json`
+
+The `GET /api/v2/homie/schema` response, captured from a live SPAN Panel running firmware `spanos2/r202603/05`. Unauthenticated endpoint. Serial numbers are masked (last 4 chars replaced with `XXXX`).
+
+Schema hash `sha256:d347556a07d98f40` — compare against `typesSchemaHash` in a live response to detect a schema change across firmware versions. `span_panel_api_schema_0.const.SCHEMA_ANCHOR` is pinned to this value, and `tests/test_schema_provenance.py`
+fails when the two diverge.
+
+### Node types present
+
+| Node Type                                        | Properties | Notes                                              |
+| ------------------------------------------------ | ---------- | -------------------------------------------------- |
+| `energy.ebus.device.distribution-enclosure.core` | 17         | Panel-wide state, network, hardware                |
+| `energy.ebus.device.lugs`                        | 7          | Upstream (main meter) and downstream (feedthrough) |
+| `energy.ebus.device.circuit`                     | 16         | Per-circuit — one node per commissioned circuit    |
+| `energy.ebus.device.bess`                        | 12         | Battery — optional, only if commissioned           |
+| `energy.ebus.device.pv`                          | 7          | Solar — optional, only if commissioned             |
+| `energy.ebus.device.evse`                        | 9          | EV charger — optional, only if commissioned        |
+| `energy.ebus.device.pcs`                         | 15         | Power Control System — optional                    |
+| `energy.ebus.device.power-flows`                 | 4          | Aggregated power flows (W)                         |
 
 ## `parent_child_tree.json`
 
 Retained topics captured off the eBus emitter's parent/child tree for a 40-space panel: 13 devices — the panel, both lugs, a BESS with its MID, a PV, an EVSE, and the circuits.
 
 Shape is `{device_id: {topic: payload}}`, every value a string, exactly as the broker retains them. `$description` is therefore a **JSON string**, not a nested object; `device_from_topics` replays it the way the transport does. `bess-mid` is typed
-`energy.ebus.device.mid`, not `.bess` — a consumer filtering the tree by type marker has to expect the MID to survive a BESS filter.
+`energy.ebus.device.mid`, not `.bess` — a reader filtering the tree by type marker has to expect the MID to survive a BESS filter.
+
+`devices_from_tree` and `device_from_topics` live in `schema_one.py` beside the capture rather than in whichever test first needed them: a tree is not directly usable, every reader of it has to replay the retained topics through `DiscoveredDevice` first,
+and splitting the two would put the same twelve lines in each of the modules that read it.
 
 ### Provenance
 
@@ -34,7 +60,7 @@ producer is not written down. It mirrors `examples/forty_tab_minimal.yaml` key f
    production enclosures we hold captures from — 27 circuits — no panel has ever published `UNKNOWN`, so this manifest uses values a real panel publishes. **`UNKNOWN` is still a legal enum member and this parser must handle it**; that obligation comes from
    `load-shed` 0.3's declared `$format` and is tested from the catalog in `tests/test_schema_one_circuits.py`, not from this capture. Contract obligations come from the catalog; representativeness comes from the capture.
 2. **Identity properties.** The BESS's part/serial/firmware, the MID's model, firmware and hardware version, and the PV's firmware are all published by real panels and unset in the example. A capture omitting them understates what a consumer has to parse —
-   which is what left four library tests injecting those values by hand, reading as coverage while asking nothing about what a panel sends. Every value is synthetic (`example-40t-001`, `EXAMPLE-BESS-40T-001`), because these bytes ship in a wheel.
+   which is what left four library tests injecting those values by hand, reading as coverage while asking nothing about what a panel sends. Every value is synthetic (`example-40t-001`, `EXAMPLE-BESS-40T-001`).
 
 The cost of that choice is real: the capture is no longer reproducible by running an example anyone can find in the emitter. The committed manifest is what buys it back.
 

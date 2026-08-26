@@ -142,6 +142,17 @@ install of the adapter distribution does not, and a 1.0.0 adapter against this b
   would have meant a caller passing both got system trust while believing it had pinned the panel CA — a security control that appears to be on and is off. When both are supplied, a dedicated client is built for the call and closed after it. The cost is
   named rather than hidden: those calls lose the injected client's connection pool, timeout and header policy. Acceptable because every caller here is bootstrap — registration, detection, schema, FQDN, status — a handful of calls per config entry.
 
+### Removed
+
+- **BREAKING: `span_panel_api.reference_payloads` is gone, and the wheel no longer carries `homie_schema.json`.** The captured `GET /api/v2/homie/schema` response is a fixture of this repository's test suite now, at
+  `tests/reference_payloads/homie_schema.json`, read through `homie_schema()` / `homie_schema_types()` there. Anyone importing the module from an installed distribution has to vendor the bytes instead — and should record which release they were taken from,
+  asserting that against `importlib.metadata.version("span-panel-api")`, so a pin that moves past a stale copy fails loudly rather than checking declarations against a schema no panel runs. That version claim is available to any consumer without a
+  checkout, which is what makes vendoring safe and is the whole reason this can be removed.
+
+  It shipped in the first place to spare consumers a copy that goes stale in silence, which was a real problem badly solved: no runtime path ever read the file, so every install of both distributions paid for test data it could not use, and the import
+  surface committed each distribution to a promise it never meant to make. Nothing declared the payloads as package data — a directory inside a package directory ships whether or not a manifest names it, which is exactly why this was easy to miss.
+  `tests/test_packaging.py` now fails if a capture reappears inside a shipped package, and CI asserts the same against every built wheel. See #162.
+
 ## [3.0.1]
 
 ### Fixed

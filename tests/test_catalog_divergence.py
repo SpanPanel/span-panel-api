@@ -44,9 +44,9 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
-from span_panel_api import reference_payloads as flat_payloads
+from reference_payloads import bootstrap as flat_payloads
+from reference_payloads import schema_one as tree_payloads
 from span_panel_api_schema_0.field_metadata import _PROPERTY_FIELD_MAP as _FLAT_FIELD_MAP
-from span_panel_api_schema_1 import reference_payloads as tree_payloads
 from span_panel_api_schema_1.catalog import (
     CATALOGUED_CONCRETE_UNITS,
     UNIT_FAMILIES,

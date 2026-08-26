@@ -551,6 +551,25 @@ def test_the_peer_is_pinned_to_the_same_specification_commit() -> None:
     )
 
 
+def test_the_recorded_capture_path_names_a_file_that_is_there() -> None:
+    """`produces.tree` is the one machine-readable statement of where the capture
+    lives, and three prose readers point at it — DEVELOPMENT.md, the payload
+    README and the capture script's own usage.
+
+    A path recorded in a lockfile has no compiler: when the capture moved out of
+    the package directory in 3.1.0 nothing here objected, because nothing
+    resolved it. Resolving it is the whole check — a rename that leaves this
+    behind fails at the rename rather than the next time somebody re-captures.
+    """
+    recorded = _peer(PANEL_SIM)["produces"]
+    assert isinstance(recorded, dict), "peers.ebus-panel-sim.produces should be an object"
+    tree = recorded["tree"]
+    assert isinstance(tree, str)
+
+    capture = Path(__file__).parent.parent / tree
+    assert capture.is_file(), f"spec_lock.json records the reference tree at {tree}, which is not there"
+
+
 def test_the_peer_targets_the_same_firmware() -> None:
     """The firmware range is the anchor the two sides actually share — the spec
     says what a device class *may* publish, while a panel publishes one tree."""
@@ -741,7 +760,7 @@ def test_the_captured_tree_names_the_emitter_release_that_made_it() -> None:
     """The capture script, the lockfile and the checkout agree on one version.
 
     Three places could disagree, and the failure mode of each is the same: bytes
-    in the wheel attributed to a producer that did not make them. The script
+    in the tree attributed to a producer that did not make them. The script
     reads its expected version *out of this lockfile* rather than carrying a
     constant of its own, so there is one pin and this test proves the checkout
     is on it.

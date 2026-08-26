@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from span_panel_api.reference_payloads import homie_schema
+from reference_payloads.bootstrap import homie_schema
 from span_panel_api_schema_0 import const
 from span_panel_api_schema_0.field_metadata import _LUGS_FALLBACK, _PROPERTY_FIELD_MAP, _lookup_property
 

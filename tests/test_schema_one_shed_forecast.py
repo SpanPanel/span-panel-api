@@ -17,13 +17,13 @@ import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
-from span_panel_api.models import FieldMetadata, SpanPanelSnapshot
-from span_panel_api_schema_1.field_metadata import build_field_metadata
-from span_panel_api_schema_1.reference_payloads import (
+from reference_payloads.schema_one import (
     RetainedTopicTree,
     device_from_topics,
     parent_child_tree,
 )
+from span_panel_api.models import FieldMetadata, SpanPanelSnapshot
+from span_panel_api_schema_1.field_metadata import build_field_metadata
 from span_panel_api_schema_1.snapshot import build_snapshot
 
 PANEL = "example-40t-001"

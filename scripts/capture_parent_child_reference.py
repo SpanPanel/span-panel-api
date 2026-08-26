@@ -1,16 +1,17 @@
 """Capture the parent/child emitter's retained surface, without a broker.
 
-Produces `packages/schema-1/src/span_panel_api_schema_1/reference_payloads/
-parent_child_tree.json`, the schema_1 reference tree that ships as package data
-and that fifteen test modules here replay through `devices_from_tree`.
+Produces `tests/reference_payloads/parent_child_tree.json`, the schema_1
+reference tree that fifteen test modules here replay through `devices_from_tree`.
+A repository fixture, not package data: it sat inside the adapter's package
+directory until 3.1.0 and was carried in the wheel for it, and no consumer of
+either distribution reads it at runtime.
 
 Run it from the **emitter's** environment, not this one — it imports
 `ebus_panel_sim`, which caps `ebus-sdk` below the version this repo installs:
 
     cd ../distribution-enclosure-simulator
     uv run python ../span-panel-api/scripts/capture_parent_child_reference.py \\
-        ../span-panel-api/packages/schema-1/src/span_panel_api_schema_1/\\
-reference_payloads/parent_child_tree.json
+        ../span-panel-api/tests/reference_payloads/parent_child_tree.json
 
 `PANEL_SIM_DIR` overrides where the checkout is looked for; it defaults to a
 `distribution-enclosure-simulator` directory beside this repo. Passing no output
@@ -475,11 +476,11 @@ def main() -> None:
     if PRODUCER_VERSION != expected:
         raise SystemExit(
             f"{SIM} is ebus-panel-sim {PRODUCER_VERSION}, and spec_lock.json records the reference "
-            f"tree as a capture of {expected}. Capturing anyway would put bytes in the wheel that "
-            "the lockfile attributes to a release that did not make them. Move the checkout to the "
-            "pinned release, or take the new capture deliberately: update peers.ebus-panel-sim's "
+            f"tree as a capture of {expected}. Capturing anyway would put bytes in this repository "
+            "that the lockfile attributes to a release that did not make them. Move the checkout to "
+            "the pinned release, or take the new capture deliberately: update peers.ebus-panel-sim's "
             "version, tag and commit in spec_lock.json, and the provenance section of "
-            "reference_payloads/README.md, in the same change."
+            "tests/reference_payloads/README.md, in the same change."
         )
 
     profile = Profile(MANIFEST)

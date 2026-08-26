@@ -11,11 +11,11 @@ import json
 
 import pytest
 
+from reference_payloads.schema_one import parent_child_tree
 from span_panel_api.adapters import _derive_required_members
 from span_panel_api.models import V2HomieSchema
 from span_panel_api.protocol import SchemaAdapter
 from span_panel_api_schema_1 import SchemaOneAdapter
-from span_panel_api_schema_1.reference_payloads import parent_child_tree
 
 _TREE = parent_child_tree()
 

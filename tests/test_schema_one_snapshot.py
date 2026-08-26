@@ -6,8 +6,8 @@ import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
+from reference_payloads.schema_one import device_from_topics, parent_child_tree
 from span_panel_api.models import SpanPanelSnapshot
-from span_panel_api_schema_1.reference_payloads import device_from_topics, parent_child_tree
 from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot
 
 _TREE = parent_child_tree()

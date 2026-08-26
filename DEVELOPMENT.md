@@ -78,17 +78,17 @@ now records the simulator commit its output came from, for the same reason `spec
 
 Two scripts, one per producer, and neither is run automatically — a capture is a deliberate act.
 
-| Artifact                                                          | Producer         | Script                                      |
-| ----------------------------------------------------------------- | ---------------- | ------------------------------------------- |
-| `tests/fixtures/flat_wire.json`                                   | `simulator`      | `scripts/capture_flat_reference.py`         |
-| `packages/schema-1/.../reference_payloads/parent_child_tree.json` | `ebus-panel-sim` | `scripts/capture_parent_child_reference.py` |
+| Artifact                                          | Producer         | Script                                      |
+| ------------------------------------------------- | ---------------- | ------------------------------------------- |
+| `tests/fixtures/flat_wire.json`                   | `simulator`      | `scripts/capture_flat_reference.py`         |
+| `tests/reference_payloads/parent_child_tree.json` | `ebus-panel-sim` | `scripts/capture_parent_child_reference.py` |
 
 Both run from the **producer's** environment rather than this one — each producer caps a dependency this repo installs above — and both substitute the transport rather than reassembling the emitter, because a capture taken through different wiring than a
 real panel uses is a capture of the wiring. Point them at a checkout with `SIMULATOR_DIR` / `PANEL_SIM_DIR`.
 
 `capture_parent_child_reference.py` goes one step further than documenting its producer: it reads the release it is a capture of out of `spec_lock.json` (`peers.ebus-panel-sim.version`) and **refuses to write** when the installed package disagrees. The pin
-therefore has exactly one home, and re-capturing against a newer emitter is a two-place change made together — that peer block, and the provenance section of `reference_payloads/README.md`. That is what stops the bytes and the claim about them drifting
-apart, and the drift is not hypothetical: it is how a producer defect in `$settable` on a locked relay reached about thirty test files across two repositories with no conformance gate objecting.
+therefore has exactly one home, and re-capturing against a newer emitter is a two-place change made together — that peer block, and the provenance section of `tests/reference_payloads/README.md`. That is what stops the bytes and the claim about them
+drifting apart, and the drift is not hypothetical: it is how a producer defect in `$settable` on a locked relay reached about thirty test files across two repositories with no conformance gate objecting.
 
 Its input is committed too, as `scripts/reference_panel.yaml`, pinned as `peers.ebus-panel-sim.manifest` — a capture whose input is not in the tree is the same class of problem as one whose producer is not recorded. That manifest is a synthetic `example-*`
 panel that mirrors the emitter's own `examples/forty_tab_minimal.yaml` key for key and marks its two deliberate divergences at the head of the file: spec-legal shed priorities in place of a value the emitter degrades to `UNKNOWN`

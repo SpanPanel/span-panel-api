@@ -84,6 +84,16 @@ Requires `span-panel-api` **3.1.0 or newer**, and the two must be upgraded toget
   handling them is a contract obligation regardless of what hardware emits — and `test_every_catalogued_priority_is_carried_through_rather_than_repaired` is now parametrised over the catalog's declared format rather than over whatever the capture happens
   to contain. Contract obligations come from the catalog; representativeness comes from the capture. A value added upstream reaches that test the moment the catalog is re-vendored.
 
+### Removed
+
+- **BREAKING: `span_panel_api_schema_1.reference_payloads` is gone, and the wheel no longer carries `parent_child_tree.json`.** The 40-space retained-topic capture, and the `parent_child_tree()` / `device_from_topics()` / `devices_from_tree()` replay that
+  reads it, are fixtures of the repository's test suite now, at `tests/reference_payloads/schema_one.py`. The helpers stay beside the capture wherever it lives, for the reason they were written: a tree is not directly usable, and separating them would put
+  the same twelve lines of replay in each of the modules that read it.
+
+  It was package data for a good reason — a vendored copy has no version and goes stale in silence — but the reason does not survive inspection: no runtime path here reads the capture, so every install paid 40 KB for test data, and detecting staleness
+  never needed the file, only the version claim. A consumer that vendors the bytes and asserts its recorded source release against `importlib.metadata.version("span-panel-api-schema-1")` gets the loud failure the package data was protecting, with no
+  checkout and no dependency on this distribution's test fixtures. `spec_lock.json`'s `peers.ebus-panel-sim.produces.tree` names the new location, and a test resolves it so the record cannot outlive the file. See #162.
+
 ## [1.0.0]
 
 First release as a standalone distribution, and the first parser for the parent/child data model. Requires `span-panel-api` 3.0.0 or newer, and `ebus-sdk` `>=0.19,<0.24`.

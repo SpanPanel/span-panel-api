@@ -193,7 +193,7 @@ jobs:
         print("```bash")
         print(f"# in a checkout of the emitter at v{latest}, from its own environment")
         print("uv run python ../span-panel-api/scripts/capture_parent_child_reference.py \\")
-        print("  ../span-panel-api/packages/schema-1/src/span_panel_api_schema_1/reference_payloads/parent_child_tree.json")
+        print("  ../span-panel-api/tests/reference_payloads/parent_child_tree.json")
         print("```\n")
         print("The script refuses until `peers.ebus-panel-sim.version` and `.commit` in")
         print("`spec_lock.json` name the release you captured from, which is what keeps the")

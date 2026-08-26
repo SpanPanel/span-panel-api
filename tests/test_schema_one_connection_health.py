@@ -33,6 +33,11 @@ import json
 
 import pytest
 
+from reference_payloads.schema_one import (
+    RetainedTopicTree,
+    device_from_topics,
+    parent_child_tree,
+)
 from span_panel_api.models import SpanEvseSnapshot, SpanPanelSnapshot
 from span_panel_api_schema_1.const import NODE_CONNECTION
 from span_panel_api_schema_1.devices import (
@@ -42,11 +47,6 @@ from span_panel_api_schema_1.devices import (
     feed_connection_statuses,
 )
 from span_panel_api_schema_1.field_metadata import build_field_metadata
-from span_panel_api_schema_1.reference_payloads import (
-    RetainedTopicTree,
-    device_from_topics,
-    parent_child_tree,
-)
 from span_panel_api_schema_1.snapshot import build_snapshot
 
 PANEL = "example-40t-001"

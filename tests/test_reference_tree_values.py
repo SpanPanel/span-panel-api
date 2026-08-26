@@ -1,7 +1,6 @@
 """What the reference tree leaves unvalued must be what the producer leaves unvalued.
 
-`parent_child_tree.json` is shipped package data and the fixture every schema_1
-test is written against, so what it *publishes* is the whole evidence base for
+`parent_child_tree.json` is the fixture every schema_1 test is written against, so what it *publishes* is the whole evidence base for
 "does this adapter read that property". A property the producer values and this
 capture does not is therefore invisible in both directions at once: no test can
 fail for not reading it, and no consumer test can fail for not surfacing it.
@@ -56,7 +55,7 @@ from collections import defaultdict
 import json
 import pathlib
 
-from span_panel_api_schema_1.reference_payloads import parent_child_tree
+from reference_payloads.schema_one import parent_child_tree
 
 _PANELBENCH_BASELINE = pathlib.Path(__file__).parent / "fixtures" / "panelbench_unvalued_by_both.json"
 

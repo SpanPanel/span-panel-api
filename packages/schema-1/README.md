@@ -50,15 +50,7 @@ returns `None`, and an entity disappears.
 
 ## Reference payloads
 
-A retained-topic capture of a full 40-space parent/child panel ships as package data, with the replay that turns it back into devices:
+A retained-topic capture of a full 40-space parent/child panel, and the replay that turns it back into devices, are fixtures of the repository's test suite at `tests/reference_payloads/`.
 
-```python
-from span_panel_api_schema_1.reference_payloads import devices_from_tree, parent_child_tree
-
-devices = devices_from_tree(parent_child_tree())
-```
-
-It ships here rather than from the bootstrap because a retained topic tree is only interpretable by the parser that speaks its vocabulary, and the eBus SDK is this distribution's dependency alone. `devices_from_tree` takes the tree rather than reading it,
-so a consumer can filter the capture first — dropping the BESS to model a panel that has none — and still build devices the same way. The bootstrap ships the schema document it fetches; see `span_panel_api.reference_payloads`.
-
-Each payload carries the version of the release it shipped in. Pin a version and you read the bytes that version was written against.
+**`span_panel_api_schema_1.reference_payloads` no longer exists.** It was package data until 1.1.0 — carried in this wheel because it sat inside the package directory, though no runtime path read it. A consumer that was importing it should vendor the bytes
+it needs and record the release it took them from, asserting that against `importlib.metadata.version("span-panel-api-schema-1")` so a moved pin that outruns the copy fails loudly instead of testing against a tree no panel publishes.

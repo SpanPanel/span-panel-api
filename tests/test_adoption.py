@@ -17,9 +17,9 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+from reference_payloads.schema_one import device_from_topics, parent_child_tree
 from span_panel_api.models import SpanPanelSnapshot
 from span_panel_api_schema_1.adoption import MODELLED_TYPES
-from span_panel_api_schema_1.reference_payloads import device_from_topics, parent_child_tree
 from span_panel_api_schema_1.snapshot import build_snapshot
 
 if TYPE_CHECKING:

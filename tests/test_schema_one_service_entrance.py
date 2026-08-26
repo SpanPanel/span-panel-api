@@ -27,16 +27,16 @@ from __future__ import annotations
 
 import pytest
 
+from reference_payloads.schema_one import (
+    RetainedTopicTree,
+    device_from_topics,
+    parent_child_tree,
+)
 from span_panel_api.models import SpanPanelSnapshot
 from span_panel_api_schema_1.const import (
     NODE_CONNECTION,
     PROP_FED_BY_DEVICE_ID,
     PROP_FED_BY_DEVICE_STATUS,
-)
-from span_panel_api_schema_1.reference_payloads import (
-    RetainedTopicTree,
-    device_from_topics,
-    parent_child_tree,
 )
 from span_panel_api_schema_1.snapshot import build_snapshot
 

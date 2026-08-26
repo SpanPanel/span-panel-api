@@ -30,9 +30,9 @@ from pathlib import Path
 
 import pytest
 
+from reference_payloads.schema_one import RetainedTopicTree, parent_child_tree
 from span_panel_api.models import V2HomieSchema
 from span_panel_api_schema_1 import SchemaOneAdapter
-from span_panel_api_schema_1.reference_payloads import RetainedTopicTree, parent_child_tree
 
 _CATALOGS = Path(__file__).parent.parent / "packages" / "schema-1" / "spec" / "catalogs"
 
@@ -75,8 +75,8 @@ def _copy() -> dict[str, dict[str, str]]:
     """A writable copy of the capture.
 
     Copied rather than mutated in place because `parent_child_tree()` reads the
-    shipped package data once per process and every other module in the suite is
-    reading the same object.
+    capture once per process and every other module in the suite is reading the
+    same object.
     """
     return {device_id: dict(topics) for device_id, topics in parent_child_tree().items()}
 

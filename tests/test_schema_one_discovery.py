@@ -30,6 +30,11 @@ import json
 from ebus_sdk.homie import DiscoveredDevice
 import pytest
 
+from reference_payloads.schema_one import (
+    device_from_topics,
+    devices_from_tree,
+    parent_child_tree,
+)
 from span_panel_api.models import DiscoveredMetadata, SpanPanelSnapshot, is_discovery_path
 from span_panel_api_schema_1 import field_metadata as field_metadata_module
 from span_panel_api_schema_1.const import (
@@ -47,11 +52,6 @@ from span_panel_api_schema_1.field_metadata import (
     _PROPERTY_FIELD_MAP,
     build_discovery,
     build_field_metadata,
-)
-from span_panel_api_schema_1.reference_payloads import (
-    device_from_topics,
-    devices_from_tree,
-    parent_child_tree,
 )
 from span_panel_api_schema_1.snapshot import build_snapshot
 

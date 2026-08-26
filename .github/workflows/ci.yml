@@ -145,6 +145,31 @@ jobs:
             print(f'{wheel}: py.typed present')
         "
 
+    # Reference captures are test data. They shipped in both wheels until 3.1.0
+    # -- not through any packaging declaration, but because a directory inside a
+    # package directory ships -- and no runtime path ever read them. Nothing in
+    # the manifests would object to that happening again, so the built artifact
+    # is where it has to be asserted. Every wheel, not the two known ones: an
+    # adapter added under packages/ is covered the day it exists.
+    - name: Verify no wheel ships reference payloads
+      run: |
+        python -c "
+        import glob, posixpath, sys, zipfile
+        wheels = glob.glob('dist/*.whl')
+        if not wheels:
+            sys.exit('::error::no wheels were built')
+        for wheel in wheels:
+            names = zipfile.ZipFile(wheel).namelist()
+            carried = [
+                n for n in names
+                if 'reference_payloads' in n.split('/')
+                or posixpath.basename(n) in ('homie_schema.json', 'parent_child_tree.json')
+            ]
+            if carried:
+                sys.exit(f'::error::{wheel} ships test data: {carried}. Reference captures are fixtures under tests/reference_payloads; a directory inside a package directory ships whether or not the manifest names it.')
+            print(f'{wheel}: no reference payloads')
+        "
+
     # The configuration entry-point discovery exists to support, and the one
     # nothing else in CI exercises: the bootstrap wheel installed with no
     # adapter present. It must import, and it must fail by name rather than

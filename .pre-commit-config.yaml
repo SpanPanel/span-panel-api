@@ -87,7 +87,13 @@ repos:
           # types rather than silently reporting import-not-found.
           - ebus-sdk>=0.19.0
         args: ['--config-file=pyproject.toml']
-        exclude: '^src/span_panel_api/generated_client/.*|scripts/.*|tests/.*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
+        # `tests/reference_payloads/` is the one thing under tests/ this hook does
+        # check. Its five accessors were type-checked as package data until 3.1.0
+        # and are read by twenty test modules; moving them out of `src/` should not
+        # have quietly cost them `--strict`. `pyproject.toml`'s own `exclude` still
+        # names tests/, which is fine — that flag governs directory discovery, and
+        # a file passed by name is checked regardless.
+        exclude: '^src/span_panel_api/generated_client/.*|scripts/.*|tests/(?!reference_payloads/).*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # Pylint for code quality
   - repo: https://github.com/pycqa/pylint

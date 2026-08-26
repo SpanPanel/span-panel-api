@@ -629,7 +629,7 @@ class TestGetHomieSchema:
 
     def test_panel_size_from_live_fixture(self):
         """panel_size works with the real panel schema fixture."""
-        from span_panel_api.reference_payloads import homie_schema, homie_schema_types
+        from reference_payloads.bootstrap import homie_schema, homie_schema_types
 
         schema = V2HomieSchema(
             firmware_version=homie_schema()["firmwareVersion"],

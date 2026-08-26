@@ -45,9 +45,12 @@ Requires `span-panel-api` **3.1.0 or newer**, and the two must be upgraded toget
   `set_circuit_priority_target("bess")` resolved a topic for a control that device never published. `_declared_settable` now distinguishes the two: a property the device does not declare is never settable, whatever the per-property default for a declared
   one says. The relay avoided this incidentally, because its default is already refusal.
 
-- **`SchemaOneAdapter.has_circuit`**, which `SchemaAdapter` declares in 3.1.0 so a transport can tell "no such circuit" apart from "this circuit's control is locked" when it reports a refusal. It answers on the device _type_, not on membership of the tree:
-  every device is addressable by id, and a BESS reported as a circuit would have its refusal read as a claim about a relay it does not have. It is deliberately not a gate on the two target builders — those refuse on the declaration, which is the
-  specification's rule and what authorises a write, and putting a type check in front of it would be a second, weaker rule where the authorisation lives.
+- **BREAKING: `SchemaOneAdapter` gains `has_circuit`, a new required `SchemaAdapter` member.** 3.1.0 declares it so a transport can tell "no such circuit" apart from "this circuit's control is locked" when it reports a refusal. Every public member of that
+  protocol is mandatory of every adapter wheel — `_derive_required_members` enforces it by name — so this is the third contract change in the pair, alongside the four `set_*_topic` renames and the widened return types. It adds no new mismatch a consumer
+  can hit: a 1.0.0 wheel was already rejected by the renames, and the rejection names this member too, with the same remedy (upgrade both distributions together).
+
+  It answers on the device _type_, not on membership of the tree: every device is addressable by id, and a BESS reported as a circuit would have its refusal read as a claim about a relay it does not have. It is deliberately not a gate on the two target
+  builders — those refuse on the declaration, which is the specification's rule and what authorises a write, and putting a type check in front of it would be a second, weaker rule where the authorisation lives.
 
 - **`spec_lock.json`: `peer` becomes `peers`, and the eBus emitter is tracked as one.** `ebus-panel-sim` produced the reference tree and was recorded nowhere, which is the whole reason that capture went three releases stale without anything objecting. It
   now carries a pin of the same shape panelbench has — repo, ref, role, commit, tag, released version, and the specification commit it implements — so a scheduled job can ask whether the producer has moved and a test can ask whether our checkout is the

@@ -35,8 +35,11 @@ Requires `span-panel-api` **3.1.0 or newer**, and the two must be upgraded toget
   — so an unknown id produced a well-formed topic aimed at nothing, including for the synthetic `unmapped_tab_*` keys the snapshot invents. `schema_1` already refused an id its tree did not carry; two adapters answering the same question differently was
   the defect, and the question is answered here from the node type in `$description`.
 
-- **`HomieDeviceConsumer.is_circuit_node` is public**, and `SchemaZeroAdapter` gains `has_circuit`, which delegates to it. `SchemaAdapter` declares `has_circuit` in 3.1.0 so a transport can tell "no such circuit" apart from "this circuit's control is
-  locked" when it reports a refusal. One reading behind both answers: what counts as a circuit here decides the refusal and its stated reason together, so the two cannot drift.
+- **BREAKING: `SchemaZeroAdapter` gains `has_circuit`, a new required `SchemaAdapter` member.** 3.1.0 declares it so a transport can tell "no such circuit" apart from "this circuit's control is locked" when it reports a refusal. Every public member of that
+  protocol is mandatory of every adapter wheel — `_derive_required_members` enforces it by name — so this is the third contract change in the pair, alongside the four `set_*_topic` renames and the widened return types. It adds no new mismatch a consumer
+  can hit: a 1.0.0 wheel was already rejected by the renames, and the rejection names this member too, with the same remedy (upgrade both distributions together).
+
+  `HomieDeviceConsumer.is_circuit_node` is public for it, and `has_circuit` delegates there rather than re-deriving. One reading behind both answers: what counts as a circuit here decides the refusal and its stated reason together, so the two cannot drift.
 
 ## [1.0.0]
 

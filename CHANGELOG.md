@@ -44,6 +44,10 @@ install of the adapter distribution does not, and a 1.0.0 adapter against this b
   reaches `after_publish` and the Home Assistant integration writes it into a security log where it is read as a fact about the panel. `SchemaAdapter` gains `has_circuit` for it — consulted only once a target has already been refused, so it can relabel a
   refusal but never cause one.
 
+  **`has_circuit` is a required protocol member**, and therefore the third adapter-contract change in this release alongside the four `set_*_topic` renames and the widened return types: `_derive_required_members` makes every public `SchemaAdapter` member
+  mandatory of every adapter wheel, so an adapter without it is rejected at discovery. That is not a new mismatch anyone can hit — a 1.0.0 adapter was already rejected by the renames — and the rejection names this member alongside them, with the same
+  remedy. `ADAPTER_CONTRACT_VERSION` still does not move: an added member is caught by name at discovery, which is what the constant's own docstring reserves it for.
+
 - **A control the library refused before resolving an address is no longer invisible to `ControlInterceptor`.** `after_publish` is contracted to see every command, refusals included, but five refusals happened while resolving the target and therefore never
   reached the publish path at all: a relay declared non-commandable, a priority declared locked, a charger with no settable limit, a panel with no islanding control, and an adopted property that is not settable. A consumer building a security audit on
   `after_publish` — which is what the Home Assistant integration does — would have had a hole in it exactly where the interesting cases are, the highest-consequence control in the system among them.

@@ -33,7 +33,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from span_panel_api.models import ADOPTION_IDENTITY_NODE, ADOPTION_TOPOLOGY_NODE, ExtensionProperty, ExtensionSubject
-from span_panel_api_schema_1.description import nodes, optional_str, properties
+from span_panel_api_schema_1.description import declared_settable, nodes, optional_str, properties
 from span_panel_api_schema_1.field_metadata import is_addressed
 
 if TYPE_CHECKING:
@@ -92,7 +92,7 @@ def build_extension_properties(
                         datatype=str(definition.get("datatype") or "string"),
                         unit=optional_str(definition.get("unit")),
                         format=optional_str(definition.get("format")),
-                        settable=bool(definition.get("settable", False)),
+                        settable=declared_settable(definition),
                         value=None if raw is None else str(raw),
                         node_has_curated_siblings=has_curated_siblings,
                     )

@@ -329,6 +329,30 @@ def test_a_property_the_device_does_not_declare_settable_carries_no_topic() -> N
     assert reading.set_topic is None
 
 
+def test_a_settable_serialised_as_text_is_read_as_the_boolean_it_spells() -> None:
+    """Homie attributes travel as text, and `bool("false")` is True.
+
+    A publisher that serialises its description by hand may not re-type the
+    booleans, so both spellings arrive here as strings. Reading them for
+    truthiness authorised a write on the declaration that most explicitly
+    refuses one; `description.declared_settable` reads the word instead, and
+    reads it the same way for a curated control and an adopted one.
+    """
+    nodes = {
+        "generator": {
+            "properties": {
+                "mode": {"datatype": "enum", "format": "AUTO,OFF", "settable": "true"},
+                "state": {"datatype": "enum", "format": "AUTO,OFF", "settable": "false"},
+            }
+        }
+    }
+    tree = _with(_tree(), "generator-1", _device(UNMODELLED_TYPE, nodes=nodes))
+
+    topics = {prop.property_id: prop.set_topic for prop in _adopted(_snapshot(tree))["generator-1"].properties}
+    assert topics["mode"] == "ebus/5/generator-1/generator/mode/set"
+    assert topics["state"] is None
+
+
 def test_no_topic_reachable_this_way_can_name_a_modelled_device() -> None:
     """The property that keeps this from being a generic write.
 

@@ -149,8 +149,10 @@ async def _get_client(
 
 
 #: Panels already warned about over plaintext, so the warning is said once each.
-#: Module state for the life of the process, which is the same scope the MQTT
-#: bridge gives its own unpinned-CA warning.
+#: Process-wide, once per panel host: wider than the MQTT bridge's unpinned-CA
+#: warning, which is per bridge instance and so repeats when a config entry is
+#: reloaded. See `_warn_plaintext_transport` for why the client object is the
+#: wrong key.
 _warned_plaintext_hosts: set[str] = set()
 
 

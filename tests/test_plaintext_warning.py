@@ -21,13 +21,11 @@ from __future__ import annotations
 import json
 import logging
 import ssl
-from collections.abc import Iterator
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 
-from span_panel_api._http import _reset_plaintext_warnings
 from span_panel_api.auth import download_ca_cert, regenerate_passphrase, register_v2
 from span_panel_api.mqtt.models import MqttClientConfig
 
@@ -56,14 +54,6 @@ SCHEMA_JSON = {
     "firmwareVersion": "spanos2/r202603/05",
     "types": {"energy.ebus.device.circuit": {"space": {"datatype": "integer", "format": "1:32:1"}}},
 }
-
-
-@pytest.fixture(autouse=True)
-def _forget_warned_hosts() -> Iterator[None]:
-    """The warning fires once per panel per process, so each test starts fresh."""
-    _reset_plaintext_warnings()
-    yield
-    _reset_plaintext_warnings()
 
 
 def _json_response(payload: object, method: str = "POST") -> httpx.Response:

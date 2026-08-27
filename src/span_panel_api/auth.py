@@ -18,17 +18,20 @@ import uuid
 
 import httpx
 
-from ._http import _build_url, _get_client
-from .exceptions import (
-    SpanPanelAPIError,
-    SpanPanelAuthError,
-    SpanPanelConnectionError,
-    SpanPanelServerError,
-    SpanPanelTimeoutError,
-)
+from ._http import V2_STATUS_PATH, _request
+from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelServerError
 from .models import HomieSchemaTypes, V2AuthResponse, V2HomieSchema, V2StatusInfo
 
 _LOGGER = logging.getLogger(__name__)
+
+#: Read, written and deleted by three calls, which is three chances to mistype it.
+_FQDN_PATH = "/api/v2/dns/fqdn"
+
+
+def _bearer(token: str) -> dict[str, str]:
+    """The Authorization header every token-bearing call sends."""
+    return {"Authorization": f"Bearer {token}"}
+
 
 #: Keys whose value is a credential wherever it appears in a response body,
 #: compared case-folded because the panel spells them lowerCamelCase and a
@@ -240,7 +243,6 @@ async def register_v2(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = _build_url(host, port, "/api/v2/auth/register", ssl_context)
     # The panel requires unique client names — append a random suffix.
     # The passphrase field must be "hopPassphrase" per the SPAN v2 API spec.
     suffix = uuid.uuid4().hex[:8]
@@ -249,15 +251,18 @@ async def register_v2(
     if passphrase:
         payload["hopPassphrase"] = passphrase
 
-    try:
-        async with _get_client(httpx_client, timeout, ssl_context) as client:
-            response = await client.post(url, json=payload)
-    except httpx.ConnectError as exc:
-        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
-    except httpx.TimeoutException as exc:
-        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+    reply = await _request(
+        "POST",
+        host,
+        port,
+        "/api/v2/auth/register",
+        timeout=timeout,
+        httpx_client=httpx_client,
+        ssl_context=ssl_context,
+        json=payload,
+    )
 
-    if response.status_code in (401, 403, 422):
+    if reply.status_code in (401, 403, 422):
         # Status only, matching the shape the branch below already uses. The body
         # is logged at DEBUG instead: a 422 from the panel's validation layer
         # echoes the submitted `hopPassphrase` straight back, and interpolating
@@ -266,13 +271,26 @@ async def register_v2(
         # passphrase goes with it because this is the one place in the library
         # that knows what was sent, and the panel is under no obligation to
         # quote it back under a key that names it.
-        _log_auth_failure("/api/v2/auth/register", response, () if passphrase is None else (passphrase,))
-        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
+        _log_auth_failure(reply.endpoint, reply.response, () if passphrase is None else (passphrase,))
+        raise SpanPanelAuthError(f"Authentication failed (HTTP {reply.status_code})")
 
-    if response.status_code != 200:
-        raise SpanPanelAPIError(f"Unexpected response from /api/v2/auth/register: HTTP {response.status_code}")
+    if reply.status_code != 200:
+        raise SpanPanelAPIError(f"Unexpected response from /api/v2/auth/register: HTTP {reply.status_code}")
 
-    data: dict[str, object] = response.json()
+    data = reply.json_object(
+        "accessToken",
+        "tokenType",
+        "iatMs",
+        "ebusBrokerUsername",
+        "ebusBrokerPassword",
+        "ebusBrokerHost",
+        "ebusBrokerMqttsPort",
+        "ebusBrokerWsPort",
+        "ebusBrokerWssPort",
+        "hostname",
+        "serialNumber",
+        "hopPassphrase",
+    )
     return V2AuthResponse(
         access_token=_str(data["accessToken"]),
         token_type=_str(data["tokenType"]),
@@ -343,28 +361,29 @@ async def download_ca_cert(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response or invalid PEM
     """
-    url = _build_url(host, port, "/api/v2/certificate/ca", ssl_context)
     last_status: int | None = None
 
     for attempt in range(1, max_attempts + 1):
-        try:
-            async with _get_client(httpx_client, timeout, ssl_context) as client:
-                response = await client.get(url)
-        except httpx.ConnectError as exc:
-            raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
-        except httpx.TimeoutException as exc:
-            raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+        reply = await _request(
+            "GET",
+            host,
+            port,
+            "/api/v2/certificate/ca",
+            timeout=timeout,
+            httpx_client=httpx_client,
+            ssl_context=ssl_context,
+        )
 
-        if response.status_code == 200:
-            pem = response.text
+        if reply.status_code == 200:
+            pem = reply.text
             if not pem.startswith("-----BEGIN"):
                 raise SpanPanelAPIError("Response is not a valid PEM certificate")
             return pem
 
-        last_status = response.status_code
+        last_status = reply.status_code
 
-        if response.status_code == HTTP_TOO_MANY_REQUESTS and attempt < max_attempts:
-            await asyncio.sleep(_retry_delay(response.headers.get("retry-after"), attempt, backoff_s))
+        if reply.status_code == HTTP_TOO_MANY_REQUESTS and attempt < max_attempts:
+            await asyncio.sleep(_retry_delay(reply.headers.get("retry-after"), attempt, backoff_s))
             continue
 
         break
@@ -402,25 +421,17 @@ async def get_homie_schema(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = _build_url(host, port, "/api/v2/homie/schema", ssl_context)
+    reply = await _request(
+        "GET",
+        host,
+        port,
+        "/api/v2/homie/schema",
+        timeout=timeout,
+        httpx_client=httpx_client,
+        ssl_context=ssl_context,
+    )
 
-    try:
-        async with _get_client(httpx_client, timeout, ssl_context) as client:
-            response = await client.get(url)
-    except httpx.TimeoutException as exc:
-        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
-    except httpx.TransportError as exc:
-        # Every way the connection itself can fail, not just a refused connect:
-        # `ReadError` and `WriteError` when a rebooting panel resets mid-request,
-        # and `RemoteProtocolError` when its proxy closes without answering --
-        # which is exactly what a proxy restarting under load produces. Catching
-        # only `ConnectError` meant those escaped this function untranslated,
-        # skipped the caller's retry clause entirely, and stranded the parser the
-        # same way a 502 used to. `TimeoutException` is itself a `TransportError`,
-        # so it has to be caught first.
-        raise SpanPanelConnectionError(f"Cannot reach panel at {host}: {exc}") from exc
-
-    if response.status_code >= 500:
+    if reply.status_code >= 500:
         # A rebooting panel answers 502 from its front end while the application
         # behind it is still starting. That is "not ready yet", not "wrong" --
         # and it is the ordinary shape of a firmware upgrade, because a device
@@ -428,33 +439,22 @@ async def get_homie_schema(
         # a distinct class so a caller can retry it and fail fast on a 4xx, which
         # will not fix itself.
         raise SpanPanelServerError(
-            f"Panel not ready: HTTP {response.status_code} fetching the Homie schema",
-            status_code=response.status_code,
+            f"Panel not ready: HTTP {reply.status_code} fetching the Homie schema",
+            status_code=reply.status_code,
         )
-    if response.status_code != 200:
+    if reply.status_code != 200:
         raise SpanPanelAPIError(
-            f"Failed to fetch Homie schema: HTTP {response.status_code}",
-            status_code=response.status_code,
+            f"Failed to fetch Homie schema: HTTP {reply.status_code}",
+            status_code=reply.status_code,
         )
 
-    try:
-        parsed = response.json()
-    except ValueError as exc:
-        # A panel part-way through starting can answer 200 with a truncated or
-        # empty body. Retryable for the same reason a 502 is -- it is "not ready
-        # yet" wearing a different status -- and untranslated this had precisely
-        # the 502's old character: raised out of the caller's retry loop on the
-        # first attempt and left the parser where it was.
-        raise SpanPanelServerError(
-            f"Panel not ready: {host} answered 200 with a body that is not JSON",
-            status_code=response.status_code,
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise SpanPanelServerError(
-            f"Panel not ready: {host} answered 200 with {type(parsed).__name__}, not an object",
-            status_code=response.status_code,
-        )
-    data: dict[str, object] = parsed
+    # A panel part-way through starting can answer 200 with a truncated or empty
+    # body. Retryable for the same reason a 502 is -- it is "not ready yet"
+    # wearing a different status -- which is why this is the one endpoint that
+    # asks for its malformed bodies as `SpanPanelServerError`. Untranslated it
+    # had precisely the 502's old character: raised out of the caller's retry
+    # loop on the first attempt and leaving the parser where it was.
+    data = reply.json_object(on_malformed=SpanPanelServerError)
 
     # Extract types — each value is a dict of property definitions
     raw_types = data.get("types", {})
@@ -521,25 +521,24 @@ async def regenerate_passphrase(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = _build_url(host, port, "/api/v2/auth/passphrase", ssl_context)
-    headers = {"Authorization": f"Bearer {token}"}
+    reply = await _request(
+        "PUT",
+        host,
+        port,
+        "/api/v2/auth/passphrase",
+        timeout=timeout,
+        httpx_client=httpx_client,
+        ssl_context=ssl_context,
+        headers=_bearer(token),
+    )
 
-    try:
-        async with _get_client(httpx_client, timeout, ssl_context) as client:
-            response = await client.put(url, headers=headers)
-    except httpx.ConnectError as exc:
-        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
-    except httpx.TimeoutException as exc:
-        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+    if reply.status_code in (401, 403, 412):
+        raise SpanPanelAuthError(f"Authentication failed (HTTP {reply.status_code})")
 
-    if response.status_code in (401, 403, 412):
-        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
+    if reply.status_code != 200:
+        raise SpanPanelAPIError(f"Failed to regenerate passphrase: HTTP {reply.status_code}")
 
-    if response.status_code != 200:
-        raise SpanPanelAPIError(f"Failed to regenerate passphrase: HTTP {response.status_code}")
-
-    data: dict[str, object] = response.json()
-    return _str(data["ebusBrokerPassword"])
+    return _str(reply.json_object("ebusBrokerPassword")["ebusBrokerPassword"])
 
 
 async def register_fqdn(
@@ -576,23 +575,23 @@ async def register_fqdn(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response (including 404 if unsupported)
     """
-    url = _build_url(host, port, "/api/v2/dns/fqdn", ssl_context)
-    headers = {"Authorization": f"Bearer {token}"}
-    payload = {"ebusTlsFqdn": fqdn}
+    reply = await _request(
+        "POST",
+        host,
+        port,
+        _FQDN_PATH,
+        timeout=timeout,
+        httpx_client=httpx_client,
+        ssl_context=ssl_context,
+        json={"ebusTlsFqdn": fqdn},
+        headers=_bearer(token),
+    )
 
-    try:
-        async with _get_client(httpx_client, timeout, ssl_context) as client:
-            response = await client.post(url, json=payload, headers=headers)
-    except httpx.ConnectError as exc:
-        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
-    except httpx.TimeoutException as exc:
-        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+    if reply.status_code in (401, 403):
+        raise SpanPanelAuthError(f"Authentication failed (HTTP {reply.status_code})")
 
-    if response.status_code in (401, 403):
-        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
-
-    if response.status_code not in (200, 201, 204):
-        raise SpanPanelAPIError(f"Failed to register FQDN: HTTP {response.status_code}")
+    if reply.status_code not in (200, 201, 204):
+        raise SpanPanelAPIError(f"Failed to register FQDN: HTTP {reply.status_code}")
 
 
 async def get_fqdn(
@@ -628,28 +627,27 @@ async def get_fqdn(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = _build_url(host, port, "/api/v2/dns/fqdn", ssl_context)
-    headers = {"Authorization": f"Bearer {token}"}
+    reply = await _request(
+        "GET",
+        host,
+        port,
+        _FQDN_PATH,
+        timeout=timeout,
+        httpx_client=httpx_client,
+        ssl_context=ssl_context,
+        headers=_bearer(token),
+    )
 
-    try:
-        async with _get_client(httpx_client, timeout, ssl_context) as client:
-            response = await client.get(url, headers=headers)
-    except httpx.ConnectError as exc:
-        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
-    except httpx.TimeoutException as exc:
-        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+    if reply.status_code in (401, 403):
+        raise SpanPanelAuthError(f"Authentication failed (HTTP {reply.status_code})")
 
-    if response.status_code in (401, 403):
-        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
-
-    if response.status_code == 404:
+    if reply.status_code == 404:
         return None
 
-    if response.status_code != 200:
-        raise SpanPanelAPIError(f"Failed to get FQDN: HTTP {response.status_code}")
+    if reply.status_code != 200:
+        raise SpanPanelAPIError(f"Failed to get FQDN: HTTP {reply.status_code}")
 
-    data: dict[str, object] = response.json()
-    raw = data.get("ebusTlsFqdn")
+    raw = reply.json_object().get("ebusTlsFqdn")
     if raw is None:
         return None
     return str(raw)
@@ -686,22 +684,22 @@ async def delete_fqdn(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
-    url = _build_url(host, port, "/api/v2/dns/fqdn", ssl_context)
-    headers = {"Authorization": f"Bearer {token}"}
+    reply = await _request(
+        "DELETE",
+        host,
+        port,
+        _FQDN_PATH,
+        timeout=timeout,
+        httpx_client=httpx_client,
+        ssl_context=ssl_context,
+        headers=_bearer(token),
+    )
 
-    try:
-        async with _get_client(httpx_client, timeout, ssl_context) as client:
-            response = await client.delete(url, headers=headers)
-    except httpx.ConnectError as exc:
-        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
-    except httpx.TimeoutException as exc:
-        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+    if reply.status_code in (401, 403):
+        raise SpanPanelAuthError(f"Authentication failed (HTTP {reply.status_code})")
 
-    if response.status_code in (401, 403):
-        raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
-
-    if response.status_code not in (200, 204):
-        raise SpanPanelAPIError(f"Failed to delete FQDN: HTTP {response.status_code}")
+    if reply.status_code not in (200, 204):
+        raise SpanPanelAPIError(f"Failed to delete FQDN: HTTP {reply.status_code}")
 
 
 async def get_v2_status(
@@ -732,20 +730,20 @@ async def get_v2_status(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response or non-v2 panel
     """
-    url = _build_url(host, port, "/api/v2/status", ssl_context)
+    reply = await _request(
+        "GET",
+        host,
+        port,
+        V2_STATUS_PATH,
+        timeout=timeout,
+        httpx_client=httpx_client,
+        ssl_context=ssl_context,
+    )
 
-    try:
-        async with _get_client(httpx_client, timeout, ssl_context) as client:
-            response = await client.get(url)
-    except httpx.ConnectError as exc:
-        raise SpanPanelConnectionError(f"Cannot reach panel at {host}") from exc
-    except httpx.TimeoutException as exc:
-        raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
+    if reply.status_code != 200:
+        raise SpanPanelAPIError(f"Panel does not support v2 API: HTTP {reply.status_code}")
 
-    if response.status_code != 200:
-        raise SpanPanelAPIError(f"Panel does not support v2 API: HTTP {response.status_code}")
-
-    data: dict[str, object] = response.json()
+    data = reply.json_object()
     return V2StatusInfo(
         serial_number=str(data.get("serialNumber", "")),
         firmware_version=str(data.get("firmwareVersion", "")),

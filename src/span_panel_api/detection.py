@@ -12,7 +12,8 @@ import ssl
 
 import httpx
 
-from ._http import _build_url, _get_client
+from ._http import V2_STATUS_PATH, _request
+from .exceptions import SpanPanelConnectionError, SpanPanelTimeoutError
 from .models import V2StatusInfo
 
 
@@ -58,19 +59,29 @@ async def detect_api_version(
         DetectionResult indicating which API version is available. On transport
         failures, ``api_version`` is ``"v1"`` and ``probe_failed`` is True.
     """
-    url = _build_url(host, port, "/api/v2/status", ssl_context)
     try:
-        async with _get_client(httpx_client, timeout, ssl_context) as client:
-            response = await client.get(url)
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError):
+        reply = await _request(
+            "GET",
+            host,
+            port,
+            V2_STATUS_PATH,
+            timeout=timeout,
+            httpx_client=httpx_client,
+            ssl_context=ssl_context,
+        )
+    except (SpanPanelConnectionError, SpanPanelTimeoutError):
+        # Every way the connection can fail, which is the point of catching this
+        # library's own two classes rather than a hand-listed tuple of httpx
+        # ones: the tuple named `ConnectError`, `TimeoutException` and
+        # `RemoteProtocolError` and therefore let a `ReadError` -- a panel
+        # resetting its listener mid-probe -- out of a function documented to
+        # return a result rather than raise.
         return DetectionResult(api_version="v1", probe_failed=True)
 
-    if response.status_code != 200:
+    if reply.status_code != 200:
         return DetectionResult(api_version="v1")
 
-    data: dict[str, object] = response.json()
-    serial = str(data.get("serialNumber", ""))
-    firmware = str(data.get("firmwareVersion", ""))
+    data = reply.json_object()
     raw_proximity = data.get("proximityProven")
     proximity_proven: bool | None = None
     if isinstance(raw_proximity, bool):
@@ -78,8 +89,8 @@ async def detect_api_version(
     return DetectionResult(
         api_version="v2",
         status_info=V2StatusInfo(
-            serial_number=serial,
-            firmware_version=firmware,
+            serial_number=str(data.get("serialNumber", "")),
+            firmware_version=str(data.get("firmwareVersion", "")),
             proximity_proven=proximity_proven,
         ),
     )

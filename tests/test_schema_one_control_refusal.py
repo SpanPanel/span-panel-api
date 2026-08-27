@@ -15,12 +15,20 @@ for entities -- these are public methods, and settability changes at runtime whe
 a circuit is re-commissioned in place.
 
 Driven from the shipped capture wherever the capture has the case, and from a
-mutated copy of it where it does not. The distinction matters: the locked relay
-below is what `ebus-panel-sim` 0.7.0 -- the specification's own executable
-publisher -- emits for a circuit commissioned `non-controllable`, so those tests
-are evidence that the catalogued rule and a conforming producer agree. The
-never-backup circuit is a mutation, because no circuit in the capture is
-commissioned that way, and it says so.
+mutated copy of it where it does not. The distinction matters, and the capture
+now carries both locks: `ebus-panel-sim` 0.8.0 -- the specification's own
+executable publisher -- emits a `non-controllable` relay on Solar Inverter and a
+never-backup priority on Pool Pump. So every refusal asserted against a device id
+below is evidence that the catalogued rule and a conforming producer agree,
+rather than evidence about an edit made here. The two locks land on different
+circuits, which is what makes their independence provable from the capture as
+well as arguable from the catalogs.
+
+What stays mutated is what this producer will not emit: a declaration that
+disagrees with its own value (the firmware defect SPAN reports), a `settable:
+false` spelled out where a conforming publisher says nothing, a `$settable`
+dropped from a circuit that publishes one, and a `load-shed` node with no
+`priority` property in it.
 """
 
 from __future__ import annotations
@@ -43,6 +51,11 @@ LOCKED_CIRCUIT = "573066aaddd7b75114c4563ce3af18c4"
 
 CONTROLLABLE_CIRCUIT = "0ab966b95f92a6a51ec548485aa85f54"
 """Kitchen Lights, its ordinary sibling."""
+
+NEVER_BACKUP_CIRCUIT = "acf35888f35522c721501d35e66503e6"
+"""Pool Pump, commissioned never-backup: `load-shed/priority` carries no
+`$settable`. Its relay is controllable, so it is the other lock and only the
+other lock."""
 
 
 def _schema() -> V2HomieSchema:
@@ -222,7 +235,11 @@ def test_a_relay_target_exists_exactly_where_relay_controllable_is_true(adapter:
         for device_id, topics in tree.items()
         if json.loads(topics["$description"])["type"].endswith(".circuit")
     }
-    assert len(circuits) == 5
+    assert len(circuits) == 6
+    assert circuits[NEVER_BACKUP_CIRCUIT]["switch/relay-controllable"] == "true", (
+        "the priority-locked circuit's relay is no longer controllable, so the sweep below "
+        "no longer carries the case that proves the two commissioning locks are independent"
+    )
 
     for device_id, topics in circuits.items():
         controllable = topics["switch/relay-controllable"] == "true"
@@ -255,7 +272,7 @@ def test_a_circuit_the_tree_does_not_carry_yields_no_target(adapter: SchemaOneAd
 
 
 # ---------------------------------------------------------------------------
-# The priority, which the capture has no case for
+# The priority, which the capture carries a case for too
 # ---------------------------------------------------------------------------
 
 
@@ -274,14 +291,18 @@ def test_priority_stays_settable_on_a_locked_relay(adapter: SchemaOneAdapter) ->
     assert target.topic == f"ebus/5/{LOCKED_CIRCUIT}/load-shed/priority/set"
 
 
-def test_a_never_backup_circuit_yields_no_priority_target() -> None:
-    """Mutated, because no circuit in the capture is commissioned never-backup."""
+def test_a_never_backup_circuit_yields_no_priority_target(adapter: SchemaOneAdapter) -> None:
+    """The mirror of the test above, and both halves come off real circuits now.
 
-    adapter = _adapter(_redeclared(CONTROLLABLE_CIRCUIT, "load-shed", "priority", settable=False))
-
-    assert adapter.set_circuit_priority_target(CONTROLLABLE_CIRCUIT) is None
-    # And only the priority: the relay is a separate commissioning flag.
-    assert adapter.set_circuit_relay_target(CONTROLLABLE_CIRCUIT) is not None
+    Pool Pump is commissioned never-backup and its relay is controllable, so this
+    is the other direction of the same independence: a locked priority takes
+    nothing away from the relay beside it, exactly as a locked relay takes nothing
+    away from the priority. Conflating the two would strip a control from every
+    never-backup circuit on every panel, and the pair of circuits is what makes
+    that a claim about commissioning rather than about a mutation of mine.
+    """
+    assert adapter.set_circuit_priority_target(NEVER_BACKUP_CIRCUIT) is None
+    assert adapter.set_circuit_relay_target(NEVER_BACKUP_CIRCUIT) is not None
 
 
 def test_an_unannounced_priority_settable_yields_no_target() -> None:
@@ -293,6 +314,13 @@ def test_an_unannounced_priority_settable_yields_no_target() -> None:
     permission resolved a write topic for precisely the circuits commissioned not
     to accept one, and the panel would have refused the publish.
 
+    Mutated even though the capture now carries a never-backup circuit, because
+    the two ask different questions. Pool Pump proves the producer announces the
+    lock this way; this proves the *reader* keys on the attribute and on nothing
+    else about that circuit -- the omission is applied to a circuit whose
+    declaration otherwise announces the priority settable, so every other
+    difference between the two circuits is held constant.
+
     Only the priority: the relay is a separate commissioning flag and this
     circuit's is untouched.
     """
@@ -303,18 +331,41 @@ def test_an_unannounced_priority_settable_yields_no_target() -> None:
     assert adapter.set_circuit_relay_target(CONTROLLABLE_CIRCUIT) is not None
 
 
-def test_every_circuit_in_the_capture_announces_its_priority_settable(adapter: SchemaOneAdapter) -> None:
-    """The premise of the two mutations above, asserted rather than assumed.
+def test_a_priority_declared_settable_false_is_a_lock_too() -> None:
+    """The spelling no conforming publisher uses, refused all the same.
 
-    Both build a locked priority by editing a declaration that the producer
-    published as settable. A capture that stopped announcing the attribute would
-    make the mutations indistinguishable from the shipped state and quietly turn
-    `test_a_priority_target_exists_exactly_on_the_circuits` into an assertion
-    that no circuit has a priority target at all.
+    Homie 5 defaults `$settable` to false and the eBus SDK emits the attribute
+    only where it is true, so the capture's never-backup circuit announces its
+    lock by saying nothing and `settable: false` appears nowhere in it. A reader
+    that recognised only the omission would grant a priority control to firmware
+    that spells the same lock out in words, which is the one publisher that could
+    not be accused of ambiguity.
+    """
+
+    adapter = _adapter(_redeclared(CONTROLLABLE_CIRCUIT, "load-shed", "priority", settable=False))
+
+    assert adapter.set_circuit_priority_target(CONTROLLABLE_CIRCUIT) is None
+    assert adapter.set_circuit_relay_target(CONTROLLABLE_CIRCUIT) is not None
+
+
+def test_exactly_one_circuit_in_the_capture_locks_its_priority(adapter: SchemaOneAdapter) -> None:
+    """The premise of everything above, asserted rather than assumed.
+
+    Two things at once, and each guards a different set of tests. That every
+    circuit but one announces `settable: true` is what makes the mutations above
+    mutations: they build a lock by editing a declaration the producer published
+    as settable, and a capture that stopped announcing the attribute would make
+    them indistinguishable from the shipped state while quietly turning
+    `test_a_priority_target_exists_exactly_where_the_priority_is_announced_settable`
+    into an assertion that no circuit has a priority target at all. That the remaining one is
+    `NEVER_BACKUP_CIRCUIT` is what makes the capture-driven refusal a refusal
+    rather than a lookup of an absent device.
 
     It is also the standing answer to the argument the permissive default was
-    built on -- firmware that publishes no attribute at all. Every circuit here
-    announces one, so no producer we hold a capture from ever needed it.
+    built on -- firmware that publishes no attribute at all. This producer omits
+    it, and it omits it in precisely one place: the circuit commissioned not to
+    accept the write. Silence here is not a gap in what the panel said, it is
+    what the panel said.
     """
     tree = parent_child_tree()
     circuits = {
@@ -322,11 +373,17 @@ def test_every_circuit_in_the_capture_announces_its_priority_settable(adapter: S
         for device_id, topics in tree.items()
         if json.loads(topics["$description"])["type"].endswith(".circuit")
     }
-    assert len(circuits) == 5, "the capture's circuit set has moved; this premise is no longer about what it was"
+    assert len(circuits) == 6, "the capture's circuit set has moved; this premise is no longer about what it was"
 
+    locked: set[str] = set()
     for device_id, topics in circuits.items():
         definition = json.loads(topics["$description"])["nodes"]["load-shed"]["properties"]["priority"]
-        assert definition.get("settable") is True, device_id
+        if "settable" in definition:
+            assert definition["settable"] is True, device_id
+        else:
+            locked.add(device_id)
+
+    assert locked == {NEVER_BACKUP_CIRCUIT}
 
 
 # ---------------------------------------------------------------------------
@@ -361,18 +418,24 @@ def test_a_device_that_declares_no_priority_yields_no_priority_target(adapter: S
     assert adapter.set_circuit_relay_target(device_id) is None
 
 
-def test_a_priority_target_exists_exactly_on_the_circuits(adapter: SchemaOneAdapter) -> None:
+def test_a_priority_target_exists_exactly_where_the_priority_is_announced_settable(adapter: SchemaOneAdapter) -> None:
     """Over the whole capture at once, the way the relay invariant is asserted.
 
     Every device in the tree is addressable by id, and only the circuits declare
     a shed priority — so a target on anything else is a target for a control
     that device never offered, whatever its `$settable` would have defaulted to.
+    Being a circuit is necessary and not sufficient: the never-backup one
+    declares the property and withholds the write, so the predicate is the
+    declaration itself. Asserting the device type instead would pass a reader
+    that never looked at a declaration at all.
     """
     tree = parent_child_tree()
 
     for device_id, topics in tree.items():
-        is_circuit = json.loads(topics["$description"])["type"].endswith(".circuit")
-        assert (adapter.set_circuit_priority_target(device_id) is not None) is is_circuit, device_id
+        nodes = json.loads(topics["$description"])["nodes"]
+        declared = nodes.get("load-shed", {}).get("properties", {}).get("priority", {})
+        announced = declared.get("settable") is True
+        assert (adapter.set_circuit_priority_target(device_id) is not None) is announced, device_id
 
 
 def test_a_declared_priority_missing_from_its_node_is_undeclared_too(adapter: SchemaOneAdapter) -> None:
@@ -405,6 +468,7 @@ def test_has_circuit_answers_for_the_circuits_and_nothing_else(adapter: SchemaOn
     """
     assert adapter.has_circuit(CONTROLLABLE_CIRCUIT) is True
     assert adapter.has_circuit(LOCKED_CIRCUIT) is True, "locked is not absent"
+    assert adapter.has_circuit(NEVER_BACKUP_CIRCUIT) is True, "nor is a locked priority"
 
     for device_id in _NON_CIRCUITS:
         assert adapter.has_circuit(device_id) is False, device_id

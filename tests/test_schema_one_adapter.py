@@ -212,7 +212,7 @@ def test_snapshot_is_built_from_the_discovered_tree(adapter: SchemaOneAdapter) -
     assert snapshot.panel_size == 40
     assert snapshot.circuits[SOLAR_CIRCUIT].name == "Solar Inverter"
     assert snapshot.battery.soe_percentage == pytest.approx(50.4104, rel=1e-4)
-    # 5 circuits occupying 8 positions (two are multi-pole), so 32 remain.
+    # 6 circuits occupying 9 positions (three are multi-pole), so 31 remain.
     assert len(snapshot.circuits) == 37
 
 

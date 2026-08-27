@@ -176,7 +176,7 @@ def _moved() -> Mapping[Declaration, frozenset[str]]:
     """Republish each declared property once; return the snapshot fields it moved.
 
     One rebuild per declaring *device*, unioned: the two lugs devices and the
-    five circuits declare the same properties and are read differently, so a
+    six circuits declare the same properties and are read differently, so a
     single probe against whichever came first would answer for both.
     """
     tree = _tree()

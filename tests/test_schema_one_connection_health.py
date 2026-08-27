@@ -9,7 +9,7 @@ it describes, and the mapper's job is to put it back where it belongs.
 **Three things make that easy to get wrong, and every test here is aimed at one
 of them.**
 
-*Absence is a value.* Two of the capture's five circuits publish no connection
+*Absence is a value.* Three of the capture's six circuits publish no connection
 record at all — the spec calls that normal for a mixed-load or unsurveyed
 circuit — and the enum firmware does publish is `OK,LOST,DEGRADED`, with no
 UNKNOWN member. So "nobody has said" can only be expressed by the property not
@@ -139,7 +139,7 @@ def test_the_status_enum_has_no_unknown_member() -> None:
 def test_only_the_circuits_feeding_a_der_publish_a_connection_record() -> None:
     """The negative case is in the capture, not manufactured by a test.
 
-    Five circuits, three of which feed a commissioned DER. The other two feed
+    Six circuits, three of which feed a commissioned DER. The other three feed
     ordinary loads and publish neither half of the record — which
     `distribution-enclosure.md` describes as the normal state for a mixed-load
     circuit, and which is exactly the shape a mapper must not read as a fault.

@@ -34,7 +34,7 @@ def test_roles_are_sorted_by_declared_type_not_device_id() -> None:
     what the schema defines."""
     roles = TreeRoles(_children())
 
-    assert len(roles.circuits) == 5
+    assert len(roles.circuits) == 6
     assert len(roles.lugs) == 2
     assert len(roles.evse) == 2
     assert roles.bess is not None and roles.bess.device_id == "bess"
@@ -51,7 +51,7 @@ def test_snapshot_carries_panel_identity(snapshot: SpanPanelSnapshot) -> None:
 def test_every_real_circuit_is_present(snapshot: SpanPanelSnapshot) -> None:
     real = {cid for cid in snapshot.circuits if not cid.startswith("unmapped_tab_")}
 
-    assert len(real) == 5
+    assert len(real) == 6
     assert SOLAR_CIRCUIT in real
     assert snapshot.circuits[SOLAR_CIRCUIT].name == "Solar Inverter"
 
@@ -89,7 +89,7 @@ def test_der_snapshots_are_populated(snapshot: SpanPanelSnapshot) -> None:
 
 
 def test_panel_and_lugs_values_reach_the_snapshot(snapshot: SpanPanelSnapshot) -> None:
-    assert snapshot.instant_grid_power_w == -5847.0
+    assert snapshot.instant_grid_power_w == -4617.0
     assert snapshot.power_flow_pv == -8500.0
     assert snapshot.grid_state == "ON_GRID"
     assert snapshot.l1_voltage == 120.0
@@ -126,7 +126,7 @@ def test_an_unsizable_panel_yields_no_unmapped_positions() -> None:
     assert snapshot.panel_size == 0
     assert not [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
     # Real circuits survive — only the synthesised ones depend on the total.
-    assert len(snapshot.circuits) == 5
+    assert len(snapshot.circuits) == 6
 
 
 def test_a_panel_with_no_children_still_builds() -> None:

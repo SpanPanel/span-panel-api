@@ -94,7 +94,7 @@ Its input is committed too, as `scripts/reference_panel.yaml`, pinned as `peers.
 panel that mirrors the emitter's own `examples/forty_tab_minimal.yaml` key for key and marks its two deliberate divergences at the head of the file: spec-legal shed priorities in place of a value the emitter degrades to `UNKNOWN`
 (electrification-bus/distribution-enclosure-simulator#51), and the identity properties a real panel publishes. Read that file before assuming ours has drifted from theirs.
 
-Expect a recapture to move every `$description`'s `version`, which is minted from the wall clock. A diff confined to those thirteen lines means the producer did not move.
+Expect a recapture to move every `$description`'s `version`, which is minted from the wall clock. A diff confined to those fourteen lines means the producer did not move.
 
 ### The producer is the specification, executable
 

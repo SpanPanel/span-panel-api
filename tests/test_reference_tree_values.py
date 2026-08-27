@@ -17,12 +17,12 @@ one. The drift was found by comparing the two artifacts by hand, which is a
 thing nobody does twice — hence this.
 
 **Compared at device-type granularity, and it has to be.** The two artifacts
-describe different panels: this one is a five-circuit synthetic enclosure with
+describe different panels: this one is a six-circuit synthetic enclosure with
 `example-*` identifiers, panelbench's is a twenty-eight-circuit one, so a
 per-device comparison would fail on the names rather than on a value. Type
-granularity is also the granularity the question is asked at: five circuits
-declare the same properties, and the same one going unvalued on all five is one
-gap, not five. The same choice the integration's `test_declared_but_unread`
+granularity is also the granularity the question is asked at: six circuits
+declare the same properties, and the same one going unvalued on all six is one
+gap, not six. The same choice the integration's `test_declared_but_unread`
 makes, for the same reason.
 
 The reduction loses nothing here, and that is measured rather than assumed:

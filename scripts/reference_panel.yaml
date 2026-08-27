@@ -84,6 +84,15 @@ circuit_templates:
     priority: OFF_GRID
     breaker_rating: 50
     device_type: evse
+  pool_pump:
+    # Commissioned to receive no backup power: the priority is locked at OFF_GRID,
+    # so `load-shed/priority` publishes no `$settable` and refuses a `/set`. The
+    # other way a circuit can be locked, distinct from `solar` below, whose NEVER
+    # is an ordinary settable value meaning "never shed".
+    relay_behavior: controllable
+    priority: OFF_GRID
+    never_backup: true
+    breaker_rating: 20
   solar:
     # The locked circuit, and the reason this capture can test a refusal at all: a
     # non-controllable relay publishes no `$settable` and reports requester
@@ -113,6 +122,10 @@ circuits:
     name: SPAN Drive - Driveway
     template: span_drive
     tabs: [35, 37]
+  - id: pool_pump
+    name: Pool Pump
+    template: pool_pump
+    tabs: [3]
   - id: solar_inverter
     name: Solar Inverter
     template: solar
@@ -132,6 +145,7 @@ ticks:
     circuits:
       kitchen_lights: 121.0
       garage_outlet: 122.0
+      pool_pump: 1230.0
       span_drive_garage: 2410.0
       span_drive_driveway: 2420.0
       solar_inverter: 0.0
@@ -141,6 +155,7 @@ ticks:
     circuits:
       kitchen_lights: 121.0
       garage_outlet: 122.0
+      pool_pump: 1230.0
       span_drive_garage: 2410.0
       span_drive_driveway: 2420.0
       solar_inverter: -2430.0
@@ -150,6 +165,7 @@ ticks:
     circuits:
       kitchen_lights: 121.0
       garage_outlet: 122.0
+      pool_pump: 1230.0
       span_drive_garage: 2410.0
       span_drive_driveway: 0.0
       solar_inverter: -8500.0

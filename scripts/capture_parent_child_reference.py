@@ -57,9 +57,9 @@ find in the emitter, so the manifest is committed here and pinned in
 `spec_lock.json` as `peers.ebus-panel-sim.manifest`.
 
 **Shape-stable, not byte-stable.** Every `$description` carries a `version`
-minted from the wall clock when its device is built, so all thirteen move on
+minted from the wall clock when its device is built, so all fourteen move on
 every run. Nothing here reads it — it is Homie's own change counter — but it
-does mean a recapture always shows thirteen diffs, and that a diff confined to
+does mean a recapture always shows fourteen diffs, and that a diff confined to
 those lines says the producer did not move.
 """
 
@@ -245,6 +245,10 @@ def circuit_instance(profile: Profile, circuit: Mapping[str, object], pcs_priori
             "relay-behavior": behavior,
             "placement": _text(circuit, "placement", "downstream-of-lugs"),
             "always-on": _bool_str(behavior == "always-on"),
+            # The other commissioning lock (ebus-panel-sim 0.8.0): read by the
+            # emitter's `manifest_physics.never_backup`, which pins the priority
+            # and drops `$settable` from `load-shed/priority`.
+            "never-backup": _bool_str(_flag(template, "never_backup") or _flag(circuit, "never_backup")),
             "pcs-priority": str(pcs_priority),
         },
     )

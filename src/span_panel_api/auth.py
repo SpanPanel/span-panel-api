@@ -112,6 +112,11 @@ def _redact(value: object, secrets: Collection[str] = ()) -> object:
     validator may fold the rejected value into its own prose, and nothing marks
     that. The one call that sends a credential knows exactly what it sent.
 
+    The three are meant to be read together rather than each judged alone: the
+    ``loc``-sibling rule covers the credential's *position* and is completed by
+    the value scrubbing the sole call site always supplies, so a scalar this
+    walk cannot place is still removed when the caller knows what it sent.
+
     Walks dicts and lists; any other value is returned as-is once scrubbed.
     """
     if isinstance(value, dict):

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest

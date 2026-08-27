@@ -34,6 +34,23 @@ VALIDATION_422 = {
     ]
 }
 
+# The other shape the same validation layer produces, and the one a key scan
+# cannot see at all: pydantic v2 reports a *field-level* failure by pointing
+# `loc` at the field and putting the rejected value itself under `input`. The
+# credential is a bare string there, so nothing about the key it arrived under
+# says "secret" — only the sibling `loc` does.
+FIELD_LEVEL_422 = {
+    "detail": [
+        {
+            "type": "string_too_short",
+            "loc": ["body", "hopPassphrase"],
+            "msg": "String should have at least 8 characters",
+            "input": SECRET,
+            "ctx": {"min_length": 8},
+        }
+    ]
+}
+
 
 def _response(status_code: int, *, json_data: object | None = None, text: str = "") -> httpx.Response:
     if json_data is not None:
@@ -88,6 +105,56 @@ class TestRedactWalk:
         assert _redact("plain") == "plain"
 
 
+class TestRedactBySiblingLocation:
+    """A scalar is judged by the `loc` beside it when its own key says nothing."""
+
+    def test_redacts_a_scalar_input_named_by_loc(self) -> None:
+        redacted = _redact(FIELD_LEVEL_422)
+        assert SECRET not in json.dumps(redacted)
+
+    def test_keeps_the_reason_the_field_was_rejected(self) -> None:
+        rendered = json.dumps(_redact(FIELD_LEVEL_422))
+        assert "string_too_short" in rendered
+        assert "at least 8 characters" in rendered
+        assert "hopPassphrase" in rendered
+
+    def test_a_loc_naming_no_credential_leaves_its_input_alone(self) -> None:
+        """The rule is scoped to credential fields — an ordinary 422 stays readable."""
+        body = {"detail": [{"type": "missing", "loc": ["body", "name"], "msg": "Field required", "input": "ha"}]}
+        assert _redact(body) == body
+
+    def test_a_container_input_is_still_walked_not_flattened(self) -> None:
+        """A nested echo keeps everything the key scan can clear individually."""
+        rendered = json.dumps(_redact(VALIDATION_422))
+        assert SECRET not in rendered
+        assert "home-assistant-0badcafe" in rendered
+
+
+class TestRedactByValue:
+    """What the caller already knows is a secret is removed wherever it appears.
+
+    Structure runs out: a validator is free to fold the rejected value into its
+    own prose, and no key or `loc` marks that. The one call that sends a
+    credential knows exactly what it sent, so it can say so.
+    """
+
+    def test_removes_the_secret_from_free_prose(self) -> None:
+        body = {"detail": f"passphrase {SECRET} was rejected"}
+        rendered = json.dumps(_redact(body, (SECRET,)))
+        assert SECRET not in rendered
+        assert "was rejected" in rendered
+
+    def test_removes_the_secret_from_an_unnamed_scalar(self) -> None:
+        assert _redact({"echo": SECRET}, (SECRET,)) == {"echo": "***"}
+
+    def test_an_empty_secret_does_not_shred_the_body(self) -> None:
+        """A door-bypass registration sends no passphrase; `""` must be inert."""
+        assert _redact({"msg": "fine"}, ("",)) == {"msg": "fine"}
+
+    def test_no_secrets_leaves_the_body_alone(self) -> None:
+        assert _redact({"msg": "fine"}, ()) == {"msg": "fine"}
+
+
 class TestRegisterV2AuthFailure:
     @pytest.mark.asyncio
     async def test_secret_is_not_in_the_exception(self) -> None:
@@ -119,6 +186,24 @@ class TestRegisterV2AuthFailure:
         assert SECRET not in str(exc)
         assert str(len(body.encode())) in caplog.text
         assert "text/html" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_field_level_422_does_not_log_the_rejected_passphrase(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The scalar echo, end to end: nothing about `input`'s key marks it secret."""
+        with caplog.at_level(logging.DEBUG, logger="span_panel_api.auth"):
+            exc = await _register_against(_response(422, json_data=FIELD_LEVEL_422))
+        assert SECRET not in caplog.text
+        assert SECRET not in str(exc)
+        assert "at least 8 characters" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_the_passphrase_is_removed_wherever_the_panel_put_it(self, caplog: pytest.LogCaptureFixture) -> None:
+        """No key and no `loc` names it — only the caller knows what it sent."""
+        body = {"error": f"the passphrase {SECRET} is not the one on the label"}
+        with caplog.at_level(logging.DEBUG, logger="span_panel_api.auth"):
+            await _register_against(_response(401, json_data=body))
+        assert SECRET not in caplog.text
+        assert "not the one on the label" in caplog.text
 
     @pytest.mark.asyncio
     async def test_403_takes_the_same_path(self) -> None:

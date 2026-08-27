@@ -9,6 +9,7 @@ client (which only covers v1 endpoints).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 import hashlib
 import json
 import logging
@@ -45,28 +46,82 @@ _CREDENTIAL_KEYS = frozenset(
 
 _REDACTED = "***"
 
+#: The key a pydantic-style validation error puts the field path under. Its value
+#: is a list -- ``["body", "hopPassphrase"]`` -- and it is the only thing in a
+#: field-level error object that says what was being validated.
+_LOCATION_KEY = "loc"
 
-def _redact(value: object) -> object:
-    """Replace every credential-valued key in a JSON-decoded body, at any depth.
+#: The members of a validation error object that describe the failure rather than
+#: repeat what was submitted. In an error object whose ``loc`` names a credential,
+#: every *other* scalar is the rejected value under one name or another --
+#: ``input`` is the name FastAPI uses, and a validator is free to add its own.
+_ERROR_DESCRIPTION_KEYS = frozenset({"type", "loc", "msg", "url"})
 
-    A top-level key scan is not enough, and the case that matters is the exact
-    one this exists for: a FastAPI-style 422 echoes the request that failed
-    validation back under ``detail[].input``, so the passphrase that was just
-    rejected reappears nested two levels down. Scanning only the outermost
-    object would redact nothing in precisely the response most likely to carry a
-    secret.
 
-    Walks dicts and lists; anything else is returned as-is, because a scalar
-    reached here is a value whose key has already been judged.
+def _names_a_credential(location: object) -> bool:
+    """Whether a validation error's ``loc`` points at one of the credential fields."""
+    if not isinstance(location, list):
+        return False
+    return any(isinstance(part, str) and part.lower() in _CREDENTIAL_KEYS for part in location)
+
+
+def _scrub(text: str, secrets: Collection[str]) -> str:
+    """Remove every occurrence of a credential the caller knows it sent.
+
+    Empty secrets are skipped rather than matched: a door-bypass registration
+    sends no passphrase, and ``"".replace("", ...)`` would rewrite every gap
+    between characters in the body.
+    """
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, _REDACTED)
+    return text
+
+
+def _redact_member(key: object, item: object, rejected_here: bool, secrets: Collection[str]) -> object:
+    """Decide one member of a decoded body, by its key and by what sits beside it."""
+    name = str(key).lower()
+    if name in _CREDENTIAL_KEYS:
+        return _REDACTED
+    if rejected_here and name not in _ERROR_DESCRIPTION_KEYS and not isinstance(item, dict | list):
+        # A scalar in an error object whose `loc` names a credential. Its own key
+        # says nothing -- `input` is not a secret-sounding word -- so the `loc`
+        # beside it is the only evidence there is, and it is conclusive. A dict or
+        # a list is walked instead, because there the keys inside can be judged
+        # one by one and flattening it would throw away the diagnostic.
+        return _REDACTED
+    return _redact(item, secrets)
+
+
+def _redact(value: object, secrets: Collection[str] = ()) -> object:
+    """Strip credentials out of a JSON-decoded body, at any depth, three ways.
+
+    **By key**, wherever a credential-named key appears. A top-level scan is not
+    enough: a FastAPI-style 422 echoes the whole rejected request back under
+    ``detail[].input``, so the passphrase reappears two levels down.
+
+    **By the key beside it.** The same validation layer reports a *field-level*
+    failure differently — ``loc`` points at the field and ``input`` carries the
+    bare value — and there the credential is a scalar under an innocuous key. Only
+    the sibling ``loc`` marks it, so that is what is read.
+
+    **By value**, for the secrets the caller passes in. Structure runs out: a
+    validator may fold the rejected value into its own prose, and nothing marks
+    that. The one call that sends a credential knows exactly what it sent.
+
+    Walks dicts and lists; any other value is returned as-is once scrubbed.
     """
     if isinstance(value, dict):
-        return {key: _REDACTED if str(key).lower() in _CREDENTIAL_KEYS else _redact(item) for key, item in value.items()}
+        rejected_here = _names_a_credential(value.get(_LOCATION_KEY))
+        return {_scrub(str(key), secrets): _redact_member(key, item, rejected_here, secrets) for key, item in value.items()}
     if isinstance(value, list):
-        return [_redact(item) for item in value]
+        return [_redact(item, secrets) for item in value]
+    if isinstance(value, str):
+        return _scrub(value, secrets)
     return value
 
 
-def _log_auth_failure(endpoint: str, response: httpx.Response) -> None:
+def _log_auth_failure(endpoint: str, response: httpx.Response, secrets: Collection[str] = ()) -> None:
     """Record why an auth call failed, at DEBUG and with credentials removed.
 
     The body is worth keeping — a 422's validation detail is the only thing that
@@ -74,6 +129,10 @@ def _log_auth_failure(endpoint: str, response: httpx.Response) -> None:
     exception message, which Home Assistant surfaces in the UI, writes to the
     config-flow log, and carries into a diagnostics download. DEBUG is opt-in and
     is where a user chasing a registration failure is already looking.
+
+    ``secrets`` is what the caller sent on this request. Passing it closes the
+    gap that key-based redaction cannot: a panel is free to quote the credential
+    back in free prose, and no key or ``loc`` marks that.
 
     A body that is not JSON is described rather than shown. It could be an HTML
     error page from a proxy, and it could equally be an echo of the request; with
@@ -95,7 +154,7 @@ def _log_auth_failure(endpoint: str, response: httpx.Response) -> None:
         "%s failed with HTTP %d; body (credentials redacted): %s",
         endpoint,
         response.status_code,
-        json.dumps(_redact(parsed), sort_keys=True),
+        json.dumps(_redact(parsed, secrets), sort_keys=True),
     )
 
 
@@ -203,8 +262,11 @@ async def register_v2(
         # is logged at DEBUG instead: a 422 from the panel's validation layer
         # echoes the submitted `hopPassphrase` straight back, and interpolating
         # `response.text` here put that secret into an exception message that
-        # Home Assistant shows in the UI and captures in diagnostics.
-        _log_auth_failure("/api/v2/auth/register", response)
+        # Home Assistant shows in the UI and captures in diagnostics. The
+        # passphrase goes with it because this is the one place in the library
+        # that knows what was sent, and the panel is under no obligation to
+        # quote it back under a key that names it.
+        _log_auth_failure("/api/v2/auth/register", response, () if passphrase is None else (passphrase,))
         raise SpanPanelAuthError(f"Authentication failed (HTTP {response.status_code})")
 
     if response.status_code != 200:

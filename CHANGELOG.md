@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.1.1]
+
+A follow-up to 3.1.0's security work, with no API change and no adapter move required.
+
+### Fixed
+
+- **A rejected passphrase no longer reaches the debug log**, closing the shape of validation response that reports the field that failed in one place and the value it rejected in another, under a key that says nothing about what it holds.
+- **A panel that fails part-way through answering is reported as unreachable**, rather than as an error from the HTTP layer that a consumer catching this library's own errors would not catch.
+- **A response this library cannot read is reported as an API error naming the endpoint and the missing field**, instead of a raw parsing error raised out of the call.
+- **`get_v2_status` reports whether the panel proved proximity**, which until now only the detection path had read, so the same panel answered differently depending on which call had asked.
+
+### Added
+
+- **A warning when the panel's bootstrap traffic is unencrypted**, logged once per client, never repeating the credential it warns about, and leaving plaintext the default it has always been.
+
 ## [3.1.0]
 
 A security release. Three things a caller could not previously find out — whether a control command was delivered, whether the panel's bootstrap traffic was encrypted, and whether the CA behind the MQTT broker is still the one that was there yesterday —

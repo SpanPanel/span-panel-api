@@ -311,14 +311,21 @@ def test_every_circuit_in_the_capture_announces_its_priority_settable(adapter: S
     make the mutations indistinguishable from the shipped state and quietly turn
     `test_a_priority_target_exists_exactly_on_the_circuits` into an assertion
     that no circuit has a priority target at all.
+
+    It is also the standing answer to the argument the permissive default was
+    built on -- firmware that publishes no attribute at all. Every circuit here
+    announces one, so no producer we hold a capture from ever needed it.
     """
     tree = parent_child_tree()
+    circuits = {
+        device_id: topics
+        for device_id, topics in tree.items()
+        if json.loads(topics["$description"])["type"].endswith(".circuit")
+    }
+    assert len(circuits) == 5, "the capture's circuit set has moved; this premise is no longer about what it was"
 
-    for device_id, topics in tree.items():
-        description = json.loads(topics["$description"])
-        if not description["type"].endswith(".circuit"):
-            continue
-        definition = description["nodes"]["load-shed"]["properties"]["priority"]
+    for device_id, topics in circuits.items():
+        definition = json.loads(topics["$description"])["nodes"]["load-shed"]["properties"]["priority"]
         assert definition.get("settable") is True, device_id
 
 

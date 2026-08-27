@@ -177,27 +177,6 @@ def test_an_unannounced_settable_means_never_backup(kitchen: DiscoveredDevice) -
     assert build_circuit(kitchen).is_never_backup is True
 
 
-def test_every_captured_circuit_announces_its_priority_settable() -> None:
-    """The premise that makes the test above a mutation rather than the norm.
-
-    A permissive default was justified as protecting firmware that publishes no
-    attribute at all. The capture publishes `settable: true` explicitly on every
-    circuit's `load-shed/priority`, so no circuit here ever needed the default —
-    and a capture that stopped doing so would be a producer change worth seeing
-    named rather than absorbed silently.
-    """
-    circuits = {
-        device_id: topics
-        for device_id, topics in _TREE.items()
-        if json.loads(topics["$description"])["type"].endswith(".circuit")
-    }
-    assert circuits, "the capture carries no circuits"
-
-    for device_id, topics in circuits.items():
-        definition = json.loads(topics["$description"])["nodes"]["load-shed"]["properties"]["priority"]
-        assert definition.get("settable") is True, device_id
-
-
 def _catalogued_priorities() -> list[str]:
     """Every value `load-shed` 0.3 declares for `priority`, in catalog order.
 

@@ -187,7 +187,7 @@ def test_an_unannounced_settable_means_never_backup(kitchen: DiscoveredDevice) -
 def test_the_captured_never_backup_circuit_is_locked_and_still_controllable(pump: DiscoveredDevice) -> None:
     """The same lock read off a real circuit rather than an edited declaration.
 
-    The three tests above build a never-backup circuit by editing Kitchen
+    The two tests above build a never-backup circuit by editing Kitchen
     Lights, which is what proves the reader keys on `$settable` and on nothing
     else about the device. This proves the other half — that a conforming
     producer announces the lock that way: `ebus-panel-sim` 0.8.0 commissions Pool

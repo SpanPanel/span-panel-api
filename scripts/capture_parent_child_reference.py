@@ -238,7 +238,9 @@ def circuit_instance(profile: Profile, circuit: Mapping[str, object], pcs_priori
             # The other commissioning lock (ebus-panel-sim 0.8.0): read by the
             # emitter's `manifest_physics.never_backup`, which pins the priority
             # and drops `$settable` from `load-shed/priority`.
-            "never-backup": _bool_str(_flag(template, "never_backup") or _flag(circuit, "never_backup")),
+            "never-backup": _bool_str(
+                _flag(template, "never_backup") if "never_backup" in template else _flag(circuit, "never_backup")
+            ),
             "pcs-priority": str(pcs_priority),
         },
     )

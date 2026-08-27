@@ -4,7 +4,12 @@ Every level of a description is optional and the SDK hands it back as an
 untyped mapping, so each reader has to narrow before it can index. Doing that
 once here keeps the narrowing identical everywhere and keeps ``Any`` out of the
 modules that read declarations — :mod:`field_metadata` for units and datatypes,
-:mod:`charge_limit` for which spelling of a node a charger declares.
+:mod:`charge_limit` for which spelling of a node a charger declares,
+:mod:`circuits` for whether a control may be written.
+
+``$settable`` is read here too, and only here: it is the one declaration
+attribute that authorises a write, and three modules were deciding what its
+absence means. :func:`declared_settable` gives that answer once.
 
 These read the *declaration*, never a value. Property values come through
 :mod:`panel`'s ``text`` / ``number`` / ``integer`` readers.
@@ -13,6 +18,8 @@ These read the *declaration*, never a value. Property values come through
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+from span_panel_api_schema_1.const import ATTR_SETTABLE
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
@@ -56,6 +63,37 @@ def node_properties(device: DiscoveredDevice | None, node_id: str) -> dict[str, 
     if device is None:
         return {}
     return properties(nodes(device.description or {}).get(node_id, {}))
+
+
+def declared_settable(definition: dict[str, object] | None) -> bool:
+    """Whether one property's declaration authorises a write to it.
+
+    **Absence is refusal, in both of the ways a declaration can be absent.**
+    Homie 5 defines ``$settable`` as defaulting to *false*, so a property
+    declared without the attribute has authorised nothing; and ``None`` — the
+    property, or the node carrying it, not declared at all — has not even said
+    there is something to write. Neither is permission, and this is the only
+    place in the adapter that decides so.
+
+    That default is what a conforming publisher relies on. The eBus SDK builds a
+    ``$description`` from ``PropertySpec``, whose ``settable`` is ``False`` by
+    default and which emits the attribute *only* when it is true
+    (``ebus_sdk.declaration``) — so a producer describing a locked control omits
+    ``$settable`` and never publishes ``settable: false``. Reading omission as
+    permission would therefore mean offering a control on precisely the devices
+    commissioned not to have one.
+
+    A string ``"true"`` counts and nothing else does, because Homie attributes
+    travel as text and a publisher that serialises the description by hand may
+    not re-type the booleans — while a value that is neither the boolean nor
+    that word has not said what it means, and a write is not the place to guess.
+    """
+    if definition is None:
+        return False
+    settable = definition.get(ATTR_SETTABLE)
+    if isinstance(settable, bool):
+        return settable
+    return str(settable).strip().lower() == "true"
 
 
 def optional_str(value: object) -> str | None:

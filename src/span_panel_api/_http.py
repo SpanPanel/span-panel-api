@@ -139,33 +139,54 @@ async def _get_client(
         yield client
 
 
-def _warn_plaintext_transport(host: str, what: str, ssl_context: ssl.SSLContext | None) -> None:
-    """Say out loud that the panel's bootstrap traffic is not encrypted.
+#: Panels already warned about over plaintext, so the warning is said once each.
+#: Module state for the life of the process, which is the same scope the MQTT
+#: bridge gives its own unpinned-CA warning.
+_warned_plaintext_hosts: set[str] = set()
+
+
+def _reset_plaintext_warnings() -> None:
+    """Test hook. Not public API."""
+    _warned_plaintext_hosts.clear()
+
+
+def _warn_plaintext_transport(host: str, ssl_context: ssl.SSLContext | None) -> None:
+    """Say out loud, once per panel, that its bootstrap traffic is not encrypted.
 
     In the same voice as the MQTT bridge's unpinned-CA warning, and for the same
     reason: a security property that is off by default is only a decision if the
-    operator can tell it is off. ``ssl_context=None`` puts every bootstrap
-    request on plaintext ``http://``, and registration is the one that carries
-    the panel passphrase up and brings the broker password back -- so anything on
-    the path reads both, and nothing said so.
+    operator can tell it is off. ``ssl_context=None`` puts the request on
+    plaintext ``http://``, and two of these calls carry credentials --
+    registration sends the panel passphrase and brings the broker password back,
+    and passphrase rotation sends a bearer token and brings the new broker
+    password back -- so anything on the path reads all of it.
 
-    Warned by the two calls that *bootstrap* a client rather than from inside
-    ``_request``. These are made a handful of times per config entry, so one line
-    per client is a line somebody reads; one per request -- registration,
-    detection, schema, status, FQDN -- is a line somebody filters out. The two
-    warn on mutually exclusive paths, so a caller never hears it twice.
+    **Called from the transport, not from the calls that bootstrap a client.**
+    Warning at the call sites meant each new call site had to remember to, and
+    passphrase rotation did not: the one call a consumer reaches for when
+    reauthenticating went out in the clear and said nothing. There is one
+    mechanism here so there is nothing to remember.
 
-    The credential itself is never named here. This is a warning *about* a
-    secret, not a place to put one.
+    **Scoped to the panel, not to the request or the client object.** Per
+    request is a line somebody filters out. Per client object looks tighter and
+    is worse, because the CA download runs on every MQTT reconnect and builds a
+    fresh client each time -- so that key would produce a warning per reconnect,
+    which is precisely what the bridge's own once-per-bridge warning exists to
+    avoid. The panel is the thing the warning is actually about.
+
+    The credential itself is never named. This is a warning *about* a secret,
+    not a place to put one.
     """
     if ssl_context is not None:
         return
+    if host in _warned_plaintext_hosts:
+        return
+    _warned_plaintext_hosts.add(host)
     _LOGGER.warning(
-        "%s for %s is being sent over plaintext HTTP: no ssl_context was supplied, so the request "
-        "and its response -- including any credential either one carries -- are readable by anything "
-        "on the path between here and the panel. Pin the panel's CA certificate and pass it as "
-        "ssl_context.",
-        what,
+        "Bootstrap traffic for %s is being sent over plaintext HTTP: no ssl_context was supplied, so "
+        "these requests and their responses -- including any credential they carry, such as the panel "
+        "passphrase and the broker password -- are readable by anything on the path between here and "
+        "the panel. Pin the panel's CA certificate and pass it as ssl_context.",
         host,
     )
 
@@ -267,6 +288,7 @@ async def _request(
     caller that supplied it.
     """
     url = _build_url(host, port, path, ssl_context)
+    _warn_plaintext_transport(host, ssl_context)
     try:
         async with _get_client(httpx_client, timeout, ssl_context) as client:
             match method:

@@ -11,7 +11,6 @@ import logging
 import ssl
 from typing import TYPE_CHECKING
 
-from ._http import _warn_plaintext_transport
 from .adapters import resolve_adapter
 from .auth import get_homie_schema, register_v2
 from .detection import detect_api_version
@@ -94,13 +93,6 @@ async def create_span_client(
         )
         if serial_number is None:
             serial_number = auth_response.serial_number
-    else:
-        # `register_v2` warns for itself, so this branch is the only one that
-        # bootstraps a client without ever reaching it. No passphrase travels
-        # here, but detection and the schema fetch still go out in the clear and
-        # still hand an observer the panel's topology -- and one HTTP path left
-        # open is where the next one gets added.
-        _warn_plaintext_transport(host, "Panel bootstrap traffic", ssl_context)
 
     if serial_number is None:
         # Try to detect from panel status

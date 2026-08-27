@@ -20,7 +20,8 @@ A follow-up to 3.1.0's security work, with no API change and no adapter move req
 
 ### Added
 
-- **A warning when the panel's bootstrap traffic is unencrypted**, logged once per client, never repeating the credential it warns about, and leaving plaintext the default it has always been.
+- **A warning when a panel's bootstrap traffic is unencrypted**, raised by the transport so that every call carrying a credential is covered, logged once per panel, never repeating the credential it warns about, and leaving plaintext the default it has
+  always been.
 
 ## [3.1.0]
 

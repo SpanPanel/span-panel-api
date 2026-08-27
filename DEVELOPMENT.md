@@ -85,8 +85,10 @@ uv run python scripts/peer_drift.py --peer panelbench      # one of them
 ```
 
 It runs as a pre-commit hook so that drift is caught on the commit that should have moved the pin. Non-strict there: a producer that cannot be reached reports as **UNKNOWN** and the commit still goes through, because not having asked is not the same fact
-as there being nothing new, and a laptop with no network still has to be able to commit. Only a producer that has actually moved past a pin stops one. `peer-drift.yml` runs the same script daily with `--strict`, where being unable to ask is a broken run
-rather than bad wifi.
+as there being nothing new, and a laptop with no network still has to be able to commit. Only a producer that has actually moved past a pin stops one.
+
+**Local commits ask; pull requests do not.** `ci.yml` runs the same hooks with `SKIP: peer-drift`, and the hook is `stages: [pre-commit]`, so a producer that moved cannot fail somebody's unrelated pull request — the answer changes because a third party
+pushed, and failing an author for that is how a check gets ignored. `peer-drift.yml` asks it daily with `--strict`, where being unable to reach a producer is a broken run rather than bad wifi, and where a red result costs a notification and nothing else.
 
 Two comparisons are verdicts, and both are verdicts about bytes here having gone stale: the emitter's **release**, because the reference tree is a capture of one, and a **panelbench commit that touches a file we vendor**. Everything else is reported and
 stays green — unreleased commits on the emitter's branch, panelbench commits that change nothing we copy, and the specification itself, which says what a device class may publish rather than what one does.
@@ -132,8 +134,8 @@ The peer checks answer a question whose shape depends on which producer revision
   `scripts/peer_drift.py --strict`, which asks the producers directly and needs no clone; the clones it still takes are there to name the commits, which is the one thing that script cannot do. It goes red only on a verdict — a new emitter release, or a
   panelbench commit touching a file we vendor — so panelbench advancing with a change we do not copy stays green.
 
-The second question is also asked on every commit, by the `peer-drift` pre-commit hook running the same script non-strict. The workflow is the backstop rather than the check: a producer that moved is best found by the commit that should have moved the pin
-with it.
+The second question is also asked on every local commit, by the `peer-drift` pre-commit hook running the same script non-strict — and skipped in `ci.yml`, so it stays off pull requests for the same reason the workflow does. The workflow is the backstop
+rather than the check: a producer that moved is best found by the commit that should have moved the pin with it.
 
 All three repositories are public, so no checkout needs a token. If either ever goes private, the checkout step in the composite action is what starts failing, and the fix is a read-scoped PAT in its `token:` — the pin is not involved.
 

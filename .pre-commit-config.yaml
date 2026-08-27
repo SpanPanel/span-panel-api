@@ -32,12 +32,17 @@ repos:
     rev: v0.11.13
     hooks:
       # Run formatter first - exclude tests to avoid conflicts with black
+      #
+      # `scripts/` is excluded except for `peer_drift.py` and `_lock.py`, which run
+      # on every commit and in CI and are held to the library's standard; the
+      # hand-run tools beside them are not. `pyproject.toml` names the same two
+      # exclusions for a bare `ruff check .`.
       - id: ruff-format
-        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
-      # Then linter - exclude tests and scripts from strict linting
+        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/(?!peer_drift\.py$|_lock\.py$).*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
+      # Then linter - exclude tests and the hand-run scripts from strict linting
       - id: ruff-check
         args: ['--fix']
-        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/(?!peer_drift\.py$|_lock\.py$).*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
   # Black for line length handling and test file formatting
   - repo: https://github.com/psf/black
@@ -93,7 +98,12 @@ repos:
         # have quietly cost them `--strict`. `pyproject.toml`'s own `exclude` still
         # names tests/, which is fine — that flag governs directory discovery, and
         # a file passed by name is checked regardless.
-        exclude: '^src/span_panel_api/generated_client/.*|scripts/.*|tests/(?!reference_payloads/).*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
+        #
+        # `scripts/peer_drift.py` and `scripts/_lock.py` are checked for the same
+        # reason: they decide whether a commit goes through, which is not the place
+        # for the one part of the tree nothing type-checks. The hand-run scripts
+        # beside them stay out — see `pyproject.toml`, which names them one by one.
+        exclude: '^src/span_panel_api/generated_client/.*|scripts/(?!peer_drift\.py$|_lock\.py$).*|tests/(?!reference_payloads/).*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # Pylint for code quality
   - repo: https://github.com/pycqa/pylint
@@ -144,16 +154,24 @@ repos:
 
   # Have the producers moved past the pins in spec_lock.json?
   #
-  # Local, and on every commit, because CI finding this out is finding it out too
-  # late: the drift this catches is a producer release nobody here noticed until a
-  # scheduled job went red the next morning, by which time the commits that should
-  # have moved the pin were already in.
+  # On a local commit, because CI finding this out is finding it out too late: the
+  # drift this catches is a producer release nobody here noticed until a scheduled
+  # job went red the next morning, by which time the commits that should have moved
+  # the pin were already in.
+  #
+  # `stages: [pre-commit]` and `SKIP: peer-drift` in ci.yml keep it off pull
+  # requests, and that is not an oversight to tidy up later: this question's answer
+  # changes because somebody else pushed, so asking it of an author's unrelated
+  # change would fail their build for a thing they did not do. peer-drift.yml asks
+  # it daily, with --strict, where failing costs a notification and nothing else.
   #
   # It asks PyPI and GitHub, so it is the one hook that needs the network — and
   # deliberately non-strict, so it does not. A producer that cannot be reached
   # reports as unknown and the commit goes through; only a producer that has
-  # actually moved past a pin stops one. CI passes --strict, where being unable to
-  # ask is a broken run rather than a hotel wifi.
+  # actually moved past a pin stops one. Five calls at a ten-second timeout, so the
+  # worst case is under a minute and only against a network that accepts
+  # connections and then says nothing; a refused connection or a failed lookup
+  # comes back at once.
   - repo: local
     hooks:
       - id: peer-drift
@@ -162,6 +180,7 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+        stages: [pre-commit]
 
   # Quick coverage check (total only, no details)
   - repo: local

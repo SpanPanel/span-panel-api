@@ -50,9 +50,9 @@ be a second one, agreeing right up until the day somebody moved only one.
 
 from __future__ import annotations
 
+import argparse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-import argparse
 import json
 import os
 import pathlib
@@ -72,8 +72,7 @@ _REPO = pathlib.Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.append(str(_REPO))
 
-from scripts._lock import LOCK, REPO, load, mapping, required, string  # noqa: E402
-from scripts._lock import peer as pinned_peer  # noqa: E402
+from scripts._lock import LOCK, REPO, load, mapping, peer as pinned_peer, required, string  # noqa: E402
 
 PANELBENCH = "panelbench"
 """The SPAN-side publisher this parser is developed against, and the one whose
@@ -183,6 +182,26 @@ class Comparison:
         return len(self.files) >= COMPARE_FILE_LIMIT
 
 
+@dataclass(frozen=True)
+class Index:
+    """What PyPI says about a distribution, narrowed to the two things we ask.
+
+    `latest` alone was not enough. It answers "is there something newer?" only if
+    the pin is still a release PyPI serves, and it is not the same question as
+    "is what we pinned still installable" — a yanked or withdrawn release leaves
+    `latest` looking perfectly ordinary while the reference tree describes
+    something nobody can get.
+    """
+
+    latest: str
+    pinned_files: int | None
+    """How many files the index lists for the pinned release; `None` when it does
+    not list that release at all."""
+    pinned_yanked: bool
+    """Every file of the pinned release withdrawn. PyPI yanks per file, so this
+    is the whole release only when they all carry the flag."""
+
+
 # ---------------------------------------------------------------------------
 # Asking, over the network
 # ---------------------------------------------------------------------------
@@ -209,7 +228,7 @@ def _headers(url: str) -> dict[str, str]:
 def http_get(url: str) -> str:
     request = urllib.request.Request(url, headers=_headers(url))
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
             body: bytes = response.read()
     except urllib.error.HTTPError as error:
         if error.code in (403, 429) and error.headers.get("x-ratelimit-remaining") == "0":
@@ -231,7 +250,7 @@ def ls_remote(repo: str, ref: str) -> str:
     """
     environment = dict(os.environ, GIT_TERMINAL_PROMPT="0")
     try:
-        completed = subprocess.run(  # noqa: S603
+        completed = subprocess.run(
             ["git", "ls-remote", repo, ref],
             capture_output=True,
             text=True,
@@ -288,17 +307,21 @@ def _count(source: Mapping[str, object], key: str, who: str) -> int:
     return value
 
 
-def _filenames(source: Mapping[str, object], who: str) -> tuple[str, ...]:
-    """The changed files, which the API omits entirely when there are none."""
-    listed = source.get("files", [])
+def _objects(listed: object, key: str, who: str) -> list[dict[str, object]]:
+    """A list of JSON objects, which is the shape both producers answer files in."""
     if not isinstance(listed, Sequence) or isinstance(listed, str | bytes):
-        raise Unreachable(f"{who} answered with a 'files' that is not a list")
-    names: list[str] = []
+        raise Unreachable(f"{who} answered with a {key!r} that is not a list")
+    entries: list[dict[str, object]] = []
     for entry in listed:
         if not isinstance(entry, Mapping):
-            raise Unreachable(f"{who} answered with a file entry that is not an object")
-        names.append(_field({str(key): value for key, value in entry.items()}, "filename", who))
-    return tuple(names)
+            raise Unreachable(f"{who} answered with a {key!r} entry that is not an object")
+        entries.append({str(inner): value for inner, value in entry.items()})
+    return entries
+
+
+def _filenames(source: Mapping[str, object], who: str) -> tuple[str, ...]:
+    """The changed files, which the API omits entirely when there are none."""
+    return tuple(_field(entry, "filename", who) for entry in _objects(source.get("files", []), "files", who))
 
 
 # ---------------------------------------------------------------------------
@@ -333,13 +356,80 @@ def watched(peer: Mapping[str, object]) -> tuple[str, ...]:
     of the specification commit it implements. Everything else in that repository
     may change freely.
     """
-    return tuple(sorted(fixtures(peer).values())) + (EBUS_SPEC_FILE,)
+    return (*sorted(fixtures(peer).values()), EBUS_SPEC_FILE)
 
 
 def touched(changed: Sequence[str], watch: Sequence[str]) -> tuple[str, ...]:
     """Those of `watch` the producer changed, in the order `watch` names them."""
     changes = set(changed)
     return tuple(path for path in watch if path in changes)
+
+
+def _release_numbers(version: str) -> tuple[int, ...] | None:
+    """The dotted integers of a version, or `None` when it is not only those.
+
+    No `packaging` here, and not from thrift: the emitter job runs this under the
+    runner's system `python3`, before uv has installed anything, so the standard
+    library is the whole toolbox. Dotted integers are the part of a version this
+    can order correctly; anything with a pre-release, post or local suffix is
+    handed back as unorderable rather than guessed at.
+    """
+    parts = version.split(".")
+    if not all(part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def newer_release(candidate: str, than: str) -> bool | None:
+    """Whether `candidate` is a later release than `than`; `None` if unanswerable.
+
+    Three-valued on purpose. "I cannot order these two" is a different fact from
+    "this one is not newer", and only one of them is a reason to leave the pin
+    alone quietly.
+    """
+    left = _release_numbers(candidate)
+    right = _release_numbers(than)
+    if left is None or right is None:
+        return None
+    width = max(len(left), len(right))
+    return _padded(left, width) > _padded(right, width)
+
+
+def _padded(numbers: tuple[int, ...], width: int) -> tuple[int, ...]:
+    """A two-segment version and a three-segment one can name the same release,
+    so both are compared at the wider of the two."""
+    return numbers + (0,) * (width - len(numbers))
+
+
+def pin_problem(index: Index, pinned: str) -> tuple[str, str] | None:
+    """Why the pinned release cannot be compared against, headline and reason.
+
+    Checked before `latest` is looked at, because these hold whatever `latest`
+    says: a pin PyPI does not serve is not a pin that "has not drifted", and
+    reporting it as current would be the check quietly agreeing with a release
+    that is no longer there.
+    """
+    if index.pinned_files is None:
+        return (
+            f"PyPI lists no release `{pinned}` at all",
+            "The pin names a version this project has not published, or one that has since "
+            "been removed from the index. Nothing can be compared against it, and the "
+            "reference tree claims to be a capture of it.",
+        )
+    if index.pinned_files == 0:
+        return (
+            f"PyPI lists release `{pinned}` with no files",
+            "The release exists in the index with nothing left to install under it, so the "
+            "version the reference tree names cannot be obtained or re-captured from.",
+        )
+    if index.pinned_yanked:
+        return (
+            f"the release we pin (`{pinned}`) has been yanked",
+            "The producer withdrew it. A capture taken from a yanked release describes a "
+            "producer nobody should install, whether or not anything newer exists — read the "
+            "emitter's reason for the yank before deciding which release to move the pin to.",
+        )
+    return None
 
 
 def released_tag(peer: Mapping[str, object], version: str) -> str:
@@ -387,6 +477,21 @@ def _unknown(who: str, error: Exception) -> str:
     )
 
 
+def _inconclusive(headline: str, why: str) -> str:
+    """Asked, answered, and the answer is not a verdict.
+
+    A different shape of unknown from `_unknown`: the producer replied, and what
+    it said cannot be read as either "the capture is current" or "the capture is
+    stale". Reporting it as drift would attach instructions that make things
+    worse — re-capturing from a release that is older, withdrawn or absent.
+    """
+    return (
+        f"**UNKNOWN — {headline}.**\n\n{why}\n\n"
+        "Neither current nor drift, so it is reported rather than acted on. `--strict`, "
+        "which CI passes, fails on it; a commit is not stopped by it."
+    )
+
+
 # ---------------------------------------------------------------------------
 # The producers, one shape each
 # ---------------------------------------------------------------------------
@@ -407,19 +512,64 @@ def emitter(lock: Mapping[str, object], get: HttpGet, ls: LsRemote) -> Producer:
     who = f"PyPI for {distribution}"
 
     try:
-        body = get(f"{PYPI_JSON}/{urllib.parse.quote(distribution)}/json")
-        latest = _field(_member(_answer(body, who), "info", who), "version", who)
+        index = _index(get(f"{PYPI_JSON}/{urllib.parse.quote(distribution)}/json"), pinned, who)
     except Unreachable as error:
         return Producer(PANEL_SIM, pinned, "", "unknown", f"{_unknown(who, error)}\n\n{context}")
 
-    if latest == pinned:
-        detail = f"Latest release is `{latest}`, which is what we pin. The reference tree is current."
-        return Producer(PANEL_SIM, pinned, latest, "current", f"{detail}\n\n{context}")
+    verdict, detail = _release_reading(peer, pinned, index)
+    return Producer(PANEL_SIM, pinned, index.latest, verdict, f"{detail}\n\n{context}")
 
+
+def _index(body: str, pinned: str, who: str) -> Index:
+    """PyPI's answer, read once for both questions we ask of it."""
+    answer = _answer(body, who)
+    latest = _field(_member(answer, "info", who), "version", who)
+    listed = _member(answer, "releases", who).get(pinned)
+    if listed is None:
+        return Index(latest, None, pinned_yanked=False)
+    files = _objects(listed, f"releases.{pinned}", who)
+    return Index(latest, len(files), pinned_yanked=bool(files) and all(entry.get("yanked") is True for entry in files))
+
+
+def _release_reading(peer: Mapping[str, object], pinned: str, index: Index) -> tuple[Verdict, str]:
+    """The verdict on the pinned release, and what to say about it.
+
+    Only one branch here is drift, and it is the narrow one: a release that
+    exists, is not withdrawn, and is genuinely later than ours. Everything else
+    the index can say — a pin it does not serve, a pin it has yanked, a `latest`
+    that is older or that carries a suffix this cannot order — is a disagreement
+    we have no safe instruction for, so it is reported and not acted on.
+    """
+    problem = pin_problem(index, pinned)
+    if problem is not None:
+        return "unknown", _inconclusive(*problem)
+    if index.latest == pinned:
+        return "current", f"Latest release is `{index.latest}`, which is what we pin. The reference tree is current."
+
+    newer = newer_release(index.latest, pinned)
+    if newer is None:
+        return "unknown", _inconclusive(
+            f"PyPI's latest (`{index.latest}`) cannot be ordered against the pin (`{pinned}`)",
+            "One of them carries a pre-release, post-release or local suffix. Ordering dotted "
+            "integers is what the standard library gives us, and guessing at the rest would make "
+            "a verdict out of a guess — read the emitter's releases and move the pin by hand.",
+        )
+    if not newer:
+        return "unknown", _inconclusive(
+            f"PyPI's latest (`{index.latest}`) is not newer than the pin (`{pinned}`)",
+            "The index serves an older release than the one we pin — a newer release withdrawn "
+            "after we pinned it, or an index that has not caught up. Re-capturing would take the "
+            "reference tree backwards, which is why this is not reported as drift.",
+        )
+    return "drift", _emitter_drift(peer, pinned, index.latest)
+
+
+def _emitter_drift(peer: Mapping[str, object], pinned: str, latest: str) -> str:
+    """What to do about a reference tree captured from a superseded release."""
     capture = string(peer, "capture_script", f"peers.{PANEL_SIM}")
     produces = mapping(required(peer, "produces", f"peers.{PANEL_SIM}"), f"peers.{PANEL_SIM}.produces")
     tree = str(required(produces, "tree", f"peers.{PANEL_SIM}.produces"))
-    detail = (
+    return (
         f"Latest release is `{latest}`, we pin `{pinned}`.\n\n"
         "The reference tree was captured from the pinned release, so it now describes a\n"
         "producer that has been superseded. To follow:\n\n"
@@ -434,7 +584,6 @@ def emitter(lock: Mapping[str, object], get: HttpGet, ls: LsRemote) -> Producer:
         "for the wire changes before accepting the new capture: a diff confined to each\n"
         "`$description`'s `version` means nothing moved."
     )
-    return Producer(PANEL_SIM, pinned, latest, "drift", f"{detail}\n\n{context}")
 
 
 def _emitter_commits(peer: Mapping[str, object], ls: LsRemote) -> str:
@@ -471,7 +620,7 @@ def panelbench(lock: Mapping[str, object], get: HttpGet, ls: LsRemote) -> Produc
     ref = string(peer, "ref", f"peers.{PANELBENCH}")
     commit = string(peer, "commit", f"peers.{PANELBENCH}")
     name = slug(repo)
-    watch = watched(peer)
+    who = f"GitHub what {name} changed"
 
     try:
         head = ls(repo, f"refs/heads/{ref}")
@@ -486,13 +635,24 @@ def panelbench(lock: Mapping[str, object], get: HttpGet, ls: LsRemote) -> Produc
             f"`{ref}` is at `{short(commit)}`, the commit we pin. Nothing to re-vendor.",
         )
 
-    who = f"GitHub what {name} changed"
     try:
-        comparison = compare(repo, commit, ref, get)
+        # Against the commit `ls-remote` just resolved, not against the branch
+        # name: the branch could move between the two calls, and a summary that
+        # names one commit while comparing another is two facts pretending to be
+        # one.
+        comparison = compare(repo, commit, head, get, who)
     except Unreachable as error:
         return Producer(PANELBENCH, commit, head, "unknown", _unknown(who, error))
 
     moved = f"`{ref}` is at `{short(head)}`, we pin `{short(commit)}`"
+    verdict, detail = _panelbench_reading(comparison, moved, watched(peer), fixtures(peer))
+    return Producer(PANELBENCH, commit, head, verdict, detail)
+
+
+def _panelbench_reading(
+    comparison: Comparison, moved: str, watch: Sequence[str], sources: Mapping[str, str]
+) -> tuple[Verdict, str]:
+    """What the comparison means, once it has been obtained."""
     if comparison.behind_by:
         detail = (
             f"**UNKNOWN — {moved}, and the pin is not an ancestor of it.**\n\n"
@@ -501,7 +661,7 @@ def panelbench(lock: Mapping[str, object], get: HttpGet, ls: LsRemote) -> Produc
             "needs to name a ref the pinned commit is actually on, and until it does\n"
             "nothing here can say whether what we vendor is current."
         )
-        return Producer(PANELBENCH, commit, head, "unknown", detail)
+        return "unknown", detail
 
     changed = touched(comparison.files, watch)
     if not changed and comparison.capped:
@@ -516,7 +676,7 @@ def panelbench(lock: Mapping[str, object], get: HttpGet, ls: LsRemote) -> Produc
             "byte comparison in `tests/test_schema_one_conformance.py` is the answer that\n"
             "does not truncate."
         )
-        return Producer(PANELBENCH, commit, head, "unknown", detail)
+        return "unknown", detail
 
     if not changed:
         detail = (
@@ -525,14 +685,12 @@ def panelbench(lock: Mapping[str, object], get: HttpGet, ls: LsRemote) -> Produc
             "lockfile out of that branch, and a commit touching none of them is the\n"
             "producer's business rather than ours."
         )
-        return Producer(PANELBENCH, commit, head, "current", detail)
+        return "current", detail
 
-    return Producer(PANELBENCH, commit, head, "drift", _panelbench_drift(moved, comparison, changed, fixtures(peer)))
+    return "drift", _panelbench_drift(moved, comparison, changed, sources)
 
 
-def _panelbench_drift(
-    moved: str, comparison: Comparison, changed: Sequence[str], sources: Mapping[str, str]
-) -> str:
+def _panelbench_drift(moved: str, comparison: Comparison, changed: Sequence[str], sources: Mapping[str, str]) -> str:
     """What to do about a producer that changed something we keep a copy of."""
     lines = [
         f"**{moved} — {comparison.ahead_by} commits ahead, and it changed what we vendor:**",
@@ -568,11 +726,9 @@ def _panelbench_drift(
     return "\n".join(lines)
 
 
-def compare(repo: str, base: str, head: str, get: HttpGet) -> Comparison:
+def compare(repo: str, base: str, head: str, get: HttpGet, who: str) -> Comparison:
     """`base...head`, as GitHub answers it, needing no clone of either."""
-    name = slug(repo)
-    who = f"GitHub what {name} changed"
-    url = f"{GITHUB_API}/repos/{name}/compare/{urllib.parse.quote(base)}...{urllib.parse.quote(head)}"
+    url = f"{GITHUB_API}/repos/{slug(repo)}/compare/{urllib.parse.quote(base)}...{urllib.parse.quote(head)}"
     answer = _answer(get(url), who)
     return Comparison(
         ahead_by=_count(answer, "ahead_by", who),

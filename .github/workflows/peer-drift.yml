@@ -11,10 +11,11 @@ name: Peer drift
 #
 # Both jobs run `scripts/peer_drift.py --strict`, which is where the comparisons and
 # what they mean now live -- including why the two producers are not the same shape,
-# and what to do about either one. The same script runs from `.pre-commit-config.yaml`,
-# non-strict, so drift is usually caught on the commit that should have moved the pin
-# rather than by this job the next morning. What stays here is the one thing a script
-# with no clone cannot do: name the commits.
+# and what to do about either one. The same script runs from `.pre-commit-config.yaml`
+# on a local commit, non-strict, so drift is usually caught on the commit that should
+# have moved the pin rather than by this job the next morning; ci.yml skips that hook
+# (`SKIP: peer-drift`) so the paragraph above holds for pull requests too. What stays
+# here is the one thing a script with no clone cannot do: name the commits.
 on:
   schedule:
     # Daily. The drift this exists to catch took nine days to be noticed by hand.

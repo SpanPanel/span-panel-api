@@ -74,10 +74,3 @@ LUGS_DOWNSTREAM = "DOWNSTREAM"
 def normalize_circuit_id(node_id: str) -> str:
     """Strip dashes from Homie UUID for entity stability."""
     return node_id.replace("-", "")
-
-
-def denormalize_circuit_id(circuit_id: str) -> str:
-    """Restore dashes to a 32-char dashless UUID (8-4-4-4-12 format)."""
-    if len(circuit_id) == 32 and "-" not in circuit_id:
-        return f"{circuit_id[:8]}-{circuit_id[8:12]}-{circuit_id[12:16]}-{circuit_id[16:20]}-{circuit_id[20:]}"
-    return circuit_id

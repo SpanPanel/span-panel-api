@@ -184,20 +184,6 @@ class TestHomieCircuitSnapshot:
 
         assert normalize_circuit_id("aabbccdd-1122-3344-5566-778899001122") == "aabbccdd11223344556677889900112" + "2"
 
-    def test_circuit_id_denormalization(self):
-        from span_panel_api_schema_0.const import denormalize_circuit_id
-
-        result = denormalize_circuit_id("aabbccdd11223344556677889900112" + "2")
-        assert result == "aabbccdd-1122-3344-5566-778899001122"
-
-    def test_denormalize_non_uuid(self):
-        from span_panel_api_schema_0.const import denormalize_circuit_id
-
-        # Non-32-char strings pass through unchanged
-        assert denormalize_circuit_id("short") == "short"
-        # Already dashed passes through
-        assert denormalize_circuit_id("aabbccdd-1122-3344-5566-778899001122") == "aabbccdd-1122-3344-5566-778899001122"
-
     def test_circuit_power_negation(self):
         """active-power in W, negative=consumption → positive=consumption in snapshot."""
         acc, consumer = _build_ready_consumer()

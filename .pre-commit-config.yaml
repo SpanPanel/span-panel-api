@@ -142,6 +142,27 @@ repos:
         pass_filenames: false
         files: ^pyproject\.toml$|^uv\.lock$
 
+  # Have the producers moved past the pins in spec_lock.json?
+  #
+  # Local, and on every commit, because CI finding this out is finding it out too
+  # late: the drift this catches is a producer release nobody here noticed until a
+  # scheduled job went red the next morning, by which time the commits that should
+  # have moved the pin were already in.
+  #
+  # It asks PyPI and GitHub, so it is the one hook that needs the network — and
+  # deliberately non-strict, so it does not. A producer that cannot be reached
+  # reports as unknown and the commit goes through; only a producer that has
+  # actually moved past a pin stops one. CI passes --strict, where being unable to
+  # ask is a broken run rather than a hotel wifi.
+  - repo: local
+    hooks:
+      - id: peer-drift
+        name: peers still at their pins
+        entry: uv run python scripts/peer_drift.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
   # Quick coverage check (total only, no details)
   - repo: local
     hooks:

@@ -91,15 +91,24 @@ async def _create_ssl_context() -> ssl.SSLContext:
     performs blocking file I/O on the system CA bundle.  The resulting context
     is thread-safe and reusable, so we cache it for the lifetime of the process.
     """
-    if _ssl_cache.context is not None:
-        return _ssl_cache.context
+    cached = _ssl_cache.context
+    if cached is not None:
+        return cached
     async with _ssl_cache.get_lock():
         # Double-check after acquiring the lock.
-        if _ssl_cache.context is not None:
-            return _ssl_cache.context
+        cached = _ssl_cache.context
+        if cached is not None:
+            return cached
+        # Read back through a local rather than returning the field again. The
+        # field is `SSLContext | None` and another task may clear or replace it
+        # between the assignment and the return, so returning it a second time
+        # is a read this function cannot promise is non-None -- which is what a
+        # strict checker objects to, correctly. The value that was just built is
+        # the value to hand back.
         loop = asyncio.get_running_loop()
-        _ssl_cache.context = await loop.run_in_executor(None, ssl.create_default_context)
-        return _ssl_cache.context
+        context = await loop.run_in_executor(None, ssl.create_default_context)
+        _ssl_cache.context = context
+        return context
 
 
 @asynccontextmanager

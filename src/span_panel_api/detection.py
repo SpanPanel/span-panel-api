@@ -13,7 +13,7 @@ import ssl
 import httpx
 
 from ._http import V2_STATUS_PATH, _request
-from .exceptions import SpanPanelConnectionError, SpanPanelTimeoutError
+from .exceptions import SpanPanelAPIError, SpanPanelConnectionError, SpanPanelTimeoutError
 from .models import V2StatusInfo
 
 
@@ -21,9 +21,11 @@ from .models import V2StatusInfo
 class DetectionResult:
     """Result of probing a SPAN Panel for API version support.
 
-    ``probe_failed`` is True when the HTTP request did not complete (for example
-    connection refused, timeout, or protocol error). It is False when any HTTP
-    response was received, including non-200 statuses that imply a v1-only panel.
+    ``probe_failed`` is True when the probe produced no usable answer: the HTTP
+    request did not complete (connection refused, timeout, a reset mid-response),
+    or the panel answered 200 with a body that could not be read. It is False
+    when a readable answer arrived, including non-200 statuses that imply a
+    v1-only panel — those are a verdict, not a failed probe.
     """
 
     api_version: str  # "v1" | "v2"
@@ -56,8 +58,10 @@ async def detect_api_version(
             this call to ``https://``; ``None`` is byte-identical to 3.0.1.
 
     Returns:
-        DetectionResult indicating which API version is available. On transport
-        failures, ``api_version`` is ``"v1"`` and ``probe_failed`` is True.
+        DetectionResult indicating which API version is available. This function
+        answers rather than raising: anything that leaves the question
+        unanswered comes back as ``api_version="v1"`` with ``probe_failed``
+        True.
     """
     try:
         reply = await _request(
@@ -69,6 +73,9 @@ async def detect_api_version(
             httpx_client=httpx_client,
             ssl_context=ssl_context,
         )
+        if reply.status_code != 200:
+            return DetectionResult(api_version="v1")
+        status = V2StatusInfo.from_status_payload(reply.json_object())
     except (SpanPanelConnectionError, SpanPanelTimeoutError):
         # Every way the connection can fail, which is the point of catching this
         # library's own two classes rather than a hand-listed tuple of httpx
@@ -77,8 +84,13 @@ async def detect_api_version(
         # resetting its listener mid-probe -- out of a function documented to
         # return a result rather than raise.
         return DetectionResult(api_version="v1", probe_failed=True)
+    except SpanPanelAPIError:
+        # A 200 carrying something that is not a status object. The case that
+        # matters is a proxy in front of a v1 panel answering its own HTML error
+        # page under a 200: unreadable, so nothing in it says "v2", and raising
+        # would take setup down over a panel the caller was only asking about.
+        # Reported as a failed probe rather than a v1 verdict, because no answer
+        # was read -- the caller is told the question is still open.
+        return DetectionResult(api_version="v1", probe_failed=True)
 
-    if reply.status_code != 200:
-        return DetectionResult(api_version="v1")
-
-    return DetectionResult(api_version="v2", status_info=V2StatusInfo.from_status_payload(reply.json_object()))
+    return DetectionResult(api_version="v2", status_info=status)

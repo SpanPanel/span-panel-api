@@ -158,6 +158,30 @@ class TestMalformedBodies:
         assert "ebusBrokerPassword" in str(caught.value)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            _response(200, body=b"<html><body>Bad Gateway</body></html>", content_type="text/html"),
+            _response(200, body=b"", content_type="text/plain"),
+            _json_response([1, 2, 3]),
+        ],
+        ids=["proxy-html", "empty", "not-an-object"],
+    )
+    async def test_the_detector_answers_rather_than_raising_on_an_unreadable_body(self, answer: httpx.Response) -> None:
+        """`detect_api_version` is documented to return a result, never to raise.
+
+        A proxy in front of a v1 panel answering its own HTML page under a 200
+        is the case that matters: the body is unreadable, so nothing about it
+        says "v2", and the honest report is a probe that produced no answer.
+        Raising here would take setup down on a panel the caller was only
+        asking about.
+        """
+        result = await detect_api_version(HOST, httpx_client=_client("get", answer))
+        assert result.api_version == "v1"
+        assert result.probe_failed is True
+        assert result.status_info is None
+
+    @pytest.mark.asyncio
     async def test_every_malformed_body_stays_inside_the_error_hierarchy(self) -> None:
         """The point of the translation: one `except SpanPanelError` catches it."""
         with pytest.raises(SpanPanelError):

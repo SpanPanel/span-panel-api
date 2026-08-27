@@ -9,6 +9,14 @@ rather than by this version number. A release here means this parser changed, ne
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [1.1.1]
+
+Still requires `span-panel-api` **3.1.0 or newer**, unchanged.
+
+### Removed
+
+- **`denormalize_circuit_id`, which nothing called** — it restored the dashes a circuit's UUID is stripped of on the way in, a form no snapshot, command topic or consumer has ever asked for.
+
 ## [1.1.0]
 
 Requires `span-panel-api` **3.1.0 or newer**, and the two must be upgraded together in both directions: this wheel is rejected at discovery by a 3.0.x bootstrap, and a 1.0.0 wheel is rejected by 3.1.0.

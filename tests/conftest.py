@@ -56,6 +56,12 @@ def _reset_ssl_cache() -> None:
     _http_mod._ssl_cache.lock = None
 
 
+@pytest.fixture(autouse=True)
+def _reset_plaintext_warnings() -> None:
+    """The plaintext warning is said once per host per process; each test starts unwarned."""
+    _http_mod._reset_plaintext_warnings()
+
+
 # ---------------------------------------------------------------------------
 # Constants shared across MQTT tests
 # ---------------------------------------------------------------------------

@@ -81,16 +81,4 @@ async def detect_api_version(
     if reply.status_code != 200:
         return DetectionResult(api_version="v1")
 
-    data = reply.json_object()
-    raw_proximity = data.get("proximityProven")
-    proximity_proven: bool | None = None
-    if isinstance(raw_proximity, bool):
-        proximity_proven = raw_proximity
-    return DetectionResult(
-        api_version="v2",
-        status_info=V2StatusInfo(
-            serial_number=str(data.get("serialNumber", "")),
-            firmware_version=str(data.get("firmwareVersion", "")),
-            proximity_proven=proximity_proven,
-        ),
-    )
+    return DetectionResult(api_version="v2", status_info=V2StatusInfo.from_status_payload(reply.json_object()))

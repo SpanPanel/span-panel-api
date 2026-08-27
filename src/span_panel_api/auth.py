@@ -747,8 +747,4 @@ async def get_v2_status(
     if reply.status_code != 200:
         raise SpanPanelAPIError(f"Panel does not support v2 API: HTTP {reply.status_code}")
 
-    data = reply.json_object()
-    return V2StatusInfo(
-        serial_number=str(data.get("serialNumber", "")),
-        firmware_version=str(data.get("firmwareVersion", "")),
-    )
+    return V2StatusInfo.from_status_payload(reply.json_object())

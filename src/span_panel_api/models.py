@@ -9,6 +9,7 @@ All snapshots are immutable (frozen) and memory-efficient (slots).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 # Homie schema type: {type_name: {property_name: {attribute: value}}}
@@ -535,6 +536,34 @@ class V2StatusInfo:
     serial_number: str
     firmware_version: str
     proximity_proven: bool | None = None  # Added in firmware 202609; None on older panels
+
+    @classmethod
+    def from_status_payload(cls, payload: Mapping[str, object]) -> V2StatusInfo:
+        """Read one decoded ``/api/v2/status`` body.
+
+        One reader, because there were two — the detector's, deciding whether the
+        panel speaks v2 at all, and ``get_v2_status``'s, reading the same answer
+        for a caller that already knows it does. They had already drifted: only
+        the detector read ``proximityProven``, so the same panel reported
+        "proximity unknown" or "proximity proven" depending on which of the two
+        had asked.
+
+        A field the panel omits reads as the empty string rather than as an
+        error. This endpoint's whole job on the detection path is to answer for a
+        panel that may not fully support it, so a partial body is information,
+        not a failure.
+
+        ``proximity_proven`` is the exception and stays ``None`` unless the panel
+        published a real boolean. Absent and false are different facts there —
+        firmware below 202609 does not report it at all — and coercing whatever
+        arrived would turn a string ``"false"`` into ``True``.
+        """
+        raw_proximity = payload.get("proximityProven")
+        return cls(
+            serial_number=str(payload.get("serialNumber", "")),
+            firmware_version=str(payload.get("firmwareVersion", "")),
+            proximity_proven=raw_proximity if isinstance(raw_proximity, bool) else None,
+        )
 
 
 _CIRCUIT_TYPE_KEY = "energy.ebus.device.circuit"

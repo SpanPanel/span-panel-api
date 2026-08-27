@@ -199,6 +199,9 @@ UNMAPPED_TAB_PREFIX = "unmapped_tab_"
 
 # The Homie attribute that carries what the flat schema published as the
 # `never-backup` boolean. v1.0 retires the property and expresses it as
-# mutability: a circuit commissioned never-backup has its priority locked, so
-# the panel publishes `$settable = false` on `load-shed/priority`.
+# mutability: a circuit commissioned never-backup has its priority locked, and
+# the panel says so by *omitting* `$settable` from `load-shed/priority` —
+# Homie 5 defaults it to false, so a conforming publisher emits the attribute
+# only where a write is accepted. Read through `description.declared_settable`,
+# which is the only thing that interprets it.
 ATTR_SETTABLE = "settable"

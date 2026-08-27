@@ -9,6 +9,17 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [1.1.1]
+
+A correctness fix to how this parser reads write authorisation off a `$description`. No API change, and the floor on `span-panel-api` stays at **3.1.0**: nothing here asks anything new of the bootstrap.
+
+### Fixed
+
+- **A circuit commissioned never-backup is reported as never-backup again, and no longer carries a shed-priority control the panel would refuse**, because a panel announces that lock by _omitting_ `$settable` from `load-shed/priority` — Homie 5's default
+  for the attribute, and what a conforming publisher emits — where this parser had read the omission as permission and returned `is_never_backup=False` with a working `set_circuit_priority_target`.
+- **A property an adopted device declares settable as text now carries a write topic only where that text is `"true"`**, where the declaration had been read for truthiness — so `"false"` authorised a write, as did `"1"`, `"yes"` and `"on"`, none of which
+  the Homie attribute is specified to take.
+
 ## [1.1.0]
 
 Requires `span-panel-api` **3.1.0 or newer**, and the two must be upgraded together in both directions: this wheel is rejected at discovery by a 3.0.x bootstrap, and a 1.0.0 wheel is rejected by 3.1.0.

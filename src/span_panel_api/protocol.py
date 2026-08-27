@@ -275,11 +275,12 @@ class SchemaAdapter(Protocol):
         under the flat schema, `$settable` on `load-shed/priority` under v1.0 --
         which is the same reading `SpanCircuitSnapshot.is_never_backup` reports.
 
-        None also where the panel carries no circuit under that id, and where
-        the device carries no shed priority to write: under v1.0 an absent
-        `$settable` on a *declared* `load-shed/priority` means settable, but a
-        device that declares no such property has offered no such control, and
-        the two are not the same absence.
+        Under v1.0 the lock is announced by *omitting* `$settable`, which is
+        Homie 5's default for the attribute and what a conforming publisher
+        emits for a control that accepts no write. A device that declares no
+        `load-shed/priority` at all answers None for the plainer reason that it
+        has offered no such control -- as does a panel carrying no circuit under
+        that id.
         """
 
     def has_circuit(self, circuit_id: str) -> bool:

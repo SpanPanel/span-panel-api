@@ -34,7 +34,7 @@ from span_panel_api_schema_1.const import (
     TYPE_PANEL,
     TYPE_PV,
 )
-from span_panel_api_schema_1.description import device_type, nodes, optional_str, properties
+from span_panel_api_schema_1.description import declared_settable, device_type, nodes, optional_str, properties
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
@@ -147,7 +147,10 @@ def _readings(device: DiscoveredDevice, declared_nodes: dict[str, dict[str, obje
             continue
         for property_id, definition in properties(node).items():
             raw = device.get_property(node_id, property_id)
-            settable = bool(definition.get("settable", False))
+            # The same reading the curated controls get: this one gates a set
+            # topic on an uncurated device, so a declaration that has not said
+            # `true` must not produce an address a consumer can write to.
+            settable = declared_settable(definition)
             readings.append(
                 AdoptedProperty(
                     node_id=node_id,

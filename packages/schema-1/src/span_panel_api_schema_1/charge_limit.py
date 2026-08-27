@@ -30,10 +30,10 @@ mentions either name.
 **Settability is read, never assumed.** The two properties of a spelling differ
 by exactly one Homie attribute — the ceiling declares no ``settable``, the limit
 declares ``settable: true`` — so a reader that treated an absent attribute as
-"settable", the way :func:`circuits.priority_is_settable` correctly does for
-``load-shed/priority``, would offer to write the installer's ceiling. The
-defaults are opposite because the questions are: there, locking is the exception
-a panel announces; here, writability is.
+permission would offer to write the installer's commissioned ceiling. That is
+Homie 5's default rather than a rule this module chose, and it is the same one
+:func:`circuits.priority_is_settable` reads for a shed priority; both go through
+:func:`description.declared_settable`.
 """
 
 from __future__ import annotations
@@ -41,8 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from span_panel_api_schema_1.const import ATTR_SETTABLE
-from span_panel_api_schema_1.description import nodes, optional_str, properties
+from span_panel_api_schema_1.description import declared_settable, nodes, optional_str, properties
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
@@ -149,22 +148,5 @@ def _property(property_id: str, definition: dict[str, object] | None) -> ChargeL
         property_id=property_id,
         unit=optional_str(definition.get("unit")),
         datatype=str(definition.get("datatype") or "string"),
-        settable=_declared_settable(definition),
+        settable=declared_settable(definition),
     )
-
-
-def _declared_settable(definition: dict[str, object]) -> bool:
-    """Whether the declaration says this property may be written.
-
-    Absent means **not** settable. See the module docstring: the ceiling and the
-    limit differ by this attribute alone, so a permissive default would make the
-    installer's commissioned maximum look writable.
-
-    A string ``"true"`` counts, because Homie attributes travel as text and a
-    publisher that serialises the description by hand may not re-type the
-    booleans.
-    """
-    settable = definition.get(ATTR_SETTABLE)
-    if isinstance(settable, bool):
-        return settable
-    return str(settable).strip().lower() == "true"

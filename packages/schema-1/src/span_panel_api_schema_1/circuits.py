@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING
 
 from span_panel_api.models import SpanCircuitSnapshot
 from span_panel_api_schema_1.const import (
-    ATTR_SETTABLE,
     NODE_BREAKER,
     NODE_INFO,
     NODE_LOAD_SHED,
@@ -50,6 +49,7 @@ from span_panel_api_schema_1.const import (
     PROP_SPACES,
     UNKNOWN,
 )
+from span_panel_api_schema_1.description import declared_settable, node_properties
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
@@ -139,63 +139,49 @@ def _tabs(device: DiscoveredDevice) -> list[int]:
     return tabs
 
 
-def _declared_settable(device: DiscoveredDevice, node: str, prop: str, *, when_unannotated: bool) -> bool:
-    """Read the Homie ``$settable`` attribute off one property's definition.
+def _settable(device: DiscoveredDevice, node: str, prop: str) -> bool:
+    """Whether this device's declaration authorises writing one property.
 
-    **An undeclared property is never settable, whatever ``when_unannotated``
-    says.** The two absences are different claims and were once collapsed onto
-    one answer: a device that declares ``load-shed/priority`` and omits
-    ``$settable`` has left a mutable property unannotated, while a device with no
-    ``load-shed`` node at all — a BESS, a MID, the lugs — has not declared the
-    property, and there is nothing on it to be settable. Answering the second
-    with the first's default produced a write target for a control the device
-    never offered, which is the defect the refusal exists to prevent.
-
-    ``when_unannotated`` is therefore the narrower question it now names: what a
-    *declared* property means when it carries no ``$settable``. That is a
-    per-property judgement rather than one rule — which is why it is a parameter
-    instead of a default. See the two callers below for why they answer it
-    differently.
-
-    A definition that is not a mapping is treated as undeclared for the same
-    reason: a malformed declaration has not said the property is settable.
+    The device-level lookup; `description.declared_settable` holds the rule, and
+    holds it once. `node_properties` drops a declaration that is not a mapping,
+    so a malformed one arrives here as undeclared — which is the right answer for
+    the same reason: it has not said the property is settable.
     """
-    definition = device.get_node_properties(node).get(prop)
-    if not isinstance(definition, dict):
-        return False
-    settable = definition.get(ATTR_SETTABLE)
-    if settable is None:
-        return when_unannotated
-    if isinstance(settable, bool):
-        return settable
-    return str(settable).strip().lower() != "false"
+    return declared_settable(node_properties(device, node).get(prop))
 
 
 def priority_is_settable(device: DiscoveredDevice) -> bool:
     """Whether ``load-shed/priority`` is user-settable on this circuit.
 
-    ``load-shed`` 0.3 declares ``priority`` settable and states no condition on
-    it, so mutability is the property's ordinary state and a lock is something a
-    panel announces. This is the successor to the flat ``never-backup`` boolean,
-    and it is read from the description rather than from a value topic — v1.0
-    expresses never-backup as *mutability*, so the signal is the Homie
-    ``$settable`` attribute on the property definition.
+    This is the successor to the flat ``never-backup`` boolean, and it is read
+    from the description rather than from a value topic: v1.0 expresses
+    never-backup as *mutability*, and the migration guide maps the retired
+    property onto ``$settable = !never-backup``. So a circuit commissioned
+    never-backup is one whose priority the panel declares unwritable, and the
+    signal is the Homie attribute on the property definition.
 
-    An unannounced ``$settable`` therefore means settable: treating an
-    unannounced circuit as locked would mark every circuit never-backup on a
-    panel that does not publish the attribute.
+    **A lock is announced by omission, not by ``settable: false``.** Homie 5
+    defaults the attribute to false, and a conforming publisher emits it only
+    where it is true — the eBus SDK's description builder does exactly that, and
+    the vendored capture shows the same hand on ``switch/relay``, where
+    ``$settable`` is present on every controllable circuit and absent on the one
+    commissioned otherwise. `description.declared_settable` gives the rule and
+    the evidence for it.
 
-    **An unannounced attribute is not an undeclared property**, and only the
-    first of those means settable. A device carrying no ``load-shed`` node, or a
-    ``load-shed`` node with no ``priority`` on it, has not published a shed
-    priority for anything to be settable *on* — every non-circuit device in the
-    tree is in that position, the BESS and the MID and the lugs among them. The
-    permissive default is for the documented case where firmware declares the
-    property and omits the attribute, and reading it as permission for a device
-    that declared neither produced a write target for a control that device
-    never offered. `_declared_settable` separates the two.
+    Reading omission the other way — as permission — is what this corrects. It
+    offered a priority control on precisely the circuits commissioned not to
+    accept one, and the panel refuses that write however the declaration last
+    read. Every circuit in the capture announces ``settable: true`` explicitly,
+    so no producer we have seen ever needed the permissive default that the
+    misreading existed to provide.
+
+    Absence of the *property* answers the same way and for a plainer reason: a
+    device carrying no ``load-shed`` node, or one with no ``priority`` on it, has
+    published no shed priority for anything to be settable *on*. Every
+    non-circuit device in the tree is in that position — the BESS, the MID, the
+    lugs — and a write target for one of them names a control it never offered.
     """
-    return _declared_settable(device, NODE_LOAD_SHED, PROP_PRIORITY, when_unannotated=True)
+    return _settable(device, NODE_LOAD_SHED, PROP_PRIORITY)
 
 
 def relay_is_settable(device: DiscoveredDevice) -> bool:
@@ -226,24 +212,20 @@ def relay_is_settable(device: DiscoveredDevice) -> bool:
     an out-of-policy write regardless of what ``$settable`` last advertised, so
     the conjunction only ever refuses a write the panel would have refused.
 
-    **Absent ``$settable`` reads as locked here, the opposite of
-    `priority_is_settable`.** Homie 5 defaults the attribute to false, and the
-    catalog's condition means a locked relay is *not* settable, so a publisher
-    describing one correctly omits the attribute rather than publishing
-    ``false``. Absence is therefore the announcement. Priority answers the other
-    way because its catalog entry carries no condition at all. The two
-    properties are not making the same kind of claim. Both refuse a device that
-    declares no such property at all, which is a third case and not either
-    default.
+    **What differs from `priority_is_settable` is the second signal, not the
+    default.** Both read an absent ``$settable`` as locked, which is Homie 5's
+    own default and the rule `description.declared_settable` states once. The
+    relay reads a value property beside the declaration because ``switch``
+    narrows it by one; ``load-shed`` states no condition on ``priority``, so
+    there is no second signal there to consult.
 
     Across the two production enclosures we hold captures from — 27 circuits —
     ``$settable`` is present on ``switch/relay`` exactly when
     ``relay-controllable`` is ``true``, without exception, which is the
-    specification's rule showing up in hardware.
+    specification's rule showing up in hardware. The vendored capture carries
+    the same pattern on its five.
     """
-    return _declared_settable(device, NODE_SWITCH, PROP_RELAY, when_unannotated=False) and _flag(
-        device, NODE_SWITCH, PROP_RELAY_CONTROLLABLE, default=True
-    )
+    return _settable(device, NODE_SWITCH, PROP_RELAY) and _flag(device, NODE_SWITCH, PROP_RELAY_CONTROLLABLE, default=True)
 
 
 def build_circuit(

@@ -214,9 +214,12 @@ def test_commits_that_change_nothing_we_copy_stay_green() -> None:
 
 def test_a_changed_capture_is_drift_and_says_where_to_copy_it() -> None:
     source = fixtures(_peer(PANELBENCH))["tree"]
+    # Answered only for the resolved head, so a comparison against the branch
+    # name -- a later push away from what the summary reports -- goes unanswered.
+    since_the_pin = f"compare/{_pinned(PANELBENCH, 'commit')}...{_HEAD}"
     found = panelbench(
         _lock(),
-        _http({"compare": _comparison(1, 0, [source, "README.md"])}),
+        _http({since_the_pin: _comparison(1, 0, [source, "README.md"])}),
         _remote({"panelbench": _HEAD}),
     )
     assert found.verdict == "drift"

@@ -18,7 +18,7 @@ import uuid
 
 import httpx
 
-from ._http import V2_STATUS_PATH, _request
+from ._http import V2_STATUS_PATH, _request, _warn_plaintext_transport
 from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelServerError
 from .models import HomieSchemaTypes, V2AuthResponse, V2HomieSchema, V2StatusInfo
 
@@ -243,6 +243,10 @@ async def register_v2(
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
     """
+    # This is the request whose plaintext exposure is a credential exposure: the
+    # passphrase goes up in it and the broker password comes back in it.
+    _warn_plaintext_transport(host, "SPAN Panel v2 registration", ssl_context)
+
     # The panel requires unique client names — append a random suffix.
     # The passphrase field must be "hopPassphrase" per the SPAN v2 API spec.
     suffix = uuid.uuid4().hex[:8]

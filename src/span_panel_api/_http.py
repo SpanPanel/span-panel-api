@@ -139,6 +139,37 @@ async def _get_client(
         yield client
 
 
+def _warn_plaintext_transport(host: str, what: str, ssl_context: ssl.SSLContext | None) -> None:
+    """Say out loud that the panel's bootstrap traffic is not encrypted.
+
+    In the same voice as the MQTT bridge's unpinned-CA warning, and for the same
+    reason: a security property that is off by default is only a decision if the
+    operator can tell it is off. ``ssl_context=None`` puts every bootstrap
+    request on plaintext ``http://``, and registration is the one that carries
+    the panel passphrase up and brings the broker password back -- so anything on
+    the path reads both, and nothing said so.
+
+    Warned by the two calls that *bootstrap* a client rather than from inside
+    ``_request``. These are made a handful of times per config entry, so one line
+    per client is a line somebody reads; one per request -- registration,
+    detection, schema, status, FQDN -- is a line somebody filters out. The two
+    warn on mutually exclusive paths, so a caller never hears it twice.
+
+    The credential itself is never named here. This is a warning *about* a
+    secret, not a place to put one.
+    """
+    if ssl_context is not None:
+        return
+    _LOGGER.warning(
+        "%s for %s is being sent over plaintext HTTP: no ssl_context was supplied, so the request "
+        "and its response -- including any credential either one carries -- are readable by anything "
+        "on the path between here and the panel. Pin the panel's CA certificate and pass it as "
+        "ssl_context.",
+        what,
+        host,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _Reply:
     """One panel answer, with the decoding every caller of it needs.

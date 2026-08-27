@@ -86,7 +86,7 @@ def _adopted(snapshot: SpanPanelSnapshot) -> dict[str, AdoptedDevice]:
 
 
 def test_a_tree_of_modelled_devices_adopts_nothing() -> None:
-    """The captured tree is thirteen devices this adapter reads, so it adopts none.
+    """The captured tree is fourteen devices this adapter reads, so it adopts none.
 
     The baseline the rest of this module measures against: anything that shows up
     here is a modelled device leaking into adoption, which is the failure that

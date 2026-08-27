@@ -74,6 +74,25 @@ It cost us a second time on 2026-08-20, in the other vendored capture. `tests/fi
 lower-case, which is the flat half of a change panelbench made on the v1.0 side the same week. Nothing compared the capture to its source, so for nine days the two vendored captures named the same charger differently. `scripts/capture_flat_reference.py`
 now records the simulator commit its output came from, for the same reason `spec_lock.json` records the other two.
 
+### The other question: has the producer moved?
+
+A sibling checkout answers _do our bytes still match the pin?_ It cannot answer _has the producer moved past it?_, because what is on your disk knows nothing about what has been pushed or released since. `scripts/peer_drift.py` asks that one — PyPI for the
+emitter's latest release, GitHub's compare API for what panelbench changed, `git ls-remote` for where a branch is — reading every pin, path and repository out of `spec_lock.json`, and needing no checkout at all:
+
+```bash
+uv run python scripts/peer_drift.py                        # all three producers
+uv run python scripts/peer_drift.py --peer panelbench      # one of them
+```
+
+It runs as a pre-commit hook so that drift is caught on the commit that should have moved the pin. Non-strict there: a producer that cannot be reached reports as **UNKNOWN** and the commit still goes through, because not having asked is not the same fact
+as there being nothing new, and a laptop with no network still has to be able to commit. Only a producer that has actually moved past a pin stops one.
+
+**Local commits ask; pull requests do not.** `ci.yml` runs the same hooks with `SKIP: peer-drift`, and the hook is `stages: [pre-commit]`, so a producer that moved cannot fail somebody's unrelated pull request — the answer changes because a third party
+pushed, and failing an author for that is how a check gets ignored. `peer-drift.yml` asks it daily with `--strict`, where being unable to reach a producer is a broken run rather than bad wifi, and where a red result costs a notification and nothing else.
+
+Two comparisons are verdicts, and both are verdicts about bytes here having gone stale: the emitter's **release**, because the reference tree is a capture of one, and a **panelbench commit that touches a file we vendor**. Everything else is reported and
+stays green — unreleased commits on the emitter's branch, panelbench commits that change nothing we copy, and the specification itself, which says what a device class may publish rather than what one does.
+
 ### Regenerating a vendored capture
 
 Two scripts, one per producer, and neither is run automatically — a capture is a deliberate act.
@@ -94,7 +113,7 @@ Its input is committed too, as `scripts/reference_panel.yaml`, pinned as `peers.
 panel that mirrors the emitter's own `examples/forty_tab_minimal.yaml` key for key and marks its two deliberate divergences at the head of the file: spec-legal shed priorities in place of a value the emitter degrades to `UNKNOWN`
 (electrification-bus/distribution-enclosure-simulator#51), and the identity properties a real panel publishes. Read that file before assuming ours has drifted from theirs.
 
-Expect a recapture to move every `$description`'s `version`, which is minted from the wall clock. A diff confined to those thirteen lines means the producer did not move.
+Expect a recapture to move every `$description`'s `version`, which is minted from the wall clock. A diff confined to those fourteen lines means the producer did not move.
 
 ### The producer is the specification, executable
 
@@ -111,8 +130,12 @@ The peer checks answer a question whose shape depends on which producer revision
 
 - **`.github/workflows/ci.yml`** clones both peers at the commits `spec_lock.json` pins, via the `.github/actions/peer-checkouts` composite action, and runs the whole suite against them. The question is _do our vendored bytes match the commit we claim they
   came from?_ — deterministic, answerable on any commit, and fair to block a merge on. It catches an accidental local edit to a vendored file.
-- **`.github/workflows/peer-drift.yml`** runs on a schedule, never on a pull request, and clones each producer at its `ref` — the branch that producer develops on. The question is _has the producer moved past the pin?_ Its answer changes because someone
-  else pushed, so it must not fail an author's unrelated change. It reports the distance from the pin in the job summary either way, and goes red only when the comparison itself fails, so panelbench advancing with a change we do not vendor stays green.
+- **`.github/workflows/peer-drift.yml`** runs on a schedule, never on a pull request. The question is _has the producer moved past the pin?_ Its answer changes because someone else pushed, so it must not fail an author's unrelated change. It runs
+  `scripts/peer_drift.py --strict`, which asks the producers directly and needs no clone; the clones it still takes are there to name the commits, which is the one thing that script cannot do. It goes red only on a verdict — a new emitter release, or a
+  panelbench commit touching a file we vendor — so panelbench advancing with a change we do not copy stays green.
+
+The second question is also asked on every local commit, by the `peer-drift` pre-commit hook running the same script non-strict — and skipped in `ci.yml`, so it stays off pull requests for the same reason the workflow does. The workflow is the backstop
+rather than the check: a producer that moved is best found by the commit that should have moved the pin with it.
 
 All three repositories are public, so no checkout needs a token. If either ever goes private, the checkout step in the composite action is what starts failing, and the fix is a read-scoped PAT in its `token:` — the pin is not involved.
 

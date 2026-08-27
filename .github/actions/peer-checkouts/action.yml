@@ -29,31 +29,25 @@ inputs:
     required: false
     default: pin
 
+# Only what a workflow step cannot read for itself. Everything else a job needs out of
+# the lockfile — the emitter's distribution and released version, each peer's repository
+# — is read straight from `spec_lock.json` by `scripts/peer_drift.py`, which asks the
+# producers whether they have moved. Exposing those here as well would put a second
+# reader between a job and the pin for no gain. What is left is the pair a `git` command
+# in a checkout needs: which commit, and which ref was cloned.
 outputs:
   panelbench-pin:
     description: The commit spec_lock.json pins for panelbench, whichever ref was cloned.
     value: ${{ steps.pins.outputs.panelbench-commit }}
-  panelbench-repo:
-    description: The panelbench repository, as owner/name.
-    value: ${{ steps.pins.outputs.panelbench-repo }}
   panelbench-checkout:
     description: The ref actually cloned — the pinned commit, or the producer's branch.
     value: ${{ steps.pins.outputs.panelbench-checkout }}
   panel-sim-pin:
     description: The commit spec_lock.json pins for ebus-panel-sim.
     value: ${{ steps.pins.outputs.panel-sim-commit }}
-  panel-sim-repo:
-    description: The emitter repository, as owner/name.
-    value: ${{ steps.pins.outputs.panel-sim-repo }}
   panel-sim-checkout:
     description: The ref actually cloned — the pinned commit, or the producer's branch.
     value: ${{ steps.pins.outputs.panel-sim-checkout }}
-  panel-sim-distribution:
-    description: The PyPI distribution the emitter releases as.
-    value: ${{ steps.pins.outputs.panel-sim-distribution }}
-  panel-sim-version:
-    description: The released version the reference tree was captured from.
-    value: ${{ steps.pins.outputs.panel-sim-version }}
 
 runs:
   using: composite
@@ -91,10 +85,6 @@ runs:
             print(f"{prefix}-repo={slug(peer['repo'])}")
             print(f"{prefix}-commit={peer['commit']}")
             print(f"{prefix}-checkout={peer['commit'] if mode == 'pin' else peer['ref']}")
-
-        emitter = peers["ebus-panel-sim"]
-        print(f"panel-sim-distribution={emitter['distribution']}")
-        print(f"panel-sim-version={emitter['version']}")
         PY
 
     # All three are public, so no token is involved. If any ever goes private this is

@@ -27,7 +27,7 @@ fails when the two diverge.
 
 ## `parent_child_tree.json`
 
-Retained topics captured off the eBus emitter's parent/child tree for a 40-space panel: 13 devices — the panel, both lugs, a BESS with its MID, a PV, an EVSE, and the circuits.
+Retained topics captured off the eBus emitter's parent/child tree for a 40-space panel: 14 devices — the panel, both lugs, a BESS with its MID, a PV, an EVSE, and the circuits.
 
 Shape is `{device_id: {topic: payload}}`, every value a string, exactly as the broker retains them. `$description` is therefore a **JSON string**, not a nested object; `device_from_topics` replays it the way the transport does. `bess-mid` is typed
 `energy.ebus.device.mid`, not `.bess` — a reader filtering the tree by type marker has to expect the MID to survive a BESS filter.
@@ -41,9 +41,9 @@ Recorded machine-readably in `spec_lock.json` as `peers.ebus-panel-sim`, which i
 
 |                |                                                           |
 | -------------- | --------------------------------------------------------- |
-| Producer       | `ebus-panel-sim` 0.7.0                                    |
+| Producer       | `ebus-panel-sim` 0.8.0                                    |
 | Repository     | electrification-bus/distribution-enclosure-simulator      |
-| Commit         | `156b6ef14fbd00ca9e79ca2fc4bcd2ca4a6348f3` (tag `v0.7.0`) |
+| Commit         | `171bb94f0960ccd2f62282c83ec203017bd6aa7f` (tag `v0.8.0`) |
 | Capture script | `scripts/capture_parent_child_reference.py`               |
 | Manifest       | `scripts/reference_panel.yaml`                            |
 
@@ -64,4 +64,4 @@ producer is not written down. It mirrors `examples/forty_tab_minimal.yaml` key f
 
 The cost of that choice is real: the capture is no longer reproducible by running an example anyone can find in the emitter. The committed manifest is what buys it back.
 
-**Shape-stable, not byte-stable.** Each `$description` carries a `version` minted from the wall clock, so all thirteen move on every recapture. Nothing reads it; a diff confined to those lines means the producer did not move.
+**Shape-stable, not byte-stable.** Each `$description` carries a `version` minted from the wall clock, so all fourteen move on every recapture. Nothing reads it; a diff confined to those lines means the producer did not move.

@@ -9,6 +9,15 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [1.1.2]
+
+A refreshed peer pin: `spec_lock.json` ships inside this wheel, so the reference capture's producer moving is a release here even though the parser did not change.
+
+### Changed
+
+- **The reference capture and the peer pins move to `ebus-panel-sim` 0.8.0 and panelbench 2.4.0, and the reference tree now carries a circuit commissioned never-backup** — so the priority lock this parser reads is a case a conforming producer emits rather
+  than one a test builds by editing a declaration.
+
 ## [1.1.1]
 
 A correctness fix to how this parser reads write authorisation off a `$description`. No API change, and the floor on `span-panel-api` stays at **3.1.0**: nothing here asks anything new of the bootstrap.

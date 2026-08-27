@@ -57,9 +57,9 @@ find in the emitter, so the manifest is committed here and pinned in
 `spec_lock.json` as `peers.ebus-panel-sim.manifest`.
 
 **Shape-stable, not byte-stable.** Every `$description` carries a `version`
-minted from the wall clock when its device is built, so all thirteen move on
+minted from the wall clock when its device is built, so all fourteen move on
 every run. Nothing here reads it — it is Homie's own change counter — but it
-does mean a recapture always shows thirteen diffs, and that a diff confined to
+does mean a recapture always shows fourteen diffs, and that a diff confined to
 those lines says the producer did not move.
 """
 
@@ -73,12 +73,21 @@ import pathlib
 import sys
 
 _REPO = pathlib.Path(__file__).resolve().parent.parent
+# Run as a file — which is the only way this is run, and from the emitter's
+# working directory at that — the interpreter puts *this* directory on the path
+# and not the repository above it, so `scripts._lock` is not importable until we
+# say where the repository is. Appended rather than prepended: this process is
+# somebody else's, and the emitter's own imports get to resolve first.
+sys.path.append(str(_REPO))
+
 SIM = pathlib.Path(os.environ.get("PANEL_SIM_DIR", _REPO.parent / "distribution-enclosure-simulator"))
 if not (SIM / "src").is_dir():
     raise SystemExit(f"no emitter checkout at {SIM}; set PANEL_SIM_DIR")
 sys.path.insert(0, str(SIM / "src"))
 
 import yaml  # noqa: E402
+
+from scripts._lock import mapping as _mapping, peer, string  # noqa: E402
 
 from ebus_panel_sim import (  # noqa: E402
     BESSConfig,
@@ -92,7 +101,6 @@ from ebus_panel_sim import (  # noqa: E402
     __version__ as PRODUCER_VERSION,
 )
 
-LOCK = _REPO / "packages" / "schema-1" / "src" / "span_panel_api_schema_1" / "spec_lock.json"
 MANIFEST = _REPO / "scripts" / "reference_panel.yaml"
 PEER = "ebus-panel-sim"
 
@@ -105,13 +113,12 @@ _VALID_INVERTER_TYPES = frozenset({"hybrid", "ac-coupled"})
 
 # ---------------------------------------------------------------------------
 # Reading YAML without giving up on types
+#
+# The mapping check itself is `scripts/_lock.py`'s, because reading the lockfile
+# needs the same one and two copies of it would be two things to keep honest.
+# What is below is the rest of the manifest's vocabulary, which only this script
+# reads.
 # ---------------------------------------------------------------------------
-
-
-def _mapping(value: object, where: str) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        raise SystemExit(f"{where} must be a mapping, got {type(value).__name__}")
-    return {str(key): item for key, item in value.items()}
 
 
 def _optional_mapping(value: object) -> dict[str, object]:
@@ -126,19 +133,6 @@ def _sequence(value: object, where: str) -> list[object]:
 
 def _mappings(value: object, where: str) -> list[dict[str, object]]:
     return [_mapping(item, f"{where}[{index}]") for index, item in enumerate(_sequence(value, where))]
-
-
-def _required(source: Mapping[str, object], key: str, where: str) -> object:
-    """One key that has to be there, reported the way everything else here is.
-
-    Indexing straight into the mapping says the same thing as a bare `KeyError`
-    traceback, which is the one failure mode in this file that makes a reader
-    work out what the script wanted. Every other malformed input exits with a
-    sentence naming it.
-    """
-    if key not in source:
-        raise SystemExit(f"{where} has no {key!r} entry")
-    return source[key]
 
 
 def _text(source: Mapping[str, object], key: str, default: str) -> str:
@@ -189,11 +183,7 @@ def pinned_release() -> str:
     until somebody recaptured and updated only one -- which is the failure this
     whole change exists to make impossible.
     """
-    with LOCK.open(encoding="utf-8") as handle:
-        lock: object = json.load(handle)
-    document = _mapping(lock, "spec_lock.json")
-    peers = _mapping(_required(document, "peers", "spec_lock.json"), "peers")
-    return _text(_mapping(_required(peers, PEER, "peers"), f"peers.{PEER}"), "version", "")
+    return string(peer(PEER), "version", f"peers.{PEER}")
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +235,12 @@ def circuit_instance(profile: Profile, circuit: Mapping[str, object], pcs_priori
             "relay-behavior": behavior,
             "placement": _text(circuit, "placement", "downstream-of-lugs"),
             "always-on": _bool_str(behavior == "always-on"),
+            # The other commissioning lock (ebus-panel-sim 0.8.0): read by the
+            # emitter's `manifest_physics.never_backup`, which pins the priority
+            # and drops `$settable` from `load-shed/priority`.
+            "never-backup": _bool_str(
+                _flag(template, "never_backup") if "never_backup" in template else _flag(circuit, "never_backup")
+            ),
             "pcs-priority": str(pcs_priority),
         },
     )

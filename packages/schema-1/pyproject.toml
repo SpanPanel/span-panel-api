@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api-schema-1"
-version = "1.1.1"
+version = "1.1.2"
 description = "Parent/child schema (data-model-version 1.x) parser for span-panel-api"
 authors = [
     {name = "SpanPanel"}

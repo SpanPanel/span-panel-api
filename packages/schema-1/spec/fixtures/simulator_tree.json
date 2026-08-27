@@ -24,10 +24,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -135,7 +131,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627511
+    "version": 1787808834687
   },
   "1bfdc7ecebb0547bbe87a3696cddb0c0": {
     "children": [],
@@ -162,10 +158,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -273,7 +265,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627514
+    "version": 1787808834690
   },
   "1eeeb748eeaa58edb7e9b7e9dbbdeca7": {
     "children": [],
@@ -300,10 +292,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -411,7 +399,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627513
+    "version": 1787808834689
   },
   "2140a7e253ed54e3bc90a959081df615": {
     "children": [],
@@ -438,10 +426,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -530,8 +514,7 @@
           "relay": {
             "datatype": "enum",
             "format": "UNKNOWN,OPEN,CLOSED",
-            "name": "Circuit relay state",
-            "settable": true
+            "name": "Circuit relay state"
           },
           "relay-controllable": {
             "datatype": "boolean",
@@ -549,7 +532,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627511
+    "version": 1787808834688
   },
   "249a2f59782e5f1ab317c4632e79afad": {
     "children": [],
@@ -576,10 +559,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -687,7 +666,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627514
+    "version": 1787808834690
   },
   "3d9d86f303cc50d1827be57d4c667e53": {
     "children": [],
@@ -714,10 +693,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -825,7 +800,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627509
+    "version": 1787808834686
   },
   "3eeb0eb1605e5a7eadac41994b7a096c": {
     "children": [],
@@ -852,10 +827,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -963,7 +934,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627510
+    "version": 1787808834686
   },
   "43a0521737db516f99f14a9964ea4af0": {
     "children": [],
@@ -990,10 +961,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -1101,7 +1068,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627512
+    "version": 1787808834688
   },
   "4aeb08c46c2c5905a944166413f2f1ef": {
     "children": [],
@@ -1128,10 +1095,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -1239,7 +1202,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627512
+    "version": 1787808834689
   },
   "4ce8b30e8d3f5c49b9e0ab0c8caf4832": {
     "children": [],
@@ -1266,10 +1229,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -1377,7 +1336,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627514
+    "version": 1787808834690
   },
   "4d1deb6acb065746b13207b1358f8ca7": {
     "children": [],
@@ -1404,10 +1363,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -1515,7 +1470,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627512
+    "version": 1787808834688
   },
   "516694a326a35cd88600b3520e8a981a": {
     "children": [],
@@ -1542,10 +1497,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -1653,7 +1604,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627512
+    "version": 1787808834689
   },
   "6fcb352679ad5bfb8c8a8eab06829b9f": {
     "children": [],
@@ -1680,10 +1631,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -1772,8 +1719,7 @@
           "relay": {
             "datatype": "enum",
             "format": "UNKNOWN,OPEN,CLOSED",
-            "name": "Circuit relay state",
-            "settable": true
+            "name": "Circuit relay state"
           },
           "relay-controllable": {
             "datatype": "boolean",
@@ -1791,7 +1737,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627514
+    "version": 1787808834690
   },
   "770e2de52c33508a8a9ee8878064b46f": {
     "children": [],
@@ -1818,10 +1764,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -1929,7 +1871,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627509
+    "version": 1787808834685
   },
   "80a4fada833156ab8112f9d50e252b8f": {
     "children": [],
@@ -1956,10 +1898,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -2067,7 +2005,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627510
+    "version": 1787808834687
   },
   "9429f828509e58d59cb5f0f9f5fee523": {
     "children": [],
@@ -2094,10 +2032,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -2205,7 +2139,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627509
+    "version": 1787808834686
   },
   "948dea7788aa5c959b99df0edfabead2": {
     "children": [],
@@ -2232,10 +2166,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -2343,7 +2273,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627513
+    "version": 1787808834689
   },
   "af731c49a6785a4cb2ea5549fb8bce7e": {
     "children": [],
@@ -2370,10 +2300,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -2481,7 +2407,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627513
+    "version": 1787808834689
   },
   "afe90839f2725e3e962fb05afa2b6d43": {
     "children": [],
@@ -2508,10 +2434,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -2600,8 +2522,7 @@
           "relay": {
             "datatype": "enum",
             "format": "UNKNOWN,OPEN,CLOSED",
-            "name": "Circuit relay state",
-            "settable": true
+            "name": "Circuit relay state"
           },
           "relay-controllable": {
             "datatype": "boolean",
@@ -2619,7 +2540,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627512
+    "version": 1787808834688
   },
   "b24483358d29589d8e91d3bf11113269": {
     "children": [],
@@ -2646,10 +2567,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -2757,7 +2674,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627511
+    "version": 1787808834687
   },
   "b9fa08f1eaaf5d129bd5c78e1d5d937f": {
     "children": [],
@@ -2784,10 +2701,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -2895,7 +2808,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627514
+    "version": 1787808834691
   },
   "be7742043a06554aab2a1e38cc776603": {
     "children": [],
@@ -2922,10 +2835,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -3033,7 +2942,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627513
+    "version": 1787808834690
   },
   "c058aa11287f50f9b81e5160a0678869": {
     "children": [],
@@ -3060,10 +2969,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -3171,7 +3076,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627510
+    "version": 1787808834686
   },
   "c339ec7ce7ff521ca7646f9606baff9f": {
     "children": [],
@@ -3198,10 +3103,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -3309,7 +3210,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627511
+    "version": 1787808834688
   },
   "d1ff145887a05b839ede89409c27b398": {
     "children": [],
@@ -3336,10 +3237,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -3447,7 +3344,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627511
+    "version": 1787808834687
   },
   "e0ac90e169e6550ea83fe0b1942f1d0e": {
     "children": [],
@@ -3474,10 +3371,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -3585,7 +3478,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627510
+    "version": 1787808834687
   },
   "e0bc156c85015a609d4132084dfcd6fe": {
     "children": [],
@@ -3612,10 +3505,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -3723,7 +3612,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627512
+    "version": 1787808834688
   },
   "edee3425d50d51ffb022ee999053b2b4": {
     "children": [],
@@ -3750,10 +3639,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -3861,7 +3746,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627511
+    "version": 1787808834687
   },
   "ef972f063451539e8b2ad88e831d87b6": {
     "children": [],
@@ -3888,10 +3773,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -3999,7 +3880,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627513
+    "version": 1787808834689
   },
   "f515a0f43b6555b1a196fbb62728c24e": {
     "children": [],
@@ -4026,10 +3907,6 @@
       "connection": {
         "name": "connection",
         "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated downstream (e.g. microinverters, packs)"
-          },
           "feeds-device-id": {
             "datatype": "string",
             "name": "Homie device-id of the downstream device fed by this circuit"
@@ -4137,7 +4014,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.circuit",
-    "version": 1786424627510
+    "version": 1787808834686
   },
   "sim-40t-001": {
     "children": [
@@ -4443,7 +4320,7 @@
       }
     },
     "type": "energy.ebus.device.distribution-enclosure",
-    "version": 1786424627515
+    "version": 1787808834691
   },
   "sim-40t-001-SIM-BESS-40T-001": {
     "children": [
@@ -4526,7 +4403,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.bess",
-    "version": 1786424627515
+    "version": 1787808834691
   },
   "sim-40t-001-SIM-BESS-40T-001-mid": {
     "children": [],
@@ -4584,7 +4461,218 @@
     "parent": "sim-40t-001-SIM-BESS-40T-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.mid",
-    "version": 1786424627515
+    "version": 1787808834691
+  },
+  "sim-40t-001-lugs-dn": {
+    "children": [],
+    "extensions": [],
+    "homie": "5.0",
+    "name": "Downstream lugs",
+    "nodes": {
+      "connection": {
+        "name": "connection",
+        "properties": {
+          "fed-by-device-id": {
+            "datatype": "string",
+            "name": "Homie device-id of the upstream device feeding this lugs"
+          },
+          "fed-by-device-status": {
+            "datatype": "enum",
+            "format": "OK,LOST,DEGRADED",
+            "name": "Panel's view of comm health to the upstream device"
+          },
+          "fed-by-device-type": {
+            "datatype": "string",
+            "name": "Homie $type of the upstream device"
+          },
+          "feeds-device-id": {
+            "datatype": "string",
+            "name": "Homie device-id of the downstream device fed by this lugs"
+          },
+          "feeds-device-status": {
+            "datatype": "enum",
+            "format": "OK,LOST,DEGRADED",
+            "name": "Panel's view of comm health to the downstream device"
+          },
+          "feeds-device-type": {
+            "datatype": "string",
+            "name": "Homie $type of the downstream device"
+          }
+        },
+        "type": "energy.ebus.capability.connection"
+      },
+      "info": {
+        "name": "info",
+        "properties": {
+          "direction": {
+            "datatype": "enum",
+            "format": "UPSTREAM,DOWNSTREAM",
+            "name": "Lugs feed direction: upstream or downstream"
+          }
+        },
+        "type": "energy.ebus.capability.info"
+      },
+      "meter": {
+        "name": "meter",
+        "properties": {
+          "active-power": {
+            "datatype": "float",
+            "name": "Active power",
+            "unit": "W"
+          },
+          "current-a": {
+            "datatype": "float",
+            "name": "L1 current",
+            "unit": "A"
+          },
+          "current-b": {
+            "datatype": "float",
+            "name": "L2 current",
+            "unit": "A"
+          },
+          "exported-energy": {
+            "datatype": "float",
+            "name": "Exported energy",
+            "unit": "Wh"
+          },
+          "imported-energy": {
+            "datatype": "float",
+            "name": "Imported energy",
+            "unit": "Wh"
+          }
+        },
+        "type": "energy.ebus.capability.meter"
+      }
+    },
+    "parent": "sim-40t-001",
+    "root": "sim-40t-001",
+    "type": "energy.ebus.device.lugs",
+    "version": 1787808834691
+  },
+  "sim-40t-001-lugs-up": {
+    "children": [],
+    "extensions": [],
+    "homie": "5.0",
+    "name": "Upstream lugs",
+    "nodes": {
+      "connection": {
+        "name": "connection",
+        "properties": {
+          "fed-by-device-id": {
+            "datatype": "string",
+            "name": "Homie device-id of the upstream device feeding this lugs"
+          },
+          "fed-by-device-status": {
+            "datatype": "enum",
+            "format": "OK,LOST,DEGRADED",
+            "name": "Panel's view of comm health to the upstream device"
+          },
+          "fed-by-device-type": {
+            "datatype": "string",
+            "name": "Homie $type of the upstream device"
+          },
+          "feeds-device-id": {
+            "datatype": "string",
+            "name": "Homie device-id of the downstream device fed by this lugs"
+          },
+          "feeds-device-status": {
+            "datatype": "enum",
+            "format": "OK,LOST,DEGRADED",
+            "name": "Panel's view of comm health to the downstream device"
+          },
+          "feeds-device-type": {
+            "datatype": "string",
+            "name": "Homie $type of the downstream device"
+          }
+        },
+        "type": "energy.ebus.capability.connection"
+      },
+      "info": {
+        "name": "info",
+        "properties": {
+          "direction": {
+            "datatype": "enum",
+            "format": "UPSTREAM,DOWNSTREAM",
+            "name": "Lugs feed direction: upstream or downstream"
+          }
+        },
+        "type": "energy.ebus.capability.info"
+      },
+      "meter": {
+        "name": "meter",
+        "properties": {
+          "active-power": {
+            "datatype": "float",
+            "name": "Active power",
+            "unit": "W"
+          },
+          "current-a": {
+            "datatype": "float",
+            "name": "L1 current",
+            "unit": "A"
+          },
+          "current-b": {
+            "datatype": "float",
+            "name": "L2 current",
+            "unit": "A"
+          },
+          "exported-energy": {
+            "datatype": "float",
+            "name": "Exported energy",
+            "unit": "Wh"
+          },
+          "imported-energy": {
+            "datatype": "float",
+            "name": "Imported energy",
+            "unit": "Wh"
+          }
+        },
+        "type": "energy.ebus.capability.meter"
+      }
+    },
+    "parent": "sim-40t-001",
+    "root": "sim-40t-001",
+    "type": "energy.ebus.device.lugs",
+    "version": 1787808834691
+  },
+  "sim-40t-001-pv-1": {
+    "children": [],
+    "extensions": [],
+    "homie": "5.0",
+    "name": "Solar",
+    "nodes": {
+      "info": {
+        "name": "info",
+        "properties": {
+          "firmware-version": {
+            "datatype": "string",
+            "name": "Firmware version"
+          },
+          "model": {
+            "datatype": "string",
+            "name": "Model"
+          },
+          "nominal-power": {
+            "datatype": "float",
+            "name": "Nominal power",
+            "unit": "W"
+          },
+          "serial-number": {
+            "datatype": "string",
+            "name": "Serial number"
+          },
+          "vendor-name": {
+            "datatype": "string",
+            "name": "Vendor name"
+          }
+        },
+        "type": "energy.ebus.capability.info"
+      }
+    },
+    "parent": "sim-40t-001",
+    "root": "sim-40t-001",
+    "type": "energy.ebus.device.pv",
+    "version": 1787808834691
   },
   "sim-40t-001-sim-evse-sim-40t-001": {
     "children": [],
@@ -4672,7 +4760,7 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.evse",
-    "version": 1786424627514
+    "version": 1787808834691
   },
   "sim-40t-001-sim-evse-sim-40t-001-2": {
     "children": [],
@@ -4760,225 +4848,6 @@
     "parent": "sim-40t-001",
     "root": "sim-40t-001",
     "type": "energy.ebus.device.evse",
-    "version": 1786424627515
-  },
-  "sim-40t-001-lugs-dn": {
-    "children": [],
-    "extensions": [],
-    "homie": "5.0",
-    "name": "Downstream lugs",
-    "nodes": {
-      "connection": {
-        "name": "connection",
-        "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated up/downstream"
-          },
-          "fed-by-device-id": {
-            "datatype": "string",
-            "name": "Homie device-id of the upstream device feeding this lugs"
-          },
-          "fed-by-device-status": {
-            "datatype": "enum",
-            "format": "OK,LOST,DEGRADED",
-            "name": "Panel's view of comm health to the upstream device"
-          },
-          "fed-by-device-type": {
-            "datatype": "string",
-            "name": "Homie $type of the upstream device"
-          },
-          "feeds-device-id": {
-            "datatype": "string",
-            "name": "Homie device-id of the downstream device fed by this lugs"
-          },
-          "feeds-device-status": {
-            "datatype": "enum",
-            "format": "OK,LOST,DEGRADED",
-            "name": "Panel's view of comm health to the downstream device"
-          },
-          "feeds-device-type": {
-            "datatype": "string",
-            "name": "Homie $type of the downstream device"
-          }
-        },
-        "type": "energy.ebus.capability.connection"
-      },
-      "info": {
-        "name": "info",
-        "properties": {
-          "direction": {
-            "datatype": "enum",
-            "format": "UPSTREAM,DOWNSTREAM",
-            "name": "Lugs feed direction: upstream or downstream"
-          }
-        },
-        "type": "energy.ebus.capability.info"
-      },
-      "meter": {
-        "name": "meter",
-        "properties": {
-          "active-power": {
-            "datatype": "float",
-            "name": "Active power",
-            "unit": "W"
-          },
-          "current-a": {
-            "datatype": "float",
-            "name": "L1 current",
-            "unit": "A"
-          },
-          "current-b": {
-            "datatype": "float",
-            "name": "L2 current",
-            "unit": "A"
-          },
-          "exported-energy": {
-            "datatype": "float",
-            "name": "Exported energy",
-            "unit": "Wh"
-          },
-          "imported-energy": {
-            "datatype": "float",
-            "name": "Imported energy",
-            "unit": "Wh"
-          }
-        },
-        "type": "energy.ebus.capability.meter"
-      }
-    },
-    "parent": "sim-40t-001",
-    "root": "sim-40t-001",
-    "type": "energy.ebus.device.lugs",
-    "version": 1786424627515
-  },
-  "sim-40t-001-lugs-up": {
-    "children": [],
-    "extensions": [],
-    "homie": "5.0",
-    "name": "Upstream lugs",
-    "nodes": {
-      "connection": {
-        "name": "connection",
-        "properties": {
-          "count": {
-            "datatype": "integer",
-            "name": "Number of physical units aggregated up/downstream"
-          },
-          "fed-by-device-id": {
-            "datatype": "string",
-            "name": "Homie device-id of the upstream device feeding this lugs"
-          },
-          "fed-by-device-status": {
-            "datatype": "enum",
-            "format": "OK,LOST,DEGRADED",
-            "name": "Panel's view of comm health to the upstream device"
-          },
-          "fed-by-device-type": {
-            "datatype": "string",
-            "name": "Homie $type of the upstream device"
-          },
-          "feeds-device-id": {
-            "datatype": "string",
-            "name": "Homie device-id of the downstream device fed by this lugs"
-          },
-          "feeds-device-status": {
-            "datatype": "enum",
-            "format": "OK,LOST,DEGRADED",
-            "name": "Panel's view of comm health to the downstream device"
-          },
-          "feeds-device-type": {
-            "datatype": "string",
-            "name": "Homie $type of the downstream device"
-          }
-        },
-        "type": "energy.ebus.capability.connection"
-      },
-      "info": {
-        "name": "info",
-        "properties": {
-          "direction": {
-            "datatype": "enum",
-            "format": "UPSTREAM,DOWNSTREAM",
-            "name": "Lugs feed direction: upstream or downstream"
-          }
-        },
-        "type": "energy.ebus.capability.info"
-      },
-      "meter": {
-        "name": "meter",
-        "properties": {
-          "active-power": {
-            "datatype": "float",
-            "name": "Active power",
-            "unit": "W"
-          },
-          "current-a": {
-            "datatype": "float",
-            "name": "L1 current",
-            "unit": "A"
-          },
-          "current-b": {
-            "datatype": "float",
-            "name": "L2 current",
-            "unit": "A"
-          },
-          "exported-energy": {
-            "datatype": "float",
-            "name": "Exported energy",
-            "unit": "Wh"
-          },
-          "imported-energy": {
-            "datatype": "float",
-            "name": "Imported energy",
-            "unit": "Wh"
-          }
-        },
-        "type": "energy.ebus.capability.meter"
-      }
-    },
-    "parent": "sim-40t-001",
-    "root": "sim-40t-001",
-    "type": "energy.ebus.device.lugs",
-    "version": 1786424627515
-  },
-  "sim-40t-001-pv-1": {
-    "children": [],
-    "extensions": [],
-    "homie": "5.0",
-    "name": "Solar",
-    "nodes": {
-      "info": {
-        "name": "info",
-        "properties": {
-          "firmware-version": {
-            "datatype": "string",
-            "name": "Firmware version"
-          },
-          "model": {
-            "datatype": "string",
-            "name": "Model"
-          },
-          "nominal-power": {
-            "datatype": "float",
-            "name": "Nominal power",
-            "unit": "W"
-          },
-          "serial-number": {
-            "datatype": "string",
-            "name": "Serial number"
-          },
-          "vendor-name": {
-            "datatype": "string",
-            "name": "Vendor name"
-          }
-        },
-        "type": "energy.ebus.capability.info"
-      }
-    },
-    "parent": "sim-40t-001",
-    "root": "sim-40t-001",
-    "type": "energy.ebus.device.pv",
-    "version": 1786424627515
+    "version": 1787808834691
   }
 }

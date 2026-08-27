@@ -114,8 +114,8 @@ def test_power_flows(fields: PanelFields) -> None:
     negates none of them, and this is what says so."""
     assert fields.power_flow_pv == -8500.0
     assert fields.power_flow_battery == 3500.0
-    assert fields.power_flow_grid == 2347.0
-    assert fields.power_flow_site == 2653.0
+    assert fields.power_flow_grid == 1117.0
+    assert fields.power_flow_site == 3883.0
 
 
 # ---------------------------------------------------------------------------
@@ -128,32 +128,32 @@ def test_grid_power_is_not_negated(fields: PanelFields) -> None:
     is what consumption means there. Applying the circuit rule would invert
     every grid figure while leaving it entirely plausible."""
     raw = _device("lugs-upstream").get_property("meter", "active-power")
-    assert raw == "-5847.0"
+    assert raw == "-4617.0"
 
-    assert fields.instant_grid_power_w == -5847.0
+    assert fields.instant_grid_power_w == -4617.0
 
 
 def test_main_meter_energy_maps_imported_to_consumed(fields: PanelFields) -> None:
     """Opposite of a circuit: the panel imports from the grid, so imported
     energy is what the house consumed."""
     upstream = _device("lugs-upstream")
-    assert upstream.get_property("meter", "imported-energy") == "44.05"
+    assert upstream.get_property("meter", "imported-energy") == "64.55"
 
-    assert fields.main_meter_energy_consumed_wh == pytest.approx(44.05, rel=1e-4)
-    assert fields.main_meter_energy_produced_wh == pytest.approx(97.45, rel=1e-4)
+    assert fields.main_meter_energy_consumed_wh == pytest.approx(64.55, rel=1e-4)
+    assert fields.main_meter_energy_produced_wh == pytest.approx(76.95, rel=1e-4)
 
 
 def test_per_phase_currents(fields: PanelFields) -> None:
     """Lugs expose `current-a`/`current-b`; circuits expose a single `current`.
     Same capability type, different property set."""
-    assert fields.upstream_l1_current_a == pytest.approx(46.4666, rel=1e-4)
+    assert fields.upstream_l1_current_a == pytest.approx(56.7166, rel=1e-4)
     assert fields.upstream_l2_current_a == pytest.approx(46.4749, rel=1e-4)
-    assert fields.downstream_l1_current_a == pytest.approx(46.4666, rel=1e-4)
+    assert fields.downstream_l1_current_a == pytest.approx(56.7166, rel=1e-4)
 
 
 def test_feedthrough_comes_from_the_downstream_lugs(fields: PanelFields) -> None:
-    assert fields.feedthrough_power_w == -5847.0
-    assert fields.feedthrough_energy_consumed_wh == pytest.approx(44.05, rel=1e-4)
+    assert fields.feedthrough_power_w == -4617.0
+    assert fields.feedthrough_energy_consumed_wh == pytest.approx(64.55, rel=1e-4)
 
 
 def test_lugs_are_found_by_declared_direction_not_device_id() -> None:

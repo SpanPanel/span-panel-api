@@ -163,17 +163,18 @@ def priority_is_settable(device: DiscoveredDevice) -> bool:
     **A lock is announced by omission, not by ``settable: false``.** Homie 5
     defaults the attribute to false, and a conforming publisher emits it only
     where it is true — the eBus SDK's description builder does exactly that, and
-    the vendored capture shows the same hand on ``switch/relay``, where
-    ``$settable`` is present on every controllable circuit and absent on the one
-    commissioned otherwise. `description.declared_settable` gives the rule and
-    the evidence for it.
+    the vendored capture shows the same hand twice: ``switch/relay`` carries
+    ``$settable`` on every controllable circuit and not on the one commissioned
+    non-controllable, and ``load-shed/priority`` carries it on every circuit but
+    the one commissioned never-backup. `description.declared_settable` gives the
+    rule and the evidence for it.
 
     Reading omission the other way — as permission — is what this corrects. It
     offered a priority control on precisely the circuits commissioned not to
     accept one, and the panel refuses that write however the declaration last
-    read. Every circuit in the capture announces ``settable: true`` explicitly,
-    so no producer we have seen ever needed the permissive default that the
-    misreading existed to provide.
+    read. No producer we have seen has ever published ``settable: false`` for the
+    permissive default to rescue: the capture's never-backup circuit announces
+    its lock by saying nothing, which is what the misreading read as a yes.
 
     Absence of the *property* answers the same way and for a plainer reason: a
     device carrying no ``load-shed`` node, or one with no ``priority`` on it, has

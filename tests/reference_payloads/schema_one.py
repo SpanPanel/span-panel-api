@@ -38,7 +38,7 @@ _DOMAIN = "ebus"
 def parent_child_tree() -> RetainedTopicTree:
     """The captured retained topics of a full 40-space panel.
 
-    Thirteen devices: the panel, both lugs, a BESS with its MID, a PV, an EVSE
+    Fourteen devices: the panel, both lugs, a BESS with its MID, a PV, an EVSE
     and the circuits — enough that a test can check what each device class does
     and does not declare, including the absences.
     """

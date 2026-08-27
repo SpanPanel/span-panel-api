@@ -207,3 +207,8 @@ Versions like `3.0.0b1` are pre-releases in both places that matter:
 - **GitHub** should have "Set as a pre-release" ticked, which keeps them out of the repository's "Latest release" slot.
 
 The publish workflow itself does not care — `on: release: published` fires either way.
+
+## When a producer releases
+
+Releasing the eBus emitter past the version we pin, or landing a panelbench commit that touches a capture we vendor, leaves this repository's `peers` block describing a producer that has been superseded — so the next commit here fails the `peer-drift`
+pre-commit hook until `spec_lock.json` moves with it. That is the intended order: re-vendor or re-capture and re-pin in one change, then commit. `gh workflow run peer-drift.yml` asks the same question on demand rather than waiting for the daily run.

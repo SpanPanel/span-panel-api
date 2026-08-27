@@ -27,9 +27,11 @@ from span_panel_api_schema_1.circuits import build_circuit
 _TREE = parent_child_tree()
 _CATALOGS = Path(__file__).parent.parent / "packages" / "schema-1" / "spec" / "catalogs"
 
-# From the fixture: a 1-pole load, and a 2-pole backfeeding PV breaker.
+# From the fixture: a 1-pole load, a 2-pole backfeeding PV breaker, and the
+# 1-pole load commissioned never-backup.
 KITCHEN_LIGHTS = "0ab966b95f92a6a51ec548485aa85f54"
 SOLAR_INVERTER = "573066aaddd7b75114c4563ce3af18c4"
+POOL_PUMP = "acf35888f35522c721501d35e66503e6"
 
 
 def _device(device_id: str) -> DiscoveredDevice:
@@ -44,6 +46,11 @@ def _kitchen() -> DiscoveredDevice:
 @pytest.fixture(name="solar")
 def _solar() -> DiscoveredDevice:
     return _device(SOLAR_INVERTER)
+
+
+@pytest.fixture(name="pump")
+def _pump() -> DiscoveredDevice:
+    return _device(POOL_PUMP)
 
 
 def test_identity_and_name(kitchen: DiscoveredDevice) -> None:
@@ -175,6 +182,31 @@ def test_an_unannounced_settable_means_never_backup(kitchen: DiscoveredDevice) -
     kitchen.update_description(json.dumps(description))
 
     assert build_circuit(kitchen).is_never_backup is True
+
+
+def test_the_captured_never_backup_circuit_is_locked_and_still_controllable(pump: DiscoveredDevice) -> None:
+    """The same lock read off a real circuit rather than an edited declaration.
+
+    The two tests above build a never-backup circuit by editing Kitchen
+    Lights, which is what proves the reader keys on `$settable` and on nothing
+    else about the device. This proves the other half — that a conforming
+    producer announces the lock that way: `ebus-panel-sim` 0.8.0 commissions Pool
+    Pump never-backup and publishes `load-shed/priority` carrying no `$settable`
+    at all, never `settable: false`.
+
+    Its relay stays controllable, and that is not incidental. The two
+    commissioning flags are scoped separately, so deriving either from the other
+    would take the switch away from every never-backup circuit on every panel —
+    here that inference would be invisible, because the derived answer and the
+    published one differ.
+    """
+    assert "settable" not in pump.get_node_properties("load-shed")["priority"]
+    assert pump.get_property("switch", "relay-controllable") == "true"
+
+    circuit = build_circuit(pump)
+
+    assert circuit.is_never_backup is True
+    assert circuit.is_user_controllable is True
 
 
 def _catalogued_priorities() -> list[str]:

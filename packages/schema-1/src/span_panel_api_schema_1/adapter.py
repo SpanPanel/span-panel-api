@@ -431,7 +431,7 @@ class SchemaOneAdapter:
 
         Searched rather than indexed because the tree is repopulated on every
         reconnect and a cached map would answer for a panel that is being
-        replaced. Thirteen devices on a full enclosure makes the linear scan
+        replaced. Fourteen devices on a full enclosure makes the linear scan
         irrelevant beside a broker round trip.
         """
         for device in self._children():

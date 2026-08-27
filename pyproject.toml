@@ -153,8 +153,20 @@ include = [
 
 [tool.ruff]
 line-length = 125
+# `scripts/` is excluded file by file rather than as a directory, so that a new
+# script is linted by default and only the ones written before that was true are
+# grandfathered out. `peer_drift.py` and `_lock.py` are the ones in scope: they
+# run on every commit and in CI, and the rest are hand-run tools.
 exclude = [
-    "scripts/",
+    "scripts/capture_flat_reference.py",
+    "scripts/capture_live_flat.py",
+    "scripts/capture_parent_child_reference.py",
+    "scripts/coverage.py",
+    "scripts/format_markdown.py",
+    "scripts/test_live_auth.py",
+    "scripts/validate_lug_derivation/",
+    "scripts/verify_adapterless_install.py",
+    "scripts/verify_reconnect.py",
     ".*_cache/",
     "dist/",
     "venv/",
@@ -164,6 +176,10 @@ exclude = [
 [tool.ruff.lint.per-file-ignores]
 # Exclude tests from ALL linting checks (formatting still applies)
 "tests/**/*.py" = ["ALL"]
+# Its whole output is a markdown summary on stdout, which the workflow appends to
+# the job summary and the hook shows on failure. T20 is right for the library and
+# wrong for a reporter.
+"scripts/peer_drift.py" = ["T201"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -217,8 +233,19 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 explicit_package_bases = true
 mypy_path = "src"
+# Excluded by name for the reason `[tool.ruff]` gives above: the two scripts the
+# drift check is made of are checked like the library, and the hand-run tools
+# written before that was expected are not.
 exclude = [
-    "scripts/",
+    "scripts/capture_flat_reference.py",
+    "scripts/capture_live_flat.py",
+    "scripts/capture_parent_child_reference.py",
+    "scripts/coverage.py",
+    "scripts/format_markdown.py",
+    "scripts/test_live_auth.py",
+    "scripts/validate_lug_derivation/",
+    "scripts/verify_adapterless_install.py",
+    "scripts/verify_reconnect.py",
     "tests/",
     "docs/",
     ".*_cache/",

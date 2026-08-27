@@ -150,21 +150,23 @@ def test_the_catalog_still_states_the_condition_this_refusal_encodes() -> None:
 
 
 def test_the_catalog_puts_no_such_condition_on_the_shed_priority() -> None:
-    """Why the two properties read an absent `$settable` in opposite directions.
+    """Why the relay reads a second signal and the priority reads one.
 
-    `load-shed` 0.3 declares `priority` settable and states no condition, so
-    mutability is its ordinary state and a lock is an announcement. `switch`
-    conditions `relay`, so a publisher describing a locked relay correctly omits
-    the attribute. Neither default is a house style; each follows from its own
-    catalog entry, and this is what records that they were read separately.
+    Both properties answer an absent `$settable` the same way — Homie 5's
+    default, false — so the asymmetry is not in the default. It is in what else
+    there is to read: `switch` narrows `relay` by a *value* property, so
+    `relay_is_settable` reads `relay-controllable` alongside the declaration,
+    while `load-shed` states no condition on `priority` and there is no second
+    signal to consult. A condition appearing here would mean `priority_is_settable`
+    is now reading half of its rule.
     """
     priority = _catalogued("load-shed", "priority")
 
     assert priority["settable"] is True
     assert "settable" not in str(priority["description"]).lower(), (
         "`load-shed` has grown a condition on `priority`'s settability. "
-        "`circuits.priority_is_settable` treats an absent `$settable` as permission on the "
-        "strength of there being none; that is now a decision to re-take."
+        "`circuits.priority_is_settable` reads the declaration alone on the strength of "
+        "there being no condition to read; that is now a decision to re-take."
     )
 
 
@@ -282,21 +284,46 @@ def test_a_never_backup_circuit_yields_no_priority_target() -> None:
     assert adapter.set_circuit_relay_target(CONTROLLABLE_CIRCUIT) is not None
 
 
-def test_an_unannounced_priority_settable_is_still_writable() -> None:
-    """Absence means settable here and locked on the relay, and the asymmetry is deliberate.
+def test_an_unannounced_priority_settable_yields_no_target() -> None:
+    """Omission is the announcement, the same way it is on the relay.
 
-    Never-backup is the exception a panel announces on top of an otherwise
-    mutable property, so defaulting silence to locked would refuse the priority
-    on every circuit of a firmware that publishes no attribute at all.
+    Homie 5 defaults `$settable` to false and the eBus SDK's description builder
+    emits the attribute only when the property is settable, so a conforming
+    publisher describes a never-backup circuit by omitting it. Reading silence as
+    permission resolved a write topic for precisely the circuits commissioned not
+    to accept one, and the panel would have refused the publish.
+
+    Only the priority: the relay is a separate commissioning flag and this
+    circuit's is untouched.
     """
 
     adapter = _adapter(_redeclared(CONTROLLABLE_CIRCUIT, "load-shed", "priority", settable=None))
 
-    assert adapter.set_circuit_priority_target(CONTROLLABLE_CIRCUIT) is not None
+    assert adapter.set_circuit_priority_target(CONTROLLABLE_CIRCUIT) is None
+    assert adapter.set_circuit_relay_target(CONTROLLABLE_CIRCUIT) is not None
+
+
+def test_every_circuit_in_the_capture_announces_its_priority_settable(adapter: SchemaOneAdapter) -> None:
+    """The premise of the two mutations above, asserted rather than assumed.
+
+    Both build a locked priority by editing a declaration that the producer
+    published as settable. A capture that stopped announcing the attribute would
+    make the mutations indistinguishable from the shipped state and quietly turn
+    `test_a_priority_target_exists_exactly_on_the_circuits` into an assertion
+    that no circuit has a priority target at all.
+    """
+    tree = parent_child_tree()
+
+    for device_id, topics in tree.items():
+        description = json.loads(topics["$description"])
+        if not description["type"].endswith(".circuit"):
+            continue
+        definition = description["nodes"]["load-shed"]["properties"]["priority"]
+        assert definition.get("settable") is True, device_id
 
 
 # ---------------------------------------------------------------------------
-# An undeclared property is not an unannounced attribute
+# A device that declares no such control at all
 # ---------------------------------------------------------------------------
 
 _NON_CIRCUITS = ("bess", "bess-mid", "pv", "lugs-upstream", "lugs-downstream")
@@ -315,15 +342,13 @@ def test_the_capture_carries_devices_with_no_shed_priority(adapter: SchemaOneAda
 
 @pytest.mark.parametrize("device_id", _NON_CIRCUITS)
 def test_a_device_that_declares_no_priority_yields_no_priority_target(adapter: SchemaOneAdapter, device_id: str) -> None:
-    """The permissive default is for a *declared* property, and these declare none.
+    """A BESS, a MID and the lugs declare no `load-shed` node at all.
 
-    `priority_is_settable` reads an absent `$settable` as permission, which is
-    right for the documented case where firmware declares `load-shed/priority`
-    and omits the attribute. A BESS, a MID or the lugs declare no `load-shed`
-    node at all — they have offered no shed priority for anything to be settable
-    on — and answering them with the same default resolved a write topic for a
-    control the device never published. The relay avoided this incidentally,
-    because its default is refusal.
+    They have published no shed priority for anything to be settable *on*, and
+    `_target` is pure string formatting from a device id — so this is the case
+    that produced a write topic for a control the device never offered. It is
+    asserted separately from the settability tests because it does not depend on
+    them: an id in the tree is not a control, whatever any `$settable` says.
     """
     assert adapter.set_circuit_priority_target(device_id) is None
     assert adapter.set_circuit_relay_target(device_id) is None

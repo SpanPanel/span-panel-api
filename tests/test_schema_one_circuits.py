@@ -161,14 +161,41 @@ def test_a_locked_priority_means_never_backup(kitchen: DiscoveredDevice) -> None
     assert build_circuit(kitchen).is_never_backup is True
 
 
-def test_an_unannounced_settable_means_settable(kitchen: DiscoveredDevice) -> None:
-    """Locking is what a panel announces. Treating silence as locked would mark
-    every circuit never-backup on firmware that omits the attribute."""
+def test_an_unannounced_settable_means_never_backup(kitchen: DiscoveredDevice) -> None:
+    """Omitting the attribute *is* how a panel announces the lock.
+
+    Homie 5 defaults `$settable` to false, and the eBus SDK's description
+    builder writes the attribute only when the property is settable — so a
+    conforming publisher describes a never-backup circuit by leaving it out, and
+    never by publishing `false`. Reading silence as permission offered a
+    priority control on exactly the circuits commissioned not to have one.
+    """
     description = json.loads(_TREE[KITCHEN_LIGHTS]["$description"])
     del description["nodes"]["load-shed"]["properties"]["priority"]["settable"]
     kitchen.update_description(json.dumps(description))
 
-    assert build_circuit(kitchen).is_never_backup is False
+    assert build_circuit(kitchen).is_never_backup is True
+
+
+def test_every_captured_circuit_announces_its_priority_settable() -> None:
+    """The premise that makes the test above a mutation rather than the norm.
+
+    A permissive default was justified as protecting firmware that publishes no
+    attribute at all. The capture publishes `settable: true` explicitly on every
+    circuit's `load-shed/priority`, so no circuit here ever needed the default —
+    and a capture that stopped doing so would be a producer change worth seeing
+    named rather than absorbed silently.
+    """
+    circuits = {
+        device_id: topics
+        for device_id, topics in _TREE.items()
+        if json.loads(topics["$description"])["type"].endswith(".circuit")
+    }
+    assert circuits, "the capture carries no circuits"
+
+    for device_id, topics in circuits.items():
+        definition = json.loads(topics["$description"])["nodes"]["load-shed"]["properties"]["priority"]
+        assert definition.get("settable") is True, device_id
 
 
 def _catalogued_priorities() -> list[str]:

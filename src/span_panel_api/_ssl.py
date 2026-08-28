@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 import hashlib
 import ipaddress
 import ssl
@@ -116,43 +116,62 @@ def leaf_names_host(peer_cert: Mapping[str, object], host: str) -> bool:
     treat this name as bound to this certificate", and the honest answer to a
     SAN that cannot be understood is no.
     """
-    san = peer_cert.get("subjectAltName")
-    if not isinstance(san, tuple | list):
-        return False
-
-    candidate = host.strip()
-    if candidate.endswith("."):
-        candidate = candidate[:-1]
+    candidate = _without_root_dot(host)
     if not candidate:
         return False
-
+    entries = list(_san_entries(peer_cert))
     try:
-        wanted_ip: ipaddress.IPv4Address | ipaddress.IPv6Address | None = ipaddress.ip_address(candidate)
+        wanted = ipaddress.ip_address(candidate)
     except ValueError:
-        wanted_ip = None
+        return _names_dns(entries, candidate)
+    return _names_address(entries, wanted)
 
+
+def _without_root_dot(name: str) -> str:
+    """Strip surrounding space and a single root dot, which is not significant."""
+    stripped = name.strip()
+    return stripped[:-1] if stripped.endswith(".") else stripped
+
+
+def _san_entries(peer_cert: Mapping[str, object]) -> Iterator[tuple[str, str]]:
+    """Yield the readable ``(kind, value)`` pairs of a certificate's SAN.
+
+    Anything malformed is skipped rather than rejected wholesale, so one broken
+    entry cannot hide a good one sitting beside it.
+    """
+    san = peer_cert.get("subjectAltName")
+    if not isinstance(san, tuple | list):
+        return
     for entry in san:
         if not isinstance(entry, tuple | list) or len(entry) != 2:
             continue
         kind, value = entry
-        if not isinstance(kind, str) or not isinstance(value, str):
+        if isinstance(kind, str) and isinstance(value, str):
+            yield kind, value
+
+
+def _names_address(entries: list[tuple[str, str]], wanted: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Whether an ``IP Address`` entry denotes ``wanted``, compared as addresses."""
+    for kind, value in entries:
+        if kind != "IP Address":
             continue
-        if wanted_ip is not None:
-            if kind != "IP Address":
-                continue
-            try:
-                if ipaddress.ip_address(value.strip()) == wanted_ip:
-                    return True
-            except ValueError:
-                continue
-        else:
-            if kind != "DNS":
-                continue
-            named = value.strip()
-            if named.endswith("."):
-                named = named[:-1]
-            if named and named.casefold() == candidate.casefold():
+        try:
+            if ipaddress.ip_address(value.strip()) == wanted:
                 return True
+        except ValueError:
+            continue
+    return False
+
+
+def _names_dns(entries: list[tuple[str, str]], candidate: str) -> bool:
+    """Whether a ``DNS`` entry equals ``candidate``, casefolded and exact."""
+    folded = candidate.casefold()
+    for kind, value in entries:
+        if kind != "DNS":
+            continue
+        named = _without_root_dot(value)
+        if named and named.casefold() == folded:
+            return True
     return False
 
 

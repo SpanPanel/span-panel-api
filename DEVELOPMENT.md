@@ -117,6 +117,9 @@ One catalog has no source in the wheel: `grid-forming.json`. The emitter models 
 `synced_commit` and is listed in `_UNSOURCED_CATALOGS` with the reason. `spec/registries/device-types.md` is the same case. Both directions are checked: a new unsourced catalog fails until somebody records why, and an entry the emitter has since started
 shipping fails until it is removed.
 
+The emitter caps `ebus-sdk` below 0.23 while this adapter permits up to 0.24, so with the emitter installed the suite resolves `ebus-sdk` 0.22.x: the top of the declared range is exercised by consumers, not here. That is a known consequence of pinning the
+emitter, accepted until its cap lifts; if a change here leans on SDK behaviour above 0.22, test it against that SDK deliberately.
+
 ### Catalogs are pinned by commit, not version
 
 `spec_lock.json` records `synced_commit`, not a specification version. That is deliberate: the 2026-07-31 spec changelog changed circuit sign-frame semantics **in place** with no version bump and stated no re-pin was required. A version pin would not have

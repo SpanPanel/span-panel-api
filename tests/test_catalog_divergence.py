@@ -424,8 +424,8 @@ def test_a_property_no_catalog_defines_is_never_reported_as_a_mismatch() -> None
     """The EVSE `config` node is the case, and it is not a defect.
 
     `config` is not an eBus capability at all — the specification has no catalog
-    of that name, which `test_an_unvendored_node_is_one_the_specification_really_does_not_define`
-    checks against a real checkout, and both its properties are declared
+    of that name, which `test_an_unvendored_node_is_one_the_emitter_really_does_not_publish`
+    checks against the installed emitter's catalogs, and both its properties are declared
     extensions in `_SPAN_EXTENSIONS`. Comparing its `unit` against a catalog that
     does not exist would report SPAN's own vocabulary as a mislabel, twice per
     property.

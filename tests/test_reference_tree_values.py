@@ -41,7 +41,7 @@ here where it is explained.
 **A failure here does not say which side moved, and both have.** Refreshing the
 vendored baseline is the fix when panelbench has already re-captured, which was
 the case the first time this fired: the copy carried 32 `connection/count`
-entries that the pinned panelbench commit had itself already dropped, so the two
+entries that panelbench had itself already dropped, so the two
 artifacts agreed only because both were stale. Regenerating the reference tree
 is the fix when the producer this side follows has moved -- see
 `scripts/capture_parent_child_reference.py`, which reproduces every identifier

@@ -78,7 +78,7 @@ dev = [
     # two distributions together, which is the configuration users will run.
     "span-panel-api-schema-0",
     "span-panel-api-schema-1",
-    # The producer of `tests/reference_payloads/parent_child_tree.json`, pinned
+    # The producer of `span_panel_api_schema_1/reference/parent_child_tree.json`, pinned
     # exactly because a reference capture is only evidence if what made it is
     # known. Dependabot raises the bump on its own; the bump PR re-runs
     # `scripts/capture_parent_child_reference.py` and the suite then says whether
@@ -108,7 +108,7 @@ dev = [
     # transitive of `twine -> keyring -> secretstorage`, which is marked
     # `sys_platform == 'linux'` -- so the whole module ran in CI and silently
     # skipped on every macOS checkout, which reads in the summary line exactly
-    # like passing. See DEVELOPMENT.md, "A skip here is not a pass".
+    # like passing. See DEVELOPMENT.md, "A skip is still not a pass".
     #
     # Floored at 50.0.0 rather than at whatever the lock happens to hold: four
     # advisories cover the range below it (the highest first patched in 50.0.0),

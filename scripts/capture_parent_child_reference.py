@@ -1,6 +1,6 @@
 """Capture the parent/child emitter's retained surface, without a broker.
 
-Produces `parent_child_tree.json`, the schema_1 reference tree that fifteen test
+Produces `parent_child_tree.json`, the schema_1 reference tree the schema_1 test
 modules here replay through `devices_from_tree`. It is **package data of
 `span-panel-api-schema-1`**, so a downstream test suite pinned to a version of
 that distribution reads the same bytes out of its own site-packages instead of

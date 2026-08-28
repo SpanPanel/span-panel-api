@@ -35,6 +35,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Mapping
 import importlib
+import importlib.resources
 import json
 from pathlib import Path
 import re
@@ -61,7 +62,7 @@ _DEVICE_TYPES = _SPEC / "registries" / "device-types.md"
 _SOURCE = Path(const.__file__).parent
 _LOCK = _SOURCE / "spec_lock.json"
 
-_EMITTER_CATALOGS = Path(ebus_panel_sim.__file__).parent / "wire" / "catalogs"
+_EMITTER_CATALOGS = Path(str(importlib.resources.files(ebus_panel_sim) / "wire" / "catalogs"))
 """The emitter wheel's own copies of the capability catalogs.
 
 The source our vendored copies are checked against, and it is installed rather

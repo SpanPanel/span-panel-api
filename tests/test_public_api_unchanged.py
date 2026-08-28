@@ -95,6 +95,12 @@ EXPECTED_PUBLIC_API = {
     # being reimplemented on the far side of the pin where they could drift.
     "build_panel_ssl_context",
     "ca_fingerprint",
+    # Added 2026-08-28: the hostname half of verification, needed by a caller
+    # that built a relaxed context to decide *which* host to talk to and must
+    # still establish the name binding. Here for the same reason as the two
+    # above -- a hand-written SAN matcher reimplemented on the far side of the
+    # pin is the drift this module exists to prevent.
+    "leaf_names_host",
     "delete_fqdn",
     "download_ca_cert",
     "get_fqdn",

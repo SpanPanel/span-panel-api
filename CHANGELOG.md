@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.2.0]
+
+A consumer pinned to a panel's CA cannot currently tell a panel that has moved from something impersonating one, because the two produce the same verification failure. This release splits the question.
+
+### Added
+
+- **`build_panel_ssl_context` takes `check_hostname`**, so a caller can verify that a peer holds a key the pinned CA signed without also asserting that the certificate names the address it was dialled by.
+- **`leaf_names_host` decides the name binding on its own**, hand-written against `getpeercert()` because `ssl.match_hostname` was removed in Python 3.12, and stricter than that function was: no wildcards, no `commonName` fallback, and DNS and IP entries
+  that never stand in for one another.
+
 ## [3.1.1]
 
 A follow-up to 3.1.0's security work, with no API change and no adapter move required.

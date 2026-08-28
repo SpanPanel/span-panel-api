@@ -6,7 +6,7 @@ supporting MQTT/Homie (v2) transport.
 
 from importlib.metadata import version as _pkg_version
 
-from ._ssl import build_panel_ssl_context, ca_fingerprint
+from ._ssl import build_panel_ssl_context, ca_fingerprint, leaf_names_host
 from .auth import (
     delete_fqdn,
     download_ca_cert,
@@ -154,6 +154,9 @@ __all__ = [  # noqa: RUF022
     # both live here rather than being reimplemented on the other side.
     "build_panel_ssl_context",
     "ca_fingerprint",
+    # Added 2026-08-28: the hostname half of verification, split out so a
+    # caller using a relaxed context can still establish the name binding.
+    "leaf_names_host",
     "delete_fqdn",
     "download_ca_cert",
     "get_fqdn",

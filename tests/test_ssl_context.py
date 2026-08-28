@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from span_panel_api._ssl import build_panel_ssl_context
+from span_panel_api._ssl import build_panel_ssl_context, leaf_names_host
 
 cryptography = pytest.importorskip("cryptography", reason="cryptography needed to mint a test CA")
 
@@ -232,3 +232,121 @@ class TestBuildSslContext:
     def test_malformed_pem_raises(self) -> None:
         with pytest.raises((ssl.SSLError, ValueError)):
             build_panel_ssl_context("-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n")
+
+
+class TestRelaxedHostnameContext:
+    """`check_hostname=False` separates "is this the panel" from "is this its name".
+
+    The scenario throughout is the one a DHCP move produces: a leaf that names
+    `localhost` and nothing else, reached at `127.0.0.1`. The certificate is
+    perfectly good and signed by the pinned anchor; only the name it was dialled
+    by is absent from it.
+    """
+
+    def test_default_context_refuses_a_host_the_leaf_does_not_name(self) -> None:
+        """The premise. With hostname checking on, the two failures look alike."""
+        ca_pem, leaf_pem, leaf_key_pem = _ca_and_leaf(with_aki=False)
+        ctx = build_panel_ssl_context(ca_pem)
+
+        with _tls_server(leaf_pem, leaf_key_pem) as (host, port):
+            with socket.create_connection((host, port), timeout=5) as raw:
+                with pytest.raises(ssl.SSLCertVerificationError):
+                    ctx.wrap_socket(raw, server_hostname="127.0.0.1")
+
+    def test_relaxed_context_completes_and_yields_the_certificate(self) -> None:
+        """The same connection succeeds, and hands back the leaf to judge."""
+        ca_pem, leaf_pem, leaf_key_pem = _ca_and_leaf(with_aki=False)
+        ctx = build_panel_ssl_context(ca_pem, check_hostname=False)
+
+        with _tls_server(leaf_pem, leaf_key_pem) as (host, port):
+            with socket.create_connection((host, port), timeout=5) as raw:
+                with ctx.wrap_socket(raw, server_hostname="127.0.0.1") as tls:
+                    peer = tls.getpeercert()
+
+        assert peer is not None
+        # Chain-valid, and demonstrably not named by the address it was reached
+        # at -- the two facts the caller has to tell apart.
+        assert leaf_names_host(peer, "localhost") is True
+        assert leaf_names_host(peer, "127.0.0.1") is False
+
+    def test_relaxed_context_still_rejects_an_untrusted_chain(self) -> None:
+        """The load-bearing guarantee: relaxing the name does not relax trust.
+
+        An attacker without a key the pinned CA signed must still fail, or the
+        tri-state would be a hole rather than a classification.
+        """
+        ca_pem, _, _ = _ca_and_leaf(with_aki=False)
+        _, other_leaf, other_key = _ca_and_leaf(with_aki=False)
+        ctx = build_panel_ssl_context(ca_pem, check_hostname=False)
+
+        with _tls_server(other_leaf, other_key) as (host, port):
+            with socket.create_connection((host, port), timeout=5) as raw:
+                with pytest.raises(ssl.SSLCertVerificationError):
+                    ctx.wrap_socket(raw, server_hostname="localhost")
+
+    def test_relaxed_context_keeps_peer_verification_required(self) -> None:
+        ctx = build_panel_ssl_context(_self_signed_ca(with_aki=False), check_hostname=False)
+
+        assert ctx.check_hostname is False
+        assert ctx.verify_mode is ssl.CERT_REQUIRED
+        assert not (ctx.verify_flags & ssl.VERIFY_X509_STRICT)
+
+    def test_default_is_unchanged(self) -> None:
+        """Every existing caller keeps hostname checking without asking for it."""
+        ctx = build_panel_ssl_context(_self_signed_ca(with_aki=False))
+        assert ctx.check_hostname is True
+
+
+class TestLeafNamesHost:
+    def test_exact_dns_match(self) -> None:
+        assert leaf_names_host({"subjectAltName": (("DNS", "panel.local"),)}, "panel.local")
+
+    def test_dns_match_is_case_insensitive(self) -> None:
+        assert leaf_names_host({"subjectAltName": (("DNS", "Panel.LOCAL"),)}, "panel.local")
+
+    def test_trailing_dot_is_insignificant_on_both_sides(self) -> None:
+        assert leaf_names_host({"subjectAltName": (("DNS", "panel.local."),)}, "panel.local")
+        assert leaf_names_host({"subjectAltName": (("DNS", "panel.local"),)}, "panel.local.")
+
+    def test_wildcards_are_not_matched(self) -> None:
+        """A panel names literal addresses; a wildcard would be an anomaly."""
+        assert not leaf_names_host({"subjectAltName": (("DNS", "*.local"),)}, "panel.local")
+
+    def test_ipv4_match(self) -> None:
+        assert leaf_names_host({"subjectAltName": (("IP Address", "10.0.0.5"),)}, "10.0.0.5")
+
+    def test_ipv6_compares_parsed_not_textually(self) -> None:
+        san = {"subjectAltName": (("IP Address", "0:0:0:0:0:0:0:1"),)}
+        assert leaf_names_host(san, "::1")
+
+    def test_ip_and_dns_entries_are_not_interchangeable(self) -> None:
+        """Naming the string in a DNS entry must not authorise the address."""
+        assert not leaf_names_host({"subjectAltName": (("DNS", "10.0.0.5"),)}, "10.0.0.5")
+        assert not leaf_names_host({"subjectAltName": (("IP Address", "10.0.0.5"),)}, "panel.local")
+
+    def test_no_common_name_fallback(self) -> None:
+        """A SAN-less certificate names nothing, whatever its subject says."""
+        peer = {"subject": ((("commonName", "panel.local"),),)}
+        assert not leaf_names_host(peer, "panel.local")
+
+    def test_absent_or_unreadable_san_is_not_a_match(self) -> None:
+        assert not leaf_names_host({}, "panel.local")
+        assert not leaf_names_host({"subjectAltName": "not-a-sequence"}, "panel.local")
+
+    def test_malformed_entries_are_skipped_not_fatal(self) -> None:
+        """A good entry beside a broken one still matches."""
+        peer = {
+            "subjectAltName": (
+                ("DNS",),
+                ("IP Address", "not-an-ip"),
+                (None, "panel.local"),
+                ("DNS", "panel.local"),
+            )
+        }
+        assert leaf_names_host(peer, "panel.local")
+
+    def test_unparseable_ip_entry_does_not_match(self) -> None:
+        assert not leaf_names_host({"subjectAltName": (("IP Address", "999.1.1.1"),)}, "10.0.0.5")
+
+    def test_empty_host_matches_nothing(self) -> None:
+        assert not leaf_names_host({"subjectAltName": (("DNS", "panel.local"),)}, "")

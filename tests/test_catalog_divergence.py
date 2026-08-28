@@ -69,11 +69,7 @@ from span_panel_api_schema_1.field_metadata import (
 
 _SPEC = Path(__file__).parent.parent / "packages" / "schema-1" / "spec"
 _CATALOGS = _SPEC / "catalogs"
-_SIMULATOR_TREE = _SPEC / "fixtures" / "simulator_tree.json"
-_SIMULATOR_WIRE = _SPEC / "fixtures" / "simulator_wire.json"
 
-SIMULATOR_TREE = "simulator-tree"
-SIMULATOR_WIRE = "simulator-wire"
 REFERENCE_TREE = "reference-tree"
 FLAT_SCHEMA = "flat-schema"
 
@@ -118,7 +114,7 @@ _REGISTER: dict[Divergence, Acknowledged] = {
         recorded="2026-08-20",
     ),
     Divergence("info", "model", Divergent.DATATYPE, "enum", "string"): Acknowledged(
-        observed_in=(REFERENCE_TREE, SIMULATOR_TREE, SIMULATOR_WIRE),
+        observed_in=(REFERENCE_TREE,),
         reason=(
             "The catalog types `model` as `string` while its own description invites a publisher to "
             "advertise the valid set 'via Homie `$format` on the property' -- which Homie 5 permits "
@@ -213,9 +209,9 @@ def _untyped_nodes(descriptions: Sequence[dict[str, object]]) -> list[str]:
     ]
 
 
-def _tree_descriptions() -> list[dict[str, object]]:
-    """The simulator capture that is already a tree of parsed descriptions."""
-    return list(_objects(_json_object(_SIMULATOR_TREE)).values())
+def _reference_descriptions() -> list[dict[str, object]]:
+    """Every `$description` in the reference capture, parsed."""
+    return _wire_descriptions(tree_payloads.parent_child_tree())
 
 
 def _wire_descriptions(tree: Mapping[str, Mapping[str, str]]) -> list[dict[str, object]]:
@@ -234,13 +230,6 @@ def _wire_descriptions(tree: Mapping[str, Mapping[str, str]]) -> list[dict[str, 
         assert isinstance(parsed, dict), "a captured $description is not a JSON object"
         descriptions.append({str(key): value for key, value in parsed.items()})
     return descriptions
-
-
-def _simulator_wire() -> Mapping[str, Mapping[str, str]]:
-    return {
-        device_id: {str(topic): str(payload) for topic, payload in topics.items()}
-        for device_id, topics in _objects(_json_object(_SIMULATOR_WIRE)).items()
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -302,13 +291,7 @@ def _flat_declared() -> list[Declared]:
 def _surface() -> dict[str, list[Declared]]:
     """Every declaration this check judges, by producer."""
     return {
-        SIMULATOR_TREE: [d for description in _tree_descriptions() for d in _from_description(description)],
-        SIMULATOR_WIRE: [d for description in _wire_descriptions(_simulator_wire()) for d in _from_description(description)],
-        REFERENCE_TREE: [
-            d
-            for description in _wire_descriptions(tree_payloads.parent_child_tree())
-            for d in _from_description(description)
-        ],
+        REFERENCE_TREE: [d for description in _reference_descriptions() for d in _from_description(description)],
         FLAT_SCHEMA: _flat_declared(),
     }
 
@@ -427,9 +410,7 @@ def test_every_acknowledgement_justifies_itself() -> None:
     assert not undated, f"acknowledgements with no ISO date: {undated}"
 
     misfiled = sorted(
-        str(divergence)
-        for divergence, entry in _REGISTER.items()
-        if set(entry.observed_in) - {SIMULATOR_TREE, SIMULATOR_WIRE, REFERENCE_TREE, FLAT_SCHEMA}
+        str(divergence) for divergence, entry in _REGISTER.items() if set(entry.observed_in) - {REFERENCE_TREE, FLAT_SCHEMA}
     )
     assert not misfiled, f"acknowledgements naming a producer this check does not survey: {misfiled}"
 
@@ -443,8 +424,8 @@ def test_a_property_no_catalog_defines_is_never_reported_as_a_mismatch() -> None
     """The EVSE `config` node is the case, and it is not a defect.
 
     `config` is not an eBus capability at all — the specification has no catalog
-    of that name, which `test_an_unvendored_node_is_one_the_specification_really_does_not_define`
-    checks against a real checkout, and both its properties are declared
+    of that name, which `test_an_unvendored_node_is_one_the_emitter_really_does_not_publish`
+    checks against the installed emitter's catalogs, and both its properties are declared
     extensions in `_SPAN_EXTENSIONS`. Comparing its `unit` against a catalog that
     does not exist would report SPAN's own vocabulary as a mislabel, twice per
     property.
@@ -616,10 +597,7 @@ def test_every_captured_node_names_a_capability() -> None:
     the skip from becoming a way for the surface to shrink unnoticed — a node
     that lost its `$type` would drop off the comparison silently.
     """
-    descriptions = (
-        _tree_descriptions() + _wire_descriptions(_simulator_wire()) + _wire_descriptions(tree_payloads.parent_child_tree())
-    )
-    untyped = sorted(set(_untyped_nodes(descriptions)))
+    untyped = sorted(set(_untyped_nodes(_reference_descriptions())))
 
     assert not untyped, f"captured nodes declaring no eBus capability type: {untyped}"
 
@@ -637,9 +615,9 @@ def test_a_relabelled_unit_in_a_capture_is_reported() -> None:
     real captures are untouched — the point is that the reader, not a fixture,
     is what notices.
     """
-    mutated = copy.deepcopy(_json_object(_SIMULATOR_TREE))
+    mutated = copy.deepcopy(_reference_descriptions())
     relabelled = 0
-    for device in _objects(mutated).values():
+    for device in mutated:
         meter = declared_nodes(device).get(NODE_METER, {})
         for property_id, definition in declared_properties(meter).items():
             if property_id == "active-power" and definition.get("unit") == "W":
@@ -647,12 +625,12 @@ def test_a_relabelled_unit_in_a_capture_is_reported() -> None:
                 relabelled += 1
     assert relabelled, "no captured device declares meter/active-power in W; the mutation proves nothing"
 
-    surface = {SIMULATOR_TREE: [d for device in _objects(mutated).values() for d in _from_description(device)]}
+    surface = {REFERENCE_TREE: [d for device in mutated for d in _from_description(device)]}
     reported = _divergences(surface)
 
     mislabel = Divergence("meter", "active-power", Divergent.UNIT, "kW", "W")
     assert mislabel in reported, f"a relabelled unit was not reported; found {sorted(str(d) for d in reported)}"
-    assert reported[mislabel] == frozenset({SIMULATOR_TREE}), "the finding names the wrong producer"
+    assert reported[mislabel] == frozenset({REFERENCE_TREE}), "the finding names the wrong producer"
 
     assert mislabel in _REGISTER, "the register happens to carry this one, from the flat schema"
     assert _REGISTER[mislabel].observed_in == (FLAT_SCHEMA,), (
@@ -667,9 +645,9 @@ def test_a_relabelled_datatype_in_a_capture_is_reported() -> None:
     `unit` and `datatype` are compared by different rules — one family-aware,
     one exact — so proving one bites does not prove the other does.
     """
-    mutated = copy.deepcopy(_json_object(_SIMULATOR_TREE))
+    mutated = copy.deepcopy(_reference_descriptions())
     relabelled = 0
-    for device in _objects(mutated).values():
+    for device in mutated:
         breaker = declared_nodes(device).get("breaker", {})
         for property_id, definition in declared_properties(breaker).items():
             if property_id == "rating":
@@ -677,7 +655,7 @@ def test_a_relabelled_datatype_in_a_capture_is_reported() -> None:
                 relabelled += 1
     assert relabelled, "no captured device declares breaker/rating; the mutation proves nothing"
 
-    surface = {SIMULATOR_TREE: [d for device in _objects(mutated).values() for d in _from_description(device)]}
+    surface = {REFERENCE_TREE: [d for device in mutated for d in _from_description(device)]}
     reported = _divergences(surface)
 
     assert (

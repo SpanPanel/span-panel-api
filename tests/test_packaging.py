@@ -15,22 +15,16 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
-_CAPTURES = Path(__file__).parent / "reference_payloads"
-"""Where the reference captures live, and the source of the names below.
+_REFERENCE_CAPTURES = {
+    "span-panel-api-schema-0": "homie_schema.json",
+    "span-panel-api-schema-1": "parent_child_tree.json",
+}
+"""The capture each adapter distribution ships, under `<package>/reference/`.
 
-Read off the fixture directory rather than listed here so a capture added there
-is covered the day it exists — the same reason `_wheel_source_packages` reads
-the manifests.
+Keyed by distribution because the question is per-distribution: the bootstrap
+ships none, and each adapter ships exactly the capture a consumer of *that*
+parser tests against.
 """
-
-
-def _is_reference_capture(path: Path) -> bool:
-    """Would this file be one of the reference captures, wherever it sits?
-
-    Two questions, because there are two ways to reintroduce the problem: move
-    the directory back inside a package, or drop one capture in beside a module.
-    """
-    return "reference_payloads" in path.parts or path.name in {capture.name for capture in _CAPTURES.glob("*.json")}
 
 
 def _wheel_source_packages() -> list[tuple[str, Path]]:
@@ -91,23 +85,31 @@ def test_every_shipped_package_carries_a_py_typed_marker(distribution: str, pack
     _wheel_source_packages(),
     ids=lambda value: value.name if isinstance(value, Path) else str(value),
 )
-def test_no_shipped_package_carries_a_reference_capture(distribution: str, package_dir: Path) -> None:
-    """Test data must not sit inside a package directory.
+def test_every_adapter_ships_its_reference_capture(distribution: str, package_dir: Path) -> None:
+    """Each adapter carries the capture its consumers test against.
+
+    Deliberately shipped, and the reasoning reversed from 3.1.0's. It is true
+    that no runtime path reads these — that is why they were pulled out — but the
+    cost of *not* shipping them is paid downstream: the integration vendored
+    copies and then needed a provenance guard to keep the copies honest, which is
+    more machinery than 59 KB in two wheels. Shipping them means a consumer
+    pinned to a version of this adapter reads the same bytes that version was
+    built and tested against, out of its own site-packages.
 
     Nothing declares what ships: hatchling takes the whole of `packages = [...]`,
-    so a directory dropped inside one is package data by position alone. That is
-    how both wheels came to carry a reference capture between 3.0.0 and 3.1.0 —
-    56 KB no runtime path reads, in every install, plus an import surface the
-    distributions never meant to promise and could not remove without a breaking
-    change.
+    so a directory inside one is package data by position alone. That cuts both
+    ways, which is why this is asserted rather than assumed — CI asserts the same
+    against the built wheels, where it is finally true rather than inferred, but a
+    failure here names the file before anyone builds one.
 
-    The captures are fixtures now, under `tests/reference_payloads`. This is the
-    cheap half of holding that: CI asserts the same thing against the built
-    wheels, where it is finally true rather than inferred, but a failure here
-    names the file before anyone builds one.
+    The bootstrap ships neither: it registers no adapter and parses nothing, so
+    there is no capture that belongs to it.
     """
-    payloads = [path for path in package_dir.rglob("*.json") if _is_reference_capture(path)]
-    assert not payloads, (
-        f"{distribution} would ship {[str(p.relative_to(package_dir)) for p in payloads]} — "
-        "reference captures belong in tests/reference_payloads, not inside a package directory"
-    )
+    expected = _REFERENCE_CAPTURES.get(distribution)
+    if expected is None:
+        stray = sorted(str(path.relative_to(package_dir)) for path in package_dir.rglob("reference/*.json"))
+        assert not stray, f"{distribution} parses nothing, so it should ship no reference capture; found {stray}"
+        return
+
+    capture = package_dir / "reference" / expected
+    assert capture.is_file(), f"{distribution} ships no {expected}; run its capture script"

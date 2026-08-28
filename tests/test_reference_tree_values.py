@@ -41,7 +41,7 @@ here where it is explained.
 **A failure here does not say which side moved, and both have.** Refreshing the
 vendored baseline is the fix when panelbench has already re-captured, which was
 the case the first time this fired: the copy carried 32 `connection/count`
-entries that the pinned panelbench commit had itself already dropped, so the two
+entries that panelbench had itself already dropped, so the two
 artifacts agreed only because both were stale. Regenerating the reference tree
 is the fix when the producer this side follows has moved -- see
 `scripts/capture_parent_child_reference.py`, which reproduces every identifier
@@ -121,8 +121,8 @@ def test_the_reference_tree_values_everything_the_producer_values() -> None:
         f"  unvalued here, valued by the producer (this capture is behind):\n    {missing}\n"
         f"  unvalued by the producer, valued here (the baseline may be behind):\n    {invented}\n\n"
         "Decide which side moved: refresh tests/fixtures/panelbench_unvalued_by_both.json from "
-        "the panelbench commit spec_lock.json pins, or recapture the reference tree with "
-        "scripts/capture_parent_child_reference.py."
+        "panelbench's own baseline, or bump the ebus-panel-sim pin and recapture the reference "
+        "tree with scripts/capture_parent_child_reference.py."
     )
 
 

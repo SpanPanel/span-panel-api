@@ -527,11 +527,25 @@ The `PanelCapability` flag enum advertises transport features at runtime:
 
 ## Reference Payloads
 
-Captures of what a panel actually serves — the `GET /api/v2/homie/schema` document and a full 40-space parent/child retained-topic tree — live in [`tests/reference_payloads/`](tests/reference_payloads/README.md), with their provenance.
+Captures of what a panel actually serves — the `GET /api/v2/homie/schema` document and a full 40-space parent/child retained-topic tree — ship as package data of the adapter that parses each, and their provenance is documented in
+[`tests/reference_payloads/`](tests/reference_payloads/README.md) beside the loaders that read them.
 
-**They are fixtures of this repository, not package data.** Until 3.1.0 they sat inside the two source packages and were therefore carried in the wheels, which no runtime path ever read. `span_panel_api.reference_payloads` and
-`span_panel_api_schema_1.reference_payloads` no longer exist; a consumer that was importing them should vendor the bytes it needs and record the release it took them from, asserting that against `importlib.metadata.version(...)` so a moved pin that outruns
-the copy fails loudly instead of testing against a schema no panel runs.
+| Capture                  | Read from                                                  |
+| ------------------------ | ---------------------------------------------------------- |
+| `homie_schema.json`      | `span_panel_api_schema_0/reference/homie_schema.json`      |
+| `parent_child_tree.json` | `span_panel_api_schema_1/reference/parent_child_tree.json` |
+
+**Test-support data, and no runtime path reads either.** They ship so a downstream test suite pinned to a version of an adapter reads the same bytes that version was tested against, out of its own site-packages:
+
+```python
+from importlib.resources import files
+import json
+
+schema = json.loads((files("span_panel_api_schema_0") / "reference" / "homie_schema.json").read_text(encoding="utf-8"))
+```
+
+The bootstrap distribution ships neither: it registers no adapter and parses nothing. `span_panel_api.reference_payloads` and `span_panel_api_schema_1.reference_payloads` — the importable modules that existed until 3.1.0 — are still gone; these are data
+files read through `importlib.resources`, not an import surface.
 
 ## Project Structure
 
@@ -562,13 +576,15 @@ src/span_panel_api/          # distribution: span-panel-api (no parser)
 
 packages/schema-0/           # distribution: span-panel-api-schema-0
 └── src/span_panel_api_schema_0/
-                             # Flat parser: HomiePropertyAccumulator, HomieLifecycle,
+    ├── reference/           # homie_schema.json — test-support package data, not read at runtime
+    └── ...                  # Flat parser: HomiePropertyAccumulator, HomieLifecycle,
                              # HomieDeviceConsumer, field metadata, SCHEMA_ANCHOR
 
 packages/schema-1/           # distribution: span-panel-api-schema-1
-├── spec/                    # eBus capability catalogs, byte-copied; checked against, never parsed
+├── spec/                    # eBus capability catalogs, byte-copied from the emitter wheel; checked against, never parsed
 └── src/span_panel_api_schema_1/
-                             # Parent/child parser: ControllerRoutes, snapshot mapper,
+    ├── reference/           # parent_child_tree.json — test-support package data, not read at runtime
+    └── ...                  # Parent/child parser: ControllerRoutes, snapshot mapper,
                              # adoption, catalog validator, spec_lock.json
 ```
 

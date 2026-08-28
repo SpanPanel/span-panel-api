@@ -9,6 +9,14 @@ rather than by this version number. A release here means this parser changed, ne
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [1.1.2]
+
+The reference schema document this parser is tested against now ships in the wheel.
+
+### Added
+
+- **`span_panel_api_schema_0/reference/homie_schema.json`** — the captured `GET /api/v2/homie/schema` response, shipped as package data so a downstream test suite reads the bytes its pinned version was tested against instead of vendoring a copy.
+
 ## [1.1.1]
 
 Still requires `span-panel-api` **3.1.0 or newer**, unchanged.

@@ -6,19 +6,24 @@ decide *which* adapter parses the panel at all. The parent/child device tree is
 the other half of that story and lives in `schema_one`, beside the replay that
 can interpret it.
 
-Read by path rather than through `importlib.resources`: this is a file in a test
-tree now, not package data, and saying so in the loader is part of the point.
+**The bytes come out of the installed wheel, not out of this tree.** They are
+package data of `span-panel-api-schema-0` — read through `importlib.resources`,
+so a downstream test suite pinned to a version of that distribution loads the
+same bytes this suite does, from its own site-packages, without vendoring a copy
+and without a guard to keep that copy honest. Test-support data, never read on a
+runtime path: nothing in the adapter opens it, and `V2HomieSchema` is
+constructed from a live panel response in production.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from importlib.resources import files
 import json
-from pathlib import Path
 
 from span_panel_api.models import HomieSchemaTypes
 
-_HOMIE_SCHEMA = Path(__file__).parent / "homie_schema.json"
+_HOMIE_SCHEMA = files("span_panel_api_schema_0") / "reference" / "homie_schema.json"
 
 
 def homie_schema() -> Mapping[str, object]:

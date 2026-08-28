@@ -41,8 +41,16 @@ cost something: flat is a schema no longer being extended, not a producer no lon
 being fixed. 1.0.16 corrected an EVSE's node id to be its drive serial, the capture
 was not re-taken because it was believed it never needed to be, and the two vendored
 captures spent nine days naming the same charger differently. `tests/fixtures/
-flat_wire.json` now records the simulator commit it came from, the way the v1.0
-capture records panelbench's — see `scripts/capture_flat_reference.py`.
+flat_wire.json` now records the simulator commit it came from — see
+`scripts/capture_flat_reference.py`.
+
+**The pair is what this module is.** `flat_wire.json` and `panelbench_wire.json`
+are two captures of one 30-circuit panel, one per firmware generation, and only a
+matched pair can answer the question above — the reference tree the rest of the
+suite runs on is a different, six-circuit panel, so it cannot stand in for either
+half. They sit beside each other in `tests/fixtures/` because that is what they
+are: committed fixtures with prose provenance in the scripts that took them, not
+peers of this distribution.
 
 *Telemetry is attested.* The simulator models the BESS and the Drives, and the
 integration renders their entities correctly against it — which is real evidence
@@ -117,7 +125,7 @@ from span_panel_api_schema_1 import SchemaOneAdapter
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _FLAT = _FIXTURES / "flat_wire.json"
-_PC = Path(__file__).parent.parent / "packages" / "schema-1" / "spec" / "fixtures" / "simulator_wire.json"
+_PC = _FIXTURES / "panelbench_wire.json"
 _SERIAL = "sim-40t-001"
 
 EXPECTED_ORPHANS: dict[str, str] = {

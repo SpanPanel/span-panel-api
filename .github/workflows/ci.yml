@@ -34,22 +34,6 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    # The schema_1 provenance checks compare vendored bytes against the two
-    # repositories they were copied from, and skip when neither is reachable. They
-    # skipped in every run this workflow has ever done, which reads in the summary
-    # line exactly like passing -- see DEVELOPMENT.md, "A skip here is not a pass".
-    # Cloning both at the commits spec_lock.json pins turns them into a question with
-    # a deterministic answer: do our vendored bytes match the commit we say they came
-    # from? Whether the *producer* has moved past that pin is a different question
-    # with a moving answer, and it lives in peer-drift.yml so it cannot fail a pull
-    # request for something the author did not do.
-    #
-    # CI is set by the runner, and tests/test_schema_one_conformance.py fails rather
-    # than skips when it is -- so removing this step breaks the build instead of
-    # quietly switching the checks back off.
-    - name: Check out the peers the provenance checks verify against
-      uses: ./.github/actions/peer-checkouts
-
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -58,12 +42,10 @@ jobs:
     - name: Install dependencies
       run: uv sync --all-packages
 
-    # SKIP because `peer-drift` asks whether a *producer* has moved, and that answer
-    # changes because somebody else pushed — peer-drift.yml is where it is asked, on
-    # a schedule, so no pull request fails for a push its author did not make.
+    # The schema_1 provenance checks compare the vendored catalogs against
+    # `ebus-panel-sim`'s own copies. `uv sync` above is all they need: the emitter is
+    # a pinned dev dependency, so there is nothing to clone and nothing that can skip.
     - name: Run pre-commit hooks
-      env:
-        SKIP: peer-drift
       run: |
         uv run pre-commit run --all-files
 
@@ -150,29 +132,34 @@ jobs:
             print(f'{wheel}: py.typed present')
         "
 
-    # Reference captures are test data. They shipped in both wheels until 3.1.0
-    # -- not through any packaging declaration, but because a directory inside a
-    # package directory ships -- and no runtime path ever read them. Nothing in
-    # the manifests would object to that happening again, so the built artifact
-    # is where it has to be asserted. Every wheel, not the two known ones: an
-    # adapter added under packages/ is covered the day it exists.
-    - name: Verify no wheel ships reference payloads
+    # Each adapter ships the reference capture its consumers test against, so a
+    # downstream suite reads the bytes its pinned version was built against rather
+    # than vendoring a copy. Nothing in the manifests declares that -- hatchling
+    # ships a directory inside a package directory either way -- so the built
+    # artifact is where it has to be asserted.
+    - name: Verify each adapter wheel ships its reference capture
       run: |
         python -c "
-        import glob, posixpath, sys, zipfile
+        import glob, sys, zipfile
+        expected = {
+            'span_panel_api_schema_0': 'span_panel_api_schema_0/reference/homie_schema.json',
+            'span_panel_api_schema_1': 'span_panel_api_schema_1/reference/parent_child_tree.json',
+        }
         wheels = glob.glob('dist/*.whl')
         if not wheels:
             sys.exit('::error::no wheels were built')
+        seen = set()
         for wheel in wheels:
             names = zipfile.ZipFile(wheel).namelist()
-            carried = [
-                n for n in names
-                if 'reference_payloads' in n.split('/')
-                or posixpath.basename(n) in ('homie_schema.json', 'parent_child_tree.json')
-            ]
-            if carried:
-                sys.exit(f'::error::{wheel} ships test data: {carried}. Reference captures are fixtures under tests/reference_payloads; a directory inside a package directory ships whether or not the manifest names it.')
-            print(f'{wheel}: no reference payloads')
+            for package, path in expected.items():
+                if any(n.startswith(package + '/') for n in names):
+                    seen.add(package)
+                    if path not in names:
+                        sys.exit(f'::error::{wheel} ships {package} without {path}; downstream test suites read that file out of this wheel')
+                    print(f'{wheel}: {path} present')
+        missing = sorted(set(expected) - seen)
+        if missing:
+            sys.exit(f'::error::no wheel was built for {missing}')
         "
 
     # The configuration entry-point discovery exists to support, and the one

@@ -5,9 +5,17 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 1
+    # Raised from 1 for `ebus-panel-sim`. It is the producer of the schema_1
+    # reference capture, so its bump is a wire question and not a tooling one: the
+    # PR has to re-run scripts/capture_parent_child_reference.py, and the suite is
+    # what answers whether the wire moved. A limit of 1 let a pytest bump take the
+    # only slot and hold that question back for a week.
+    open-pull-requests-limit: 5
     allow:
       - dependency-type: "all"
+    # `ebus-panel-sim` is deliberately in none of these groups, and must stay that
+    # way. A grouped bump arrives as one commit with one review, and a wire change
+    # buried in a pytest bump is a wire change nobody read.
     groups:
       # Group development dependencies together
       dev-dependencies:

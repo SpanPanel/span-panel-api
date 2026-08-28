@@ -9,6 +9,18 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [1.1.3]
+
+`spec_lock.json` ships inside this wheel, so its shape changing is a release here even though the parser did not change.
+
+### Added
+
+- **`span_panel_api_schema_1/reference/parent_child_tree.json`** — the reference capture, shipped as package data so a downstream test suite replays the bytes its pinned version was tested against instead of vendoring a copy.
+
+### Changed
+
+- **`spec_lock.json` loses its `peers` block** — the producer this parser is developed against is now an ordinary pinned dev dependency of the repository rather than a peer recorded in the lockfile.
+
 ## [1.1.2]
 
 A refreshed peer pin: `spec_lock.json` ships inside this wheel, so the reference capture's producer moving is a release here even though the parser did not change.

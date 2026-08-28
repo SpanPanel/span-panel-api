@@ -40,8 +40,3 @@ coverage_output.log
 # of which belongs in a repository. The differential that reads them commits its
 # *verdict* only, never the capture, and skips when the file is absent.
 tests/fixtures/live_*.json
-
-# Peer checkouts. CI clones the eBus specification and SpanPanel/panelbench here so
-# the provenance checks have something to compare vendored bytes against; the same
-# layout works locally if you would rather not point .env at siblings.
-/peers/

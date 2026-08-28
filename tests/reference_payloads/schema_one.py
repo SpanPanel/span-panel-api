@@ -10,15 +10,20 @@ tree is not directly usable, every consumer of it has to replay the retained
 topics through `DiscoveredDevice` first, and separating the two would put the
 same twelve lines in each of the test modules that read it.
 
-Read by path rather than through `importlib.resources`: this is a file in a test
-tree now, not package data, and saying so in the loader is part of the point.
+**The bytes come out of the installed wheel, not out of this tree.** The capture
+is package data of `span-panel-api-schema-1` — read through
+`importlib.resources`, so a downstream test suite pinned to a version of that
+distribution replays the same bytes this suite does, from its own site-packages,
+without vendoring a copy and without a guard to keep that copy honest.
+Test-support data, never read on a runtime path: nothing in the adapter opens
+it, and a real consumer gets this tree off a broker.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from importlib.resources import files
 import json
-from pathlib import Path
 
 from ebus_sdk.homie import DiscoveredDevice
 
@@ -29,7 +34,7 @@ type RetainedTopicTree = Mapping[str, Mapping[str, str]]
 wire exactly as the panel publishes it, and `update_description` parses it.
 """
 
-_PARENT_CHILD_TREE = Path(__file__).parent / "parent_child_tree.json"
+_PARENT_CHILD_TREE = files("span_panel_api_schema_1") / "reference" / "parent_child_tree.json"
 
 _DEFAULT_STATE = "ready"
 _DOMAIN = "ebus"

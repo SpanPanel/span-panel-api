@@ -26,15 +26,15 @@ _DOTENV = Path(__file__).parent.parent / ".env"
 def _load_dotenv() -> None:
     """Populate the environment from `.env`, without overriding what is set.
 
-    Read directly rather than through python-dotenv: this supplies developer
-    defaults for the optional provenance checks (`EBUS_SPEC_DIR`,
-    `PANELBENCH_DIR`), and taking a dependency to parse two lines would put a
-    package in the test path to save nothing.
+    Read directly rather than through python-dotenv: this supplies the credentials
+    for the one check that needs a real panel (`LIVE_PANEL_*`), and taking a
+    dependency to parse four lines would put a package in the test path to save
+    nothing.
 
     `setdefault`, never assignment. An exported value is a deliberate choice for
-    this run — pointing at a different checkout to reproduce something — and a
-    file silently winning over it is the kind of surprise that costs an
-    afternoon. See `.env.example`; absence is fine, the checks skip.
+    this run — pointing at a second panel to reproduce something — and a file
+    silently winning over it is the kind of surprise that costs an afternoon. See
+    `.env.example`; absence is fine, `test_live_flat_differential.py` skips.
     """
     if not _DOTENV.exists():
         return

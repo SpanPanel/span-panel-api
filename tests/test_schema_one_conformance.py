@@ -19,31 +19,31 @@ Three checks with different reach, deliberately:
 
 - **Conformance** — this adapter against the vendored catalogs. Always runs, from
   a vendored copy, so it needs neither network nor a sibling checkout.
-- **Coverage** — this adapter against a captured tree from the SPAN simulator,
-  the producer our development is done against. Always runs, from a vendored copy.
-- **Provenance** — the vendored copies and the recorded pins against their
-  sources, which need `EBUS_SPEC_DIR` / `PANELBENCH_DIR` / `PANEL_SIM_DIR` to name
-  checkouts. Skipped without them on a developer machine and **failed** without
-  them under `CI`, where the workflow clones all three: see `_unconfigured`, and
-  DEVELOPMENT.md's "A skip here is not a pass".
+- **Coverage** — this adapter against the reference tree, captured from the
+  emitter our development is done against. Always runs, from a committed capture.
+- **Provenance** — the vendored catalogs against their source, which is the
+  `ebus-panel-sim` wheel's own `wire/catalogs/`. Always runs too, because the
+  emitter is a pinned dev dependency and its files are installed rather than
+  cloned. Nothing here skips.
 
 Provenance proves we copied the right bytes; it cannot prove we understood them.
-The first two are where the understanding gets checked, which is why they are the
-ones that must run everywhere.
+The first two are where the understanding gets checked.
 """
 
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
 import importlib
 import json
-import os
-import subprocess
 from pathlib import Path
 import re
-from typing import NoReturn
 
-import pytest
+from ebus_panel_sim import __version__ as EMITTER_VERSION
+import ebus_panel_sim
+
+from reference_payloads.schema_one import RetainedTopicTree, devices_from_tree, parent_child_tree
+from scripts import capture_parent_child_reference as capture_reference
 
 from span_panel_api_schema_1 import const
 from span_panel_api_schema_1.charge_limit import SPELLINGS
@@ -54,13 +54,38 @@ from span_panel_api_schema_1.field_metadata import _PROPERTY_FIELD_MAP
 # module that happens to hold most of the vocabulary.
 from span_panel_api_schema_1.panel import PROP_ISLANDING_STATE
 
-_SPEC = Path(__file__).parent.parent / "packages" / "schema-1" / "spec"
+_REPO = Path(__file__).parent.parent
+_SPEC = _REPO / "packages" / "schema-1" / "spec"
 _CATALOGS = _SPEC / "catalogs"
 _DEVICE_TYPES = _SPEC / "registries" / "device-types.md"
-_SIMULATOR_TREE = _SPEC / "fixtures" / "simulator_tree.json"
-_SIMULATOR_WIRE = _SPEC / "fixtures" / "simulator_wire.json"
 _SOURCE = Path(const.__file__).parent
 _LOCK = _SOURCE / "spec_lock.json"
+
+_EMITTER_CATALOGS = Path(ebus_panel_sim.__file__).parent / "wire" / "catalogs"
+"""The emitter wheel's own copies of the capability catalogs.
+
+The source our vendored copies are checked against, and it is installed rather
+than cloned — `ebus-panel-sim` is a pinned dev dependency, so this directory is
+there for every developer and every CI run alike. That is the whole reason the
+provenance check below has no skip in it: the sibling checkout it used to need
+was a thing an environment could fail to provide, and a check an environment can
+switch off is one nobody can rely on.
+"""
+
+_UNSOURCED_CATALOGS = {
+    "grid-forming": (
+        "the emitter models the BESS as a single device with no inverter child, so it "
+        "publishes no grid-forming capability and ships no catalog for one. This copy comes "
+        "from the specification at `synced_commit` and is the one catalog with no installed "
+        "source to compare against."
+    )
+}
+"""Catalogs we vendor that the emitter does not ship, and why.
+
+Listed rather than tolerated, for the same reason `_SPAN_EXTENSIONS` is: a file
+with no source and a file whose source moved are indistinguishable from a diff,
+and only one of them is deliberate.
+"""
 
 
 def _lock() -> dict[str, object]:
@@ -69,117 +94,24 @@ def _lock() -> dict[str, object]:
     return loaded
 
 
-PANELBENCH = "panelbench"
-"""The SPAN-side publisher this parser is developed against."""
+def _without_description_versions(tree: RetainedTopicTree) -> dict[str, dict[str, object]]:
+    """A capture with each `$description`'s wall-clock `version` dropped.
 
-PANEL_SIM = "ebus-panel-sim"
-"""The eBus specification's own executable publisher, and the producer of the
-reference tree. Same organisation as the specification, conformed against live
-panel output — the spec in runnable form rather than a third-party imitation of
-it. Pinned here for the reason panelbench is: an unrecorded producer is a
-dependency nobody can see, and this one went stale for exactly that reason."""
-
-
-def _peers() -> dict[str, object]:
-    peers = _lock()["peers"]
-    assert isinstance(peers, dict)
-    return peers
-
-
-def _peer(name: str = PANELBENCH) -> dict[str, object]:
-    """One peer by name.
-
-    Keyed rather than positional: both readers of this block — this module and
-    `.github/actions/peer-checkouts` — want a specific peer, never "the first
-    one", so a list would make every call site restate a lookup.
+    Parsed rather than string-edited, so the comparison is over documents and a
+    reformatting of the same declaration is not reported as a wire change.
+    `$description` is the only topic reached into; every other payload is
+    compared exactly as retained.
     """
-    peer = _peers()[name]
-    assert isinstance(peer, dict), f"peers.{name} should be an object"
-    return peer
-
-
-def _peer_str(key: str, name: str = PANELBENCH) -> str:
-    value = _peer(name)[key]
-    assert isinstance(value, str), f"peers.{name}.{key} should be a string"
-    return value
-
-
-def _peer_fixtures() -> dict[str, str]:
-    """The captures vendored from panelbench, by kind.
-
-    Two of them, answering different questions: `tree` is `$description`
-    documents and is what the conformance profile is computed from; `wire` adds
-    `$state` and every property value, and is the only one that can drive this
-    parser end to end. A consumer checked against declarations alone has been
-    checked for understanding the shape of a panel, not for building the right
-    snapshot from one.
-
-    Paths *inside panelbench*, because these are byte copies of files that live
-    there. The other peer's artifact is generated rather than copied, so it is
-    recorded under `produces` with paths inside this repository — one key would
-    have meant two things depending on which peer you read it from.
-    """
-    fixtures = _peer(PANELBENCH)["fixtures"]
-    assert isinstance(fixtures, dict)
-    return {str(kind): str(path) for kind, path in fixtures.items()}
-
-
-def _unconfigured(reason: str) -> NoReturn:
-    """Not configured: skip on a developer machine, fail in CI.
-
-    Locally, skipping is right — not every developer keeps sibling checkouts, and a
-    provenance check is not what they are running the suite for.
-
-    In CI it is the opposite. The workflow clones every peer and exports every
-    variable, so an unset or wrong path there does not mean "unavailable", it means
-    the wiring that makes these checks run has come undone. Skipping on that reads in
-    the summary line exactly like passing, which is how these checks stayed silent for
-    the nine days it took the vendored capture to go stale. A check that can be
-    switched off by a missing environment variable is a check nobody can rely on.
-
-    `CI` rather than a variable of our own, because it is what GitHub Actions and every
-    other runner already set — an environment that stops supplying a path has to opt
-    *out* of being an environment, which is not something a workflow edit does by
-    accident.
-    """
-    if os.environ.get("CI"):
-        pytest.fail(
-            f"{reason}. CI configures every peer checkout, so this is the provenance "
-            "wiring being broken rather than a check that is unavailable — and a skip "
-            "here is indistinguishable from a pass."
-        )
-    pytest.skip(reason)
-
-
-def _checkout(variable: str, what: str, expect: str | None = None) -> Path:
-    """A sibling checkout named by an environment variable, or unconfigured.
-
-    A variable that is unset and one pointing at a directory that is gone are the
-    same situation — the checkout is not available — and both take the same exit.
-    Letting a stale path through instead produces a FileNotFoundError from somewhere
-    deep in a comparison, which reads as a broken test rather than an unconfigured one.
-    Set them in `.env`; see `.env.example`.
-
-    "Gone" includes *emptied*, which is the form this actually takes. A checkout under
-    a temp directory keeps its `.git` and its directory tree while the reaper removes
-    the files, so `is_dir()` was true at every level and the comparison still raised.
-    Presence of a directory proves nothing here; the caller names one that must hold
-    at least one `.json`, which is what distinguishes a populated checkout from the
-    skeleton of a reaped one.
-
-    Each of the three states keeps its own message, because they call for different
-    actions — set the variable, fix the path, or re-clone — and collapsing them would
-    make the most confusing one, the reaped skeleton, look like the simplest one.
-    """
-    configured = os.environ.get(variable)
-    if not configured:
-        _unconfigured(f"set {variable} to {what}")
-    path = Path(configured)
-    if not path.is_dir():
-        _unconfigured(f"{variable}={configured} does not exist; point it at {what}")
-    if expect is not None and not any((path / expect).glob("*.json")):
-        _unconfigured(f"{variable}={configured} has no files under {expect}/ — the checkout is empty or is not {what}")
-    return path
+    normalised: dict[str, dict[str, object]] = {}
+    for device_id, topics in tree.items():
+        body: dict[str, object] = dict(topics)
+        raw = topics.get("$description")
+        if raw is not None:
+            described: object = json.loads(raw)
+            assert isinstance(described, Mapping), f"{device_id}'s $description is not a JSON object"
+            body["$description"] = {key: value for key, value in described.items() if key != "version"}
+        normalised[device_id] = body
+    return normalised
 
 
 def _catalog(node: str) -> dict[str, object]:
@@ -248,20 +180,23 @@ def _read_pairs() -> set[tuple[str, str]]:
     return pairs
 
 
-def _simulator_declared() -> set[tuple[str, str]]:
-    """Every ``(node, property)`` the captured simulator tree declares anywhere.
+def _emitter_declared() -> set[tuple[str, str]]:
+    """Every ``(node, property)`` the reference tree declares anywhere.
 
     Flattened across devices rather than kept per device type, matching the
     granularity of the catalogs: a capability's property set is the same
     wherever that capability appears.
+
+    Read through the same replay every other test uses rather than off the raw
+    JSON, because the capture holds `$description` as a retained *string* — the
+    shape a broker serves — and reaching into it by hand here would be a second
+    parser for a document `device_from_topics` already knows how to read.
     """
-    with _SIMULATOR_TREE.open() as handle:
-        tree: dict[str, dict[str, object]] = json.load(handle)
     return {
         (node_id, property_id)
-        for device in tree.values()
-        for node_id, node in (device.get("nodes") or {}).items()  # type: ignore[union-attr]
-        for property_id in (node.get("properties") or {})
+        for device in devices_from_tree(parent_child_tree())
+        for node_id in device.get_nodes()
+        for property_id in device.get_node_properties(node_id)
     }
 
 
@@ -313,26 +248,17 @@ _SPAN_EXTENSIONS: dict[tuple[str, str], str] = {
 }
 
 
-# Properties this adapter reads that the captured simulator tree never declares.
+# Properties this adapter reads that the reference tree never declares.
 #
 # Not defects on either side, but the precise list of what our development
 # producer does not exercise — which is exactly the part of the parser that gets
 # no evidence from testing against it.
 #
-# Empty as of 2026-08-08, and that is a measurement rather than a default. Its
-# one entry was grid/islanding-state, excused because the simulator modelled a
-# MID but no tracked config published one. The producer now publishes a MID, so
-# the entry stopped being true and the check below said so. Every property this
-# parser reads is now exercised by the capture it is developed against.
-#
-# The mechanism stays for the next gap. An empty dict is the honest state, and it
-# is load-bearing: the coverage check holds every other mapping with nothing
-# excused, so a future producer regression fails rather than lands here.
-#
-# Non-empty again as of 2026-08-10, with one entry and a different cause than the
-# last: not a config that failed to enable a device, but a device class the
-# producer does not model at all.
-_NOT_EXERCISED_BY_SIMULATOR: dict[tuple[str, str], str] = {
+# The mechanism is load-bearing: the coverage check holds every other mapping
+# with nothing excused, so a producer regression fails here rather than landing
+# quietly. An entry earns its place by naming a reason the emitter cannot
+# publish the property, not by recording that it does not.
+_NOT_EXERCISED_BY_THE_EMITTER: dict[tuple[str, str], str] = {
     ("grid-forming", "capable"): (
         "BESS model 0.14 decomposes a BESS into `battery` / `inverter` / `mid` child "
         "roles and puts grid-forming on the inverter. The emitter models the BESS as a "
@@ -410,20 +336,25 @@ def test_every_capability_node_this_adapter_reads_has_a_vendored_catalog() -> No
     assert not missing, f"capability nodes read but not vendored: {sorted(missing)}"
 
 
-def test_an_unvendored_node_is_one_the_specification_really_does_not_define() -> None:
-    """The claim behind an excused node, checked against the specification.
+def test_an_unvendored_node_is_one_the_emitter_really_does_not_publish() -> None:
+    """The claim behind an excused node, checked against the emitter.
 
-    `_fully_excused_nodes` says "no catalog exists to vendor". Nothing else can
-    check that, because the check runs against the files we chose to copy — so
-    a capability adopted upstream under an excused name would stay invisible
-    exactly as long as nobody re-read the spec. Opportunistic, like every other
-    provenance check here.
+    `_fully_excused_nodes` says "no catalog exists to vendor". Nothing in the
+    files we chose to copy can check that, so a capability adopted upstream under
+    an excused name would stay invisible exactly as long as nobody re-read the
+    spec — which used to mean until somebody cloned it.
+
+    Asked of the emitter's catalog set instead, and the narrowing is worth
+    stating: this now answers "has the producer started carrying a catalog for
+    this node?" rather than "does the specification define it?". The producer is
+    the spec in runnable form and vendors these files from it, so an adoption it
+    publishes against reaches here — and this runs on every machine rather than
+    on the ones with a checkout, which the previous version did not.
     """
-    spec = _checkout("EBUS_SPEC_DIR", "a specification checkout to verify vendored bytes", expect="capabilities")
-    adopted = sorted(node for node in _fully_excused_nodes() if (spec / "capabilities" / f"{node}.json").exists())
+    adopted = sorted(node for node in _fully_excused_nodes() if (_EMITTER_CATALOGS / f"{node}.json").exists())
 
     assert not adopted, (
-        f"the specification now defines these capabilities: {adopted}. Vendor the catalog, "
+        f"ebus-panel-sim {EMITTER_VERSION} now carries catalogs for {adopted}. Vendor each one, "
         "pin it in spec_lock.json, and compare what it specifies against what SPAN publishes."
     )
 
@@ -538,291 +469,160 @@ def test_an_abstract_unit_is_never_taken_from_the_catalog() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_peer_is_pinned_to_the_same_specification_commit() -> None:
-    """Publisher and consumer must be reading the same vocabulary.
-
-    Checked against the recorded peer rather than a live checkout so it runs
-    everywhere. Its real job is to make bumping our own pin without looking at
-    the other side impossible to do quietly.
-    """
-    assert _peer_str("synced_commit") == _lock()["synced_commit"], (
-        "this adapter and the simulator it is developed against are pinned to different "
-        "specification commits; re-vendor both, or record why they may differ."
-    )
-
-
-def test_the_recorded_capture_path_names_a_file_that_is_there() -> None:
-    """`produces.tree` is the one machine-readable statement of where the capture
-    lives, and three prose readers point at it — DEVELOPMENT.md, the payload
-    README and the capture script's own usage.
-
-    A path recorded in a lockfile has no compiler: when the capture moved out of
-    the package directory in 3.1.0 nothing here objected, because nothing
-    resolved it. Resolving it is the whole check — a rename that leaves this
-    behind fails at the rename rather than the next time somebody re-captures.
-    """
-    recorded = _peer(PANEL_SIM)["produces"]
-    assert isinstance(recorded, dict), "peers.ebus-panel-sim.produces should be an object"
-    tree = recorded["tree"]
-    assert isinstance(tree, str)
-
-    capture = Path(__file__).parent.parent / tree
-    assert capture.is_file(), f"spec_lock.json records the reference tree at {tree}, which is not there"
-
-
-def test_the_peer_targets_the_same_firmware() -> None:
-    """The firmware range is the anchor the two sides actually share — the spec
-    says what a device class *may* publish, while a panel publishes one tree."""
-    firmware = _lock()["firmware"]
-    assert isinstance(firmware, dict)
-
-    assert _peer_str("firmware_range") == firmware["range"]
-
-
-def test_every_property_read_is_exercised_by_the_simulator() -> None:
+def test_every_property_read_is_exercised_by_the_emitter() -> None:
     """What the producer never publishes, testing against it never proves.
 
-    An entry in `_NOT_EXERCISED_BY_SIMULATOR` is not a defect on either side; it
-    is a precise statement of where this parser has no evidence, which is worth
-    knowing before trusting a passing suite.
+    An entry in `_NOT_EXERCISED_BY_THE_EMITTER` is not a defect on either side;
+    it is a precise statement of where this parser has no evidence, which is
+    worth knowing before trusting a passing suite.
     """
-    declared = _simulator_declared()
+    declared = _emitter_declared()
     unexercised = sorted(
         f"{node}/{property_id}"
         for node, property_id in _read_pairs()
-        if (node, property_id) not in declared and (node, property_id) not in _NOT_EXERCISED_BY_SIMULATOR
+        if (node, property_id) not in declared and (node, property_id) not in _NOT_EXERCISED_BY_THE_EMITTER
     )
 
     assert not unexercised, (
-        "properties this adapter reads that the captured simulator tree never declares:\n  "
+        "properties this adapter reads that the reference tree never declares:\n  "
         + "\n  ".join(unexercised)
-        + "\n\nEither the simulator should publish them, or record why it does not in "
-        "_NOT_EXERCISED_BY_SIMULATOR."
+        + "\n\nEither the emitter should publish them, or record why it does not in "
+        "_NOT_EXERCISED_BY_THE_EMITTER."
     )
 
 
-def test_nothing_is_recorded_as_unexercised_once_the_simulator_publishes_it() -> None:
+def test_nothing_is_recorded_as_unexercised_once_the_emitter_publishes_it() -> None:
     """When the producer starts covering a gap, the entry stops being true. Left
     in place it would go on excusing a property that is now testable."""
-    declared = _simulator_declared()
+    declared = _emitter_declared()
     now_covered = sorted(
-        f"{node}/{property_id}" for node, property_id in _NOT_EXERCISED_BY_SIMULATOR if (node, property_id) in declared
+        f"{node}/{property_id}" for node, property_id in _NOT_EXERCISED_BY_THE_EMITTER if (node, property_id) in declared
     )
 
     assert not now_covered, (
-        "the simulator now declares these; drop them from _NOT_EXERCISED_BY_SIMULATOR "
+        "the emitter now declares these; drop them from _NOT_EXERCISED_BY_THE_EMITTER "
         "and let the coverage check hold them:\n  " + "\n  ".join(now_covered)
     )
 
 
 # ---------------------------------------------------------------------------
-# Provenance — opportunistic, because it needs checkouts
+# Provenance — against the installed emitter, so nothing here can be skipped
 # ---------------------------------------------------------------------------
 
 
-def test_vendored_catalogs_are_byte_identical_to_the_specification() -> None:
+def test_vendored_catalogs_are_byte_identical_to_the_emitters() -> None:
     """Are the bytes we vendored the bytes we claim they are?
 
-    Read out of git **at `synced_commit`** rather than from the checkout's working
-    tree, so the answer does not depend on what that clone happens to be sitting
-    on. This used to read the working tree while its own docstring claimed
-    otherwise, and `synced_commit` appeared only in the failure message. That is
-    wrong three ways, and one of them is the dangerous one:
+    Compared against `ebus-panel-sim`'s own copies, which are the specification's
+    `capabilities/` carried in a wheel — the emitter is written by the
+    organisation that writes the spec, and it publishes against these files
+    rather than beside them. So this asks the integrity question of the same
+    artifact the reference capture came out of: our vocabulary and the producer's
+    are one set of bytes or the comparison says where they differ.
 
-    * it **fails** when the clone has moved *ahead* of the pin, which is ordinary
-      currency drift and not a defect here -- observed the day the specification
-      went to `power-flows` 0.3;
-    * it **fails spuriously** with the clone on an unrelated branch;
-    * it **passes falsely** with a clone itself stale at the pinned commit while
-      the specification has moved on.
+    **Integrity, deliberately not currency.** Whether upstream has moved past the
+    release we pin is a different question, and it is pip's: Dependabot raises the
+    bump, the bump PR re-captures, and the suite says whether the wire moved.
+    Conflating the two is what made the previous version of this check
+    unreliable — it failed on a sibling clone that had merely moved ahead.
 
-    **Integrity, deliberately not currency.** Whether upstream has moved past our
-    pin is a separate question whose answer is normally "yes, a little", and it
-    must not fail a build. Conflating the two is what made this unreliable.
-    Currency is not checked by anything automatic here, and wants a scheduled job
-    rather than a gate.
-
-    The upstream reference producer fixed the same defect in its own copy of this
-    check (`distribution-enclosure-simulator` #47), which is where the framing
-    comes from.
+    Nothing here skips. The old version needed `EBUS_SPEC_DIR` to name a
+    checkout, so it ran only where somebody had cloned the specification, and a
+    skip reads in a summary line exactly like a pass — which is how a stale
+    vendored capture went unnoticed for nine days. A pinned dependency is
+    installed for everyone or the environment is broken outright.
     """
-    spec = _checkout(
-        "EBUS_SPEC_DIR",
-        "a specification checkout to verify vendored bytes",
-        expect="capabilities",
-    )
-    commit = _lock()["synced_commit"]
-    differing: list[str] = []
-    for path in sorted(_CATALOGS.glob("*.json")):
-        blob = subprocess.run(
-            ["git", "-C", str(spec), "show", f"{commit}:capabilities/{path.name}"],
-            capture_output=True,
-            # Stripped, because `-C` does not beat them. Git hooks export `GIT_DIR`
-            # and `GIT_INDEX_FILE` pointing at the repository being committed to,
-            # and an exported `GIT_DIR` wins over directory discovery -- so under
-            # pre-commit this read the *consumer's* object store, could not find a
-            # specification commit there, and failed with a fetch instruction for a
-            # commit the clone already had. Caught by the hook that causes it.
-            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
-        )
-        if blob.returncode != 0:
-            # A clone that cannot resolve the pin fails rather than skipping: a
-            # silent skip reads exactly like a pass on the one check that proves
-            # the vendored bytes are what the lockfile says.
-            pytest.fail(
-                f"{spec} cannot resolve {commit} (needed to read capabilities/{path.name}). "
-                f"Fetch it: git -C {spec} fetch origin {commit}"
-            )
-        if blob.stdout != path.read_bytes():
-            differing.append(path.name)
+    differing = [
+        path.name
+        for path in sorted(_CATALOGS.glob("*.json"))
+        if path.stem not in _UNSOURCED_CATALOGS and path.read_bytes() != (_EMITTER_CATALOGS / path.name).read_bytes()
+    ]
 
     assert not differing, (
-        f"vendored catalogs differ from the specification at {commit}: {differing}. "
-        "These are byte copies, so this is a vendoring defect rather than upstream having moved."
+        f"vendored catalogs differ from ebus-panel-sim {EMITTER_VERSION}: {differing}. These are byte "
+        "copies, so either re-vendor them from the installed wheel or the emitter changed what it "
+        "publishes against — and the reference capture was taken through the second one."
     )
 
 
-def test_the_vendored_captures_match_the_simulator() -> None:
-    """Both captures against the simulator that produced them.
+def test_every_vendored_catalog_has_a_source_or_a_recorded_reason() -> None:
+    """The comparison above is worth what its inputs are, and a file the emitter
+    does not ship is silently exempt from it.
 
-    Byte comparison for the tree, whose content is deterministic. The wire
-    capture carries values perturbed by `noise_factor` and an advancing clock, so
-    it is compared on shape: same devices, same topics. Holding it to bytes would
-    fail on every recapture for a reason nobody can act on.
+    Both directions, because both fail quietly. A new unsourced catalog would be
+    vendored bytes nothing checks; an entry in `_UNSOURCED_CATALOGS` that the
+    emitter has since started shipping would go on excusing a file that can now
+    be compared.
     """
-    sim_dir = _checkout("PANELBENCH_DIR", "a panelbench checkout to verify the captured fixtures")
-    fixtures = _peer_fixtures()
-    ref, commit = _peer_str("ref"), _peer_str("commit")
+    vendored = {path.stem for path in _CATALOGS.glob("*.json")}
+    shipped = {path.stem for path in _EMITTER_CATALOGS.glob("*.json")}
 
-    tree_source = sim_dir / fixtures["tree"]
-    assert tree_source.exists(), f"{tree_source} is missing; is {sim_dir} on {ref}?"
-    assert (
-        tree_source.read_bytes() == _SIMULATOR_TREE.read_bytes()
-    ), f"the captured tree differs from {tree_source}. Re-capture it and update peer.commit (recorded: {commit})."
+    unchecked = sorted(vendored - shipped - set(_UNSOURCED_CATALOGS))
+    assert not unchecked, (
+        f"these vendored catalogs have no source in ebus-panel-sim {EMITTER_VERSION} and nothing "
+        f"says why: {unchecked}. Nothing compares them, so add each to _UNSOURCED_CATALOGS with the "
+        "reason the emitter does not publish that capability."
+    )
 
-    wire_source = sim_dir / fixtures["wire"]
-    assert wire_source.exists(), f"{wire_source} is missing; is {sim_dir} on {ref}?"
-    with wire_source.open() as handle:
-        theirs = json.load(handle)
-    with _SIMULATOR_WIRE.open() as handle:
-        ours = json.load(handle)
-
-    assert set(theirs) == set(ours), "the simulator now publishes a different device set than the vendored capture"
-    differing = sorted(device for device in ours if set(ours[device]) != set(theirs[device]))
-    assert not differing, (
-        f"these devices publish different topics than the vendored capture: {differing}. "
-        f"Re-vendor from {wire_source} and update peer.commit (recorded: {commit})."
+    now_shipped = sorted(name for name in _UNSOURCED_CATALOGS if name in shipped)
+    assert not now_shipped, (
+        f"ebus-panel-sim {EMITTER_VERSION} now ships {now_shipped}; drop the entry from "
+        "_UNSOURCED_CATALOGS and let the byte comparison hold them."
     )
 
 
-def test_the_peer_record_matches_the_simulator_lockfile() -> None:
-    """What we believe the producer pins, against what it actually pins."""
-    sim_dir = _checkout("PANELBENCH_DIR", "a panelbench checkout to verify the peer record")
+def test_the_shipped_reference_tree_is_what_the_pinned_emitter_produces() -> None:
+    """Regenerate the capture and compare it to the bytes this repository ships.
 
-    with (sim_dir / ".ebus-spec.json").open() as handle:
-        theirs = json.load(handle)
-    assert theirs["role"] == _peer_str("role"), "the peer is not publishing; this pairing is not what it claims"
-    assert theirs["synced_commit"] == _peer_str("synced_commit"), (
-        f"the simulator now pins {theirs['synced_commit']}, we recorded {_peer_str('synced_commit')}. "
-        "Re-vendor and update both, or the two sides are reading different vocabularies."
-    )
+    This is the whole provenance mechanism, and it replaces every document that
+    used to say which release made the tree. Nothing records that any more: the
+    pin in `pyproject.toml` is the only statement, and this is what holds it true.
+    A record can go stale silently — that is exactly how the tree went three
+    emitter releases out of date while thirty test files asserted a producer
+    defect as fact. A regeneration cannot: it fails on the commit that moved the
+    pin.
 
+    In-process, so it needs no network, no checkout and no broker — the producer
+    is installed. On a Dependabot bump of `ebus-panel-sim` this goes red exactly
+    when the wire moved, and stays green when it did not.
 
-def test_the_emitters_pin_matches_ours() -> None:
-    """The producer of the reference tree reads the same specification we do.
-
-    `ebus-panel-sim` publishes an `.ebus-spec.json` of exactly this shape, from
-    the same organisation that writes the specification — so this is not two
-    third parties happening to agree, it is the executable form of the spec
-    stating which commit it implements. When the two pins match, a divergence
-    between our parser and that capture is a disagreement about the same
-    document rather than about two different ones, which is the only condition
-    under which the capture is evidence at all.
-
-    That is the whole reason the pin belongs in a lockfile instead of only in a
-    README: the reference tree went stale precisely because nothing could ask
-    this question mechanically.
+    **One field is normalised: each `$description`'s `version`.** Homie's own
+    change counter, minted from the wall clock when a device is built, so all
+    fourteen differ on every run and none of them is a fact about the wire.
+    Nothing in this library reads it. Everything else — every topic, every
+    payload, every declaration — is held to the byte.
     """
-    sim_dir = _checkout("PANEL_SIM_DIR", "an ebus-panel-sim checkout to verify the emitter pin")
+    # Through `serialise` rather than compared as returned. That is the function
+    # the script writes with, so this compares what *would be committed* against
+    # what is — and it settles the payload types on the way, because the SDK hands
+    # the recorder a `DeviceState` for `$state` where its own signature says
+    # `str`. Comparing the live objects would have leaned on that enum's string
+    # equality to pass, which is not a thing to depend on.
+    regenerated = _without_description_versions(json.loads(capture_reference.serialise(capture_reference.capture())))
+    shipped = _without_description_versions(parent_child_tree())
 
-    with (sim_dir / ".ebus-spec.json").open() as handle:
-        theirs = json.load(handle)
-    assert theirs["role"] == _peer_str(
-        "role", PANEL_SIM
-    ), "the emitter is not publishing; this pairing is not what it claims"
-    assert theirs["synced_commit"] == _peer_str("synced_commit", PANEL_SIM), (
-        f"the emitter now pins {theirs['synced_commit']}, we recorded {_peer_str('synced_commit', PANEL_SIM)}. "
-        "Re-capture and update both, or the capture was produced against a vocabulary this parser is not reading."
+    assert regenerated == shipped, (
+        f"ebus-panel-sim {EMITTER_VERSION} no longer produces the reference tree this repository "
+        "ships. Adopt the new capture and read the diff — it is a wire change:\n"
+        "    uv run python scripts/capture_parent_child_reference.py"
     )
 
 
-def test_the_captured_tree_names_the_emitter_release_that_made_it() -> None:
-    """The capture script, the lockfile and the checkout agree on one version.
+def test_the_comparison_would_notice_a_moved_wire() -> None:
+    """The guard on the guard: a normalisation that swallowed too much would make
+    the check above pass on any capture at all.
 
-    Three places could disagree, and the failure mode of each is the same: bytes
-    in the tree attributed to a producer that did not make them. The script
-    reads its expected version *out of this lockfile* rather than carrying a
-    constant of its own, so there is one pin and this test proves the checkout
-    is on it.
-
-    Skipped without a checkout like every other provenance check, and failed
-    under CI for the same reason — a skip reads in a summary line exactly like a
-    pass.
+    So the one field it drops is dropped by name, and a payload changed anywhere
+    else has to survive it. `$description` is where a normalisation is most
+    likely to go wrong, because that is the field being reached into.
     """
-    sim_dir = _checkout("PANEL_SIM_DIR", "an ebus-panel-sim checkout to verify the capture's producer")
+    tree = parent_child_tree()
+    device = next(iter(tree))
+    described = json.loads(tree[device]["$description"])
+    described["name"] = "a panel by another name"
+    mutated = {**tree, device: {**tree[device], "$description": json.dumps(described)}}
 
-    recorded = _peer_str("version", PANEL_SIM)
-    source = (sim_dir / "src" / "ebus_panel_sim" / "__init__.py").read_text(encoding="utf-8")
-    installed = re.search(r'^__version__ = "([^"]+)"', source, re.MULTILINE)
-
-    assert installed is not None, f"{sim_dir} carries no __version__; is it an ebus-panel-sim checkout?"
-    assert installed.group(1) == recorded, (
-        f"{sim_dir} is ebus-panel-sim {installed.group(1)}, and spec_lock.json records the reference "
-        f"tree as a capture of {recorded}. Move the checkout, or re-capture and re-pin together."
+    assert _without_description_versions(mutated) != _without_description_versions(tree), (
+        "the normalisation drops more than the wall-clock version stamp, so the comparison "
+        "above would accept a capture whose declarations had changed"
     )
-
-
-def test_an_unconfigured_peer_checkout_fails_in_ci_and_skips_locally(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The guard on the guard.
-
-    Everything above this line is worth exactly as much as the thing that decides
-    whether it runs, and that thing is one `if`. It has already gone wrong once in the
-    other direction: `PANELBENCH_DIR` named a directory that did not exist, every peer
-    check skipped, and nine days of drift accumulated behind a summary line that read
-    like a pass.
-
-    So the skip and the failure are both asserted, in both environments, for all three
-    of the states `_checkout` distinguishes. Asserting only the CI half would leave the
-    local half free to become a failure, which is the change that makes a developer
-    delete the check rather than configure it.
-
-    `_checkout` is exercised through its public behaviour — the exception it raises —
-    rather than by inspecting `_unconfigured`, so this keeps holding if the branch
-    moves into the callers.
-    """
-    outcomes = (pytest.fail.Exception, pytest.skip.Exception)
-    missing = "/nonexistent/peer/checkout"
-
-    monkeypatch.delenv("CI", raising=False)
-    monkeypatch.setenv("PANELBENCH_DIR", missing)
-    with pytest.raises(outcomes, match="does not exist") as local:
-        _checkout("PANELBENCH_DIR", "a panelbench checkout")
-    assert local.type is pytest.skip.Exception, (
-        f"off CI an unavailable checkout must skip, got {local.typename}. Failing instead is "
-        "what makes a developer without sibling checkouts delete the check rather than configure it"
-    )
-
-    monkeypatch.setenv("CI", "true")
-    for variable, value, expect, why in (
-        ("PANELBENCH_DIR", "", None, "unset"),
-        ("PANELBENCH_DIR", missing, None, "a path that is gone"),
-        ("EBUS_SPEC_DIR", str(_SPEC), "no-such-directory", "a checkout reaped to an empty skeleton"),
-    ):
-        monkeypatch.setenv(variable, value)
-        with pytest.raises(outcomes) as raised:
-            _checkout(variable, "a peer checkout", expect=expect)
-        assert raised.type is pytest.fail.Exception, (
-            f"under CI, {why} must fail rather than {raised.typename.lower()}: a peer check that "
-            "skips is one an environment can switch off, and the summary line cannot tell the "
-            "difference between that and a pass"
-        )

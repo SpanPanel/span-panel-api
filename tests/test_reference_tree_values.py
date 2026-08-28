@@ -121,8 +121,8 @@ def test_the_reference_tree_values_everything_the_producer_values() -> None:
         f"  unvalued here, valued by the producer (this capture is behind):\n    {missing}\n"
         f"  unvalued by the producer, valued here (the baseline may be behind):\n    {invented}\n\n"
         "Decide which side moved: refresh tests/fixtures/panelbench_unvalued_by_both.json from "
-        "the panelbench commit spec_lock.json pins, or recapture the reference tree with "
-        "scripts/capture_parent_child_reference.py."
+        "panelbench's own baseline, or bump the ebus-panel-sim pin and recapture the reference "
+        "tree with scripts/capture_parent_child_reference.py."
     )
 
 

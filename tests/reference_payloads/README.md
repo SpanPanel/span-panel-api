@@ -2,8 +2,16 @@
 
 Captures of what a panel actually serves, read by this repository's test suite through `reference_payloads.bootstrap` and `reference_payloads.schema_one`.
 
-**These are repository fixtures, not package data.** Until 3.1.0 they sat inside `src/span_panel_api/` and `packages/schema-1/src/span_panel_api_schema_1/`, so both wheels carried them — not through any packaging declaration, but because a directory inside
-a package directory ships. Nothing at runtime read them, and nothing does now. `tests/test_packaging.py` fails if a payload directory reappears inside a shipped package, and CI asserts the same against the built wheels.
+**The bytes are not here.** This directory holds the loaders; each capture is package data of the adapter that parses it, and the loaders read it with `importlib.resources`:
+
+| Capture                  | Ships in                  | At                                                         |
+| ------------------------ | ------------------------- | ---------------------------------------------------------- |
+| `homie_schema.json`      | `span-panel-api-schema-0` | `span_panel_api_schema_0/reference/homie_schema.json`      |
+| `parent_child_tree.json` | `span-panel-api-schema-1` | `span_panel_api_schema_1/reference/parent_child_tree.json` |
+
+**Test-support data, shipped deliberately, and never read at runtime.** No path in either distribution opens these files; a real consumer gets the schema document from the panel and the tree off a broker. They ship so that a downstream test suite pinned to
+a version of an adapter reads the same bytes that version was built and tested against, out of its own site-packages. The alternative is what the integration was doing: vendoring copies, and then maintaining a guard to keep the copies honest — more
+machinery than 59 KB in two wheels. That reverses the 3.1.0 decision, whose reasoning (no runtime path reads them) was true and turned out not to be the deciding cost. `tests/test_packaging.py` and CI both assert each adapter wheel carries its capture.
 
 ## `homie_schema.json`
 
@@ -37,24 +45,23 @@ and splitting the two would put the same twelve lines in each of the modules tha
 
 ### Provenance
 
-Recorded machine-readably in `spec_lock.json` as `peers.ebus-panel-sim`, which is the single home of the pin — this section describes it, and the capture script reads it.
+**No document states which release made this file, and that is the design.** `ebus-panel-sim` is pinned in `pyproject.toml`'s `dev` group, and `test_the_shipped_reference_tree_is_what_the_pinned_emitter_produces` regenerates the capture in-process on every
+run and compares it to the committed bytes. A written record can go stale in silence — that is exactly how this tree went three emitter releases out of date while thirty test files asserted a producer defect as fact. A regeneration cannot. Following a
+release is two steps: bump the pin, run `uv run python scripts/capture_parent_child_reference.py`.
 
-|                |                                                           |
-| -------------- | --------------------------------------------------------- |
-| Producer       | `ebus-panel-sim` 0.8.0                                    |
-| Repository     | electrification-bus/distribution-enclosure-simulator      |
-| Commit         | `171bb94f0960ccd2f62282c83ec203017bd6aa7f` (tag `v0.8.0`) |
-| Capture script | `scripts/capture_parent_child_reference.py`               |
-| Manifest       | `scripts/reference_panel.yaml`                            |
+|                |                                                      |
+| -------------- | ---------------------------------------------------- |
+| Producer       | `ebus-panel-sim`, pinned in `pyproject.toml`         |
+| Repository     | electrification-bus/distribution-enclosure-simulator |
+| Capture script | `scripts/capture_parent_child_reference.py`          |
+| Manifest       | `scripts/reference_panel.yaml`                       |
 
-**The producer is the specification in runnable form.** `ebus-panel-sim` is published by electrification-bus — the organisation that writes the eBus specification — and is conformed against live panel output. Its own `.ebus-spec.json` names the
-specification commit it implements, and `test_the_emitters_pin_matches_ours` checks that against ours, so a disagreement between this parser and this capture is a disagreement about one document rather than about two. Testing against it is correct.
+**The producer is the specification in runnable form.** `ebus-panel-sim` is published by electrification-bus — the organisation that writes the eBus specification — and is conformed against live panel output, so testing against it is correct. Its wheel
+also carries the capability catalogs it publishes against, and `test_vendored_catalogs_are_byte_identical_to_the_emitters` compares those to the ones vendored under `packages/schema-1/spec/catalogs/` — so a disagreement between this parser and this capture
+is a disagreement about one vocabulary rather than about two. See #161 and #162 for what depending on a frozen, unrecorded copy of it cost.
 
-What was wrong was depending on a **frozen, unrecorded** copy of it. This file used to state what the capture _contained_ and not what _made_ it, so when the emitter was corrected the capture silently was not — and a producer defect in `$settable` on a
-locked relay reached about thirty test files across two repositories before anyone compared them. The pin, the script that reads it, and the script's refusal to write a capture from any other release are the three halves of that fix. See #161 and #162.
-
-**The manifest is this repository's, not the emitter's example.** `scripts/reference_panel.yaml` is committed and pinned for the same reason the producer version is: a capture whose input is not in the tree is the same class of problem as one whose
-producer is not written down. It mirrors `examples/forty_tab_minimal.yaml` key for key so the two can be diffed, and marks its two deliberate divergences at the head of the file:
+**The manifest is this repository's, not the emitter's example.** `scripts/reference_panel.yaml` is the capture's input, committed beside the script and existing in exactly one place: a capture whose input is not in the tree is the same class of problem as
+one whose producer is not written down. It mirrors `examples/forty_tab_minimal.yaml` key for key so the two can be diffed, and marks its two deliberate divergences at the head of the file:
 
 1. **Shed priorities.** The example commissions two circuits `NICE_TO_HAVE`, a REST-generation value with no v1.0 representation that the emitter degrades to `UNKNOWN` (electrification-bus/distribution-enclosure-simulator#51, open). Across the two
    production enclosures we hold captures from — 27 circuits — no panel has ever published `UNKNOWN`, so this manifest uses values a real panel publishes. **`UNKNOWN` is still a legal enum member and this parser must handle it**; that obligation comes from
@@ -64,4 +71,5 @@ producer is not written down. It mirrors `examples/forty_tab_minimal.yaml` key f
 
 The cost of that choice is real: the capture is no longer reproducible by running an example anyone can find in the emitter. The committed manifest is what buys it back.
 
-**Shape-stable, not byte-stable.** Each `$description` carries a `version` minted from the wall clock, so all fourteen move on every recapture. Nothing reads it; a diff confined to those lines means the producer did not move.
+**Shape-stable, not byte-stable.** Each `$description` carries a `version` minted from the wall clock, so all fourteen move on every recapture. Nothing reads it; a diff confined to those lines means the producer did not move. It is also the one field the
+regeneration test normalises away — everything else is compared to the byte.

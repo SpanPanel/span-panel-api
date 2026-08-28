@@ -33,16 +33,16 @@ repos:
     hooks:
       # Run formatter first - exclude tests to avoid conflicts with black
       #
-      # `scripts/` is excluded except for `peer_drift.py` and `_lock.py`, which run
-      # on every commit and in CI and are held to the library's standard; the
-      # hand-run tools beside them are not. `pyproject.toml` names the same two
-      # exclusions for a bare `ruff check .`.
+      # `scripts/` is excluded except for `capture_parent_child_reference.py`, which
+      # produces the fixture the schema_1 suite is written against and is held to the
+      # library's standard; the hand-run tools beside it are not. `pyproject.toml`
+      # names the same exclusions for a bare `ruff check .`.
       - id: ruff-format
-        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/(?!peer_drift\.py$|_lock\.py$).*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/(?!capture_parent_child_reference\.py$).*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
       # Then linter - exclude tests and the hand-run scripts from strict linting
       - id: ruff-check
         args: ['--fix']
-        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/(?!peer_drift\.py$|_lock\.py$).*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/(?!capture_parent_child_reference\.py$).*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
 
   # Black for line length handling and test file formatting
   - repo: https://github.com/psf/black
@@ -75,22 +75,26 @@ repos:
         args: ['--config', '.markdownlint-cli2.jsonc']
         exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|node_modules/.*|htmlcov/.*'
 
-  # MyPy for type checking
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.16.0
+  # MyPy for type checking, run out of the project environment rather than out of
+  # one pre-commit builds.
+  #
+  # `mirrors-mypy` needs every typed import restated as `additional_dependencies`,
+  # which is a second dependency declaration that drifts: it had already gone stale
+  # once and needed `ebus-sdk` added by hand, and adding the emitter would have put
+  # a hardcoded `ebus-panel-sim==<version>` here that a Dependabot bump of the real
+  # pin would silently leave behind. `uv run` resolves from `pyproject.toml` and
+  # `uv.lock`, so the checker sees exactly what the suite sees, and the pin has one
+  # home. It also fixes a quieter divergence: the mirror was three minor versions
+  # behind the mypy a developer gets from `uv run mypy`, so the hook and the
+  # terminal could disagree about the same file.
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies:
-          - httpx
-          - click
-          - typing-extensions
-          - pytest
-          - types-PyYAML
-          - paho-mqtt
-          # schema-1 parses the parent/child tree with the eBus SDK, which
-          # ships py.typed — so the hook needs it installed to resolve those
-          # types rather than silently reporting import-not-found.
-          - ebus-sdk>=0.19.0
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
         args: ['--config-file=pyproject.toml']
         # `tests/reference_payloads/` is the one thing under tests/ this hook does
         # check. Its five accessors were type-checked as package data until 3.1.0
@@ -99,11 +103,11 @@ repos:
         # names tests/, which is fine — that flag governs directory discovery, and
         # a file passed by name is checked regardless.
         #
-        # `scripts/peer_drift.py` and `scripts/_lock.py` are checked for the same
-        # reason: they decide whether a commit goes through, which is not the place
-        # for the one part of the tree nothing type-checks. The hand-run scripts
-        # beside them stay out — see `pyproject.toml`, which names them one by one.
-        exclude: '^src/span_panel_api/generated_client/.*|scripts/(?!peer_drift\.py$|_lock\.py$).*|tests/(?!reference_payloads/).*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
+        # `scripts/capture_parent_child_reference.py` is checked for the same reason:
+        # every schema_1 test is written against what it writes, which is not the place
+        # for the one part of the tree nothing type-checks. The hand-run scripts beside
+        # it stay out — see `pyproject.toml`, which names them one by one.
+        exclude: '^src/span_panel_api/generated_client/.*|scripts/(?!capture_parent_child_reference\.py$).*|tests/(?!reference_payloads/).*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # Pylint for code quality
   - repo: https://github.com/pycqa/pylint
@@ -151,36 +155,6 @@ repos:
         language: system
         pass_filenames: false
         files: ^pyproject\.toml$|^uv\.lock$
-
-  # Have the producers moved past the pins in spec_lock.json?
-  #
-  # On a local commit, because CI finding this out is finding it out too late: the
-  # drift this catches is a producer release nobody here noticed until a scheduled
-  # job went red the next morning, by which time the commits that should have moved
-  # the pin were already in.
-  #
-  # `stages: [pre-commit]` and `SKIP: peer-drift` in ci.yml keep it off pull
-  # requests, and that is not an oversight to tidy up later: this question's answer
-  # changes because somebody else pushed, so asking it of an author's unrelated
-  # change would fail their build for a thing they did not do. peer-drift.yml asks
-  # it daily, with --strict, where failing costs a notification and nothing else.
-  #
-  # It asks PyPI and GitHub, so it is the one hook that needs the network — and
-  # deliberately non-strict, so it does not. A producer that cannot be reached
-  # reports as unknown and the commit goes through; only a producer that has
-  # actually moved past a pin stops one. Five calls at a ten-second timeout, so the
-  # worst case is under a minute and only against a network that accepts
-  # connections and then says nothing; a refused connection or a failed lookup
-  # comes back at once.
-  - repo: local
-    hooks:
-      - id: peer-drift
-        name: peers still at their pins
-        entry: uv run python scripts/peer_drift.py
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-commit]
 
   # Quick coverage check (total only, no details)
   - repo: local

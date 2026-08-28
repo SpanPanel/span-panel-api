@@ -208,7 +208,13 @@ Versions like `3.0.0b1` are pre-releases in both places that matter:
 
 The publish workflow itself does not care — `on: release: published` fires either way.
 
-## When a producer releases
+## When the emitter releases
 
-Releasing the eBus emitter past the version we pin, or landing a panelbench commit that touches a capture we vendor, leaves this repository's `peers` block describing a producer that has been superseded — so the next commit here fails the `peer-drift`
-pre-commit hook until `spec_lock.json` moves with it. That is the intended order: re-vendor or re-capture and re-pin in one change, then commit. `gh workflow run peer-drift.yml` asks the same question on demand rather than waiting for the daily run.
+`ebus-panel-sim` is a pinned dev dependency, so a release past the pin arrives the way every other dependency's does: as a Dependabot pull request, ungrouped and on its own. Following it is bump the pin, re-run `scripts/capture_parent_child_reference.py`,
+run the suite — and the suite is what says whether the wire moved. See DEVELOPMENT.md, "Conformance against the specification and the producer". If the capture changes, that is a release of `span-panel-api-schema-1`, for the reason the next section gives.
+
+## A capture change is a release of the adapter that ships it
+
+Each adapter carries the reference capture its consumers test against — `span_panel_api_schema_1/reference/parent_child_tree.json` and `span_panel_api_schema_0/reference/homie_schema.json`. Those are package data, so re-running a capture changes what the
+wheel contains even when no parser did, and that is a release of that adapter like any other change to its contents. Bump the adapter's version and add a CHANGELOG entry saying the capture moved; downstream test suites read these bytes out of the version
+they pin, and a version that silently means two different trees is the thing this arrangement exists to prevent.

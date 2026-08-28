@@ -2,10 +2,10 @@
 #
 # Read by `scripts/capture_parent_child_reference.py`, which drives the eBus
 # emitter (`ebus-panel-sim`) with it and records the retained topics as
-# `tests/reference_payloads/parent_child_tree.json`.
-# Recorded in `spec_lock.json` as `peers.ebus-panel-sim.manifest`, so the capture's
-# input is pinned the same way its producer is: a capture whose input is not in the
-# tree is the same class of problem as one whose producer version is not written down.
+# `span_panel_api_schema_1/reference/parent_child_tree.json`, package data of the
+# schema-1 adapter.
+# Committed here beside that script, because a capture whose input is not in the tree
+# is the same class of problem as one whose producer version is not written down.
 #
 # Laid out to mirror the emitter's own `examples/forty_tab_minimal.yaml` key for key,
 # so the two can be read side by side and `diff`ed. Every difference is deliberate and

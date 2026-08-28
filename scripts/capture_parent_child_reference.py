@@ -1,39 +1,42 @@
 """Capture the parent/child emitter's retained surface, without a broker.
 
-Produces `tests/reference_payloads/parent_child_tree.json`, the schema_1
-reference tree that fifteen test modules here replay through `devices_from_tree`.
-A repository fixture, not package data: it sat inside the adapter's package
-directory until 3.1.0 and was carried in the wheel for it, and no consumer of
-either distribution reads it at runtime.
+Produces `parent_child_tree.json`, the schema_1 reference tree that fifteen test
+modules here replay through `devices_from_tree`. It is **package data of
+`span-panel-api-schema-1`**, so a downstream test suite pinned to a version of
+that distribution reads the same bytes out of its own site-packages instead of
+vendoring a copy and maintaining a guard to keep the copy honest. Test-support
+data all the same: no runtime path in either distribution opens it.
 
-Run it from the **emitter's** environment, not this one — it imports
-`ebus_panel_sim`, which caps `ebus-sdk` below the version this repo installs:
+Run it from this repository, with this repository's environment:
 
-    cd ../distribution-enclosure-simulator
-    uv run python ../span-panel-api/scripts/capture_parent_child_reference.py \\
-        ../span-panel-api/tests/reference_payloads/parent_child_tree.json
+    uv run python scripts/capture_parent_child_reference.py
 
-`PANEL_SIM_DIR` overrides where the checkout is looked for; it defaults to a
-`distribution-enclosure-simulator` directory beside this repo. Passing no output
-path writes `parent_child_capture.json` in the working directory, which is the
-safe way to look at a capture before adopting it.
+Writing over the shipped file is the default, because `capture()` below is what
+the test suite runs and a capture nobody adopts is a capture nobody compares.
+Pass a path to write somewhere else and look at it first.
 
-**What the emitter is, and why depending on it is right.** `ebus-panel-sim` is
-published by electrification-bus, the organisation that writes the eBus
-specification, and is conformed against live panel output. It is the
-specification in runnable form and the designated checkpoint for correctness —
-not a third-party imitation to be second-guessed. Its `.ebus-spec.json` names the
-specification commit it implements, and `test_the_emitters_pin_matches_ours`
-checks that against ours, so a disagreement between this parser and a capture is
-a disagreement about one document rather than about two.
+**The emitter is an ordinary pinned dev dependency.** `ebus-panel-sim` sits in
+the `dev` group in `pyproject.toml`, so `ebus_panel_sim` imports out of this
+environment like anything else, and that pin is the *only* statement anywhere of
+which release made the shipped tree. Nothing else records it, because nothing
+else has to: `capture()` is importable, and
+`test_the_shipped_reference_tree_is_what_the_pinned_emitter_produces` runs it
+in-process and compares the result to the committed bytes. A tree the pinned
+producer does not reproduce fails the suite. Following a release is therefore two
+steps: bump the pin, re-run this — and the suite says whether the wire moved.
 
-What went wrong was never the dependency. It was depending on a **frozen,
+**Why depending on it is right.** `ebus-panel-sim` is published by
+electrification-bus, the organisation that writes the eBus specification, and is
+conformed against live panel output. It is the specification in runnable form and
+the designated checkpoint for correctness — not a third-party imitation to be
+second-guessed.
+
+What went wrong before was never the dependency. It was depending on a **frozen,
 unrecorded** copy: the reference tree was captured once, nothing wrote down what
 made it, and when the emitter was corrected the capture silently was not — so
 this repository went on asserting a producer defect as fact across roughly thirty
-test files. Three things fix that, and all three are here: the pin lives in
-`spec_lock.json`, this script reads it rather than restating it, and the capture
-is refused when the installed emitter is not the pinned release.
+test files. Regenerating the capture on every test run is what stops that, and it
+is stronger than any written record could be.
 
 Substitutes the transport rather than reassembling the emitter: the recorder is
 handed to `Emitter(mqttc=...)`, the producer's own bring-your-own-transport
@@ -53,14 +56,14 @@ of a value the emitter degrades to `UNKNOWN`
 (electrification-bus/distribution-enclosure-simulator#51), and the identity
 properties a real panel publishes. The cost of that choice is real and worth
 naming: the capture is no longer reproducible by running an example anyone can
-find in the emitter, so the manifest is committed here and pinned in
-`spec_lock.json` as `peers.ebus-panel-sim.manifest`.
+find in the emitter, so the manifest is committed here beside this script.
 
 **Shape-stable, not byte-stable.** Every `$description` carries a `version`
 minted from the wall clock when its device is built, so all fourteen move on
 every run. Nothing here reads it — it is Homie's own change counter — but it
 does mean a recapture always shows fourteen diffs, and that a diff confined to
-those lines says the producer did not move.
+those lines says the producer did not move. It is also the one field the
+comparison test normalises away; everything else is held to the byte.
 """
 
 from __future__ import annotations
@@ -68,28 +71,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import hashlib
 import json
-import os
 import pathlib
 import sys
 
-_REPO = pathlib.Path(__file__).resolve().parent.parent
-# Run as a file — which is the only way this is run, and from the emitter's
-# working directory at that — the interpreter puts *this* directory on the path
-# and not the repository above it, so `scripts._lock` is not importable until we
-# say where the repository is. Appended rather than prepended: this process is
-# somebody else's, and the emitter's own imports get to resolve first.
-sys.path.append(str(_REPO))
-
-SIM = pathlib.Path(os.environ.get("PANEL_SIM_DIR", _REPO.parent / "distribution-enclosure-simulator"))
-if not (SIM / "src").is_dir():
-    raise SystemExit(f"no emitter checkout at {SIM}; set PANEL_SIM_DIR")
-sys.path.insert(0, str(SIM / "src"))
-
-import yaml  # noqa: E402
-
-from scripts._lock import mapping as _mapping, peer, string  # noqa: E402
-
-from ebus_panel_sim import (  # noqa: E402
+from ebus_panel_sim import (
     BESSConfig,
     ChargeMode,
     DeviceInstance,
@@ -100,11 +85,28 @@ from ebus_panel_sim import (  # noqa: E402
     TickInputs,
     __version__ as PRODUCER_VERSION,
 )
+import yaml
 
-MANIFEST = _REPO / "scripts" / "reference_panel.yaml"
-PEER = "ebus-panel-sim"
+_REPO = pathlib.Path(__file__).resolve().parent.parent
 
-OUT = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path("parent_child_capture.json")
+MANIFEST = pathlib.Path(__file__).resolve().parent / "reference_panel.yaml"
+"""The capture's input, and there is one copy of it.
+
+Beside this script rather than in the schema-1 package data, because only this
+module reads it: `capture()` takes the path so a caller can drive a different
+panel, and the default is the file this repository commits. Shipping it would be
+a second copy of an input nothing downstream runs.
+"""
+
+SHIPPED = _REPO / "packages" / "schema-1" / "src" / "span_panel_api_schema_1" / "reference" / "parent_child_tree.json"
+"""Where the committed capture lives: package data of `span-panel-api-schema-1`.
+
+Named here because writing it is this script's whole purpose and because
+`test_the_shipped_reference_tree_is_what_the_pinned_emitter_produces` regenerates
+it in-process and compares. That test is why no file records which release made
+these bytes: the pin in `pyproject.toml` is the only statement, and the
+comparison is what holds it true.
+"""
 
 _ID_NAMESPACE = "panel-sim-example"
 _VALID_RELAY_BEHAVIORS = frozenset({"controllable", "non-controllable", "always-on"})
@@ -114,11 +116,19 @@ _VALID_INVERTER_TYPES = frozenset({"hybrid", "ac-coupled"})
 # ---------------------------------------------------------------------------
 # Reading YAML without giving up on types
 #
-# The mapping check itself is `scripts/_lock.py`'s, because reading the lockfile
-# needs the same one and two copies of it would be two things to keep honest.
-# What is below is the rest of the manifest's vocabulary, which only this script
-# reads.
+# `yaml.safe_load` returns `object`, and a reader under strict typing is not
+# allowed to pretend otherwise. Each helper below narrows exactly one shape and
+# says what it found when the shape is wrong. A malformed manifest is fatal —
+# it is a file this repository owns, and a broken one makes the whole capture a
+# guess — so they exit with a sentence naming the key rather than raising for a
+# caller that has nothing useful to do about it.
 # ---------------------------------------------------------------------------
+
+
+def _mapping(value: object, where: str) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        raise SystemExit(f"{where} must be a mapping, got {type(value).__name__}")
+    return {str(key): item for key, item in value.items()}
 
 
 def _optional_mapping(value: object) -> dict[str, object]:
@@ -168,22 +178,6 @@ def circuit_id(source_id: str) -> str:
     rewrite every circuit key.
     """
     return hashlib.sha256(f"{_ID_NAMESPACE}:{source_id}".encode()).hexdigest()[:32]
-
-
-# ---------------------------------------------------------------------------
-# The pin, which lives in exactly one place
-# ---------------------------------------------------------------------------
-
-
-def pinned_release() -> str:
-    """The `ebus-panel-sim` release this capture is a capture of.
-
-    Read out of `spec_lock.json` rather than restated here. A constant in this
-    file would be a second home for the pin, and the two would agree right up
-    until somebody recaptured and updated only one -- which is the failure this
-    whole change exists to make impossible.
-    """
-    return string(peer(PEER), "version", f"peers.{PEER}")
 
 
 # ---------------------------------------------------------------------------
@@ -363,9 +357,7 @@ def manifest(profile: Profile) -> DeviceManifest:
         DeviceInstance("lugs", "lugs-upstream", "Upstream lugs", {"direction": "upstream"}),
         DeviceInstance("lugs", "lugs-downstream", "Downstream lugs", {"direction": "downstream"}),
     ]
-    instances.extend(
-        circuit_instance(profile, circuit, index) for index, circuit in enumerate(profile.circuits, start=1)
-    )
+    instances.extend(circuit_instance(profile, circuit, index) for index, circuit in enumerate(profile.circuits, start=1))
     instances.extend(bess_instances(profile)[:1])
     instances.extend(pv_instance(profile))
     instances.extend(evse_instances(profile))
@@ -467,19 +459,16 @@ def as_capture(retained: dict[str, str]) -> dict[str, dict[str, str]]:
     return devices
 
 
-def main() -> None:
-    expected = pinned_release()
-    if PRODUCER_VERSION != expected:
-        raise SystemExit(
-            f"{SIM} is ebus-panel-sim {PRODUCER_VERSION}, and spec_lock.json records the reference "
-            f"tree as a capture of {expected}. Capturing anyway would put bytes in this repository "
-            "that the lockfile attributes to a release that did not make them. Move the checkout to "
-            "the pinned release, or take the new capture deliberately: update peers.ebus-panel-sim's "
-            "version, tag and commit in spec_lock.json, and the provenance section of "
-            "tests/reference_payloads/README.md, in the same change."
-        )
+def capture(manifest_path: pathlib.Path = MANIFEST) -> dict[str, dict[str, str]]:
+    """Drive the installed emitter over a manifest and return the retained tree.
 
-    profile = Profile(MANIFEST)
+    The capture itself, with no filesystem side effect, so the test suite can run
+    it in-process and compare the result against the bytes this repository ships.
+    That comparison is the whole provenance mechanism now: a shipped tree the
+    pinned producer does not reproduce is a test failure rather than a claim in a
+    document nobody re-reads.
+    """
+    profile = Profile(manifest_path)
     recorder = RecordingTransport()
     emitter = Emitter(manifest(profile), SetterRegistry(), mqttc=recorder, bess_configs=bess_config(profile))
     emitter.start()
@@ -488,26 +477,37 @@ def main() -> None:
             emitter.publish_tick(tick)
         # Read the store while the tree is up. `stop()` republishes `$state`, and
         # a capture of a panel shutting down is not what a consumer replays.
-        capture = as_capture(recorder.retained)
+        recorded = as_capture(recorder.retained)
     finally:
         emitter.stop(graceful=True)
 
     # An injected transport publishes nothing the SDK does not ask it to, so check
     # the two topics a consumer cannot reach `ready` without rather than trusting
     # that they landed.
-    body = capture.get(profile.panel_id, {})
+    body = recorded.get(profile.panel_id, {})
     missing = [key for key in ("$description", "$state") if key not in body]
     if missing:
         raise SystemExit(f"capture is unusable: {missing} never landed")
     if body["$state"] != "ready":
         raise SystemExit(f"capture is of a panel in {body['$state']!r}, not ready")
+    return recorded
 
-    OUT.write_text(json.dumps(capture, indent=2, sort_keys=True) + "\n")
 
-    topics = sum(len(value) for value in capture.values())
+def serialise(recorded: Mapping[str, Mapping[str, str]]) -> str:
+    """The on-disk form, so the writer and the comparison cannot disagree on it."""
+    return json.dumps(recorded, indent=2, sort_keys=True) + "\n"
+
+
+def main(argv: Sequence[str]) -> None:
+    out = pathlib.Path(argv[0]) if argv else SHIPPED
+    recorded = capture()
+    out.write_text(serialise(recorded))
+
+    topics = sum(len(value) for value in recorded.values())
     print(f"producer: ebus-panel-sim {PRODUCER_VERSION}   manifest: {MANIFEST.name}")
-    print(f"devices: {len(capture)}   topics: {topics}   -> {OUT}")
-    print("device ids:", sorted(capture))
+    print(f"devices: {len(recorded)}   topics: {topics}   -> {out}")
+    print("device ids:", sorted(recorded))
 
 
-main()
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -10,5 +10,5 @@ Captured from a live SPAN Panel running firmware `spanos2/r202603/05`. Serial nu
 
 ## Moved
 
-`homie_schema.json` lives at [`tests/reference_payloads/homie_schema.json`](../../reference_payloads/README.md) and is read through `reference_payloads.bootstrap.homie_schema()`. It was package data under `src/span_panel_api/` between 3.0.0 and 3.1.0;
-nothing at runtime read it there, so it is an ordinary fixture again. Its provenance, schema hash and node-type table live in the README next to it.
+`homie_schema.json` is package data of `span-panel-api-schema-0`, at `span_panel_api_schema_0/reference/homie_schema.json`, and is read through `reference_payloads.bootstrap.homie_schema()`. Nothing at runtime reads it; it ships so a downstream test suite
+pinned to a version of that adapter reads the same bytes it was tested against. Its provenance, schema hash and node-type table live in [`tests/reference_payloads/README.md`](../../reference_payloads/README.md), beside the loader.

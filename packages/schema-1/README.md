@@ -41,16 +41,28 @@ span-panel-api's transport covers the whole tree and each message is routed to w
 
 ## Conformance
 
-`spec_lock.json` ships with the package and records what this parser targets: the firmware range, the eBus specification commit its vocabulary was read from, and the version of every capability, device and registry it implements. The capability catalogs it
-addresses are byte-copied under `spec/`.
+`spec_lock.json` ships with the package and is this parser's declaration as a consumer: the firmware range it reads, the eBus specification commit its vocabulary was read from, and the version of every capability, device and registry it implements. The
+capability catalogs it addresses are byte-copied into the repository under `spec/`, and the repository checks them against the copies the eBus emitter carries in its own wheel.
 
 Those copies exist to be **checked against, never parsed in production** — units and datatypes come from each device's `$description`, since a catalog is the superset across all hardware rather than a statement about the panel in front of you. The suite
 asks the consumer's question rather than the publisher's: is every name this adapter _reads_ one the specification defines? A consumer addressing a name that no longer exists does not fail loudly, it goes quiet — the property never arrives, metadata lookup
 returns `None`, and an entity disappears.
 
-## Reference payloads
+## Reference payload
 
-A retained-topic capture of a full 40-space parent/child panel, and the replay that turns it back into devices, are fixtures of the repository's test suite at `tests/reference_payloads/`.
+`span_panel_api_schema_1/reference/parent_child_tree.json` ships in this wheel: a retained-topic capture of a full 40-space parent/child panel — 14 devices, `{device_id: {topic: payload}}`, every value a string exactly as a broker retains it.
 
-**`span_panel_api_schema_1.reference_payloads` no longer exists.** It was package data until 1.1.0 — carried in this wheel because it sat inside the package directory, though no runtime path read it. A consumer that was importing it should vendor the bytes
-it needs and record the release it took them from, asserting that against `importlib.metadata.version("span-panel-api-schema-1")` so a moved pin that outruns the copy fails loudly instead of testing against a tree no panel publishes.
+**Test-support data, and no runtime path reads it.** It ships so a downstream test suite pinned to a version of this adapter replays the bytes that version was built and tested against, out of its own site-packages:
+
+```python
+from importlib.resources import files
+import json
+
+tree = json.loads((files("span_panel_api_schema_1") / "reference" / "parent_child_tree.json").read_text(encoding="utf-8"))
+```
+
+Vendoring a copy instead means also maintaining a guard to keep the copy honest, which is what this replaces. It was package data until 1.1.0, a fixture of the repository's test suite for 1.1.2, and package data again from 1.1.3 — for the cost, not for the
+principle: no runtime path has ever read it.
+
+The bytes are produced by `ebus-panel-sim`, pinned in the repository's dev dependencies, and the repository's suite regenerates the capture in-process on every run and compares it, so a tree the pinned producer does not reproduce is a test failure rather
+than a claim in a document.

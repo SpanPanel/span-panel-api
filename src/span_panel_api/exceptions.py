@@ -49,15 +49,23 @@ class SpanPanelCAChangedError(SpanPanelError):
     a client waiting to succeed against whatever is answering, which is the
     outcome pinning exists to prevent.
 
-    It is also not a conclusion drawn from a handshake failure, because that
-    conclusion cannot be drawn: an expired leaf (a panel whose clock reset after
-    a power outage) and a hostname mismatch (a panel whose address moved) both
+    It is also not a conclusion drawn from the failed handshake, because that
+    handshake cannot support one: an expired leaf (a panel whose clock reset
+    after a power outage) and a hostname mismatch (a panel whose address moved)
     raise the same verification error against a perfectly valid pinned CA, and
     the ``ssl`` module exposes no peer chain when verification fails. This is
     raised only after a separate fetch of the panel's advertised CA returned a
     certificate whose fingerprint differs from the pinned one -- so
     ``observed_fingerprint`` is what the panel says its anchor is now, not what
     it presented on the connection that failed.
+
+    The other two are told apart afterwards and elsewhere, by a *second*
+    handshake with hostname checking relaxed (``_ssl.probe_leaf_name``), which
+    reaches the point of holding a validated certificate and can therefore read
+    its names. That path never produces this error: a leaf that chains to the pin
+    has proved the panel is the panel, so the worst it can report is
+    ``LeafNameMismatch``, which is not fatal and is retried like any other
+    address problem.
 
     The two remedies are opposite and only the user can choose between them, so
     both fingerprints are carried: re-pin, if the panel's CA was legitimately

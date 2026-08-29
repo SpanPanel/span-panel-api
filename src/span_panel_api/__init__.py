@@ -6,7 +6,7 @@ supporting MQTT/Homie (v2) transport.
 
 from importlib.metadata import version as _pkg_version
 
-from ._ssl import build_panel_ssl_context, ca_fingerprint, leaf_names_host
+from ._ssl import LeafNameMismatch, build_panel_ssl_context, ca_fingerprint, leaf_names_host
 from .auth import (
     delete_fqdn,
     download_ca_cert,
@@ -157,6 +157,12 @@ __all__ = [  # noqa: RUF022
     # Added 2026-08-28: the hostname half of verification, split out so a
     # caller using a relaxed context can still establish the name binding.
     "leaf_names_host",
+    # Added 2026-08-28 (3.3.0): what the transport reports when the pinned CA
+    # validates the broker's certificate and that certificate names somewhere
+    # else. Purely additive -- a consumer that registers no leaf-mismatch
+    # callback never receives one, and the reconnect behaviour it accompanies is
+    # unchanged.
+    "LeafNameMismatch",
     "delete_fqdn",
     "download_ca_cert",
     "get_fqdn",

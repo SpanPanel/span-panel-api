@@ -22,7 +22,7 @@ from paho.mqtt.enums import CallbackAPIVersion
 from paho.mqtt.properties import Properties
 from paho.mqtt.reasoncodes import ReasonCode
 
-from .._ssl import build_panel_ssl_context, ca_fingerprint
+from .._ssl import LeafNameMismatch, LeafProbe, build_panel_ssl_context, ca_fingerprint, probe_leaf_name
 from ..auth import download_ca_cert
 from ..exceptions import (
     SpanPanelAPIError,
@@ -37,6 +37,7 @@ from .const import (
     MQTT_CONNECT_TIMEOUT_S,
     MQTT_FULL_REBUILD_AFTER_FAILURES,
     MQTT_KEEPALIVE_S,
+    MQTT_LEAF_PROBE_TIMEOUT_S,
     MQTT_RECONNECT_BACKOFF_MULTIPLIER,
     MQTT_RECONNECT_MAX_DELAY_S,
     MQTT_RECONNECT_MIN_DELAY_S,
@@ -92,6 +93,15 @@ class AsyncMqttBridge:
         # this staying `None` is the normal condition even during a long outage.
         self._fatal_error: SpanPanelError | None = None
         self._fatal_error_callback: Callable[[SpanPanelError], None] | None = None
+
+        # The non-terminal counterpart: a broker whose certificate the pin
+        # validates and which does not name the address this bridge dials. Not
+        # fatal -- the loop keeps retrying, because a returning DHCP lease fixes
+        # it -- so it is announced at most once and then latched, and the latch
+        # is released by the next successful connect. Without the latch a
+        # week-long mismatch would announce itself on every backoff tick.
+        self._leaf_mismatch_callback: Callable[[LeafNameMismatch], None] | None = None
+        self._leaf_mismatch_reported = False
 
         # QoS-1 publishes awaiting a PUBACK, keyed by paho message id. Emptied
         # by `_on_publish` one at a time, and wholesale by
@@ -163,6 +173,38 @@ class AsyncMqttBridge:
             except Exception:  # pylint: disable=broad-exception-caught
                 _LOGGER.warning("Fatal-error callback raised", exc_info=True)
 
+    def set_leaf_mismatch_callback(self, callback: Callable[[LeafNameMismatch], None]) -> None:
+        """Set the callback fired when the broker's certificate names somewhere else.
+
+        The counterpart to `set_fatal_error_callback`, and non-fatal on purpose.
+        This bridge goes on retrying afterwards, because the condition genuinely
+        can clear on its own, so a consumer's correct response is to make the
+        remedy visible rather than to tear anything down.
+
+        It still needs a channel of its own for the same reason the fatal one
+        does: the reconnect loop is fire-and-forget, and the connection callback
+        can only say "disconnected" -- which is what an ordinary outage looks
+        like, and which a consumer is right to wait through. Waiting through this
+        one is waiting for something that will not happen.
+
+        Fires at most once between successful connects, from the event loop. A
+        subscriber that raises is logged and otherwise ignored, so a broken one
+        cannot suppress the notification for a second subscriber added later.
+        """
+        self._leaf_mismatch_callback = callback
+
+    def _report_leaf_mismatch(self, mismatch: LeafNameMismatch) -> None:
+        """Announce a name mismatch once, until the next successful connect clears it."""
+        if self._leaf_mismatch_reported:
+            return
+        self._leaf_mismatch_reported = True
+        if self._leaf_mismatch_callback is None:
+            return
+        try:
+            self._leaf_mismatch_callback(mismatch)
+        except Exception:  # pylint: disable=broad-exception-caught
+            _LOGGER.warning("Leaf-mismatch callback raised", exc_info=True)
+
     def set_pre_rebuild_callback(self, callback: Callable[[], None]) -> None:
         """Set callback invoked just before the bridge rebuilds its paho client.
 
@@ -211,29 +253,37 @@ class AsyncMqttBridge:
             )
         return await download_ca_cert(self._panel_host, port=self._panel_http_port)
 
-    async def _diagnose_ca_change(self) -> SpanPanelCAChangedError | None:
-        """Decide whether a certificate-verification failure means the CA rotated.
+    async def _diagnose_verification_failure(self) -> SpanPanelCAChangedError | None:
+        """Say what a certificate-verification failure actually was.
 
-        It usually does not, and the failure carries no evidence either way. A
-        valid pinned CA still produces `SSLCertVerificationError` when the leaf
-        has expired — a panel whose clock reset after a power outage, which for
-        an electrical panel is not a corner case — or when the hostname no longer
-        matches after the panel's address changed. And `ssl` exposes no peer
-        chain on a verification failure, so the certificate that was actually
-        offered cannot be read from the exception at all.
+        The failure itself carries no evidence. A valid pinned CA still produces
+        `SSLCertVerificationError` when the leaf has expired — a panel whose clock
+        reset after a power outage, which for an electrical panel is not a corner
+        case — or when the hostname no longer matches after the panel's address
+        changed. And `ssl` exposes no peer chain on a verification failure, so the
+        certificate that was actually offered cannot be read from the exception at
+        all.
 
-        So the observed fingerprint has to come from somewhere else: a separate,
-        unauthenticated fetch of the panel's advertised CA. That fetch is
-        **diagnostic only and is never used to re-anchor** — it is exactly the
-        request an attacker would answer, and treating its result as a new trust
-        anchor is the re-anchoring this class exists to stop.
+        So the evidence has to come from somewhere else, and this asks two
+        questions in turn. First, what CA does the panel advertise now? — a
+        separate, unauthenticated fetch. If that has rotated, nothing else
+        matters and the connection is over. If it has not, the panel is still the
+        panel and the failure is about the certificate underneath: second
+        question, does the broker's leaf name the address this bridge dials?
+
+        Both fetches are **diagnostic only and are never used to re-anchor**. The
+        CA fetch is exactly the request an attacker would answer; the relaxed
+        handshake in `_diagnose_leaf_name` verifies against the pin and returns a
+        verdict rather than a certificate. Neither can change what is trusted.
 
         Three outcomes, and only one of them escalates:
 
-        - Fingerprint matches the pin — the CA did not change. Some other TLS
-          problem; the caller keeps retrying.
         - Fingerprint differs — the panel is advertising a different anchor.
-          Returns the error to raise.
+          Returns the error to raise, and asks nothing further.
+        - Fingerprint matches the pin — the CA did not change. Returns None; the
+          caller keeps retrying, and `_diagnose_leaf_name` has meanwhile said
+          which of the remaining failures this is and announced a name mismatch
+          if that is what it found.
         - The fetch failed, or returned something that is not a certificate —
           returns None. **Never escalate on missing evidence.** A panel that is
           reachable on 8883 and not on its HTTP port is a panel mid-reboot, and
@@ -266,15 +316,75 @@ class AsyncMqttBridge:
             _LOGGER.warning("Could not fingerprint a CA certificate while diagnosing a TLS failure: %s", exc)
             return None
         if expected == observed:
-            _LOGGER.warning(
-                "TLS verification failed for %s, but the panel still advertises the pinned CA "
-                "(SHA-256 %s). An expired certificate or a changed hostname would both look like "
-                "this. Continuing to retry.",
-                self._panel_host,
-                expected,
-            )
+            await self._diagnose_leaf_name(expected)
             return None
         return SpanPanelCAChangedError(expected, observed)
+
+    async def _diagnose_leaf_name(self, pinned_fingerprint: str) -> None:
+        """Tell an expired leaf from a moved panel, and announce a moved panel.
+
+        Reached only once the advertised CA has been confirmed to still be the
+        pinned one, which is what makes the remaining question worth asking: the
+        panel is the panel, so either its certificate has expired — nothing anyone
+        can act on, and it fixes itself once the panel has the time again — or the
+        certificate is fine and does not name the address this bridge dials, which
+        only a person can fix.
+
+        Answered by one further handshake to the broker with hostname checking
+        relaxed, run in an executor because it blocks. **Nothing it observes is
+        kept.** No context is rebuilt from it, no certificate is recorded, and the
+        anchor it verifies against is `self._ca_pem` unchanged — the pin is the pin
+        before this runs and after it, whatever the broker served.
+
+        Warns either way, on every attempt, because the log is where a failure
+        that is nobody's fault belongs. The callback is what marks the one that
+        is somebody's, and it fires once until the next successful connect —
+        a mismatch that lasts a week is one condition, not ten thousand.
+        """
+        pinned = self._ca_pem
+        if pinned is None:
+            return
+        loop = self._loop if self._loop is not None else asyncio.get_running_loop()
+        try:
+            probe = await loop.run_in_executor(
+                None,
+                partial(probe_leaf_name, pinned, self._host, self._port, timeout=MQTT_LEAF_PROBE_TIMEOUT_S),
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # A pin that cannot be made into a context is the documented way
+            # `probe_leaf_name` raises, and it should be unreachable here: the
+            # same PEM was turned into a context by `connect` before any
+            # handshake could fail. The catch is broad and here anyway because of
+            # *where* this runs. `_reconnect_loop` awaits it from inside an
+            # exception handler, so anything escaping kills that task with no
+            # traceback and no terminal state -- a bridge that looks merely
+            # disconnected and will never try again, which is the one outcome the
+            # whole fatal-error channel exists to prevent. A diagnostic must not
+            # be able to cause it.
+            probe = LeafProbe(None, f"the pinned CA could not be used for a second look ({exc})")
+        mismatch = probe.mismatch
+        if mismatch is None:
+            _LOGGER.warning(
+                "TLS verification failed for %s, but the panel still advertises the pinned CA "
+                "(SHA-256 %s), and %s. Continuing to retry.",
+                self._panel_host,
+                pinned_fingerprint,
+                probe.detail,
+            )
+            return
+        _LOGGER.warning(
+            "TLS verification failed for %s: the certificate served by %s:%s is signed by the pinned "
+            "CA (SHA-256 %s) but names %s, while this connection is configured as %s. The panel has "
+            "most likely moved. Continuing to retry, which recovers on its own if it moves back; "
+            "otherwise re-point the configuration at one of the names the certificate carries.",
+            self._panel_host,
+            self._host,
+            self._port,
+            pinned_fingerprint,
+            ", ".join(mismatch.leaf_names) if mismatch.leaf_names else "no address at all",
+            mismatch.host,
+        )
+        self._report_leaf_mismatch(mismatch)
 
     def _make_paho_client(self, ssl_context: ssl.SSLContext | None) -> AsyncMQTTClient:
         """Build and wire a fresh paho client.
@@ -365,11 +475,12 @@ class AsyncMqttBridge:
                 # The pinned handshake failed on the very first attempt, which is
                 # what a CA rotated while the consumer was shut down looks like.
                 # Wrapped as a connection error this became a setup-retry loop
-                # with nothing for the user to act on, forever. `_diagnose_ca_change`
-                # is what distinguishes it from an expired leaf or a moved host,
-                # and returns None for both of those so they keep their old
-                # retryable shape.
-                fatal = await self._diagnose_ca_change()
+                # with nothing for the user to act on, forever.
+                # `_diagnose_verification_failure` is what distinguishes it from an
+                # expired leaf or a moved host, and returns None for both of those
+                # so they keep their old retryable shape — announcing the moved
+                # host on its own channel on the way past.
+                fatal = await self._diagnose_verification_failure()
                 if fatal is not None:
                     raise fatal from exc
                 raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
@@ -642,6 +753,11 @@ class AsyncMqttBridge:
 
         if connected:
             _LOGGER.debug("MQTT connected to %s:%s", self._host, self._port)
+            # A completed handshake is the proof that any name mismatch reported
+            # earlier is over -- the address moved back, or the panel registered
+            # the name it is dialled by. Releasing the latch here is what makes a
+            # second mismatch, later, a second notification rather than silence.
+            self._leaf_mismatch_reported = False
             # Cancel reconnect loop on successful connection
             if self._reconnect_task is not None:
                 self._reconnect_task.cancel()
@@ -868,15 +984,18 @@ class AsyncMqttBridge:
                         await self._rebuild_client()
                         failures_since_rebuild_attempt = 0
                     else:
-                        fatal = await self._diagnose_ca_change()
+                        fatal = await self._diagnose_verification_failure()
                         if fatal is not None:
                             self._enter_terminal_state(fatal)
                             return
                         # Not the CA. An expired leaf or a moved host, both of
                         # which the panel or the network can still fix, so this
-                        # is an ordinary failure. No immediate rebuild: with a
-                        # pin, a rebuild changes nothing about trust and only
-                        # discards whatever paho was still holding.
+                        # is an ordinary failure -- including the moved host,
+                        # which the diagnostic has by now named on its own
+                        # channel without making it terminal. No immediate
+                        # rebuild: with a pin, a rebuild changes nothing about
+                        # trust and only discards whatever paho was still
+                        # holding.
                         failures_since_rebuild_attempt += 1
                         _LOGGER.warning("Reconnect TLS verification failed (%s), retrying in %ss", exc, delay)
                 except ssl.SSLError as exc:

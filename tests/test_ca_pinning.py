@@ -191,12 +191,21 @@ class TestTrustAnchor:
 # ---------------------------------------------------------------------------
 
 
-class TestDiagnoseCaChange:
+class TestDiagnoseVerificationFailure:
+    """The CA question, which is asked first and settles the matter when it differs.
+
+    The name question that follows a matching fingerprint has its own suite in
+    `test_leaf_name_mismatch.py`, against a real broker. Here the pinned PEM is a
+    marker rather than a certificate, so the second handshake cannot be attempted
+    at all -- which is itself worth asserting, because that failure arrives inside
+    the reconnect loop's exception handler and must not escape it.
+    """
+
     @pytest.mark.asyncio
     async def test_unpinned_never_escalates(self) -> None:
         bridge = _bridge(ca_pem=None)
         with patch("span_panel_api.mqtt.connection.download_ca_cert") as fetch:
-            assert await bridge._diagnose_ca_change() is None
+            assert await bridge._diagnose_verification_failure() is None
         fetch.assert_not_called()
 
     @pytest.mark.asyncio
@@ -207,14 +216,34 @@ class TestDiagnoseCaChange:
             patch("span_panel_api.mqtt.connection.download_ca_cert", return_value=PINNED_PEM),
             caplog.at_level(logging.WARNING, logger="span_panel_api.mqtt.connection"),
         ):
-            assert await bridge._diagnose_ca_change() is None
+            assert await bridge._diagnose_verification_failure() is None
         assert "still advertises the pinned CA" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_pin_the_second_handshake_cannot_use_is_still_transient(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The diagnostic must not be able to kill the loop that awaits it.
+
+        `PINNED_PEM` fingerprints perfectly well and is not a certificate, so it
+        gets as far as the name question and then cannot build a context. That
+        exception is raised inside the reconnect loop's own exception handler,
+        where anything escaping leaves a task dead with no traceback and a bridge
+        that looks merely disconnected forever.
+        """
+        bridge = _bridge(ca_pem=PINNED_PEM)
+        with (
+            patch("span_panel_api.mqtt.connection.download_ca_cert", return_value=PINNED_PEM),
+            caplog.at_level(logging.WARNING, logger="span_panel_api.mqtt.connection"),
+        ):
+            assert await bridge._diagnose_verification_failure() is None
+
+        assert "could not be used for a second look" in caplog.text
+        assert bridge.fatal_error is None
 
     @pytest.mark.asyncio
     async def test_different_fingerprint_carries_both(self) -> None:
         bridge = _bridge(ca_pem=PINNED_PEM)
         with patch("span_panel_api.mqtt.connection.download_ca_cert", return_value=ROTATED_PEM):
-            error = await bridge._diagnose_ca_change()
+            error = await bridge._diagnose_verification_failure()
         assert isinstance(error, SpanPanelCAChangedError)
         assert error.expected_fingerprint == PINNED_FP
         assert error.observed_fingerprint == ROTATED_FP
@@ -235,14 +264,14 @@ class TestDiagnoseCaChange:
         """Missing evidence is not evidence. A panel mid-reboot looks exactly like this."""
         bridge = _bridge(ca_pem=PINNED_PEM)
         with patch("span_panel_api.mqtt.connection.download_ca_cert", side_effect=failure):
-            assert await bridge._diagnose_ca_change() is None
+            assert await bridge._diagnose_verification_failure() is None
 
     @pytest.mark.asyncio
     async def test_unfingerprintable_answer_never_escalates(self) -> None:
         """A proxy's error page in place of a PEM says nothing about the CA."""
         bridge = _bridge(ca_pem=PINNED_PEM)
         with patch("span_panel_api.mqtt.connection.download_ca_cert", return_value="<html>404</html>"):
-            assert await bridge._diagnose_ca_change() is None
+            assert await bridge._diagnose_verification_failure() is None
 
 
 # ---------------------------------------------------------------------------

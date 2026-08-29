@@ -101,6 +101,13 @@ EXPECTED_PUBLIC_API = {
     # above -- a hand-written SAN matcher reimplemented on the far side of the
     # pin is the drift this module exists to prevent.
     "leaf_names_host",
+    # Added 2026-08-28 (3.3.0): the transport's report that the pinned CA
+    # validates the broker's certificate and that certificate names somewhere
+    # other than the address configured. Here rather than in the transport
+    # section because it is produced by the same module as the two above and
+    # carries the names that module read. Additive -- a consumer that registers
+    # no callback never receives one.
+    "LeafNameMismatch",
     "delete_fqdn",
     "download_ca_cert",
     "get_fqdn",

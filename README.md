@@ -393,9 +393,25 @@ context = build_panel_ssl_context(stored_pem)
 fingerprint = ca_fingerprint(stored_pem)
 ```
 
-Leaving `ca_pem` unset keeps the previous behaviour, with one `WARNING` per bridge recording that the anchor was obtained unauthenticated. With it set, a certificate-verification failure is diagnosed rather than assumed: an expired leaf after a panel's
-clock reset and a hostname mismatch after the panel moved both produce the identical error, so the library refetches the advertised CA for comparison only and keeps retrying unless the fingerprint has actually changed — at which point it raises
-`SpanPanelCAChangedError` carrying both fingerprints and stops. Register `register_fatal_error_callback` to be told; a consumer that registers nothing still cannot mistake a dead bridge for a healthy one, because `ping()` and `get_snapshot()` re-raise.
+Leaving `ca_pem` unset keeps the previous behaviour, with one `WARNING` per bridge recording that the anchor was obtained unauthenticated. With it set, a certificate-verification failure is diagnosed rather than assumed, in two steps — a rotated CA, an
+expired leaf and a panel that has moved all raise the identical error, and the failed handshake carries no evidence about which.
+
+First the library refetches the advertised CA, for comparison only. If the fingerprint has changed it raises `SpanPanelCAChangedError` carrying both fingerprints and stops. Register `register_fatal_error_callback` to be told; a consumer that registers
+nothing still cannot mistake a dead bridge for a healthy one, because `ping()` and `get_snapshot()` re-raise.
+
+If the fingerprint matches, the panel is still the panel and the library asks one further question: a second handshake to the broker with hostname checking relaxed — the chain, the signature and the expiry still verified against the pin — to see whether
+the certificate names the address being dialled.
+
+```python
+def moved(mismatch: LeafNameMismatch) -> None:
+    print(f"configured as {mismatch.host}, certificate names {', '.join(mismatch.leaf_names)}")
+
+unregister = client.register_leaf_mismatch_callback(moved)
+```
+
+**This is not fatal and the transport keeps retrying**, because a returning DHCP lease fixes it without anyone's help; what the callback is for is putting the other remedy — re-point the configuration at one of the names reported — in front of a user who
+would otherwise see only an outage. It fires at most once per outage and is re-armed by the next successful connect. An expired leaf reports nothing, because nothing anyone does helps and the panel recovers on its own once it has the time again. Neither
+handshake can re-anchor anything: both are diagnostic, and the pin is the pin whatever the panel served.
 
 The bootstrap REST calls take an `ssl_context` for the same purpose. `download_ca_cert` is the one exception and stays on plain HTTP — it fetches the anchor everything else is checked against, so it has nothing to check itself against, and its result must
 be fingerprint-confirmed out of band before it is trusted.

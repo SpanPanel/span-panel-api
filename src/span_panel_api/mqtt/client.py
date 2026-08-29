@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, NoReturn
 
 from span_panel_api.schema_drift import log_schema_drift
 
+from .._ssl import LeafNameMismatch
 from ..adapters import installed_adapter_keys, resolve_adapter
 from ..auth import get_homie_schema
 from ..dispatch import select_adapter_key
@@ -167,6 +168,7 @@ class SpanMqttClient:
         self._snapshot_callbacks: list[Callable[[SpanPanelSnapshot], Awaitable[None]]] = []
         self._connection_callbacks: list[Callable[[bool], None]] = []
         self._fatal_error_callbacks: list[Callable[[SpanPanelError], None]] = []
+        self._leaf_mismatch_callbacks: list[Callable[[LeafNameMismatch], None]] = []
         self._schema_change_callbacks: list[Callable[[str | None, str | None], None]] = []
         self._live = False
         self._ready_event: asyncio.Event | None = None
@@ -456,6 +458,7 @@ class SpanMqttClient:
         self._bridge.set_message_callback(self._on_message)
         self._bridge.set_connection_callback(self._on_connection_change)
         self._bridge.set_fatal_error_callback(self._on_fatal_error)
+        self._bridge.set_leaf_mismatch_callback(self._on_leaf_mismatch)
         # Pre-rebuild hook: reset Homie accumulator before the bridge swaps
         # paho clients, so retained messages on the new subscription start
         # from a clean slate (no stale `$state=disconnected` cached from
@@ -630,6 +633,50 @@ class SpanMqttClient:
                 cb(error)
             except Exception:  # pylint: disable=broad-exception-caught
                 _LOGGER.warning("Fatal-error callback raised", exc_info=True)
+
+    def register_leaf_mismatch_callback(self, callback: Callable[[LeafNameMismatch], None]) -> Callable[[], None]:
+        """Subscribe to the broker's certificate naming somewhere other than here.
+
+        Fires with the address this client dials and the addresses the broker's
+        certificate actually carries, once the pinned CA has been confirmed as
+        still the panel's own. So it says something quite narrow and quite
+        useful: this *is* the panel, and it is not where the configuration says
+        it is -- most often a panel that took a new DHCP lease.
+
+        Not a fatal error and deliberately not on that channel. The transport
+        keeps retrying and recovers by itself if the panel comes back to the
+        configured address, so a consumer should surface the remedy -- re-point
+        the configuration at one of the names reported -- rather than tear
+        anything down. Nothing else re-raises it, because there is nothing to
+        raise: `ping()` and `get_snapshot()` go on reporting an ordinary outage,
+        which is what this is until somebody decides otherwise.
+
+        Fires at most once per outage: the next successful connect re-arms it, so
+        a mismatch that lasts a week is one notification and a mismatch that
+        recurs after a recovery is a second one.
+
+        Returns an unregister function. Calling it twice is safe.
+        """
+        self._leaf_mismatch_callbacks.append(callback)
+
+        def unregister() -> None:
+            with contextlib.suppress(ValueError):
+                self._leaf_mismatch_callbacks.remove(callback)
+
+        return unregister
+
+    def _on_leaf_mismatch(self, mismatch: LeafNameMismatch) -> None:
+        """Fan the bridge's name-mismatch report out to subscribers.
+
+        Iterates a copy for the same reason the other two fan-outs do: a
+        subscriber unregistering from inside its own callback must not mutate
+        the list being walked.
+        """
+        for cb in list(self._leaf_mismatch_callbacks):
+            try:
+                cb(mismatch)
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.warning("Leaf-mismatch callback raised", exc_info=True)
 
     def register_schema_change_callback(self, callback: Callable[[str | None, str | None], None]) -> Callable[[], None]:
         """Subscribe to the panel changing schema generation mid-session.

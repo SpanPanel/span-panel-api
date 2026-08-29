@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.3.0]
+
+A pinned panel that has moved is no longer reported the same way as a panel whose clock reset, so a consumer can put the remedy in front of a user instead of retrying in silence.
+
+### Added
+
+- **`LeafNameMismatch` reports a broker whose certificate the pinned CA validates and which names somewhere other than the configured address**, carrying that address and the names the certificate does carry.
+- **`register_leaf_mismatch_callback` delivers that report**, at most once per outage and re-armed by the next successful connect, returning an unregister function like the other callback channels.
+
+### Changed
+
+- **The warning logged when a pinned handshake fails against an unchanged CA now names which failure it is** — an expired or otherwise rejected certificate, an unreachable broker, or a certificate that names somewhere else — instead of saying it could be
+  either.
+- **A moved panel is still retried and never terminal**, because the address can come back on its own and the report exists to make the alternative remedy visible rather than to stop the transport.
+
 ## [3.2.0]
 
 A consumer pinned to a panel's CA cannot currently tell a panel that has moved from something impersonating one, because the two produce the same verification failure. This release splits the question.

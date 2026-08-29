@@ -12,6 +12,7 @@ from enum import Flag, auto
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from ._ssl import LeafNameMismatch
     from .exceptions import SpanPanelError
     from .models import ControlTarget, FieldMetadata, SpanPanelSnapshot, V2HomieSchema
     from .mqtt.control import ControlInterceptor, PublishOutcome
@@ -62,6 +63,24 @@ class SpanPanelClientProtocol(Protocol):
         what an ordinary outage looks like and a consumer is right to wait
         through it; this fires only for a failure no amount of waiting fixes,
         and the consumer is expected to surface it to a person.
+        """
+
+    def register_leaf_mismatch_callback(self, callback: Callable[[LeafNameMismatch], None]) -> Callable[[], None]:
+        """Subscribe to the broker's certificate naming somewhere other than here.
+
+        The third of a set, and it sits between the other two rather than beside
+        either. `register_connection_callback` reports a state a consumer waits
+        through; `register_fatal_error_callback` reports one no waiting fixes.
+        This reports one that waiting *might* fix -- a panel on a new DHCP lease
+        comes back on its own -- and might not, and only a person can tell which.
+        The transport keeps retrying either way, so a consumer's job here is to
+        make the remedy visible rather than to stop.
+
+        Declared here for the same reason as the fatal channel: the consumer
+        depends on it, and this module's rule is that the consumer codes against
+        protocols. Additive for callers and breaking for implementers -- a class
+        type-checked against this protocol has to grow the method, which test
+        fakes and simulators are exactly what that means in practice.
         """
 
 

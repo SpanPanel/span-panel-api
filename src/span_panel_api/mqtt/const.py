@@ -28,3 +28,11 @@ MQTT_RECONNECT_BACKOFF_MULTIPLIER = 2
 # going through HA's config_entry teardown. Resets after every rebuild attempt so the cadence holds
 # throughout extended outages.
 MQTT_FULL_REBUILD_AFTER_FAILURES = 3
+
+# How long the relaxed diagnostic handshake in `_diagnose_leaf_name` may take,
+# connection and TLS together. Short because it runs on a reconnect attempt that
+# has already failed and is about to be retried anyway: the answer is worth
+# having, and worth nothing if it arrives after the next attempt. A panel that
+# cannot answer inside this is a panel mid-reboot, which the caller already
+# treats as transient.
+MQTT_LEAF_PROBE_TIMEOUT_S = 5.0

@@ -12,7 +12,13 @@ from typing import Literal
 
 import httpx
 
-from .exceptions import SpanPanelAPIError, SpanPanelConnectionError, SpanPanelTimeoutError, SpanPanelValidationError
+from .exceptions import (
+    SpanPanelAPIError,
+    SpanPanelConnectionError,
+    SpanPanelTimeoutError,
+    SpanPanelTLSVerificationError,
+    SpanPanelValidationError,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,6 +33,10 @@ DEFAULT_HTTPS_PORT = 443
 #: for a caller that already knows it does. Named here rather than spelled out in
 #: each, so the two cannot drift apart the way their parsers had.
 V2_STATUS_PATH = "/api/v2/status"
+
+#: The one bootstrap path exempt from the plaintext warning, named here because
+#: the transport is what grants the exemption. See `_warn_plaintext_transport`.
+CA_CERT_PATH = "/api/v2/certificate/ca"
 
 #: The verbs the bootstrap API uses. Spelled as a `Literal` rather than passed
 #: through to `client.request()` so the dispatch below stays exhaustive and each
@@ -161,8 +171,22 @@ def _reset_plaintext_warnings() -> None:
     _warned_plaintext_hosts.clear()
 
 
-def _warn_plaintext_transport(host: str, ssl_context: ssl.SSLContext | None) -> None:
+def _warn_plaintext_transport(host: str, path: str, ssl_context: ssl.SSLContext | None) -> None:
     """Say out loud, once per panel, that its bootstrap traffic is not encrypted.
+
+    **The CA download is exempt, and does not claim the once-per-host slot.**
+    The warning exists so an operator can tell a security property is off when
+    it could be on, and for that endpoint there is no "on": verifying the fetch
+    of the anchor would require the anchor being fetched, an unverified-TLS
+    wrapping is readable and forgeable by the same active on-path attacker, and
+    the payload is a public certificate carrying no credential in either
+    direction — its authenticity control is the leaf check callers run *after*
+    the fetch. Each caller also states its own trust posture in its own voice:
+    the bridge's unpinned warning, a config flow's fingerprint confirmation, a
+    consumer's trust-on-first-use log. Warning here anyway named credentials the
+    call never carries, which is the line issue span#264 reported. Not marking
+    the host matters as much as not warning: a pinned consumer's diagnostic
+    re-read must not spend the slot a genuinely plaintext call needs later.
 
     In the same voice as the MQTT bridge's unpinned-CA warning, and for the same
     reason: a security property that is off by default is only a decision if the
@@ -189,6 +213,8 @@ def _warn_plaintext_transport(host: str, ssl_context: ssl.SSLContext | None) -> 
     not a place to put one.
     """
     if ssl_context is not None:
+        return
+    if path == CA_CERT_PATH:
         return
     if host in _warned_plaintext_hosts:
         return
@@ -299,7 +325,7 @@ async def _request(
     caller that supplied it.
     """
     url = _build_url(host, port, path, ssl_context)
-    _warn_plaintext_transport(host, ssl_context)
+    _warn_plaintext_transport(host, path, ssl_context)
     try:
         async with _get_client(httpx_client, timeout, ssl_context) as client:
             match method:
@@ -314,5 +340,31 @@ async def _request(
     except httpx.TimeoutException as exc:
         raise SpanPanelTimeoutError(f"Timed out connecting to {host}") from exc
     except httpx.TransportError as exc:
+        if _is_certificate_verification_failure(exc):
+            raise SpanPanelTLSVerificationError(
+                f"{host} answered {path} with a certificate the supplied trust anchor rejects: {exc}"
+            ) from exc
         raise SpanPanelConnectionError(f"Cannot reach panel at {host}: {exc}") from exc
     return _Reply(host=host, endpoint=path, response=response)
+
+
+def _is_certificate_verification_failure(exc: BaseException) -> bool:
+    """Whether this transport failure is demonstrably about certificate verification.
+
+    httpx wraps the underlying ``ssl.SSLCertVerificationError`` rather than
+    exposing it, so the evidence lives in the cause chain. Only that exact class
+    counts: a handshake that dies any other way -- a reset, a protocol mismatch,
+    an alert from a peer that is not TLS at all -- is indistinguishable from a
+    panel mid-reboot, and calling ambiguous evidence "verification failed" would
+    let a transient outage masquerade as the one failure consumers treat as
+    terminal. The walk is capped because ``__context__`` chains are
+    caller-assembled and nothing here should trust one to be finite.
+    """
+    seen = 0
+    current: BaseException | None = exc
+    while current is not None and seen < 10:
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return True
+        current = current.__cause__ if current.__cause__ is not None else current.__context__
+        seen += 1
+    return False

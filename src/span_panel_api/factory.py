@@ -45,7 +45,14 @@ async def create_span_client(
         serial_number: Panel serial number (extracted from detection/registration if omitted).
         port: Port of the panel bootstrap API used for registration, detection and the
             schema fetch. ``None`` takes the scheme default -- 80 plaintext, 443 with a
-            context.
+            context. It reaches the constructed client in the slot matching its
+            transport: ``panel_https_port`` with a context, ``panel_http_port`` without
+            -- so a pinned client's plaintext CA fetches never dial the TLS port.
+            The corollary is stated rather than hidden: under a context the bridge's
+            diagnostic CA re-read takes the plaintext default, port 80. A pinned
+            caller whose panel serves plaintext on a nonstandard port has no way to
+            say so through this factory; construct ``SpanMqttClient`` directly and
+            pass both ports.
         httpx_client: Optional shared ``httpx.AsyncClient``, used for every request this
             makes and handed to the client it builds. Not closed here; its timeouts and
             limits are the caller's, which is why the per-call ``timeout`` defaults are
@@ -115,11 +122,17 @@ async def create_span_client(
     # `adapters` — none of it is safe to run on an event loop.
     adapter_cls = await asyncio.to_thread(resolve_adapter, adapter_key, dispatch_reason)
 
+    # `port` follows the transport the factory's own REST calls just used it
+    # for: with an ssl_context it was the HTTPS port (`_build_url` accepts no
+    # other reading), so it lands in the HTTPS slot and the bridge's
+    # deliberately-plaintext CA download keeps its own default. Without one it
+    # is the plaintext port, exactly as before.
     client = SpanMqttClient(
         host,
         serial_number,
         mqtt_config,
-        panel_http_port=port,
+        panel_http_port=None if ssl_context is not None else port,
+        panel_https_port=port if ssl_context is not None else None,
         adapter_factory=adapter_cls,
         data_model_version=schema.data_model_version,
         schema_dispatch_reason=dispatch_reason,

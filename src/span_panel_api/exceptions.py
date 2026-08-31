@@ -13,6 +13,25 @@ class SpanPanelConnectionError(SpanPanelError):
     """Connection to SPAN panel failed."""
 
 
+class SpanPanelTLSVerificationError(SpanPanelConnectionError):
+    """Something answered a bootstrap REST call with a certificate the supplied anchor rejects.
+
+    A subclass of `SpanPanelConnectionError` on purpose: every consumer that
+    catches the parent and retries keeps doing exactly what it did, because
+    nothing raised this before an `ssl_context` reached the bootstrap calls. The
+    subclass exists for the consumer that wants the opposite of a retry — a
+    verification failure is not "the panel is not up yet", it is "whatever is up
+    does not hold a key the pin signs", and retrying that is waiting to succeed
+    against whatever is answering. Catch this before the parent to fail closed.
+
+    Raised only when the failure is demonstrably about verification — an
+    `ssl.SSLCertVerificationError` in the cause chain. Every other transport
+    failure, TLS handshakes that die for other reasons included, stays a plain
+    `SpanPanelConnectionError`, because ambiguous evidence must not look
+    terminal.
+    """
+
+
 class SpanPanelTimeoutError(SpanPanelError):
     """Request timed out."""
 

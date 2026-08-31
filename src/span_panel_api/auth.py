@@ -18,7 +18,7 @@ import uuid
 
 import httpx
 
-from ._http import V2_STATUS_PATH, _request
+from ._http import CA_CERT_PATH, V2_STATUS_PATH, _request
 from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelServerError
 from .models import HomieSchemaTypes, V2AuthResponse, V2HomieSchema, V2StatusInfo
 
@@ -373,7 +373,7 @@ async def download_ca_cert(
             "GET",
             host,
             port,
-            "/api/v2/certificate/ca",
+            CA_CERT_PATH,
             timeout=timeout,
             httpx_client=httpx_client,
             ssl_context=ssl_context,

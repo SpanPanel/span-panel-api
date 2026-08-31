@@ -7,6 +7,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.4.0]
+
+A consumer that pinned the panel's CA could not put its schema fetches behind that pin, because the one port `SpanMqttClient` took served two transports with opposite security properties — the schema fetch, which should ride the pinned HTTPS transport, and
+the bridge's CA download, which is plaintext by design because it fetches the very anchor everything else is checked against. This release splits them.
+
+### Added
+
+- **`SpanMqttClient` takes `panel_https_port`**, and its schema fetches — the one at connect and every redispatch refetch — move to HTTPS on that port whenever an `ssl_context` is supplied, leaving the bridge's deliberately-plaintext CA fetches on
+  `panel_http_port` exactly where they were. Naming the HTTPS port without an anchor is refused rather than left silently plaintext, for the same reason `_build_url` refuses port 80 with a context.
+- **`SpanPanelTLSVerificationError` names a bootstrap REST call that failed certificate verification**, as a subclass of `SpanPanelConnectionError` so every existing except clause keeps its meaning — raised only when an `ssl.SSLCertVerificationError` is in
+  the cause chain, because ambiguous evidence must not look terminal, and exported so a consumer that fails closed on an untrusted certificate can catch it before the parent.
+
+### Changed
+
+- **`create_span_client`'s `port` lands in the slot its transport needs**: with an `ssl_context` it was already read as the HTTPS port by every REST call the factory makes, so it now reaches the client's HTTPS slot and the CA download takes the plaintext
+  default, instead of the TLS port being handed to a plaintext fetch.
+- **The redispatch schema refetch no longer retries a certificate-verification failure**, which cannot succeed on a later attempt under the same anchor; it is left to raise and logged once per trigger, instead of a background task fetching every thirty
+  seconds forever while the log blames a slow boot.
+- **The CA download no longer emits the plaintext-transport warning**, because the fetch of the anchor itself is unverifiable by construction and carries no credential — its trust posture is stated by each caller in its own voice, and the warning as it
+  stood named credentials that call never carries. Every other bootstrap call still warns, and the CA download no longer spends the once-per-host slot a genuinely plaintext call needs later.
+
 ## [3.3.0]
 
 A pinned panel that has moved is no longer reported the same way as a panel whose clock reset, so a consumer can put the remedy in front of a user instead of retrying in silence.

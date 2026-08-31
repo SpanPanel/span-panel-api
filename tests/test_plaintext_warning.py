@@ -135,13 +135,23 @@ class TestItIsSaidOnce:
         assert len(_warnings(caplog)) == 1
 
     @pytest.mark.asyncio
-    async def test_repeated_ca_fetches_on_fresh_clients_warn_once(self, caplog: pytest.LogCaptureFixture) -> None:
-        """The reconnect path, and the reason this is scoped to the panel.
+    async def test_the_ca_download_never_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Reversed in 3.4.0, deliberately: this endpoint is unverifiable by construction.
 
-        `download_ca_cert` is called on every MQTT reconnect with no injected
-        client, so each call builds its own. Anything keyed on the client object
-        would warn once per reconnect — exactly the log the bridge's own
-        once-per-bridge warning exists to avoid.
+        The warning exists so an operator can tell a security property is *off*
+        when it could be on, and for the first fetch of the anchor itself there
+        is no "on": any verification would require the anchor being fetched, an
+        unverified-TLS wrapping would be readable and forgeable by the same
+        active on-path attacker, and the payload is a public certificate with no
+        credential in either direction — the authenticity control is the leaf
+        check its callers run *after* the fetch. Every caller also already says
+        so in its own voice: the bridge's once-per-bridge unpinned warning, the
+        config flow's fingerprint confirmation, and the deferred pin's
+        trust-on-first-use log line. Until 3.3.x this endpoint warned like the
+        rest, naming credentials it never carries; that line is what issue
+        span#264 reported. A caller that already holds the anchor and wants a
+        verified second copy passes ``ssl_context``, and no warning was ever in
+        question there.
         """
         with patch("span_panel_api._http.httpx.AsyncClient") as mock_cls:
             dedicated = AsyncMock()
@@ -153,6 +163,30 @@ class TestItIsSaidOnce:
             with caplog.at_level(logging.WARNING):
                 for _ in range(5):
                     await download_ca_cert(HOST)
+
+        assert len(_warnings(caplog)) == 0
+
+    @pytest.mark.asyncio
+    async def test_the_ca_download_does_not_swallow_a_later_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Skipping the warning must not mark the host as already warned.
+
+        The diagnostic CA re-read runs on a *pinned* entry whose other calls are
+        HTTPS; if it claimed the once-per-host slot, a genuinely plaintext call
+        made later — a reauth on an entry that lost its pin — would say nothing.
+        """
+        answer = _json_response({"ebusBrokerPassword": "new-pass"}, method="PUT")
+        # Built before the patch below replaces `httpx.AsyncClient`; a spec
+        # against the patched class is a spec against a Mock, which mock refuses.
+        injected = _client("put", answer)
+        with patch("span_panel_api._http.httpx.AsyncClient") as mock_cls:
+            dedicated = AsyncMock()
+            dedicated.__aenter__ = AsyncMock(return_value=dedicated)
+            dedicated.__aexit__ = AsyncMock(return_value=False)
+            dedicated.get = AsyncMock(return_value=_text_response(PEM))
+            mock_cls.return_value = dedicated
+            with caplog.at_level(logging.WARNING):
+                await download_ca_cert(HOST)
+                await regenerate_passphrase(HOST, "jwt", httpx_client=injected)
 
         assert len(_warnings(caplog)) == 1
 

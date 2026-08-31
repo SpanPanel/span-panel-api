@@ -33,6 +33,8 @@ from ..exceptions import (
     SpanPanelServerError,
     SpanPanelStaleDataError,
     SpanPanelTimeoutError,
+    SpanPanelTLSVerificationError,
+    SpanPanelValidationError,
 )
 from ..models import AdoptedProperty, ControlTarget, FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot, V2HomieSchema
 from ..protocol import PanelCapability, SchemaAdapter
@@ -131,6 +133,7 @@ class SpanMqttClient:
         broker_config: MqttClientConfig,
         snapshot_interval: float = 1.0,
         panel_http_port: int | None = None,
+        panel_https_port: int | None = None,
         adapter_factory: Callable[[str, V2HomieSchema], SchemaAdapter] | None = None,
         data_model_version: str | None = None,
         schema_dispatch_reason: str | None = None,
@@ -139,11 +142,29 @@ class SpanMqttClient:
         ssl_context: ssl.SSLContext | None = None,
         control_deadlines: ControlDeadlines | None = None,
     ) -> None:
+        if panel_https_port is not None and ssl_context is None:
+            # A TLS port with nothing to verify against is a decision nobody
+            # made: accepted silently, the schema fetch would run plaintext HTTP
+            # against a port the caller believes is TLS. The same misreading
+            # `_build_url` refuses for port 80 with a context, from the other
+            # direction.
+            raise SpanPanelValidationError(
+                f"panel_https_port={panel_https_port} was passed without an ssl_context for {host}. "
+                "Supply the pinned CA as ssl_context, or omit panel_https_port to stay on plaintext HTTP."
+            )
         self._host = host
         self._serial_number = serial_number
         self._broker_config = broker_config
         self._snapshot_interval = snapshot_interval
+        # Two ports because they serve transports with opposite security
+        # properties. `panel_http_port` is the plaintext one, and it belongs to
+        # the bridge: the CA download is unauthenticated by construction — it
+        # fetches the very anchor everything else is checked against — so it
+        # never follows the pin. `panel_https_port` carries this client's own
+        # schema fetches once an `ssl_context` anchors them; `None` with a
+        # context means `_build_url`'s TLS default, 443.
         self._panel_http_port = panel_http_port
+        self._panel_https_port = panel_https_port
         self._adapter_factory = adapter_factory
         # Shared by the caller, owned by the caller: never closed here, and its
         # policy -- timeouts, limits, headers -- is whatever the caller set. That
@@ -222,10 +243,18 @@ class SpanMqttClient:
         four arguments spelled out separately, and adding the trust anchor to one
         and not the other is exactly how a session ends up bootstrapping over
         HTTPS and refetching over HTTP for the rest of its life. One call site.
+
+        The port follows the transport. With an anchor the fetch is HTTPS and
+        takes ``panel_https_port``; without one it is plaintext and takes
+        ``panel_http_port``, exactly as it always did. Handing the HTTP port to
+        a TLS call is the combination ``_build_url`` refuses, and handing the
+        TLS port to the plaintext one is the constructor refusal -- so by the
+        time this runs, the pairing is already known good.
         """
+        port = self._panel_https_port if self._ssl_context is not None else self._panel_http_port
         return await get_homie_schema(
             self._host,
-            port=self._panel_http_port,
+            port=port,
             httpx_client=self._httpx_client,
             ssl_context=self._ssl_context,
         )
@@ -1465,6 +1494,16 @@ class SpanMqttClient:
         while True:
             try:
                 return await self._fetch_schema()
+            except SpanPanelTLSVerificationError:
+                # Before its parent, which the next clause would retry forever.
+                # A verification failure cannot succeed on a later attempt --
+                # the anchor is fixed for the session -- so it is precisely the
+                # "error that is not the panel still coming up" this loop's
+                # contract leaves to raise. The redispatch wrapper logs it once
+                # per trigger, and escalation belongs to the MQTT side: a
+                # rotated CA surfaces through the bridge's own diagnosis and
+                # fatal-error channel, which reconnects share with this trigger.
+                raise
             except (
                 SpanPanelConnectionError,
                 SpanPanelTimeoutError,
@@ -1516,6 +1555,23 @@ class SpanMqttClient:
         """
         try:
             await self._redispatch_once()
+        except SpanPanelTLSVerificationError:
+            # Before the catch-all, whose text blames a slow boot. This is the
+            # one refetch failure that is not one: the schema endpoint answered
+            # with a certificate the session's anchor rejects, which cannot fix
+            # itself on a later attempt and must not steer a user investigating
+            # an interception toward waiting. Still non-fatal here for the
+            # catch-all's reason -- nothing may escape a fire-and-forget task --
+            # and the next reconnect edge re-arms the attempt.
+            _LOGGER.error(
+                "Could not follow the panel's schema-generation change: the schema refetch "
+                "failed certificate verification against the pinned CA, so the %r parser is "
+                "unchanged. If the panel's CA rotated with the firmware, the broker "
+                "connection will surface it; otherwise check what answers the panel's "
+                "HTTPS port.",
+                self._data_model_version,
+                exc_info=True,
+            )
         except Exception:  # pylint: disable=broad-exception-caught
             # Nothing may escape here. This runs as a fire-and-forget task, so an
             # escaping exception becomes "Task exception was never retrieved" in

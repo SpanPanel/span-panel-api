@@ -30,6 +30,7 @@ from .exceptions import (
     SpanPanelServerError,
     SpanPanelStaleDataError,
     SpanPanelTimeoutError,
+    SpanPanelTLSVerificationError,
     SpanPanelValidationError,
 )
 from .factory import create_span_client
@@ -200,6 +201,11 @@ __all__ = [  # noqa: RUF022
     "SpanPanelError",
     "SpanPanelServerError",
     "SpanPanelStaleDataError",
+    # Added 2026-08-31 (3.4.0): a bootstrap REST call that failed verification
+    # rather than connection. A subclass of SpanPanelConnectionError, so every
+    # existing except clause keeps its meaning; a consumer that fails closed on
+    # an untrusted certificate catches this one before the parent.
+    "SpanPanelTLSVerificationError",
     "SpanPanelTimeoutError",
     "SpanPanelValidationError",
 ]

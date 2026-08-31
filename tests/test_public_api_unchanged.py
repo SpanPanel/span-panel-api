@@ -155,6 +155,11 @@ EXPECTED_PUBLIC_API = {
     "SpanPanelError",
     "SpanPanelServerError",
     "SpanPanelStaleDataError",
+    # Added 2026-08-31 (3.4.0): a bootstrap REST call that failed *verification*
+    # rather than connection. A subclass of SpanPanelConnectionError, so every
+    # existing except clause keeps its meaning; a consumer that wants to fail
+    # closed on an untrusted certificate catches this one first.
+    "SpanPanelTLSVerificationError",
     "SpanPanelTimeoutError",
     "SpanPanelValidationError",
 }

@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.4.1]
+
+A panel that merely advertises itself on the network no longer produces the plaintext-transport warning when discovery probes it, closing the remaining way issue span#264's log line reached an operator who could do nothing about it.
+
+### Changed
+
+- **The status endpoint no longer emits the plaintext-transport warning**, for the CA download's reason from the other side: it is the detection probe made against devices nobody has configured, where no pin can exist and the only action is configuring the
+  panel — whose flow pins before any credential moves. It carries no credential in either direction, and it no longer spends the once-per-host warning slot, which it previously claimed first in every flow so that a genuinely credential-bearing call behind
+  it said nothing. Registration, passphrase rotation, and the schema fetch warn exactly as before.
+
 ## [3.4.0]
 
 A consumer that pinned the panel's CA could not put its schema fetches behind that pin, because the one port `SpanMqttClient` took served two transports with opposite security properties — the schema fetch, which should ride the pinned HTTPS transport, and

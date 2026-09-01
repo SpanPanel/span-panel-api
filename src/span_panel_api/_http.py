@@ -31,11 +31,14 @@ DEFAULT_HTTPS_PORT = 443
 #: The one bootstrap path two modules request: the detector probes it to decide
 #: whether the panel speaks v2 at all, and `get_v2_status` reads the same answer
 #: for a caller that already knows it does. Named here rather than spelled out in
-#: each, so the two cannot drift apart the way their parsers had.
+#: each, so the two cannot drift apart the way their parsers had. Load-bearing
+#: for `_warn_plaintext_transport`'s exemption: a request to this path is the
+#: one the warning stays silent for, so a change here changes what warns.
 V2_STATUS_PATH = "/api/v2/status"
 
-#: The one bootstrap path exempt from the plaintext warning, named here because
-#: the transport is what grants the exemption. See `_warn_plaintext_transport`.
+#: Exempt from the plaintext warning alongside `V2_STATUS_PATH`, named here
+#: because the transport is what grants the exemption. See
+#: `_warn_plaintext_transport`.
 CA_CERT_PATH = "/api/v2/certificate/ca"
 
 #: The verbs the bootstrap API uses. Spelled as a `Literal` rather than passed
@@ -174,19 +177,33 @@ def _reset_plaintext_warnings() -> None:
 def _warn_plaintext_transport(host: str, path: str, ssl_context: ssl.SSLContext | None) -> None:
     """Say out loud, once per panel, that its bootstrap traffic is not encrypted.
 
-    **The CA download is exempt, and does not claim the once-per-host slot.**
+    **Two endpoints are exempt, and neither claims the once-per-host slot.**
     The warning exists so an operator can tell a security property is off when
-    it could be on, and for that endpoint there is no "on": verifying the fetch
-    of the anchor would require the anchor being fetched, an unverified-TLS
-    wrapping is readable and forgeable by the same active on-path attacker, and
-    the payload is a public certificate carrying no credential in either
-    direction — its authenticity control is the leaf check callers run *after*
-    the fetch. Each caller also states its own trust posture in its own voice:
-    the bridge's unpinned warning, a config flow's fingerprint confirmation, a
-    consumer's trust-on-first-use log. Warning here anyway named credentials the
-    call never carries, which is the line issue span#264 reported. Not marking
-    the host matters as much as not warning: a pinned consumer's diagnostic
-    re-read must not spend the slot a genuinely plaintext call needs later.
+    it could be on, and for both there is no "on". The CA download fetches the
+    very anchor verification would need — an unverified-TLS wrapping is
+    readable and forgeable by the same active on-path attacker, the payload is
+    a public certificate, and its authenticity control is the leaf check
+    callers run *after* the fetch. The status endpoint is the detection probe:
+    most prominently the request discovery makes against a device nobody has
+    configured, where no pin can exist because trust-on-first-use has not
+    happened and the only action available is configuring the panel — whose
+    flow pins before any credential moves, with a person confirming the
+    fingerprint. Neither call carries a credential in either direction, and
+    warning on them named credentials they never carry: the CA download's line
+    is what issue span#264 reported, and the status probe's is what a merely
+    *advertising* unconfigured panel produced at every boot.
+
+    Two limits of the status exemption, stated rather than implied. The body
+    informs decisions — `proximityProven`, the serial an identity check reads —
+    and a plaintext answer is one anything on the path can write; the controls
+    for that are the panel's own registration gate and the pin the consumer's
+    flow acquires before a credential moves, not a log line. And a consumer
+    *can* probe a configured, pinned panel's status without its context; the
+    exemption means no warning will point that out, so a consumer owes every
+    probe of a configured host the entry's own transport. Not marking the host matters as
+    much as not warning — the probe runs first in every flow and a diagnostic
+    re-read runs on pinned entries, and neither may spend the slot a
+    credential-bearing call needs later.
 
     In the same voice as the MQTT bridge's unpinned-CA warning, and for the same
     reason: a security property that is off by default is only a decision if the
@@ -214,7 +231,7 @@ def _warn_plaintext_transport(host: str, path: str, ssl_context: ssl.SSLContext 
     """
     if ssl_context is not None:
         return
-    if path == CA_CERT_PATH:
+    if path in (CA_CERT_PATH, V2_STATUS_PATH):
         return
     if host in _warned_plaintext_hosts:
         return

@@ -26,7 +26,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from span_panel_api.auth import download_ca_cert, regenerate_passphrase, register_v2
+from span_panel_api.auth import download_ca_cert, get_v2_status, regenerate_passphrase, register_v2
+from span_panel_api.detection import detect_api_version
 from span_panel_api.mqtt.models import MqttClientConfig
 
 HOST = "panel.invalid"
@@ -165,6 +166,54 @@ class TestItIsSaidOnce:
                     await download_ca_cert(HOST)
 
         assert len(_warnings(caplog)) == 0
+
+    @pytest.mark.asyncio
+    async def test_the_status_probe_never_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Exempted in 3.4.1, for the CA download's reason from the other side.
+
+        The status endpoint is the detection probe — the request zeroconf
+        discovery makes against a device nobody has configured, once per boot,
+        where no pin can exist because trust-on-first-use has not happened and
+        there is nothing the operator can do but configure the panel. It
+        carries no credential in either direction, and the flows that probe it
+        on a configured-but-unpinned entry acquire the pin before any
+        credential moves, with a human confirming the fingerprint. The warning
+        here named credentials the call never carries and pointed at an action
+        nobody could take — the line that made an operator remove a healthy
+        emulator. The exemption's limits live in `_warn_plaintext_transport`'s
+        docstring: a consumer probing a *configured* host owes that probe the
+        entry's own transport, because no warning will say so anymore.
+        """
+        answer = _json_response({"serialNumber": "SYN-0000-0001", "firmwareVersion": "f"}, method="GET")
+        with caplog.at_level(logging.WARNING):
+            await get_v2_status(HOST, httpx_client=_client("get", answer))
+        assert len(_warnings(caplog)) == 0
+
+    @pytest.mark.asyncio
+    async def test_the_detection_probe_never_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Detection reads the same endpoint, and must be equally silent."""
+        answer = _json_response({"serialNumber": "SYN-0000-0001", "firmwareVersion": "f"}, method="GET")
+        with caplog.at_level(logging.WARNING):
+            await detect_api_version(HOST, httpx_client=_client("get", answer))
+        assert len(_warnings(caplog)) == 0
+
+    @pytest.mark.asyncio
+    async def test_the_status_probe_does_not_swallow_a_later_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The probe fires first in every flow, so it must not spend the slot.
+
+        Today it does exactly that: a reauth's status probe claims the
+        once-per-host warning, and the credential-bearing call behind it says
+        nothing. The warning belongs to whichever call actually deserves it.
+        """
+        status = _json_response({"serialNumber": "SYN-0000-0001", "firmwareVersion": "f"}, method="GET")
+        rotate = _json_response({"ebusBrokerPassword": "new-pass"}, method="PUT")
+        with caplog.at_level(logging.WARNING):
+            await get_v2_status(HOST, httpx_client=_client("get", status))
+            # The midpoint is the assertion: the slot must still be unspent
+            # here, so the warning below demonstrably belongs to the rotation.
+            assert len(_warnings(caplog)) == 0
+            await regenerate_passphrase(HOST, "jwt", httpx_client=_client("put", rotate))
+        assert len(_warnings(caplog)) == 1
 
     @pytest.mark.asyncio
     async def test_the_ca_download_does_not_swallow_a_later_warning(self, caplog: pytest.LogCaptureFixture) -> None:

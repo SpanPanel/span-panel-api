@@ -280,7 +280,8 @@ To install pre-commit hooks:
 ./setup-hooks.sh
 ```
 
-This installs dependencies (if needed) and configures git pre-commit hooks.
+This syncs dependencies and, in the primary checkout, installs the git pre-commit hook. Run from a worktree, it syncs that worktree's own environment and checks the shared hook instead of reinstalling it: hooks are shared by every worktree and record the
+interpreter that installed them, so a hook installed from a worktree stops working when that worktree is removed.
 
 ## Workspace layout
 

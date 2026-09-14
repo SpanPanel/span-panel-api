@@ -22,6 +22,9 @@
 # wrong code without an error. uv clones packages from its cache, so the second
 # environment costs little. Local configuration that is not bound to a path, `.env`,
 # is linked instead.
+#
+# The shared pre-commit hook is installed from the primary checkout first when it is
+# missing or bound elsewhere, so no worktree starts out committing unchecked.
 
 set -euo pipefail
 
@@ -80,6 +83,22 @@ if git -C "$primary_root" show-ref --verify --quiet refs/heads/main; then
         # Untracked files are not counted as changes above, because a fast-forward
         # refuses to overwrite one; this is where that refusal lands.
         echo "Could not fast-forward main at $main_checkout; leaving it as it is."
+    fi
+fi
+
+# Every worktree commits through the one hook in the common directory. Missing, its
+# commits skip every check without a word; bound to an environment that is gone,
+# they fail. The primary checkout is the one place it can be installed to last, so
+# install it there before the worktree exists, and refuse if that does not take.
+if ! (cd "$checkout" && bash ./setup-hooks.sh --check-hook >/dev/null); then
+    echo "Installing the shared pre-commit hook from the primary checkout..."
+    if ! (cd "$primary_root" && ./setup-hooks.sh); then
+        echo "Could not install the pre-commit hook from $primary_root; not creating the worktree." >&2
+        exit 1
+    fi
+    if ! (cd "$checkout" && bash ./setup-hooks.sh --check-hook); then
+        echo "The pre-commit hook is still not bound to $primary_root; not creating the worktree." >&2
+        exit 1
     fi
 fi
 

@@ -11,7 +11,8 @@ Pre-releases are not listed separately. A beta is a step towards the next public
 
 ## [1.1.4]
 
-The parser reports the islanding state the panel is acting on, and refuses islanding writes the panel would ignore.
+The parser reports the islanding state the panel is acting on, and refuses islanding writes the panel would ignore. Reported and fixed by [@dcj](https://github.com/dcj) in [#179](https://github.com/SpanPanel/span-panel-api/pull/179), from issue
+[#178](https://github.com/SpanPanel/span-panel-api/issues/178).
 
 ### Fixed
 

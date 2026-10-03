@@ -16,6 +16,8 @@ failure rather than a connection failure.
 caller that caught `SpanPanelConnectionError` to handle a refused login must catch `SpanPanelAuthError` too. Right after a rotation the same error is also how a broker that has not yet accepted the new password answers, so retry it with backoff for up to
 about a minute before treating it as wrong credentials.
 
+Reported and fixed by [@dcj](https://github.com/dcj) in [#179](https://github.com/SpanPanel/span-panel-api/pull/179), from issue [#178](https://github.com/SpanPanel/span-panel-api/issues/178).
+
 ### Added
 
 - **`rotate_passphrase()` returns both new values** as a `PassphraseRotation` (`ebus_broker_password`, `hop_passphrase`), because a rotation replaces the hop passphrase as well as the broker password and `register_v2` afterwards accepts only the new one.

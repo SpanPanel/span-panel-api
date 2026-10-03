@@ -466,9 +466,14 @@ schema = await get_homie_schema("192.168.1.100")
 print(f"Panel size: {schema.panel_size} spaces")
 print(f"Schema hash: {schema.types_schema_hash}")
 
-# Rotate the passphrase, which is also the MQTT broker password; both values change
+# Rotate the passphrase, which is currently also the MQTT broker password; both values change
+# Access tokens already issued are not revoked
 rotation = await rotate_passphrase("192.168.1.100", token=auth.access_token)
 new_password = rotation.ebus_broker_password
+# The broker may not accept new_password immediately, and the old one may keep
+# working briefly. Retry a refused connect (including SpanPanelAuthError) with
+# backoff for up to about a minute; if still refused, rotate again and use the
+# newly returned value. Never fall back to the old password.
 
 # Get panel status (unauthenticated)
 status = await get_v2_status("192.168.1.100")

@@ -175,7 +175,7 @@ __all__ = [  # noqa: RUF022
     "register_fqdn",
     "regenerate_passphrase",
     "register_v2",
-    # Added 2026-10-02 (3.4.2): the rotation reports both new values, because
+    # Added 2026-10-02 (unreleased): the rotation reports both new values, because
     # it replaces the hop passphrase as well as the broker password. Additive --
     # regenerate_passphrase keeps its str return.
     "rotate_passphrase",
@@ -207,7 +207,7 @@ __all__ = [  # noqa: RUF022
     "SpanPanelSchemaVersionError",
     "SpanPanelConnectionError",
     "SpanPanelError",
-    # Added 2026-10-02 (3.4.2): a 403 from a reduced-privilege token. A subclass
+    # Added 2026-10-02 (unreleased): a 403 from a reduced-privilege token. A subclass
     # of SpanPanelAuthError, so every existing except clause keeps its meaning.
     "SpanPanelInsufficientPrivilegeError",
     "SpanPanelServerError",

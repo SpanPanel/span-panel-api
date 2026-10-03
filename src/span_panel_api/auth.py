@@ -499,15 +499,23 @@ async def rotate_passphrase(
     httpx_client: httpx.AsyncClient | None = None,
     ssl_context: ssl.SSLContext | None = None,
 ) -> PassphraseRotation:
-    """Rotate the panel's passphrase, which is also its MQTT broker password.
+    """Rotate the panel's passphrase, which is currently also its MQTT broker password.
 
     One PUT replaces both: the hop passphrase that ``register_v2`` accepts and
-    the broker password, which the panel reports as two fields carrying the
-    same new value. Afterwards ``register_v2`` accepts only the new passphrase.
+    the broker password, which the panel reports as two fields currently
+    carrying the same new value. Use ``ebus_broker_password`` for the broker.
+    Afterwards ``register_v2`` accepts only the new passphrase. Access tokens
+    already issued are not revoked.
 
-    The broker may disconnect the session and needs a moment to accept the new
-    password, and this call can return before it does. Reconnect with the new
-    password, retrying with backoff; never fall back to the old one.
+    The broker may not accept the new password the moment this call returns,
+    and the old one may keep working briefly. Reconnect with the new password
+    and never fall back to the old one. If the broker refuses it, retry with
+    backoff for up to about a minute, and include ``SpanPanelAuthError`` in the
+    retry: ``connect()`` raises it for a refused CONNACK, which is what a broker
+    that has not yet accepted the new password produces. If it is still refused
+    after that, rotate again and use the newly returned value. Do not rely on
+    the old password stopping, or on existing sessions being disconnected, at
+    any particular moment.
 
     Args:
         host: IP address or hostname of the SPAN Panel
@@ -552,9 +560,10 @@ async def regenerate_passphrase(
     """Rotate the panel's passphrase and return only the new broker password.
 
     The same PUT as ``rotate_passphrase``, with the same effect: the hop
-    passphrase changes too, and ``register_v2`` accepts only the new one. Use
-    ``rotate_passphrase`` to receive both values; this function is kept for
-    callers written against its ``str`` return.
+    passphrase changes too, ``register_v2`` accepts only the new one, access
+    tokens already issued are not revoked, and the same reconnect advice
+    applies. Use ``rotate_passphrase`` to receive both values; this function is
+    kept for callers written against its ``str`` return.
 
     Args:
         host: IP address or hostname of the SPAN Panel

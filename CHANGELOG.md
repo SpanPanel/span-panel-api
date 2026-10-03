@@ -12,7 +12,9 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 ### Added
 
 - **`rotate_passphrase()` returns both new values** as a `PassphraseRotation` (`ebus_broker_password`, `hop_passphrase`), because a rotation replaces the hop passphrase as well as the broker password and `register_v2` afterwards accepts only the new one.
-  Exported with the result type. The broker may disconnect the session and needs a moment to accept the new password: reconnect with the new one, retrying with backoff, and never fall back to the old one.
+  Exported with the result type. Access tokens already issued are not revoked. The broker may not accept the new password the moment the call returns, and the old one may keep working briefly: reconnect with the new one and never fall back to the old one.
+  If the broker refuses it, retry with backoff for up to about a minute, including `SpanPanelAuthError`, which `connect()` raises for a refused CONNACK and which is what a broker that has not yet accepted the new password produces. If it is still refused,
+  rotate again and use the newly returned value. Do not rely on the old password stopping, or on existing sessions being disconnected, at any particular moment.
 - **`SpanPanelInsufficientPrivilegeError`** for a rotation refused with HTTP 403: the token is reduced-privilege (one obtained by proof of proximity), and registering with the passphrase yields a full-privilege token. A subclass of `SpanPanelAuthError`, so
   existing except clauses still catch it.
 

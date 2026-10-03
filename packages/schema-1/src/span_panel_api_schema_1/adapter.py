@@ -275,6 +275,12 @@ class SchemaOneAdapter:
         the BESS stops discharging. Returning None here, as this did until the
         successor was decided, left that recovery unavailable during an outage.
 
+        **The panel decides whether a write takes effect, by its own link to the
+        battery.** It accepts `ON_GRID` or `OFF_GRID` only while the battery's
+        `status/communication-state` is not `OK`; otherwise it ignores the write
+        and the published value does not change. A lost MID alone does not make
+        the write eligible. `NONE` is always ignored.
+
         **None unless the panel declares the assertion `$settable`**, the same
         refusal `set_circuit_relay_target` makes. Absence of the declaration,
         or of the property, authorizes nothing (see

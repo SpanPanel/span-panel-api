@@ -472,8 +472,8 @@ _CONSUMED_OFF_SNAPSHOT: dict[tuple[str, str, str], str] = {
         "parses the tree, so it is consumed before any snapshot exists"
     ),
     (TYPE_PANEL, NODE_SHED, "asserted-islanding-state"): (
-        "tier 1 of resolve_islanding_state (panel.py), whose probe value ON_GRID "
-        "matches the reference MID, and the write target of set_dominant_power_source_target"
+        "tier 1 of resolve_islanding_state (panel.py), which returns a non-NONE "
+        "assertion first, and the write target of set_dominant_power_source_target"
     ),
     (TYPE_LUGS, NODE_CONNECTION, "feeds-device-id"): (
         "the downstream-lugs feedthrough branch of resolve_relative_position "

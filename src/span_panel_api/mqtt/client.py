@@ -869,7 +869,10 @@ class SpanMqttClient:
 
         Refused, with nothing published, when the panel does not declare the
         control settable, and under v1.0 for `NONE` and `UNKNOWN`, which the
-        panel would ignore.
+        panel would ignore. Under v1.0 the panel also ignores `ON_GRID` and
+        `OFF_GRID` while its link to the battery is healthy (the battery's
+        `status/communication-state` is `OK`), leaving the published value
+        unchanged.
         """
         adapter = self._require_adapter()
         target = adapter.set_dominant_power_source_target()

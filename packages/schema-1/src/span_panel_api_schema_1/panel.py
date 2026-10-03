@@ -612,9 +612,11 @@ def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevic
     | 3 | no MID at all | `power-flows/grid` heuristic |
     | 4 | none of the above | unknown |
 
-    **An assertion in force is the effective state, so it outranks the MID.** When comms
-    to the BESS or MID are lost and the grid returns, the user asserts the grid is up so
-    the BESS stops discharging, and the panel acts on that assertion until it clears.
+    **An assertion in force is the effective state, so it outranks the MID.** When the
+    panel's link to the battery is not healthy (the battery's `status/communication-state`
+    is not `OK`) and the grid returns, the user asserts the grid is up so the BESS stops
+    discharging, and the panel acts on that assertion until it clears. The panel ignores
+    the write while that link is healthy.
     Reading the MID first would report the sensed value while the panel is acting on a
     different one. The assertion clears itself back to `NONE` once the battery link
     recovers, so the MID's answer returns without anything here having to expire it.

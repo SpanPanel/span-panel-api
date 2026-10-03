@@ -11,10 +11,10 @@ import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from paho.mqtt.client import ConnectFlags, DisconnectFlags, MQTTMessage
+from paho.mqtt.client import ConnackCode, ConnectFlags, DisconnectFlags, MQTTMessage, convert_connack_rc_to_reason_code
 from paho.mqtt.reasoncodes import ReasonCode
 
-from span_panel_api.exceptions import SpanPanelAPIError, SpanPanelConnectionError
+from span_panel_api.exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelConnectionError
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.const import MQTT_FULL_REBUILD_AFTER_FAILURES, MQTT_RECONNECT_MIN_DELAY_S
@@ -139,6 +139,93 @@ class TestBridgeConnect:
         assert bridge._client is None
         assert bridge._should_reconnect is False
         mqtt_client_mock.disconnect.assert_called_once()
+
+
+def _refuse_connack(mqtt_client_mock: MagicMock, reason_code: ReasonCode) -> None:
+    """Make the mock broker answer CONNECT with a refused CONNACK."""
+    loop = asyncio.get_running_loop()
+
+    def _connect(**_kwargs: object) -> int:
+        loop.call_soon_threadsafe(
+            mqtt_client_mock.on_connect,
+            mqtt_client_mock,
+            None,
+            ConnectFlags(session_present=False),
+            reason_code,
+            None,
+        )
+        return 0
+
+    mqtt_client_mock.connect.side_effect = _connect
+
+
+class TestBridgeConnackRefusal:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "reason_code",
+        [
+            convert_connack_rc_to_reason_code(ConnackCode.CONNACK_REFUSED_BAD_USERNAME_PASSWORD),
+            convert_connack_rc_to_reason_code(ConnackCode.CONNACK_REFUSED_NOT_AUTHORIZED),
+            ReasonCode(packetType=2, identifier=0x86),
+            ReasonCode(packetType=2, identifier=0x87),
+        ],
+        ids=["v311-rc4", "v311-rc5", "v5-0x86", "v5-0x87"],
+    )
+    async def test_credential_refusal_raises_auth_error(self, mqtt_client_mock: MagicMock, reason_code: ReasonCode) -> None:
+        bridge = _make_bridge()
+        _refuse_connack(mqtt_client_mock, reason_code)
+
+        with pytest.raises(SpanPanelAuthError, match=str(reason_code)) as exc_info:
+            await bridge.connect()
+
+        assert not isinstance(exc_info.value, SpanPanelConnectionError)
+        assert bridge.is_connected() is False
+        assert bridge._initial_connect_done is False
+
+    @pytest.mark.asyncio
+    async def test_other_refusal_still_raises_connection_error(self, mqtt_client_mock: MagicMock) -> None:
+        bridge = _make_bridge()
+        _refuse_connack(
+            mqtt_client_mock,
+            convert_connack_rc_to_reason_code(ConnackCode.CONNACK_REFUSED_SERVER_UNAVAILABLE),
+        )
+
+        with pytest.raises(SpanPanelConnectionError, match="MQTT connection failed"):
+            await bridge.connect()
+
+    @pytest.mark.asyncio
+    async def test_refusal_does_not_outlive_its_connect(self, mqtt_client_mock: MagicMock) -> None:
+        """A credential refusal from an earlier attempt does not color a later one."""
+        bridge = _make_bridge()
+        _refuse_connack(mqtt_client_mock, ReasonCode(packetType=2, identifier=0x86))
+        with pytest.raises(SpanPanelAuthError):
+            await bridge.connect()
+
+        # The socket closes before any CONNACK arrives on the second attempt.
+        loop = asyncio.get_running_loop()
+
+        def _connect_then_drop(**_kwargs: object) -> int:
+            loop.call_soon_threadsafe(
+                mqtt_client_mock.on_disconnect,
+                mqtt_client_mock,
+                None,
+                DisconnectFlags(is_disconnect_packet_from_server=False),
+                ReasonCode(packetType=2, aName="Unspecified error"),
+                None,
+            )
+            return 0
+
+        mqtt_client_mock.connect.side_effect = _connect_then_drop
+        with pytest.raises(SpanPanelConnectionError, match="MQTT connection failed"):
+            await bridge.connect()
+
+    @pytest.mark.asyncio
+    async def test_span_client_connect_propagates_auth_error(self, mqtt_client_mock: MagicMock) -> None:
+        client = _make_span_client()
+        _refuse_connack(mqtt_client_mock, ReasonCode(packetType=2, aName="Bad user name or password"))
+
+        with pytest.raises(SpanPanelAuthError):
+            await client.connect()
 
 
 # ---------------------------------------------------------------------------

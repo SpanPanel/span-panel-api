@@ -7,6 +7,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [Unreleased]
+
+### Added
+
+- **`rotate_passphrase()` returns both new values** as a `PassphraseRotation` (`ebus_broker_password`, `hop_passphrase`), because a rotation replaces the hop passphrase as well as the broker password and `register_v2` afterwards accepts only the new one.
+  Exported with the result type. The broker may disconnect the session and needs a moment to accept the new password: reconnect with the new one, retrying with backoff, and never fall back to the old one.
+- **`SpanPanelInsufficientPrivilegeError`** for a rotation refused with HTTP 403: the token is reduced-privilege (one obtained by proof of proximity), and registering with the passphrase yields a full-privilege token. A subclass of `SpanPanelAuthError`, so
+  existing except clauses still catch it.
+
+### Changed
+
+- **`regenerate_passphrase()` no longer claims the hop passphrase is unchanged.** It performs the same rotation and still returns only the new broker password as a `str`.
+- **`set_dominant_power_source` refuses with "Panel offers no settable dominant power source control"** where it said "Core node not found in panel topology", since the parent/child schema has no core node and now also refuses a control the panel does not
+  declare settable.
+- **Passphrase rotation raises `SpanPanelServerError` with `status_code` for a 5xx**, instead of a plain `SpanPanelAPIError`. After a 500 the outcome is unknown: the passphrase may or may not have changed.
+
+### Fixed
+
+- **A broker that refuses the credentials now raises `SpanPanelAuthError` from `connect()`**, instead of `SpanPanelConnectionError`, so a consumer can ask for new credentials rather than retry. This covers the CONNACK refusals "Bad user name or password"
+  and "Not authorized"; the error message carries the reason code. Every other refusal still raises `SpanPanelConnectionError`, and the reconnect loop still retries all of them.
+
 ## [3.4.1]
 
 A panel that merely advertises itself on the network no longer produces the plaintext-transport warning when discovery probes it, closing the remaining way issue span#264's log line reached an operator who could do nothing about it.

@@ -9,6 +9,16 @@ class SpanPanelAuthError(SpanPanelError):
     """Authentication failed."""
 
 
+class SpanPanelInsufficientPrivilegeError(SpanPanelAuthError):
+    """The token is valid but reduced-privilege, so the panel refused the call (HTTP 403).
+
+    A token obtained by proof of proximity (the door bypass) carries reduced
+    privilege. Registering with the panel's passphrase yields a full-privilege
+    token. A subclass of `SpanPanelAuthError`, so an existing except clause
+    keeps catching it.
+    """
+
+
 class SpanPanelConnectionError(SpanPanelError):
     """Connection to SPAN panel failed."""
 

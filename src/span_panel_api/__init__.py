@@ -16,6 +16,7 @@ from .auth import (
     regenerate_passphrase,
     register_fqdn,
     register_v2,
+    rotate_passphrase,
 )
 from .detection import DetectionResult, detect_api_version
 from .exceptions import (
@@ -26,6 +27,7 @@ from .exceptions import (
     SpanPanelCAChangedError,
     SpanPanelConnectionError,
     SpanPanelError,
+    SpanPanelInsufficientPrivilegeError,
     SpanPanelSchemaVersionError,
     SpanPanelServerError,
     SpanPanelStaleDataError,
@@ -46,6 +48,7 @@ from .models import (
     ExtensionSubject,
     FieldMetadata,
     HomieSchemaTypes,
+    PassphraseRotation,
     SpanBatterySnapshot,
     SpanCircuitSnapshot,
     SpanEvseSnapshot,
@@ -172,6 +175,11 @@ __all__ = [  # noqa: RUF022
     "register_fqdn",
     "regenerate_passphrase",
     "register_v2",
+    # Added 2026-10-02 (3.4.2): the rotation reports both new values, because
+    # it replaces the hop passphrase as well as the broker password. Additive --
+    # regenerate_passphrase keeps its str return.
+    "rotate_passphrase",
+    "PassphraseRotation",
     # Transport
     "MqttClientConfig",
     "SpanMqttClient",
@@ -199,6 +207,9 @@ __all__ = [  # noqa: RUF022
     "SpanPanelSchemaVersionError",
     "SpanPanelConnectionError",
     "SpanPanelError",
+    # Added 2026-10-02 (3.4.2): a 403 from a reduced-privilege token. A subclass
+    # of SpanPanelAuthError, so every existing except clause keeps its meaning.
+    "SpanPanelInsufficientPrivilegeError",
     "SpanPanelServerError",
     "SpanPanelStaleDataError",
     # Added 2026-08-31 (3.4.0): a bootstrap REST call that failed verification

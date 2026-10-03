@@ -26,6 +26,7 @@ from .._ssl import LeafNameMismatch, LeafProbe, build_panel_ssl_context, ca_fing
 from ..auth import download_ca_cert
 from ..exceptions import (
     SpanPanelAPIError,
+    SpanPanelAuthError,
     SpanPanelCAChangedError,
     SpanPanelConnectionError,
     SpanPanelError,
@@ -48,6 +49,11 @@ if TYPE_CHECKING:
     from paho.mqtt.client import SocketLike
 
 _LOGGER = logging.getLogger(__name__)
+
+# CONNACK refusals that mean the credentials were rejected: "Bad user name or
+# password" (0x86) and "Not authorized" (0x87). paho reports the MQTT 3.1.1
+# return codes 4 and 5 as these same MQTT 5 reason codes.
+_CONNACK_AUTH_REFUSALS = frozenset({0x86, 0x87})
 
 
 class AsyncMqttBridge:
@@ -111,6 +117,8 @@ class AsyncMqttBridge:
         self._connected = False
         self._client: AsyncMQTTClient | None = None
         self._connect_event: asyncio.Event | None = None
+        # Reason code of the most recent refused CONNACK; `connect()` reads it.
+        self._connack_refusal: ReasonCode | None = None
 
         self._misc_timer: asyncio.TimerHandle | None = None
         self._should_reconnect = False
@@ -420,6 +428,8 @@ class AsyncMqttBridge:
         (blocking I/O), and waits for CONNACK.
 
         Raises:
+            SpanPanelAuthError: The broker refused the username or password
+                (CONNACK "Bad user name or password" or "Not authorized").
             SpanPanelConnectionError: Cannot connect to broker.
             SpanPanelTimeoutError: Connection timed out.
             SpanPanelCAChangedError: The panel is pinned and now advertises a
@@ -432,6 +442,7 @@ class AsyncMqttBridge:
             self._loop = asyncio.get_running_loop()
 
         self._connect_event = asyncio.Event()
+        self._connack_refusal = None
         self._should_reconnect = True
 
         _LOGGER.debug(
@@ -505,6 +516,9 @@ class AsyncMqttBridge:
             raise SpanPanelTimeoutError(f"Timed out connecting to MQTT broker at {self._host}:{self._port}") from exc
 
         if not self._connected:
+            refusal = self._connack_refusal
+            if refusal is not None and refusal.value in _CONNACK_AUTH_REFUSALS:
+                raise SpanPanelAuthError(f"MQTT broker at {self._host}:{self._port} refused the credentials: {refusal}")
             raise SpanPanelConnectionError(f"MQTT connection failed to {self._host}:{self._port}")
 
         self._initial_connect_done = True
@@ -763,6 +777,7 @@ class AsyncMqttBridge:
                 self._reconnect_task.cancel()
                 self._reconnect_task = None
         else:
+            self._connack_refusal = reason_code
             _LOGGER.warning("MQTT connection refused: %s", reason_code)
 
         # Signal the asyncio connect() waiter

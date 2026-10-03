@@ -459,6 +459,31 @@ def test_a_declared_priority_missing_from_its_node_is_undeclared_too(adapter: Sc
 # ---------------------------------------------------------------------------
 
 
+def test_the_capture_declares_the_islanding_assertion_settable(adapter: SchemaOneAdapter) -> None:
+    target = adapter.set_dominant_power_source_target()
+
+    assert target is not None
+    assert target.topic == f"ebus/5/{PANEL}/shed/asserted-islanding-state/set"
+
+
+@pytest.mark.parametrize("settable", [None, False])
+def test_an_islanding_assertion_not_declared_settable_yields_no_target(settable: bool | None) -> None:
+    """The same refusal the relay makes: absence of `$settable` authorizes nothing."""
+    adapter = _adapter(_redeclared(PANEL, "shed", "asserted-islanding-state", settable=settable))
+
+    assert adapter.set_dominant_power_source_target() is None
+
+
+def test_a_panel_without_the_islanding_assertion_yields_no_target() -> None:
+    tree = _copy()
+    description = json.loads(tree[PANEL]["$description"])
+    del description["nodes"]["shed"]["properties"]["asserted-islanding-state"]
+    tree[PANEL]["$description"] = json.dumps(description)
+    tree[PANEL].pop("shed/asserted-islanding-state", None)
+
+    assert _adapter(tree).set_dominant_power_source_target() is None
+
+
 def test_has_circuit_answers_for_the_circuits_and_nothing_else(adapter: SchemaOneAdapter) -> None:
     """Membership of the circuit set, not of the topology.
 

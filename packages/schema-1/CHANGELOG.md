@@ -9,6 +9,15 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [Unreleased]
+
+### Fixed
+
+- **An islanding assertion in force is now the reported islanding state even while the MID is ready.** `resolve_islanding_state` returned the MID's sensed value whenever the MID was ready and read `shed/asserted-islanding-state` only when it was not, so
+  `dsm_state` could disagree with the state the panel was acting on. `ON_GRID` or `OFF_GRID` asserted now wins; otherwise the ready MID's value, then the existing fallback.
+- **`set_dominant_power_source_target` returns None unless the panel declares `shed/asserted-islanding-state` settable**, the same refusal `set_circuit_relay_target` makes.
+- **`dominant_power_source_payload` refuses `NONE` and `UNKNOWN`** instead of publishing `NONE`, which the panel ignores. An assertion clears itself once the panel's link to the battery recovers.
+
 ## [1.1.3]
 
 `spec_lock.json` ships inside this wheel, so its shape changing is a release here even though the parser did not change.

@@ -11,9 +11,12 @@ from span_panel_api.exceptions import (
     SpanPanelAPIError,
     SpanPanelAuthError,
     SpanPanelConnectionError,
+    SpanPanelInsufficientPrivilegeError,
+    SpanPanelServerError,
     SpanPanelTimeoutError,
 )
 from span_panel_api.models import (
+    PassphraseRotation,
     V2AuthResponse,
     V2HomieSchema,
     V2StatusInfo,
@@ -28,6 +31,7 @@ from span_panel_api.auth import (
     regenerate_passphrase,
     register_fqdn,
     register_v2,
+    rotate_passphrase,
 )
 
 # ---------------------------------------------------------------------------
@@ -684,6 +688,77 @@ class TestRegeneratePassphrase:
 
             with pytest.raises(SpanPanelAuthError, match="412"):
                 await regenerate_passphrase("192.168.65.70", "")
+
+
+def _put_client(response: httpx.Response) -> AsyncMock:
+    """An injected client whose PUT returns `response`."""
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.put.return_value = response
+    return client
+
+
+ROTATIONS = [
+    pytest.param(regenerate_passphrase, id="regenerate_passphrase"),
+    pytest.param(rotate_passphrase, id="rotate_passphrase"),
+]
+
+
+class TestRotatePassphrase:
+    @pytest.mark.asyncio
+    async def test_returns_both_new_values(self):
+        body = {"ebusBrokerPassword": "new-broker", "hopPassphrase": "new-hop"}
+        result = await rotate_passphrase("192.168.65.70", "jwt", httpx_client=_put_client(_mock_response(200, body)))
+
+        assert result == PassphraseRotation(ebus_broker_password="new-broker", hop_passphrase="new-hop")
+
+    @pytest.mark.asyncio
+    async def test_repr_omits_the_secrets(self):
+        body = {"ebusBrokerPassword": "new-broker", "hopPassphrase": "new-hop"}
+        result = await rotate_passphrase("192.168.65.70", "jwt", httpx_client=_put_client(_mock_response(200, body)))
+
+        assert "new-broker" not in repr(result)
+        assert "new-hop" not in repr(result)
+
+    @pytest.mark.asyncio
+    async def test_a_200_without_hop_passphrase_is_an_api_error(self):
+        response = _mock_response(200, {"ebusBrokerPassword": "new-broker"})
+        with pytest.raises(SpanPanelAPIError, match="hopPassphrase"):
+            await rotate_passphrase("192.168.65.70", "jwt", httpx_client=_put_client(response))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call", ROTATIONS)
+    async def test_403_is_insufficient_privilege(self, call):
+        with pytest.raises(SpanPanelInsufficientPrivilegeError, match="403") as caught:
+            await call("192.168.65.70", "door-token", httpx_client=_put_client(_mock_response(403)))
+        assert isinstance(caught.value, SpanPanelAuthError)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call", ROTATIONS)
+    @pytest.mark.parametrize("status", [401, 412])
+    async def test_401_and_412_are_auth_errors(self, call, status):
+        with pytest.raises(SpanPanelAuthError, match=str(status)) as caught:
+            await call("192.168.65.70", "jwt", httpx_client=_put_client(_mock_response(status)))
+        assert not isinstance(caught.value, SpanPanelInsufficientPrivilegeError)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call", ROTATIONS)
+    @pytest.mark.parametrize("status", [500, 503])
+    async def test_5xx_is_a_server_error_with_status(self, call, status):
+        response = _mock_response(status, text="secret-in-body")
+        with pytest.raises(SpanPanelServerError) as caught:
+            await call("192.168.65.70", "jwt", httpx_client=_put_client(response))
+        assert caught.value.status_code == status
+        assert "secret-in-body" not in str(caught.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call", ROTATIONS)
+    async def test_other_4xx_is_an_api_error_not_a_server_error(self, call):
+        response = _mock_response(404, text="secret-in-body")
+        with pytest.raises(SpanPanelAPIError) as caught:
+            await call("192.168.65.70", "jwt", httpx_client=_put_client(response))
+        assert not isinstance(caught.value, SpanPanelServerError)
+        assert caught.value.status_code == 404
+        assert "secret-in-body" not in str(caught.value)
 
 
 # ===================================================================

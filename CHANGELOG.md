@@ -7,7 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
-## [Unreleased]
+## [3.5.0]
+
+A rotation replaces the panel passphrase as well as the broker password, and the library now hands back both, so a caller no longer loses the only copy of the user's new passphrase. A broker that refuses the credentials is now reported as an authentication
+failure rather than a connection failure.
+
+**Upgrade note.** `connect()` raises `SpanPanelAuthError`, where it raised `SpanPanelConnectionError`, when the broker refuses the credentials (CONNACK "Bad user name or password" or "Not authorized"). The two are siblings under `SpanPanelError`, so a
+caller that caught `SpanPanelConnectionError` to handle a refused login must catch `SpanPanelAuthError` too. Right after a rotation the same error is also how a broker that has not yet accepted the new password answers, so retry it with backoff for up to
+about a minute before treating it as wrong credentials.
 
 ### Added
 

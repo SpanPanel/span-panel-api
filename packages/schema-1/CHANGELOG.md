@@ -9,7 +9,9 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
-## [Unreleased]
+## [1.1.4]
+
+The parser reports the islanding state the panel is acting on, and refuses islanding writes the panel would ignore.
 
 ### Fixed
 

@@ -116,7 +116,7 @@ EXPECTED_PUBLIC_API = {
     "register_fqdn",
     "regenerate_passphrase",
     "register_v2",
-    # Added 2026-10-02 (unreleased): the rotation reports both new values, because
+    # Added 2026-10-02 (3.5.0): the rotation reports both new values, because
     # it replaces the hop passphrase as well as the broker password. Additive --
     # regenerate_passphrase keeps its str return.
     "rotate_passphrase",
@@ -158,7 +158,7 @@ EXPECTED_PUBLIC_API = {
     "SpanPanelSchemaVersionError",
     "SpanPanelConnectionError",
     "SpanPanelError",
-    # Added 2026-10-02 (unreleased): a 403 from a reduced-privilege token. A subclass
+    # Added 2026-10-02 (3.5.0): a 403 from a reduced-privilege token. A subclass
     # of SpanPanelAuthError, so every existing except clause keeps its meaning.
     "SpanPanelInsufficientPrivilegeError",
     "SpanPanelServerError",

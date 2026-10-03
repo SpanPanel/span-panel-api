@@ -18,9 +18,9 @@ import uuid
 
 import httpx
 
-from ._http import CA_CERT_PATH, V2_STATUS_PATH, _request
-from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelServerError
-from .models import HomieSchemaTypes, V2AuthResponse, V2HomieSchema, V2StatusInfo
+from ._http import CA_CERT_PATH, V2_STATUS_PATH, _Reply, _request
+from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelInsufficientPrivilegeError, SpanPanelServerError
+from .models import HomieSchemaTypes, PassphraseRotation, V2AuthResponse, V2HomieSchema, V2StatusInfo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -491,6 +491,64 @@ async def get_homie_schema(
     )
 
 
+async def rotate_passphrase(
+    host: str,
+    token: str,
+    timeout: float = 10.0,
+    port: int | None = None,
+    httpx_client: httpx.AsyncClient | None = None,
+    ssl_context: ssl.SSLContext | None = None,
+) -> PassphraseRotation:
+    """Rotate the panel's passphrase, which is currently also its MQTT broker password.
+
+    One PUT replaces both: the hop passphrase that ``register_v2`` accepts and
+    the broker password, which the panel reports as two fields currently
+    carrying the same new value. Use ``ebus_broker_password`` for the broker.
+    Afterwards ``register_v2`` accepts only the new passphrase. Access tokens
+    already issued are not revoked.
+
+    The broker may not accept the new password the moment this call returns,
+    and the old one may keep working briefly. Reconnect with the new password
+    and never fall back to the old one. If the broker refuses it, retry with
+    backoff for up to about a minute, and include ``SpanPanelAuthError`` in the
+    retry: ``connect()`` raises it for a refused CONNACK, which is what a broker
+    that has not yet accepted the new password produces. If it is still refused
+    after that, rotate again and use the newly returned value. Do not rely on
+    the old password stopping, or on existing sessions being disconnected, at
+    any particular moment.
+
+    Args:
+        host: IP address or hostname of the SPAN Panel
+        token: Valid JWT access token
+        timeout: Request timeout in seconds when ``httpx_client`` is None; ignored when injected.
+        port: Port of the panel bootstrap API. ``None`` means "unspecified" and takes
+            the scheme's default -- 80 without ``ssl_context``, 443 with one.
+        httpx_client: Optional shared ``httpx.AsyncClient``; not closed by this function.
+            Not used when ``ssl_context`` is supplied -- httpx fixes its trust store at
+            construction, so a pinned CA needs a client built for it. See ``_get_client``.
+        ssl_context: Trust anchor for the panel's HTTPS certificate. Supplying one moves
+            this call to ``https://``; ``None`` is byte-identical to 3.0.1.
+
+    Returns:
+        The new broker password and the new hop passphrase.
+
+    Raises:
+        SpanPanelInsufficientPrivilegeError: HTTP 403; the token is reduced-privilege
+        SpanPanelAuthError: HTTP 401 (token invalid or stale) or 412 (no bearer token)
+        SpanPanelServerError: HTTP 5xx. After a 500 the outcome is unknown: the
+            passphrase may or may not have changed.
+        SpanPanelConnectionError: Cannot reach panel
+        SpanPanelTimeoutError: Request timed out
+        SpanPanelAPIError: Unexpected response
+    """
+    reply = await _put_passphrase(host, token, timeout, port, httpx_client, ssl_context)
+    data = reply.json_object("ebusBrokerPassword", "hopPassphrase")
+    return PassphraseRotation(
+        ebus_broker_password=_str(data["ebusBrokerPassword"]),
+        hop_passphrase=_str(data["hopPassphrase"]),
+    )
+
+
 async def regenerate_passphrase(
     host: str,
     token: str,
@@ -499,11 +557,13 @@ async def regenerate_passphrase(
     httpx_client: httpx.AsyncClient | None = None,
     ssl_context: ssl.SSLContext | None = None,
 ) -> str:
-    """Rotate the MQTT broker password on the SPAN Panel.
+    """Rotate the panel's passphrase and return only the new broker password.
 
-    After this call, the previous broker password is invalidated.
-    The new broker password is returned. Note: the hop_passphrase
-    (used for REST auth) is NOT changed by this operation.
+    The same PUT as ``rotate_passphrase``, with the same effect: the hop
+    passphrase changes too, ``register_v2`` accepts only the new one, access
+    tokens already issued are not revoked, and the same reconnect advice
+    applies. Use ``rotate_passphrase`` to receive both values; this function is
+    kept for callers written against its ``str`` return.
 
     Args:
         host: IP address or hostname of the SPAN Panel
@@ -521,11 +581,21 @@ async def regenerate_passphrase(
         New MQTT broker password
 
     Raises:
-        SpanPanelAuthError: Token invalid or expired
-        SpanPanelConnectionError: Cannot reach panel
-        SpanPanelTimeoutError: Request timed out
-        SpanPanelAPIError: Unexpected response
+        Exactly what ``rotate_passphrase`` raises.
     """
+    reply = await _put_passphrase(host, token, timeout, port, httpx_client, ssl_context)
+    return _str(reply.json_object("ebusBrokerPassword")["ebusBrokerPassword"])
+
+
+async def _put_passphrase(
+    host: str,
+    token: str,
+    timeout: float,
+    port: int | None,
+    httpx_client: httpx.AsyncClient | None,
+    ssl_context: ssl.SSLContext | None,
+) -> _Reply:
+    """Send the rotation PUT and raise for every status but 200."""
     reply = await _request(
         "PUT",
         host,
@@ -537,13 +607,27 @@ async def regenerate_passphrase(
         headers=_bearer(token),
     )
 
-    if reply.status_code in (401, 403, 412):
+    if reply.status_code == 403:
+        raise SpanPanelInsufficientPrivilegeError(
+            f"Token lacks the privilege to rotate the passphrase (HTTP {reply.status_code})"
+        )
+
+    if reply.status_code in (401, 412):
         raise SpanPanelAuthError(f"Authentication failed (HTTP {reply.status_code})")
 
-    if reply.status_code != 200:
-        raise SpanPanelAPIError(f"Failed to regenerate passphrase: HTTP {reply.status_code}")
+    if reply.status_code >= 500:
+        raise SpanPanelServerError(
+            f"Panel could not rotate the passphrase: HTTP {reply.status_code}",
+            status_code=reply.status_code,
+        )
 
-    return _str(reply.json_object("ebusBrokerPassword")["ebusBrokerPassword"])
+    if reply.status_code != 200:
+        raise SpanPanelAPIError(
+            f"Failed to regenerate passphrase: HTTP {reply.status_code}",
+            status_code=reply.status_code,
+        )
+
+    return reply
 
 
 async def register_fqdn(

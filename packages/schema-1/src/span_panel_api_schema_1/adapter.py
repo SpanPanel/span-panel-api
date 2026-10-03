@@ -40,7 +40,7 @@ from span_panel_api_schema_1.const import (
     STATE_READY,
     TYPE_CIRCUIT,
 )
-from span_panel_api_schema_1.description import device_type
+from span_panel_api_schema_1.description import declared_settable, device_type, node_properties
 from span_panel_api_schema_1.field_metadata import build_field_metadata
 from span_panel_api_schema_1.panel import integer
 from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot, harmonised_evse_keys
@@ -275,9 +275,23 @@ class SchemaOneAdapter:
         the BESS stops discharging. Returning None here, as this did until the
         successor was decided, left that recovery unavailable during an outage.
 
+        **The panel decides whether a write takes effect, by its own link to the
+        battery.** It accepts `ON_GRID` or `OFF_GRID` only while the battery's
+        `status/communication-state` is not `OK`; otherwise it ignores the write
+        and the published value does not change. A lost MID alone does not make
+        the write eligible. `NONE` is always ignored.
+
+        **None unless the panel declares the assertion `$settable`**, the same
+        refusal `set_circuit_relay_target` makes. Absence of the declaration,
+        or of the property, authorizes nothing (see
+        `description.declared_settable`).
+
         Payload translation is not optional: the flat enum this protocol speaks
         is not the one the panel accepts. See `dominant_power_source_payload`.
         """
+        root = self._controller.get_root(self._serial_number)
+        if not declared_settable(node_properties(root, NODE_SHED).get(PROP_ASSERTED_ISLANDING_STATE)):
+            return None
         return self._target(self._serial_number, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
 
     def dominant_power_source_payload(self, value: str) -> str | None:
@@ -291,17 +305,19 @@ class SchemaOneAdapter:
 
         The narrowing loses nothing, because the six values were a *source
         class* pressed into service as a manual override and the job only ever
-        needed on-grid, off-grid, or no assertion. Anything not recognised
-        returns None rather than guessing, so the transport refuses the command
-        instead of asserting something the user did not ask for.
+        needed on-grid or off-grid. Anything not recognized returns None rather
+        than guessing, so the transport refuses the command instead of
+        asserting something the user did not ask for.
+
+        **`NONE` and `UNKNOWN` are refused too.** The panel ignores a written
+        `NONE`, so publishing one would report a clear that never happened. An
+        assertion clears itself once the panel's link to the battery recovers.
         """
         return {
             "GRID": "ON_GRID",
             "BATTERY": "OFF_GRID",
             "PV": "OFF_GRID",
             "GENERATOR": "OFF_GRID",
-            "NONE": "NONE",
-            "UNKNOWN": "NONE",
         }.get(value.strip().upper())
 
     def set_evse_charge_limit_target(self, node_id: str) -> ControlTarget | None:

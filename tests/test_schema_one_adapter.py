@@ -418,8 +418,12 @@ def test_the_flat_vocabulary_is_translated_not_forwarded(adapter: SchemaOneAdapt
     for off_grid in ("BATTERY", "PV", "GENERATOR"):
         assert adapter.dominant_power_source_payload(off_grid) == "OFF_GRID", off_grid
 
-    for no_assertion in ("NONE", "UNKNOWN"):
-        assert adapter.dominant_power_source_payload(no_assertion) == "NONE", no_assertion
+
+def test_no_assertion_is_refused_rather_than_published(adapter: SchemaOneAdapter) -> None:
+    """The panel ignores a written `NONE`, so publishing one would report a clear
+    that never happened. An assertion clears itself once the battery link recovers."""
+    for no_assertion in ("NONE", "UNKNOWN", "none"):
+        assert adapter.dominant_power_source_payload(no_assertion) is None, no_assertion
 
 
 def test_an_unrecognised_value_is_refused_rather_than_guessed(adapter: SchemaOneAdapter) -> None:

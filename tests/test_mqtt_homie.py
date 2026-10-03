@@ -1109,7 +1109,7 @@ class TestSpanMqttClientControl:
         client._adapter = SchemaZeroAdapter(serial_number=SERIAL, schema=flat_schema(32))
 
         # No description loaded — core node not found
-        with pytest.raises(SpanPanelServerError, match="Core node not found"):
+        with pytest.raises(SpanPanelServerError, match="no settable dominant power source control"):
             await client.set_dominant_power_source("GRID")
 
 

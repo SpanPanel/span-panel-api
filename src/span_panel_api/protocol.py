@@ -320,7 +320,7 @@ class SchemaAdapter(Protocol):
         """
 
     def set_dominant_power_source_target(self) -> ControlTarget | None:
-        """Where a dominant-power-source command goes, or None if the panel has no such control."""
+        """Where a dominant-power-source command goes, or None if the panel offers no settable one."""
 
     def set_evse_charge_limit_target(self, node_id: str) -> ControlTarget | None:
         """The target that writes one charger's charge-current limit, or None.
@@ -355,7 +355,9 @@ class SchemaAdapter(Protocol):
         `NONE`/`ON_GRID`/`OFF_GRID`, so the value has to be mapped rather than
         forwarded. Returning None means "no legal representation", and the
         transport should refuse the command rather than publish a value the
-        panel will reject.
+        panel will reject. v1.0 returns None for `NONE` and `UNKNOWN`: the panel
+        ignores a written `NONE`, and an assertion clears itself once the
+        panel's link to the battery recovers.
         """
 
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:

@@ -600,7 +600,6 @@ _GRID_POWER_EPSILON_W = 1.0
 
 ISLANDING_ON_GRID = "ON_GRID"
 ISLANDING_OFF_GRID = "OFF_GRID"
-ASSERTION_NONE = "NONE"
 
 
 def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevice) -> str | None:
@@ -608,17 +607,19 @@ def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevic
 
     | tier | condition | source |
     | --- | --- | --- |
-    | 1 | MID `$state` is `ready` and `islanding-state` present | sensed |
-    | 2 | MID not `ready` | `shed/asserted-islanding-state`, when not `NONE` |
+    | 1 | `shed/asserted-islanding-state` is `ON_GRID` or `OFF_GRID` | asserted |
+    | 2 | MID `$state` is `ready` and `islanding-state` present | sensed |
     | 3 | no MID at all | `power-flows/grid` heuristic |
     | 4 | none of the above | unknown |
 
-    **Tier 2 is the reason the assertion control exists.** When comms to the BESS or MID
-    are lost and the grid returns, the user asserts the grid is up so the BESS stops
-    discharging. Declining to read it here would wire the control and then ignore it at
-    exactly the moment it matters. Nothing is hidden by doing so: the MID is a device, so
-    it goes *unavailable* in Home Assistant when it stops publishing, and the assertion is
-    itself visible as the control the user set.
+    **An assertion in force is the effective state, so it outranks the MID.** When the
+    panel's link to the battery is not healthy (the battery's `status/communication-state`
+    is not `OK`) and the grid returns, the user asserts the grid is up so the BESS stops
+    discharging, and the panel acts on that assertion until it clears. The panel ignores
+    the write while that link is healthy.
+    Reading the MID first would report the sensed value while the panel is acting on a
+    different one. The assertion clears itself back to `NONE` once the battery link
+    recovers, so the MID's answer returns without anything here having to expire it.
 
     **Tier 3 never answers `OFF_GRID`, and never asserts on-grid from a missing MID.** An
     earlier draft reasoned that no MID means no islanding authority means on-grid. That is
@@ -627,14 +628,15 @@ def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevic
     counterexample. Grid power flowing is positive evidence of being on-grid; its absence
     is not evidence of the opposite.
     """
+    asserted = text(panel, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
+    if asserted in (ISLANDING_ON_GRID, ISLANDING_OFF_GRID):
+        return asserted
+
     if mid is not None:
         if mid.state == "ready":
             sensed = text(mid, NODE_GRID, PROP_ISLANDING_STATE)
             if sensed:
                 return sensed
-        asserted = text(panel, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
-        if asserted and asserted != ASSERTION_NONE:
-            return asserted
         return None
 
     grid_power = number(panel, NODE_POWER_FLOWS, "grid")

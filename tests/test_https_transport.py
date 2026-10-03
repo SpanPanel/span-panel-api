@@ -27,6 +27,7 @@ from span_panel_api.auth import (
     regenerate_passphrase,
     register_fqdn,
     register_v2,
+    rotate_passphrase,
 )
 from span_panel_api.detection import detect_api_version
 from span_panel_api.exceptions import SpanPanelValidationError
@@ -154,6 +155,12 @@ class TestAuthCallsUseHttps:
                 "/api/v2/auth/passphrase",
             ),
             (
+                lambda ctx, c: rotate_passphrase(HOST, "tok", httpx_client=c, ssl_context=ctx),
+                "put",
+                _json_response({"ebusBrokerPassword": "new", "hopPassphrase": "new"}),
+                "/api/v2/auth/passphrase",
+            ),
+            (
                 lambda ctx, c: register_fqdn(HOST, "tok", "panel.example", httpx_client=c, ssl_context=ctx),
                 "post",
                 _json_response({}, 204),
@@ -188,6 +195,7 @@ class TestAuthCallsUseHttps:
             "register_v2",
             "get_homie_schema",
             "regenerate_passphrase",
+            "rotate_passphrase",
             "register_fqdn",
             "get_fqdn",
             "delete_fqdn",

@@ -35,6 +35,7 @@ from span_panel_api.auth import (
     regenerate_passphrase,
     register_fqdn,
     register_v2,
+    rotate_passphrase,
 )
 from span_panel_api.detection import detect_api_version
 from span_panel_api.exceptions import SpanPanelAPIError, SpanPanelConnectionError, SpanPanelError
@@ -48,6 +49,7 @@ CALLS: list[tuple[str, Callable[[httpx.AsyncClient], Awaitable[object]], str]] =
     ("register_v2", lambda c: register_v2(HOST, "home-assistant", "pass", httpx_client=c), "post"),
     ("download_ca_cert", lambda c: download_ca_cert(HOST, httpx_client=c), "get"),
     ("regenerate_passphrase", lambda c: regenerate_passphrase(HOST, "jwt", httpx_client=c), "put"),
+    ("rotate_passphrase", lambda c: rotate_passphrase(HOST, "jwt", httpx_client=c), "put"),
     ("register_fqdn", lambda c: register_fqdn(HOST, "jwt", "panel.example.com", httpx_client=c), "post"),
     ("get_fqdn", lambda c: get_fqdn(HOST, "jwt", httpx_client=c), "get"),
     ("delete_fqdn", lambda c: delete_fqdn(HOST, "jwt", httpx_client=c), "delete"),
@@ -60,6 +62,7 @@ CALLS: list[tuple[str, Callable[[httpx.AsyncClient], Awaitable[object]], str]] =
 DECODERS: list[tuple[str, Callable[[httpx.AsyncClient], Awaitable[object]], str]] = [
     ("register_v2", lambda c: register_v2(HOST, "home-assistant", "pass", httpx_client=c), "post"),
     ("regenerate_passphrase", lambda c: regenerate_passphrase(HOST, "jwt", httpx_client=c), "put"),
+    ("rotate_passphrase", lambda c: rotate_passphrase(HOST, "jwt", httpx_client=c), "put"),
     ("get_fqdn", lambda c: get_fqdn(HOST, "jwt", httpx_client=c), "get"),
     ("get_v2_status", lambda c: get_v2_status(HOST, httpx_client=c), "get"),
 ]

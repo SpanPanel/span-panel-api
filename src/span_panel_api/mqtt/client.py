@@ -416,6 +416,7 @@ class SpanMqttClient:
         5. Wait for $state==ready and $description parsed
 
         Raises:
+            SpanPanelAuthError: The broker refused the credentials
             SpanPanelConnectionError: Cannot connect or device not ready
             SpanPanelTimeoutError: Connection or ready timed out
         """
@@ -865,6 +866,13 @@ class SpanMqttClient:
         directly; v1.0 routes the command to `shed/asserted-islanding-state`,
         whose enum is `NONE`/`ON_GRID`/`OFF_GRID`. Publishing `value` unchanged
         would put a string outside that enum on the wire.
+
+        Refused, with nothing published, when the panel does not declare the
+        control settable, and under v1.0 for `NONE` and `UNKNOWN`, which the
+        panel would ignore. Under v1.0 the panel also ignores `ON_GRID` and
+        `OFF_GRID` while its link to the battery is healthy (the battery's
+        `status/communication-state` is `OK`), leaving the published value
+        unchanged.
         """
         adapter = self._require_adapter()
         target = adapter.set_dominant_power_source_target()
@@ -873,7 +881,7 @@ class SpanMqttClient:
                 device_id=self._serial_number,
                 value=value,
                 detail="no such control",
-                message="Core node not found in panel topology",
+                message="Panel offers no settable dominant power source control",
             )
         payload = adapter.dominant_power_source_payload(value)
         if payload is None:

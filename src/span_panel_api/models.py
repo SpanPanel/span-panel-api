@@ -526,7 +526,15 @@ class V2AuthResponse:
     ebus_broker_wss_port: int
     hostname: str
     serial_number: str
-    hop_passphrase: str  # For REST auth only; will diverge from broker password
+    hop_passphrase: str  # For REST auth; currently the same value as ebus_broker_password
+
+
+@dataclass(frozen=True, slots=True)
+class PassphraseRotation:
+    """Response from PUT /api/v2/auth/passphrase: both values, both new."""
+
+    ebus_broker_password: str = field(repr=False)
+    hop_passphrase: str = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)

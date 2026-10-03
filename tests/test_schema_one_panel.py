@@ -331,15 +331,28 @@ def _synthetic(device_id: str, state: str = "ready", **props: str) -> Discovered
 
 
 def test_islanding_is_sensed_when_the_mid_is_ready() -> None:
-    """Tier 1. The MID is the islanding authority, so its answer wins outright."""
+    """Tier 2. With no assertion in force, the MID is the islanding authority."""
     mid = _synthetic("mid", grid__islanding_state="OFF_GRID")
-    panel = _synthetic(PANEL, shed__asserted_islanding_state="ON_GRID")
+    panel = _synthetic(PANEL, shed__asserted_islanding_state="NONE")
 
-    assert resolve_islanding_state(mid, panel) == "OFF_GRID", "a ready MID outranks the user's assertion"
+    assert resolve_islanding_state(mid, panel) == "OFF_GRID"
+
+
+def test_an_assertion_in_force_outranks_a_ready_mid() -> None:
+    """Tier 1. The assertion is what the panel acts on, so it is the effective state.
+
+    Reading the MID first reported the sensed value while the panel was acting on the
+    user's assertion, which is the moment the two disagree and the one that matters.
+    """
+    mid = _synthetic("mid", grid__islanding_state="OFF_GRID")
+
+    for asserted in ("ON_GRID", "OFF_GRID"):
+        panel = _synthetic(PANEL, shed__asserted_islanding_state=asserted)
+        assert resolve_islanding_state(mid, panel) == asserted, asserted
 
 
 def test_a_stale_mid_falls_back_to_the_users_assertion() -> None:
-    """Tier 2, and the case the assertion control exists for.
+    """Tier 1 again, and the case the assertion control exists for.
 
     When comms to the BESS or MID are lost and the grid returns, the user asserts the
     grid is up so the BESS stops discharging. Declining to read it would wire the
@@ -357,6 +370,14 @@ def test_a_stale_mid_with_no_assertion_is_unknown_not_guessed() -> None:
     panel = _synthetic(PANEL, shed__asserted_islanding_state="NONE")
 
     assert resolve_islanding_state(mid, panel) is None
+
+
+def test_an_assertion_outside_the_enum_is_not_an_answer() -> None:
+    """Only `ON_GRID` and `OFF_GRID` are states; anything else falls through to the MID."""
+    mid = _synthetic("mid", grid__islanding_state="OFF_GRID")
+    panel = _synthetic(PANEL, shed__asserted_islanding_state="UNKNOWN")
+
+    assert resolve_islanding_state(mid, panel) == "OFF_GRID"
 
 
 def test_no_mid_reads_grid_power_and_never_asserts_off_grid() -> None:

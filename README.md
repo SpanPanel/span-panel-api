@@ -449,7 +449,7 @@ Standalone async functions for v2-specific HTTP operations:
 ```python
 from span_panel_api import (
     register_v2, download_ca_cert, get_homie_schema,
-    regenerate_passphrase, get_v2_status,
+    rotate_passphrase, get_v2_status,
     register_fqdn, get_fqdn, delete_fqdn,
 )
 
@@ -466,8 +466,14 @@ schema = await get_homie_schema("192.168.1.100")
 print(f"Panel size: {schema.panel_size} spaces")
 print(f"Schema hash: {schema.types_schema_hash}")
 
-# Rotate MQTT broker password (invalidates previous password)
-new_password = await regenerate_passphrase("192.168.1.100", token=auth.access_token)
+# Rotate the passphrase, which is currently also the MQTT broker password; both values change
+# Access tokens already issued are not revoked
+rotation = await rotate_passphrase("192.168.1.100", token=auth.access_token)
+new_password = rotation.ebus_broker_password
+# The broker may not accept new_password immediately, and the old one may keep
+# working briefly. Retry a refused connect (including SpanPanelAuthError) with
+# backoff for up to about a minute; if still refused, rotate again and use the
+# newly returned value. Never fall back to the old password.
 
 # Get panel status (unauthenticated)
 status = await get_v2_status("192.168.1.100")

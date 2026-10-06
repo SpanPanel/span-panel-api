@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api-schema-0"
-version = "1.1.2"
+version = "1.2.0"
 description = "Flat-schema (data-model-version absent) parser for span-panel-api"
 authors = [
     {name = "SpanPanel"}
@@ -16,7 +16,10 @@ dependencies = [
     # for `set_*_target` instead of `set_*_topic`. Against 3.0.x this wheel is
     # rejected at discovery for carrying names that bootstrap does not require —
     # so the floor moves with the rename rather than trailing it.
-    "span-panel-api>=3.1.0,<4.0",
+    # Raised to 3.6.0, the first bootstrap whose snapshot carries `pv_inverters`
+    # and the inverter's `device_id` and `node_id`, which this parser fills.
+    # Against an earlier one, building a snapshot fails on those arguments.
+    "span-panel-api>=3.6.0,<4.0",
 ]
 
 [project.urls]

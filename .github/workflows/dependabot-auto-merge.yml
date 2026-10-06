@@ -19,8 +19,12 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
+      # `ebus-panel-sim` produces the schema_1 reference capture, so its bump has to
+      # be read, not just pass (see .github/dependabot.yml). The required
+      # `lint-and-test` check fails a capture that moved, but auto-merge would still
+      # land a green bump nobody read.
       - name: Auto-merge for patch and minor updates
-        if: ${{ steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor' }}
+        if: ${{ (steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor') && !contains(steps.metadata.outputs.dependency-names, 'ebus-panel-sim') }}
         run: |
           echo "Auto-merging ${{ steps.metadata.outputs.dependency-names }}"
           gh pr merge --auto --merge "$PR_URL"
@@ -33,6 +37,16 @@ jobs:
         run: |
           echo "Auto-merging GitHub Actions update for ${{ steps.metadata.outputs.dependency-names }}"
           gh pr merge --auto --merge "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment on emitter updates
+        if: ${{ github.event.action == 'opened' && contains(steps.metadata.outputs.dependency-names, 'ebus-panel-sim') }}
+        run: |
+          gh pr comment "$PR_URL" --body "**\`ebus-panel-sim\` is not auto-merged.**
+
+          It produces the schema_1 reference capture. Re-run \`scripts/capture_parent_child_reference.py\` on this branch, commit the capture, and review what moved on the wire before merging."
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

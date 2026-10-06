@@ -19,8 +19,10 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
+      # Not `ebus-panel-sim`: this approval meets the ruleset's only review
+      # requirement, and the emitter bump has to be read (see dependabot-auto-merge.yml).
       - name: Auto-approve patch and minor updates
-        if: ${{ steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor' }}
+        if: ${{ (steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor') && !contains(steps.metadata.outputs.dependency-names, 'ebus-panel-sim') }}
         run: |
           echo "Auto-approving ${{ steps.metadata.outputs.dependency-names }}"
           gh pr review --approve "$PR_URL"

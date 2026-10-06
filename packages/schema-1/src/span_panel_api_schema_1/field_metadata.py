@@ -157,11 +157,11 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     (TYPE_BESS, NODE_INFO, "serial-number", "battery.serial_number"),
     (TYPE_BESS, NODE_INFO, "firmware-version", "battery.software_version"),
     (TYPE_BESS, NODE_INFO, "nameplate-capacity", "battery.nameplate_capacity_kwh"),
-    # The BESS's own meter and its own link health. `battery.power_w` carries a
-    # sign flip (`build_battery` reports discharge-positive, the wire carries the
-    # enclosure's frame), which does not affect the unit or the datatype this row
-    # describes — a row states what the property *is*, not what the mapper does
-    # with it.
+    # The BESS's own meter and its own link health. `battery.power_w` may carry a
+    # sign flip (`build_battery` reports discharge-positive, and the wire is
+    # charge-positive before r202639), which does not affect the unit or the
+    # datatype this row describes: a row states what the property *is*, not what
+    # the mapper does with it.
     (TYPE_BESS, NODE_METER, "active-power", "battery.power_w"),
     (TYPE_BESS, NODE_STATUS, "communication-state", "battery.communication_state"),
     # --- PV ------------------------------------------------------------------
@@ -457,6 +457,7 @@ _CONSUMED_WITHOUT_A_ROW: tuple[tuple[str, str, str], ...] = (
     (TYPE_EVSE, NODE_INFO, "serial-number"),
     (TYPE_EVSE, NODE_INFO, "vendor-name"),
     (TYPE_PV, NODE_INFO, "firmware-version"),
+    (TYPE_PV, NODE_INFO, "serial-number"),
 )
 """Declarations the mapper reads into the snapshot without a metadata row.
 

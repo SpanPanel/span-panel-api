@@ -423,13 +423,18 @@ class HomieDeviceConsumer:
         feed = self._acc.get_prop(pv_node, "feed")
         rel_pos = self._acc.get_prop(pv_node, "relative-position")
 
+        feed_circuit_id = normalize_circuit_id(feed) if feed else None
         return SpanPVSnapshot(
             vendor_name=vn if vn else None,
             model=pn if pn else None,
             software_version=sw if sw else None,
             nameplate_capacity_w=_parse_float(nc) if nc else None,
-            feed_circuit_id=normalize_circuit_id(feed) if feed else None,
+            feed_circuit_id=feed_circuit_id,
             relative_position=rel_pos.upper() if rel_pos else None,
+            device_id=pv_node,
+            # The same key schema_1 gives this inverter, so a consumer's handle
+            # for it survives the panel's upgrade to the parent/child schema.
+            node_id=feed_circuit_id or pv_node,
         )
 
     def _build_evse_devices(self) -> dict[str, SpanEvseSnapshot]:
@@ -726,5 +731,8 @@ class HomieDeviceConsumer:
             circuits=circuits,
             battery=battery,
             pv=pv,
+            # Flat publishes one inverter at most, so this is `pv` again, keyed
+            # as schema_1 keys each of its inverters.
+            pv_inverters={pv.node_id: pv} if pv.node_id is not None else {},
             evse=evse,
         )

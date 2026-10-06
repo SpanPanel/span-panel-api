@@ -28,6 +28,7 @@ from .exceptions import (
     SpanPanelConnectionError,
     SpanPanelError,
     SpanPanelInsufficientPrivilegeError,
+    SpanPanelPassphraseUnavailableError,
     SpanPanelSchemaVersionError,
     SpanPanelServerError,
     SpanPanelStaleDataError,
@@ -210,6 +211,11 @@ __all__ = [  # noqa: RUF022
     # Added 2026-10-02 (3.5.0): a 403 from a reduced-privilege token. A subclass
     # of SpanPanelAuthError, so every existing except clause keeps its meaning.
     "SpanPanelInsufficientPrivilegeError",
+    # Added (unreleased): registration reached a panel that cannot read its own
+    # passphrase. A subclass of SpanPanelAPIError, so existing except clauses
+    # keep their meaning; deliberately not a SpanPanelAuthError, because the
+    # passphrase the user supplied may be correct.
+    "SpanPanelPassphraseUnavailableError",
     "SpanPanelServerError",
     "SpanPanelStaleDataError",
     # Added 2026-08-31 (3.4.0): a bootstrap REST call that failed verification

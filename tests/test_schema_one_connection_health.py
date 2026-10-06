@@ -293,6 +293,54 @@ def test_the_status_map_ignores_a_circuit_that_publishes_only_one_half() -> None
     assert statuses == {}
 
 
+# A second circuit feeding the PV, as a split-feed installation publishes it.
+# Its id sorts below the captured solar circuit's, so it is the circuit the PV
+# is keyed by, and the one whose view of the link the PV reports.
+SPLIT_FEED_CIRCUIT = "0000aaaabbbbccccddddeeeeffff0000"
+
+
+def _split_feed_tree(status: str | None) -> tuple[dict[str, dict[str, str]], str]:
+    """The capture with the PV fed by a second circuit publishing `status`, or no status.
+
+    Returned with the captured solar circuit's id, found before the second feed
+    exists, since `_feeding_circuit` rightly refuses a DER with two.
+    """
+    tree = _mutable_tree()
+    solar = _feeding_circuit(tree, PV)
+    split = {**tree[solar], "info/spaces": "9,11"}
+    if status is None:
+        del split[FEEDS_STATUS_TOPIC]
+    else:
+        split[FEEDS_STATUS_TOPIC] = status
+    tree[SPLIT_FEED_CIRCUIT] = split
+    return tree, solar
+
+
+def test_a_der_fed_by_two_circuits_takes_the_link_health_of_the_circuit_it_is_keyed_by() -> None:
+    """Two feeds disagreeing about the link must not leave the answer to discovery order."""
+    down = _not_ok()[0]
+    tree, solar = _split_feed_tree(down)
+    assert tree[solar][FEEDS_STATUS_TOPIC] == STATUS_OK
+    circuits = [device_from_topics(device_id, tree[device_id]) for device_id in (solar, SPLIT_FEED_CIRCUIT)]
+
+    assert feed_connection_statuses(circuits) == {PV: down}
+    assert feed_connection_statuses(list(reversed(circuits))) == {PV: down}
+
+    snapshot = _snapshot(tree)
+    assert snapshot.pv.feed_circuit_id == SPLIT_FEED_CIRCUIT
+    assert snapshot.pv.connected is False
+
+
+def test_a_keyed_circuit_without_a_status_leaves_its_der_unknown_beside_a_second_feed() -> None:
+    """The status belongs to the circuit the DER is keyed by, never borrowed from its other feed."""
+    tree, solar = _split_feed_tree(None)
+    circuits = [device_from_topics(device_id, tree[device_id]) for device_id in (solar, SPLIT_FEED_CIRCUIT)]
+
+    assert feed_connection_statuses(circuits) == {}
+    assert feed_connection_statuses(list(reversed(circuits))) == {}
+    assert _snapshot(tree).pv.connected is None
+
+
 # ---------------------------------------------------------------------------
 # The facts this must not be confused with
 # ---------------------------------------------------------------------------

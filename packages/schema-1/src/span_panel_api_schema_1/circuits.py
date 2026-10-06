@@ -116,7 +116,7 @@ def _optional_integer(device: DiscoveredDevice, node: str, prop: str) -> int | N
     return None if raw is None else int(raw)
 
 
-def _tabs(device: DiscoveredDevice) -> list[int]:
+def circuit_tabs(device: DiscoveredDevice) -> list[int]:
     """Breaker spaces from ``info/spaces``.
 
     v1.0 publishes the occupied spaces literally (``"36,38"``), where the flat
@@ -254,7 +254,7 @@ def build_circuit(
         # circuit's.
         produced_energy_wh=_number(device, NODE_METER, PROP_IMPORTED_ENERGY),
         consumed_energy_wh=_number(device, NODE_METER, PROP_EXPORTED_ENERGY),
-        tabs=_tabs(device),
+        tabs=circuit_tabs(device),
         priority=priority,
         # `always-on` is `not relay-controllable`, and the flat schema derived
         # user-controllability from `always-on` — so this is the same answer by

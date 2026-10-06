@@ -9,6 +9,13 @@ rather than by this version number. A release here means this parser changed, ne
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [Unreleased]
+
+### Added
+
+- **`pv_inverters` holds the panel's one inverter** under the key `span-panel-api-schema-1` gives it, so a consumer can read every panel through that field.
+- **`pv.device_id` and `pv.node_id`** give the inverter's flat node id and its `pv_inverters` key.
+
 ## [1.1.2]
 
 The reference schema document this parser is tested against now ships in the wheel.

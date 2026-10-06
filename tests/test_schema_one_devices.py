@@ -101,6 +101,19 @@ def test_feed_relationships_are_read_off_the_circuits() -> None:
     assert feeds == {"pv": SOLAR_CIRCUIT}
 
 
+def _circuit_feeding(device_id: str, fed_device_id: str) -> DiscoveredDevice:
+    """The captured solar circuit under another device id, feeding `fed_device_id`."""
+    topics = {**_TREE[SOLAR_CIRCUIT], "connection/feeds-device-id": fed_device_id}
+    return device_from_topics(device_id, topics)
+
+
+def test_an_inverter_fed_by_two_circuits_is_keyed_by_the_lowest_circuit_id() -> None:
+    a, b = _circuit_feeding("aaaa", "pv-1"), _circuit_feeding("bbbb", "pv-1")
+
+    assert feed_circuit_ids([a, b]) == {"pv-1": "aaaa"}
+    assert feed_circuit_ids([b, a]) == {"pv-1": "aaaa"}
+
+
 def test_connection_status_is_reported_by_the_owner_not_the_device() -> None:
     """The upstream lugs claim the BESS, and it is their view of that link that
     `battery.connected` reflects."""
@@ -301,6 +314,121 @@ def test_the_bess_meter_and_the_enclosure_flow_agree_about_direction() -> None:
     enclosure_flow = float(_published("example-40t-001", "power-flows/battery"))
 
     assert (bess_meter < 0) == (enclosure_flow < 0)
+
+
+# ---------------------------------------------------------------------------
+# Battery power: the wire frame by firmware release
+# ---------------------------------------------------------------------------
+
+R202633 = "spanos2/r202633/01"
+R202639 = "spanos2/r202639/03"
+
+
+def _battery_power(raw: str, *, firmware_version: str | None, power_flow_battery: float | None = None) -> float | None:
+    bess = _bess_with({BESS_POWER_TOPIC: raw})
+    return build_battery(bess, [], firmware_version=firmware_version, power_flow_battery=power_flow_battery).power_w
+
+
+@pytest.mark.parametrize("firmware_version", [R202633, "spanos2/r202627/01", "spanos2/r202633/39"])
+def test_before_r202639_the_bess_meter_is_negated(firmware_version: str) -> None:
+    """A charging battery reads positive on the wire before r202639 and negative here.
+
+    `"spanos2/r202633/39"` guards against reading the wrong number: its respin
+    suffix is `39`, and only the release segment is compared.
+    """
+    assert _battery_power("1000.0", firmware_version=firmware_version) == -1000.0
+    assert _battery_power("-1917.49", firmware_version=firmware_version) == 1917.49
+
+
+@pytest.mark.parametrize("firmware_version", [R202639, "spanos2/r202639/01", "spanos2/r202645/02"])
+def test_from_r202639_the_bess_meter_passes_through(firmware_version: str) -> None:
+    """From r202639 the wire is already discharge-positive, so no negation."""
+    assert _battery_power("1917.49", firmware_version=firmware_version) == 1917.49
+    assert _battery_power("-1000.0", firmware_version=firmware_version) == -1000.0
+
+
+def test_the_snapshot_convention_is_the_same_on_both_releases() -> None:
+    """One physical state, a battery charging at 1 kW, published in each release's frame.
+
+    `power-flows/battery` reads `+1000` on both, so the flow figure and the BESS
+    meter disagree on r202639 and agree before it; the snapshot field reads the
+    same either way.
+    """
+    before = _battery_power("1000.0", firmware_version=R202633, power_flow_battery=1000.0)
+    after = _battery_power("-1000.0", firmware_version=R202639, power_flow_battery=1000.0)
+
+    assert before == after == -1000.0
+
+
+def test_a_parsed_release_outranks_the_sign_comparison() -> None:
+    """The flow figure is a fallback; a version that parses decides on its own."""
+    assert _battery_power("1000.0", firmware_version=R202639, power_flow_battery=1000.0) == 1000.0
+    assert _battery_power("1000.0", firmware_version=R202633, power_flow_battery=-1000.0) == -1000.0
+
+
+@pytest.mark.parametrize("firmware_version", [R202633, R202639, None])
+def test_a_battery_at_rest_reports_zero_on_every_frame(firmware_version: str | None) -> None:
+    """Both paths normalize `-0.0`, the pass-through one included."""
+    for raw in ("0.0", "-0.0"):
+        power = _battery_power(raw, firmware_version=firmware_version)
+        assert power == 0.0
+        assert str(power) == "0.0"
+
+
+@pytest.mark.parametrize("firmware_version", [None, "example/v0.1.0", "spanos2/r2026/01"])
+def test_without_a_release_matching_signs_mean_the_old_frame(firmware_version: str | None) -> None:
+    """Before r202639 the BESS meter and the flow figure carry one sign."""
+    assert _battery_power("1000.0", firmware_version=firmware_version, power_flow_battery=950.0) == -1000.0
+    assert _battery_power("-1000.0", firmware_version=firmware_version, power_flow_battery=-950.0) == 1000.0
+
+
+@pytest.mark.parametrize("firmware_version", [None, "example/v0.1.0", "spanos2/r2026/01"])
+def test_without_a_release_opposite_signs_mean_the_new_frame(firmware_version: str | None) -> None:
+    """From r202639 the BESS meter is the negation of the flow figure."""
+    assert _battery_power("-1000.0", firmware_version=firmware_version, power_flow_battery=950.0) == -1000.0
+    assert _battery_power("1000.0", firmware_version=firmware_version, power_flow_battery=-950.0) == 1000.0
+
+
+@pytest.mark.parametrize("power_flow_battery", [None, 0.0, -0.0])
+def test_without_a_release_or_a_signed_flow_the_old_frame_is_assumed(power_flow_battery: float | None) -> None:
+    """Nothing to compare against, so the negation every earlier release applied."""
+    assert _battery_power("1000.0", firmware_version="example/v0.1.0", power_flow_battery=power_flow_battery) == -1000.0
+
+
+def test_the_captured_tree_resolves_to_the_old_frame_through_the_snapshot() -> None:
+    """End to end: the capture carries no SPAN version string and equal signs.
+
+    So the fallback picks the old frame, and the snapshot's battery is the
+    negation of its wire meter: the charging battery the capture describes.
+    """
+    from span_panel_api_schema_1.snapshot import build_snapshot
+
+    panel_id = "example-40t-001"
+    children = [_device(device_id) for device_id in _TREE if device_id != panel_id]
+    snapshot = build_snapshot(_device(panel_id), children)
+
+    assert snapshot.battery.power_w == -float(_published("bess", BESS_POWER_TOPIC))
+    assert snapshot.battery.power_w is not None and snapshot.battery.power_w < 0
+
+
+def test_an_r202639_tree_reports_the_same_charging_battery_through_the_snapshot() -> None:
+    """The capture republished as r202639 would publish it: BESS meter negated, flow unchanged."""
+    from span_panel_api_schema_1.snapshot import build_snapshot
+
+    panel_id = "example-40t-001"
+    raw = float(_published("bess", BESS_POWER_TOPIC))
+    panel_topics = {**_TREE[panel_id], "info/firmware-version": R202639}
+    bess_topics = {**_TREE["bess"], BESS_POWER_TOPIC: str(-raw)}
+    children = [
+        device_from_topics("bess", bess_topics) if device_id == "bess" else _device(device_id)
+        for device_id in _TREE
+        if device_id != panel_id
+    ]
+    snapshot = build_snapshot(device_from_topics(panel_id, panel_topics), children)
+
+    assert snapshot.firmware_version == R202639
+    assert snapshot.battery.power_w == -raw
+    assert snapshot.power_flow_battery == float(_published(panel_id, "power-flows/battery"))
 
 
 # ---------------------------------------------------------------------------

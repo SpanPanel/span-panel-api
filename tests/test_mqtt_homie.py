@@ -667,11 +667,18 @@ class TestHomiePVMetadata:
         assert snapshot.pv.nameplate_capacity_w == 3960.0
         assert snapshot.pv.feed_circuit_id == "aabbccdd112233445566778899001122"
         assert snapshot.pv.relative_position == "IN_PANEL"
+        assert snapshot.pv.device_id == "pv-0"
+        # Keyed by the feeding circuit, as schema_1 keys each inverter, so the
+        # one inverter flat publishes is also the whole of `pv_inverters`.
+        assert snapshot.pv.node_id == "aabbccdd112233445566778899001122"
+        assert snapshot.pv_inverters == {"aabbccdd112233445566778899001122": snapshot.pv}
 
     def test_no_pv_node(self):
         """Without PV node, pv snapshot has None values."""
         acc, consumer = _build_ready_consumer({"core": {"type": TYPE_CORE}})
         snapshot = consumer.build_snapshot()
+        assert snapshot.pv_inverters == {}
+        assert snapshot.pv.node_id is None
         assert snapshot.pv.vendor_name is None
         assert snapshot.pv.model is None
         assert snapshot.pv.nameplate_capacity_w is None
@@ -694,6 +701,8 @@ class TestHomiePVMetadata:
         assert snapshot.pv.nameplate_capacity_w is None
         assert snapshot.pv.feed_circuit_id is None
         assert snapshot.pv.relative_position is None
+        # No feeding circuit, so the node id is the only key there is.
+        assert snapshot.pv_inverters == {"pv-0": snapshot.pv}
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,25 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [Unreleased]
+
+### Fixed
+
+- **A second inverter's feeding circuit is labeled `device_type="pv"`**, so its power no longer reads as a load with the opposite sign.
+- **A PV inverter wired through two breakers now reports its power and link status consistently**, with both circuits labeled `pv` and its feed and link status read from the one with the lowest circuit id.
+- **`pv` is the inverter on the lowest breaker space when more than one is commissioned**, rather than whichever came first in the device tree.
+- **Each inverter's extension properties are filed under that inverter**, with its `pv_inverters` key as the `instance_key` when more than one is commissioned.
+- **The first snapshot waits briefly for the circuits that feed an inverter**, so an inverter's key and its circuit's label do not change just after connecting.
+- **`battery.power_w` is discharge-positive on firmware r202639 and later, from the first snapshot on**, where a charging battery read positive.
+
+### Added
+
+- **`span_panel_api_schema_1.firmware.release_build`** reads the six-digit release build number out of a firmware version string, or returns `None` when it has none.
+- **`build_battery` takes keyword-only `firmware_version` and `power_flow_battery`** to pick the BESS meter's wire frame, and behaves as before without them.
+- **Every PV inverter is read, not only the first**, each landing in `pv_inverters` with its serial number when published, its device id and its key.
+- **`TreeRoles.pvs` lists every inverter**, and `snapshot.primary_pv`, `devices.pv_inverter_key` and `circuits.circuit_tabs` choose the one `pv` describes, give an inverter's key, and read a circuit's breaker spaces.
+- **`pv.serial_number` is read from `info/serial-number`**, so that property no longer appears as a discovery row.
+
 ## [1.1.4]
 
 The parser reports the islanding state the panel is acting on, and refuses islanding writes the panel would ignore. Reported and fixed by [@dcj](https://github.com/dcj) in [#179](https://github.com/SpanPanel/span-panel-api/pull/179), from issue

@@ -11,11 +11,13 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from span_panel_api.models import ExtensionSubject, SpanPanelSnapshot
+from span_panel_api.models import ExtensionSubject, SpanPanelSnapshot, SpanPVSnapshot
 from span_panel_api_schema_1.adoption import build_adopted_devices
-from span_panel_api_schema_1.circuits import build_circuit
+from span_panel_api_schema_1.circuits import build_circuit, circuit_tabs
 from span_panel_api_schema_1.const import (
+    NODE_CONNECTION,
     NODE_INFO,
+    PROP_FEEDS_DEVICE_ID,
     PROP_MODEL,
     PROP_SERIAL_NUMBER,
     TYPE_BESS,
@@ -34,6 +36,7 @@ from span_panel_api_schema_1.devices import (
     build_pv,
     feed_circuit_ids,
     feed_connection_statuses,
+    pv_inverter_key,
 )
 from span_panel_api_schema_1.extension import build_extension_properties
 from span_panel_api_schema_1.field_metadata import addressed_rows
@@ -71,7 +74,9 @@ class TreeRoles:
         self.lugs: list[DiscoveredDevice] = []
         self.evse: list[DiscoveredDevice] = []
         self.bess: DiscoveredDevice | None = None
-        self.pv: DiscoveredDevice | None = None
+        # Every inverter, in tree order. From r202639 each commissioned inverter
+        # is its own device; earlier firmware published one.
+        self.pvs: list[DiscoveredDevice] = []
         self.mid: DiscoveredDevice | None = None
 
         for device in devices:
@@ -84,10 +89,38 @@ class TreeRoles:
                 self.evse.append(device)
             elif declared == TYPE_BESS and self.bess is None:
                 self.bess = device
-            elif declared == TYPE_PV and self.pv is None:
-                self.pv = device
+            elif declared == TYPE_PV:
+                self.pvs.append(device)
             elif declared == TYPE_MID and self.mid is None:
                 self.mid = device
+
+        self.pv: DiscoveredDevice | None = primary_pv(self.pvs, self.circuits)
+
+
+def primary_pv(pvs: Sequence[DiscoveredDevice], circuits: Sequence[DiscoveredDevice]) -> DiscoveredDevice | None:
+    """The inverter ``snapshot.pv`` describes, chosen the same way on every build.
+
+    The order depends only on what the panel publishes, never on the order the
+    devices were discovered in:
+
+    1. an inverter whose feeding circuit publishes its breaker spaces, before
+       one with no feeding circuit (or a circuit that publishes none);
+    2. among those, the lowest breaker space the feeding circuit occupies;
+    3. then the lowest device id.
+
+    A single inverter is chosen whatever it publishes, so a panel with one
+    inverter reads exactly as it did before more than one could be published.
+    """
+    if not pvs:
+        return None
+    feeds = feed_circuit_ids(list(circuits))
+    lowest_tab = {circuit.device_id: min(circuit_tabs(circuit), default=None) for circuit in circuits}
+
+    def rank(device: DiscoveredDevice) -> tuple[int, int, str]:
+        tab = lowest_tab.get(feeds.get(device.device_id, ""))
+        return (0, tab, device.device_id) if tab is not None else (1, 0, device.device_id)
+
+    return min(pvs, key=rank)
 
 
 def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], ready_since: float = 0.0) -> SpanPanelSnapshot:
@@ -104,11 +137,16 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
     feed_statuses = feed_connection_statuses(roles.circuits)
     # A DER's device type decides how its feeding circuit is labelled, so the
     # circuit inherits it — matching the flat adapter, where the same circuit
-    # reports device_type "pv" rather than "circuit".
+    # reports device_type "pv" rather than "circuit". Every inverter's circuit,
+    # not only the one `snapshot.pv` describes: a PV circuit left labeled
+    # "circuit" is read as a load, with its power in the opposite sign. Read
+    # from the circuit side rather than through `feeds`, which keeps one circuit
+    # per DER: every circuit of a DER fed by several carries its power.
+    kind_by_der = {device.device_id: "pv" for device in roles.pvs} | {device.device_id: "evse" for device in roles.evse}
     der_type_by_circuit = {
-        circuit_id: kind
-        for kind, device in (("pv", roles.pv), *(("evse", e) for e in roles.evse))
-        if device is not None and (circuit_id := feeds.get(device.device_id))
+        circuit.device_id: kind
+        for circuit in roles.circuits
+        if (kind := kind_by_der.get(text(circuit, NODE_CONNECTION, PROP_FEEDS_DEVICE_ID)))
     }
 
     circuits = {}
@@ -176,12 +214,25 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
             ("panel", panel),
             ("battery", roles.bess),
             ("mid", roles.mid),
-            ("pv", roles.pv),
+            *((("pv", roles.pv),) if len(roles.pvs) == 1 else ()),
         )
         if device is not None
     ]
+    # One inverter keeps the singleton `pv` subject it always had. With more
+    # than one, each inverter is its own subject keyed like `pv_inverters`, so
+    # no inverter's vendor properties are filed under another's.
+    pv_subjects = (
+        [(device, ExtensionSubject(kind="pv", instance_key=pv_inverter_key(device, feeds))) for device in roles.pvs]
+        if len(roles.pvs) > 1
+        else []
+    )
+    pv_inverters = {
+        pv_inverter_key(device, feeds): build_pv(device, feeds, upstream, downstream, feed_statuses=feed_statuses)
+        for device in roles.pvs
+    }
+
     extension_properties = build_extension_properties(
-        [*singleton_subjects, *lugs_subjects, *evse_subjects, *circuit_subjects],
+        [*singleton_subjects, *pv_subjects, *lugs_subjects, *evse_subjects, *circuit_subjects],
         addressed_rows(children),
     )
 
@@ -240,8 +291,14 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         downstream_l1_current_a=fields.downstream_l1_current_a,
         downstream_l2_current_a=fields.downstream_l2_current_a,
         circuits=circuits,
-        battery=build_battery(roles.bess, owners),
-        pv=build_pv(roles.pv, feeds, upstream, downstream, feed_statuses=feed_statuses),
+        battery=build_battery(
+            roles.bess,
+            owners,
+            firmware_version=fields.firmware_version,
+            power_flow_battery=fields.power_flow_battery,
+        ),
+        pv=pv_inverters[pv_inverter_key(roles.pv, feeds)] if roles.pv is not None else SpanPVSnapshot(),
+        pv_inverters=pv_inverters,
         mid=build_mid(roles.mid, device_names),
         # Gated on the node being declared, not on any value: every limit this
         # capability publishes is legally `0.0`, so there is no reading that can

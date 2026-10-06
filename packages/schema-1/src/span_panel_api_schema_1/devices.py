@@ -19,36 +19,33 @@ against conflating them. Both are now carried, in separate fields
 (``connected`` and ``communication_state``), because they answer different
 questions: the panel's view of the link, and the publisher's view of its own.
 
-**Battery power is discharge-positive, and that is not the rule circuits follow.**
-``build_circuit`` negates so that positive means power flowing *into* the metered
-device, which is the convention the rest of this module states. ``build_battery``
-negates too, but its wire input is in the opposite frame, so it lands on the
-opposite result: ``battery.power_w`` is positive while the battery *discharges*.
+**Battery power is discharge-positive, and the wire's frame for it changed at r202639.**
+``battery.power_w`` is positive while the battery *discharges*: the frame the eBus
+specification asks for from a device's own meter, and deliberately not the
+into-the-device rule ``build_circuit`` follows.
 
-Measured rather than reasoned. Driving the producer into self-consumption with
-the grid at zero forces the direction: PV 4181 W plus battery 1917 W meeting a
-6099 W load leaves nothing ambiguous, and the battery is discharging. The wire
+Through r202633 the BESS ``meter/active-power`` is charge-positive, carrying the
+same sign as the enclosure's ``power-flows/battery``, so ``build_battery`` negates
+it. Measured rather than reasoned: driving the producer into self-consumption
+with the grid at zero forces the direction. PV 4181 W plus battery 1917 W meeting
+a 6099 W load leaves nothing ambiguous: the battery is discharging. The wire
 publishes ``-1917.49`` and this module reports ``+1917.49``.
 
-That value is *correct* -- it is the frame the eBus specification asks for from a
-device's own meter, "positive while discharging, that is, power flowing out of
-the device". What was wrong was the name: this used to be ``_charge_positive``,
-and the sentence above used to claim the into-the-device rule held everywhere.
-It does not hold for the battery, and saying so was the defect.
+From r202639 the BESS meter is published discharge-positive, the negation of
+``power-flows/battery`` (whose own sign did not change), so it passes through.
+The frame is chosen from the enclosure's release build number
+(``firmware.release_build``), never from the respin suffix after it. Where the
+version does not parse, the two wire properties decide instead: one nonzero sign
+on both is the old frame, opposite signs the new one. Where either is zero or
+absent the old frame is assumed, because that is what every earlier release of
+this package applied and what the reference capture (``ebus-panel-sim`` 0.8.0,
+which publishes no SPAN version string) carries. A battery at rest reads zero in
+both frames, so the assumption only decides a nonzero BESS meter beside a missing
+or zero flow figure.
 
-Both wire properties behind it carry the *same* sign as each other -- a live
-panel capture and ``ebus-panel-sim`` 0.6.0 both publish the pair identically --
-so ``panel.power_flow_battery`` (passed through untouched) and
-``battery.power_w`` (negated here) end up as each other's mirror, and a consumer
-showing both sees one convention after applying one negation to either.
-
-Note that the alignment of those two wire properties is the specification's
-*violation* rather than its rule: the spec defines ``power-flows/battery`` as the
-negation of the BESS meter, and this firmware publishes them equal. Comparing the
-two therefore tells a consumer which firmware it is on -- equal means today's,
-opposite means a conformant future one -- which is what would let this conversion
-stay correct across that change. Undecidable while the battery is idle and both
-read zero.
+On either firmware ``panel.power_flow_battery`` (passed through untouched, and
+charge-positive) and ``battery.power_w`` end up as each other's mirror, so a
+consumer showing both sees one convention after negating either one.
 """
 
 from __future__ import annotations
@@ -78,6 +75,7 @@ from span_panel_api_schema_1.const import (
     PROP_VENDOR_NAME,
     UNKNOWN,
 )
+from span_panel_api_schema_1.firmware import release_build
 from span_panel_api_schema_1.panel import integer, number, resolve_grid_forming_device_name, text
 
 if TYPE_CHECKING:
@@ -114,12 +112,14 @@ def feed_circuit_ids(circuits: list[DiscoveredDevice]) -> dict[str, str]:
 
     v1.0 states the relationship on the *circuit* (``connection/feeds-device-id``)
     rather than on the DER, so it is read once here and handed to whichever
-    device needs it.
+    device needs it. A device fed by more than one circuit (the specification
+    allows it) maps to the circuit with the lowest device id, so the answer, and
+    every key built on it, does not depend on discovery order.
     """
     feeds: dict[str, str] = {}
-    for circuit in circuits:
+    for circuit in sorted(circuits, key=lambda device: device.device_id):
         fed = text(circuit, NODE_CONNECTION, PROP_FEEDS_DEVICE_ID)
-        if fed:
+        if fed and fed not in feeds:
             feeds[fed] = circuit.device_id
     return feeds
 
@@ -157,12 +157,18 @@ def feed_connection_statuses(circuits: list[DiscoveredDevice]) -> dict[str, str]
     Most circuits publish neither. A mixed-load or unsurveyed circuit feeds no
     commissioned DER, so it has no connection record to publish — the spec calls
     that normal, which is why nothing here treats a missing record as an error.
+
+    A device fed by more than one circuit takes the status of the circuit
+    ``feed_circuit_ids`` chose for it, so its link health and its feed come from
+    one record whatever the discovery order. That circuit's silence is not
+    filled from the other feed: it leaves the device absent here, as any
+    circuit publishing only one half does.
     """
+    by_id = {circuit.device_id: circuit for circuit in circuits}
     statuses: dict[str, str] = {}
-    for circuit in circuits:
-        fed = text(circuit, NODE_CONNECTION, PROP_FEEDS_DEVICE_ID)
-        status = text(circuit, NODE_CONNECTION, PROP_FEEDS_DEVICE_STATUS)
-        if fed and status:
+    for fed, circuit_id in feed_circuit_ids(circuits).items():
+        status = text(by_id[circuit_id], NODE_CONNECTION, PROP_FEEDS_DEVICE_STATUS)
+        if status:
             statuses[fed] = status
     return statuses
 
@@ -185,32 +191,71 @@ def _connected(status: str | None) -> bool | None:
     return None if status is None else status == STATUS_OK
 
 
-def _discharge_positive(raw_power_w: float | None) -> float | None:
-    """Flip the enclosure's meter frame to the BESS device's own.
+BESS_METER_DISCHARGE_POSITIVE_FROM_BUILD = 202639
+"""The first release build whose BESS ``meter/active-power`` is discharge-positive."""
+
+
+def _bess_meter_is_charge_positive(
+    firmware_version: str | None,
+    raw_power_w: float | None,
+    power_flow_battery: float | None,
+) -> bool:
+    """Whether the BESS meter on the wire is in the pre-r202639 frame.
+
+    The enclosure's release build decides when it parses. Otherwise the BESS
+    meter is compared with ``power-flows/battery``, which kept its sign across
+    the change: equal signs mean the old frame, opposite signs the new one. With
+    either one zero or absent the comparison says nothing, and the old frame is
+    assumed (see the module docstring for why).
+    """
+    build = release_build(firmware_version)
+    if build is not None:
+        return build < BESS_METER_DISCHARGE_POSITIVE_FROM_BUILD
+    if raw_power_w is None or power_flow_battery is None or raw_power_w == 0.0 or power_flow_battery == 0.0:
+        return True
+    return (raw_power_w > 0.0) == (power_flow_battery > 0.0)
+
+
+def _discharge_positive(raw_power_w: float | None, *, charge_positive_on_wire: bool) -> float | None:
+    """Bring the BESS meter into the device's own frame, discharge-positive.
 
     Positive means power flowing *out of the battery*, which is discharging, and
-    which is what the eBus specification asks of a device's own meter. Named for
-    what it produces after being called `_charge_positive` for as long as it
-    produced the opposite -- measured against a producer driven into
-    self-consumption, where the grid sits at zero and the direction cannot be
-    argued.
+    which is what the eBus specification asks of a device's own meter. A wire
+    value already in that frame passes through; one in the older charge-positive
+    frame is negated.
 
     `None` stays `None`: a BESS that publishes no `meter` node has no power
     reading, which is not the same as zero. The `0.0` guard is `build_circuit`'s,
-    for the same reason — negating `0.0` yields `-0.0`, which compares equal to
-    `0.0` and formats as `"-0.0"`.
+    for the same reason: negating `0.0` yields `-0.0`, which compares equal to
+    `0.0` and formats as `"-0.0"`. A wire `-0.0` is normalized on the
+    pass-through path too.
     """
     if raw_power_w is None:
         return None
-    return 0.0 if raw_power_w == 0.0 else -raw_power_w
+    if raw_power_w == 0.0:
+        return 0.0
+    return -raw_power_w if charge_positive_on_wire else raw_power_w
 
 
-def build_battery(bess: DiscoveredDevice | None, owners: list[DiscoveredDevice]) -> SpanBatterySnapshot:
-    """Build the battery snapshot. An uncommissioned panel yields the empty one."""
+def build_battery(
+    bess: DiscoveredDevice | None,
+    owners: list[DiscoveredDevice],
+    *,
+    firmware_version: str | None = None,
+    power_flow_battery: float | None = None,
+) -> SpanBatterySnapshot:
+    """Build the battery snapshot. An uncommissioned panel yields the empty one.
+
+    `firmware_version` is the enclosure's ``info/firmware-version`` and
+    `power_flow_battery` its ``power-flows/battery``; together they pick the
+    BESS meter's wire frame. Omitted, they leave the old frame assumed.
+    """
     if bess is None:
         return SpanBatterySnapshot()
 
     status = connection_status_for(bess.device_id, owners)
+    raw_power_w = number(bess, NODE_METER, PROP_ACTIVE_POWER)
+    charge_positive_on_wire = _bess_meter_is_charge_positive(firmware_version, raw_power_w, power_flow_battery)
 
     return SpanBatterySnapshot(
         # Historically misnamed in the snapshot and kept that way: `soe_percentage`
@@ -229,12 +274,23 @@ def build_battery(bess: DiscoveredDevice | None, owners: list[DiscoveredDevice])
         nameplate_capacity_kwh=number(bess, NODE_INFO, PROP_NAMEPLATE_CAPACITY),
         # None when unclaimed, so "nobody has said" stays distinct from "not OK".
         connected=_connected(status),
-        power_w=_discharge_positive(number(bess, NODE_METER, PROP_ACTIVE_POWER)),
+        power_w=_discharge_positive(raw_power_w, charge_positive_on_wire=charge_positive_on_wire),
         # The BESS's own link health, kept as the published enum string rather
         # than collapsed to a bool: DEGRADED is neither OK nor LOST, and a bool
         # would have to pick one.
         communication_state=_optional(text(bess, NODE_STATUS, PROP_COMMUNICATION_STATE)),
     )
+
+
+def pv_inverter_key(pv: DiscoveredDevice, feeds: Mapping[str, str]) -> str:
+    """The inverter's `pv_inverters` key: its feeding circuit's id, else its device id.
+
+    The circuit first because its id survives firmware r202639, which renumbers
+    every PV device on a panel with more than one inverter. A circuit feeds at
+    most one device, so two circuit-fed inverters cannot share a key. An
+    inverter no circuit feeds keeps its device id, the only handle it has.
+    """
+    return feeds.get(pv.device_id) or pv.device_id
 
 
 def build_pv(
@@ -245,7 +301,11 @@ def build_pv(
     *,
     feed_statuses: dict[str, str],
 ) -> SpanPVSnapshot:
-    """Build the PV snapshot. An uncommissioned panel yields the empty one."""
+    """Build one inverter's PV snapshot. An uncommissioned panel yields the empty one.
+
+    `info/nominal-power` is the array's DC size as recorded at installation,
+    carried for display and never a limit on what the inverter produces.
+    """
     if pv is None:
         return SpanPVSnapshot()
 
@@ -253,9 +313,12 @@ def build_pv(
         connected=_connected(feed_statuses.get(pv.device_id)),
         vendor_name=_optional(text(pv, NODE_INFO, PROP_VENDOR_NAME)),
         model=_optional(text(pv, NODE_INFO, PROP_MODEL)),
+        serial_number=_optional(text(pv, NODE_INFO, PROP_SERIAL_NUMBER)),
         software_version=_optional(text(pv, NODE_INFO, PROP_FIRMWARE_VERSION)),
         nameplate_capacity_w=number(pv, NODE_INFO, PROP_NOMINAL_POWER),
         feed_circuit_id=feeds.get(pv.device_id),
+        device_id=pv.device_id,
+        node_id=pv_inverter_key(pv, feeds),
         # Retired as a property in v1.0 and derived instead, per the enclosure model's
         # own replacement rule. `None` where no owner references the DER, because the
         # integration gates whether a control entity exists on this value.

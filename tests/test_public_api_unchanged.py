@@ -161,6 +161,11 @@ EXPECTED_PUBLIC_API = {
     # Added 2026-10-02 (3.5.0): a 403 from a reduced-privilege token. A subclass
     # of SpanPanelAuthError, so every existing except clause keeps its meaning.
     "SpanPanelInsufficientPrivilegeError",
+    # Added (unreleased): registration reached a panel that cannot read its own
+    # passphrase. Additive, and a SpanPanelAPIError subclass rather than a
+    # SpanPanelAuthError, so no existing except clause starts telling a user
+    # their passphrase is wrong.
+    "SpanPanelPassphraseUnavailableError",
     "SpanPanelServerError",
     "SpanPanelStaleDataError",
     # Added 2026-08-31 (3.4.0): a bootstrap REST call that failed *verification*

@@ -357,10 +357,11 @@ def test_retained_says_whether_a_value_has_arrived_and_never_what_it_is() -> Non
     """`retained` is the declared-but-never-valued signal, and the only value question asked."""
     rows = _discovered()
     assert rows["discovered.distribution-enclosure/status/time-zone"].retained is True
-    # The PV's serial, which `test_the_held_pv_serial_is_still_the_only_singleton_left`
-    # pins as deliberately declared and never published. `connection/count` used to
-    # stand here, until the producer removed a property no configuration could value.
-    assert rows["discovered.pv/info/serial-number"].retained is False
+    # The lugs declare the `feeds-*` half of `connection` and no producer values it
+    # (see `resolve_relative_position`). The PV's serial stood here until the
+    # adapter began reading it into `pv.serial_number`, which took it out of
+    # discovery; `connection/count` before that, until the producer removed it.
+    assert rows["discovered.lugs/connection/feeds-device-status"].retained is False
 
     tree = _tree()
     del tree[PANEL_DEVICE_ID]["status/time-zone"]

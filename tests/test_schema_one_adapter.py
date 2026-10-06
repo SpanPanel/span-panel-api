@@ -7,15 +7,17 @@ how the transport feeds it — so these exercise the SDK's real discovery path
 
 from __future__ import annotations
 
+import copy
 import json
 
 import pytest
 
-from reference_payloads.schema_one import parent_child_tree
+from reference_payloads.schema_one import RetainedTopicTree, parent_child_tree
 from span_panel_api.adapters import _derive_required_members
 from span_panel_api.models import V2HomieSchema
 from span_panel_api.protocol import SchemaAdapter
 from span_panel_api_schema_1 import SchemaOneAdapter
+from span_panel_api_schema_1.adapter import FEED_GRACE_S
 
 _TREE = parent_child_tree()
 
@@ -36,7 +38,12 @@ def _schema() -> V2HomieSchema:
     )
 
 
-def _feed(adapter: SchemaOneAdapter, device_ids: list[str] | None = None, omit: tuple[str, ...] = ()) -> None:
+def _feed(
+    adapter: SchemaOneAdapter,
+    device_ids: list[str] | None = None,
+    omit: tuple[str, ...] = (),
+    tree: RetainedTopicTree = _TREE,
+) -> None:
     """Replay retained topics the way the broker would deliver them.
 
     The panel first by default, which is the friendly order — the SDK gates a
@@ -45,8 +52,8 @@ def _feed(adapter: SchemaOneAdapter, device_ids: list[str] | None = None, omit: 
     appears; `test_children_before_the_panel` covers the unfriendly order,
     which a broker is equally entitled to replay.
     """
-    for device_id in device_ids or [PANEL, *[d for d in _TREE if d != PANEL]]:
-        topics = _TREE[device_id]
+    for device_id in device_ids or [PANEL, *[d for d in tree if d != PANEL]]:
+        topics = tree[device_id]
         prefix = f"ebus/5/{device_id}"
         adapter.handle_message(f"{prefix}/$description", topics["$description"])
         adapter.handle_message(f"{prefix}/$state", topics["$state"])
@@ -461,6 +468,96 @@ def test_a_der_missing_its_declared_model_is_reported_alongside_circuits() -> No
     adapter.handle_message("ebus/5/pv/info/model", _TREE["pv"]["info/model"])
 
     assert "pv" not in adapter.circuit_nodes_missing_names()
+
+
+def test_a_circuit_missing_its_declared_feed_is_reported() -> None:
+    """The feed decides each inverter's `pv_inverters` key.
+
+    A first snapshot built before the feed arrives keys the inverter by its
+    device id; the feed's arrival would then move the key, and every entity a
+    consumer built on it.
+    """
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    _feed(adapter, omit=("connection/feeds-device-id",))
+
+    assert SOLAR_CIRCUIT in adapter.circuit_nodes_missing_names()
+
+    adapter.handle_message(
+        f"ebus/5/{SOLAR_CIRCUIT}/connection/feeds-device-id", _TREE[SOLAR_CIRCUIT]["connection/feeds-device-id"]
+    )
+
+    assert adapter.circuit_nodes_missing_names() == []
+
+
+def test_an_unplaced_inverters_feed_wait_ends_after_a_grace() -> None:
+    """A DER may be published with no connection record; waiting the full name
+    timeout on every connect for one would only delay the snapshot and log a
+    warning that is not one."""
+    now = [100.0]
+    adapter = SchemaOneAdapter(PANEL, _schema(), clock=lambda: now[0])
+    _feed(adapter, omit=("connection/feeds-device-id",))
+
+    assert SOLAR_CIRCUIT in adapter.circuit_nodes_missing_names()
+
+    now[0] += FEED_GRACE_S
+
+    assert adapter.circuit_nodes_missing_names() == []
+
+
+def test_the_feed_grace_starts_only_once_everything_else_has_arrived() -> None:
+    now = [100.0]
+    adapter = SchemaOneAdapter(PANEL, _schema(), clock=lambda: now[0])
+    _feed(adapter, omit=("connection/feeds-device-id", "info/name"))
+    adapter.circuit_nodes_missing_names()
+    now[0] += FEED_GRACE_S
+    for device_id, topics in _TREE.items():
+        if "info/name" in topics:
+            adapter.handle_message(f"ebus/5/{device_id}/info/name", topics["info/name"])
+
+    assert SOLAR_CIRCUIT in adapter.circuit_nodes_missing_names()
+
+
+def test_the_panel_firmware_version_is_waited_on_when_a_battery_is_declared() -> None:
+    """The release build in the panel's firmware version decides the BESS meter's frame.
+
+    A first snapshot built without it falls back to comparing signs, and the
+    next one may read the other way, so the battery's power would flip once.
+    """
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    _feed(adapter, omit=("info/firmware-version",))
+
+    assert PANEL in adapter.circuit_nodes_missing_names()
+
+    adapter.handle_message(f"ebus/5/{PANEL}/info/firmware-version", _TREE[PANEL]["info/firmware-version"])
+
+    assert PANEL not in adapter.circuit_nodes_missing_names()
+
+
+def test_a_panel_that_declares_no_firmware_version_is_not_waited_on() -> None:
+    tree = copy.deepcopy(_TREE)
+    description = json.loads(tree[PANEL]["$description"])
+    del description["nodes"]["info"]["properties"]["firmware-version"]
+    tree[PANEL]["$description"] = json.dumps(description)
+    tree[PANEL].pop("info/firmware-version")
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    _feed(adapter, tree=tree)
+
+    assert PANEL not in adapter.circuit_nodes_missing_names()
+
+
+def test_a_panel_without_a_battery_does_not_wait_for_its_firmware_version() -> None:
+    """Only a BESS meter's frame hangs on the firmware version, so no BESS means no wait."""
+    tree = copy.deepcopy(_TREE)
+    tree.pop("bess")
+    tree.pop("bess-mid")
+    description = json.loads(tree[PANEL]["$description"])
+    description["children"].remove("bess")
+    tree[PANEL]["$description"] = json.dumps(description)
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    _feed(adapter, omit=("info/firmware-version",), tree=tree)
+
+    assert adapter.is_ready() is True
+    assert PANEL not in adapter.circuit_nodes_missing_names()
 
 
 def test_find_node_by_type_answers_with_a_device_id(adapter: SchemaOneAdapter) -> None:

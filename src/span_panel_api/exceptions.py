@@ -68,6 +68,22 @@ class SpanPanelServerError(SpanPanelAPIError):
     """
 
 
+class SpanPanelPassphraseUnavailableError(SpanPanelAPIError):
+    """The panel cannot read its own passphrase, so it cannot issue broker credentials.
+
+    A fault on the panel, not a rejected credential, which is why this is not a
+    `SpanPanelAuthError`: a caller that maps that class to "wrong passphrase"
+    would send the user back to retype one that may well be correct.
+
+    Raised in two places. ``register_v2`` raises it for the 422 a panel answers
+    when registration needs the passphrase and the panel cannot read it.
+    ``create_span_client`` raises it when registration succeeded but returned no
+    broker password, which from firmware r202639 is how a panel in the same
+    state answers a registration it can otherwise complete; connecting to the
+    broker without a password could only fail later and less clearly.
+    """
+
+
 class SpanPanelCAChangedError(SpanPanelError):
     """The panel is presenting a certificate chain from a different CA than the pin.
 

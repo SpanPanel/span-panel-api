@@ -74,11 +74,24 @@ class SpanCircuitSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class SpanPVSnapshot:
-    """PV inverter metadata — populated only when a PV node is commissioned."""
+    """One PV inverter's metadata, populated only when a PV device is commissioned.
+
+    A panel may commission more than one inverter, and from firmware r202639 each
+    is published as its own device. `SpanPanelSnapshot.pv_inverters` carries all
+    of them; `SpanPanelSnapshot.pv` carries one, chosen as that field documents.
+    """
 
     vendor_name: str | None = None  # pv/vendor-name
     model: str | None = None  # human designation (v1.0 info/model; flat pv/product-name)
-    nameplate_capacity_w: float | None = None  # pv/nameplate-capacity (W)
+    nameplate_capacity_w: float | None = None
+    """The PV array's DC size as recorded at installation, in watts. Informational.
+
+    v1.0 `info/nominal-power`; flat `pv/nameplate-capacity`. A figure entered at
+    commissioning, never a measured or enforced limit: the inverter can produce
+    more or less than this, so a consumer must not treat it as a ceiling on PV
+    power or clamp a reading to it.
+    """
+
     feed_circuit_id: str | None = None  # pv/feed (normalized circuit ID)
     relative_position: str | None = None  # pv/relative-position (IN_PANEL | UPSTREAM | DOWNSTREAM)
     software_version: str | None = None
@@ -104,6 +117,31 @@ class SpanPVSnapshot:
     it does not know) and is deliberately distinct from `False`. The enum has
     three members, `OK,LOST,DEGRADED`, and no UNKNOWN, so absence is the only
     way to say it.
+    """
+
+    serial_number: str | None = None
+    """`info/serial-number`, v1.0 only. Frequently unpublished, and that is normal.
+
+    An inverter's serial is often not recorded at commissioning, so `None` is
+    the ordinary case rather than a fault. Shown on a device card, never used as
+    an identity: see `node_id`.
+    """
+
+    device_id: str | None = None
+    """The inverter's id on the wire: the v1.0 device id, or the flat node id.
+
+    For addressing and diagnostics, never for identity. On a panel with more
+    than one inverter every PV device id changes at firmware r202639, the one
+    published before included.
+    """
+
+    node_id: str | None = None
+    """This inverter's key in `SpanPanelSnapshot.pv_inverters`; `None` on the empty snapshot.
+
+    Named after `SpanEvseSnapshot.node_id`, which plays the same role for
+    chargers. It is the feeding circuit's id when a circuit feeds the inverter,
+    because that id stays put when the inverter's own device id changes, and
+    `device_id` otherwise.
     """
 
 
@@ -310,7 +348,13 @@ class SpanEvseSnapshot:
 
     `None` means the charger declares no such property — `charge-limit.md` reads
     that as "no adjustable charge-current ceiling; it charges at a fixed rate" —
-    or that it has not published a value yet.
+    or that it has not published a value yet, or, from firmware r202639, that
+    no user has set a limit. That release publishes a value only once a user
+    sets one, leaving `charge_current_ceiling_a` as the limit in force; earlier
+    releases filled it with the ceiling on their own, and that retained value
+    can outlive the upgrade. A value equal to the ceiling therefore means the
+    same as `None`. Read `effective_charge_current_limit_a` for the limit the
+    charger is actually applying.
 
     **Not `advertised_current_a`.** That is the current actually being offered
     to the vehicle, which the capability defines as the `min()` of this, the
@@ -360,6 +404,20 @@ class SpanEvseSnapshot:
     cases.
     """
 
+    @property
+    def effective_charge_current_limit_a(self) -> int | None:
+        """The charge-current limit in force, in amps: the user's, else the ceiling.
+
+        `charge_current_limit_a` when one is published, otherwise
+        `charge_current_ceiling_a`, which is the limit from r202639 whenever no
+        user has set one. A stale retained limit equal to the ceiling resolves
+        to the same number either way, so no special case is needed for it.
+        `None` only when neither half is published.
+        """
+        if self.charge_current_limit_a is not None:
+            return self.charge_current_limit_a
+        return self.charge_current_ceiling_a
+
 
 @dataclass(frozen=True, slots=True)
 class SpanBatterySnapshot:
@@ -379,23 +437,24 @@ class SpanBatterySnapshot:
     nameplate_capacity_kwh: float | None = None  # bess/nameplate-capacity (kWh)
     connected: bool | None = None  # bess/connected
 
-    # The BESS's own `meter/active-power`, v1.0 only. **Charge-positive**, which
-    # is a sign flip away from the wire: the enclosure meters the BESS the way it
-    # meters a circuit, so a charging battery reads negative there and positive
-    # here, exactly as `SpanCircuitSnapshot.instant_power_w` reports a load's
-    # consumption positive. The snapshot's rule across every power field is that
+    # The BESS's own `meter/active-power`, v1.0 only. **Discharge-positive**:
     # positive means power flowing *out of* the battery, which is discharging.
     # That is the frame the eBus specification asks of a device's own meter, and
-    # it is deliberately NOT the into-the-device rule the circuit fields follow:
-    # the wire input is in the opposite frame, so one negation lands here rather
-    # than there. Measured against a producer in self-consumption with the grid
-    # at zero, where the direction cannot be argued.
+    # it is deliberately NOT the into-the-device rule
+    # `SpanCircuitSnapshot.instant_power_w` follows. Measured against a producer
+    # in self-consumption with the grid at zero, where the direction cannot be
+    # argued.
+    #
+    # The wire frame changed under this field at firmware r202639: earlier
+    # releases publish the BESS meter charge-positive and the adapter negates it;
+    # r202639 and later publish it discharge-positive and it passes through. The
+    # field's own convention is the same on both.
     #
     # Distinct from `SpanPanelSnapshot.power_flow_battery`, which is the
     # enclosure's own arbitrated flow figure, passed through untouched and
     # charge-positive. The two describe the same physical power in opposite
     # frames, so a consumer rendering both must negate one of them; this one is
-    # already negated.
+    # already in the discharge-positive frame.
     power_w: float | None = None  # v2: bess meter/active-power (W), discharge-positive
 
     # `status/communication-state`, v1.0 only: the BESS publisher's report of its
@@ -513,20 +572,27 @@ class DiscoveredMetadata(FieldMetadata):
 
 @dataclass(frozen=True, slots=True)
 class V2AuthResponse:
-    """Response from POST /api/v2/auth/register."""
+    """Response from POST /api/v2/auth/register.
+
+    ``ebus_broker_password`` and ``hop_passphrase`` are ``None`` when the panel
+    could not read its passphrase. From firmware r202639 that no longer fails
+    the registration: the access token is still issued and REST calls work, but
+    there is no broker password to connect with. Earlier firmware always
+    supplied both.
+    """
 
     access_token: str
     token_type: str
     iat_ms: int
     ebus_broker_username: str
-    ebus_broker_password: str  # Use this for MQTT, NOT hop_passphrase
+    ebus_broker_password: str | None  # Use this for MQTT, NOT hop_passphrase
     ebus_broker_host: str
     ebus_broker_mqtts_port: int
     ebus_broker_ws_port: int
     ebus_broker_wss_port: int
     hostname: str
     serial_number: str
-    hop_passphrase: str  # For REST auth; currently the same value as ebus_broker_password
+    hop_passphrase: str | None  # For REST auth; currently the same value as ebus_broker_password
 
 
 @dataclass(frozen=True, slots=True)
@@ -893,6 +959,10 @@ class ExtensionSubject:
     The EVSE's `node_id` and the circuit's `circuit_id` -- the same keys
     `snapshot.evse` and `snapshot.circuits` use, so a consumer holding the
     snapshot resolves the subject with a lookup it already performs.
+
+    `pv` is a singleton while the panel publishes one inverter. With more than
+    one, each inverter's subject carries its `SpanPVSnapshot.node_id`, the key
+    `snapshot.pv_inverters` uses.
     """
 
 
@@ -1112,6 +1182,26 @@ class SpanPanelSnapshot:
     circuits: dict[str, SpanCircuitSnapshot] = field(default_factory=dict)
     battery: SpanBatterySnapshot = field(default_factory=SpanBatterySnapshot)
     pv: SpanPVSnapshot = field(default_factory=SpanPVSnapshot)
+    """One PV inverter, or the empty snapshot when none is commissioned.
+
+    With a single inverter it is that inverter. With several it is the one whose
+    feeding circuit occupies the lowest breaker space; an inverter with no
+    feeding circuit ranks after every circuit-fed one, and remaining ties go to
+    the lowest device id. Kept for consumers written before `pv_inverters`,
+    which carries every inverter, this one included.
+    """
+    pv_inverters: dict[str, SpanPVSnapshot] = field(default_factory=dict)
+    """Every commissioned PV inverter, keyed by `SpanPVSnapshot.node_id`.
+
+    The key is the feeding circuit's id where a circuit feeds the inverter, and
+    the inverter's own device id otherwise. Preferring the circuit keeps the key
+    still across firmware r202639, which changes every PV device id on a panel
+    with more than one inverter but leaves circuit ids alone.
+
+    Empty when no inverter is commissioned, and from an adapter that predates
+    the field; a consumer falls back to `pv` in that case. A defaulted snapshot
+    field for the reason `adopted_devices` gives.
+    """
     evse: dict[str, SpanEvseSnapshot] = field(default_factory=dict)  # keyed by serial (see SpanEvseSnapshot.node_id)
     mid: SpanMidSnapshot | None = None
     """The islanding authority, when the panel publishes one. v1.0 only.

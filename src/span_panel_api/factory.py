@@ -15,7 +15,7 @@ from .adapters import resolve_adapter
 from .auth import get_homie_schema, register_v2
 from .detection import detect_api_version
 from .dispatch import select_adapter_key
-from .exceptions import SpanPanelAuthError
+from .exceptions import SpanPanelAuthError, SpanPanelPassphraseUnavailableError
 from .mqtt.client import SpanMqttClient
 from .mqtt.models import MqttClientConfig
 
@@ -77,6 +77,10 @@ async def create_span_client(
     Raises:
         SpanPanelAuthError: Neither mqtt_config nor passphrase provided,
             or serial_number could not be determined.
+        SpanPanelPassphraseUnavailableError: Registration was attempted and the panel
+            cannot read its own passphrase, so it issued no broker password.
+        SpanPanelServerError: Registration was attempted and the panel is not ready
+            to register clients yet; retryable.
         SpanPanelConnectionError: Cannot reach panel during detection or registration.
         SpanPanelTimeoutError: Timeout during detection or registration.
         SpanPanelSchemaVersionError: The panel reports a data-model-version whose
@@ -90,6 +94,11 @@ async def create_span_client(
         auth_response = await register_v2(
             host, _V2_CLIENT_NAME, passphrase, port=port, httpx_client=httpx_client, ssl_context=ssl_context
         )
+        if auth_response.ebus_broker_password is None:
+            raise SpanPanelPassphraseUnavailableError(
+                "Panel registration returned no MQTT broker password because the panel cannot read "
+                "its passphrase; the broker cannot be reached until that is resolved"
+            )
         mqtt_config = MqttClientConfig(
             broker_host=auth_response.ebus_broker_host,
             username=auth_response.ebus_broker_username,

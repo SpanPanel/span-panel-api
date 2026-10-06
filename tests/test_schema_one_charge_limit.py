@@ -228,6 +228,43 @@ def test_an_unpublished_value_is_none_rather_than_zero() -> None:
     assert evse.charge_current_limit_settable is True
 
 
+def test_no_user_limit_leaves_the_ceiling_in_force() -> None:
+    """From r202639 the limit is published only once a user sets one.
+
+    Absent, the ceiling is the limit the charger applies, and the property is
+    still declared, so still a control.
+    """
+    evse = _snapshot_evse(_tree(**{EVSE: {LIMIT_TOPIC: None}}), EVSE)
+
+    assert evse.charge_current_limit_a is None
+    assert evse.effective_charge_current_limit_a == int(_published(EVSE, CEILING_TOPIC))
+    assert evse.charge_current_limit_settable is True
+
+
+def test_no_limit_and_no_ceiling_has_no_effective_limit() -> None:
+    evse = _snapshot_evse(_tree(**{EVSE: {LIMIT_TOPIC: None, CEILING_TOPIC: None}}), EVSE)
+
+    assert evse.effective_charge_current_limit_a is None
+
+
+def test_a_limit_equal_to_the_ceiling_reads_the_same_as_none() -> None:
+    """The value older firmware filled in on its own, possibly still retained
+    after the upgrade cleared it. It and an absent limit must agree."""
+    ceiling = _published(EVSE, CEILING_TOPIC)
+    retained = _snapshot_evse(_tree(**{EVSE: {LIMIT_TOPIC: ceiling}}), EVSE)
+    cleared = _snapshot_evse(_tree(**{EVSE: {LIMIT_TOPIC: None}}), EVSE)
+
+    assert retained.effective_charge_current_limit_a == int(ceiling)
+    assert retained.effective_charge_current_limit_a == cleared.effective_charge_current_limit_a
+
+
+def test_a_user_limit_below_the_ceiling_is_the_effective_limit() -> None:
+    lowered = int(_published(EVSE, CEILING_TOPIC)) - 8
+    evse = _snapshot_evse(_tree(**{EVSE: {LIMIT_TOPIC: str(lowered)}}), EVSE)
+
+    assert evse.effective_charge_current_limit_a == lowered
+
+
 def test_the_declaration_decides_settability() -> None:
     assert _snapshot_evse(_TREE, EVSE).charge_current_limit_settable is True
     assert _snapshot_evse(_without_settable(EVSE), EVSE).charge_current_limit_settable is False

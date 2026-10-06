@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [Unreleased]
+
+### Added
+
+- **`SpanPanelSnapshot.pv_inverters`** carries every commissioned PV inverter, keyed by its feeding circuit's id, which stays put when firmware r202639 renames a panel's inverters, or by its device id where no circuit feeds it.
+- **`SpanPVSnapshot.serial_number`, `device_id` and `node_id`** give an inverter's serial number when one is published, its id on the wire, and its key in `pv_inverters`.
+- **`SpanEvseSnapshot.effective_charge_current_limit_a`** is the charge-current limit a charger is applying, its user limit when one is published and its ceiling otherwise, since from firmware r202639 a SPAN Drive publishes a user limit only once someone
+  sets one.
+- **`SpanPanelPassphraseUnavailableError`**, raised by `register_v2` and `create_span_client` for a panel that cannot read its own passphrase, is a `SpanPanelAPIError` rather than a `SpanPanelAuthError` because the passphrase the user gave may be correct.
+
+### Changed
+
+- **`V2AuthResponse.ebus_broker_password` and `hop_passphrase` are `str | None`**, `None` when a panel on firmware r202639 or later cannot read its passphrase yet still issues a valid access token.
+- **`register_v2` raises `SpanPanelServerError` with `status_code` for any 5xx**, including the 503 a panel on firmware r202639 answers until it knows its serial number, where it raised a plain `SpanPanelAPIError`.
+- **`SpanPanelSnapshot.pv` is the inverter on the lowest breaker space when more than one is commissioned**, rather than whichever one the adapter met first.
+- **`SpanPVSnapshot.nameplate_capacity_w` is documented as the array's DC size recorded at installation**, an informational figure and never a ceiling on PV power.
+
 ## [3.5.0]
 
 A rotation replaces the panel passphrase as well as the broker password, and the library now hands back both, so a caller no longer loses the only copy of the user's new passphrase. A broker that refuses the credentials is now reported as an authentication

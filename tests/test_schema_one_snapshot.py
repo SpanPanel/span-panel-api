@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
 from reference_payloads.schema_one import device_from_topics, parent_child_tree
-from span_panel_api.models import SpanPanelSnapshot
+from span_panel_api.models import ExtensionSubject, SpanPanelSnapshot
 from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot
 
 _TREE = parent_child_tree()
@@ -39,6 +41,7 @@ def test_roles_are_sorted_by_declared_type_not_device_id() -> None:
     assert len(roles.evse) == 2
     assert roles.bess is not None and roles.bess.device_id == "bess"
     assert roles.pv is not None and roles.pv.device_id == "pv"
+    assert [device.device_id for device in roles.pvs] == ["pv"]
     assert roles.mid is not None and roles.mid.device_id == "bess-mid"
 
 
@@ -140,3 +143,191 @@ def test_a_panel_with_no_children_still_builds() -> None:
     assert snapshot.battery.soe_percentage is None
     # Every position is unoccupied, so all 40 are synthesised.
     assert len(snapshot.circuits) == 40
+
+
+# ---------------------------------------------------------------------------
+# More than one PV inverter
+# ---------------------------------------------------------------------------
+
+# Firmware from r202639 publishes every commissioned inverter as its own device and,
+# once there is more than one, changes every PV device id. The ids here are illustrative.
+FIRST_PV = "example-40t-001-IQ8PLUS-72-2-US-1"
+SECOND_PV = "example-40t-001-SN1234-2"
+UNFED_PV = "example-40t-001-IQ8PLUS-72-2-US-3"
+SECOND_SOLAR_CIRCUIT = "5be1d2c3a4f5061728394a5b6c7d8e9f"
+
+
+def _multi_inverter_children() -> list[DiscoveredDevice]:
+    """The capture with three inverters: two fed by a circuit each, one fed by none.
+
+    The second inverter's circuit sits on lower breaker spaces than the captured
+    solar circuit, so the rule choosing `snapshot.pv` has a reason to pick it.
+    Only the second inverter publishes a serial; the others leave it unpublished,
+    which is the common case.
+    """
+    tree = {device_id: dict(topics) for device_id, topics in _TREE.items()}
+    pv_topics = tree.pop("pv")
+    tree[FIRST_PV] = dict(pv_topics)
+    tree[SECOND_PV] = {**pv_topics, "info/serial-number": "SN1234", "info/nominal-power": "4000.0"}
+    tree[UNFED_PV] = dict(pv_topics)
+    tree[SOLAR_CIRCUIT]["connection/feeds-device-id"] = FIRST_PV
+    tree[SECOND_SOLAR_CIRCUIT] = {
+        **tree[SOLAR_CIRCUIT],
+        "connection/feeds-device-id": SECOND_PV,
+        "info/name": "Garage Solar",
+        "info/spaces": "5,7",
+    }
+    return [device_from_topics(device_id, topics) for device_id, topics in tree.items() if device_id != PANEL]
+
+
+def test_every_inverter_is_a_snapshot_keyed_by_its_feeding_circuit_or_its_device_id() -> None:
+    snapshot = build_snapshot(_device(PANEL), _multi_inverter_children())
+
+    assert set(snapshot.pv_inverters) == {SOLAR_CIRCUIT, SECOND_SOLAR_CIRCUIT, UNFED_PV}
+    assert snapshot.pv_inverters[SOLAR_CIRCUIT].device_id == FIRST_PV
+    assert snapshot.pv_inverters[SECOND_SOLAR_CIRCUIT].device_id == SECOND_PV
+    for key, inverter in snapshot.pv_inverters.items():
+        assert inverter.node_id == key
+
+    unfed = snapshot.pv_inverters[UNFED_PV]
+    assert unfed.feed_circuit_id is None
+    assert unfed.relative_position is None
+
+
+def test_every_inverters_feeding_circuit_is_labeled_pv() -> None:
+    """Not only the one `snapshot.pv` describes: an unlabeled PV circuit reads as a load."""
+    snapshot = build_snapshot(_device(PANEL), _multi_inverter_children())
+
+    assert {cid for cid, c in snapshot.circuits.items() if c.device_type == "pv"} == {SOLAR_CIRCUIT, SECOND_SOLAR_CIRCUIT}
+
+
+# A second circuit feeding the first inverter, as a split-feed installation
+# publishes it. Its id sorts above the captured solar circuit's, so the
+# inverter's key stays the captured circuit and only the label is at issue.
+SPLIT_FEED_CIRCUIT = "9f0e1d2c3b4a59687766554433221100"
+CHARGER_CIRCUITS = ("62d0e03897b337b57101aae82f1e9ba2", "fe8b85c15bc9610c1b8b4ebc6f82488d")
+
+
+def _split_feed_children() -> list[DiscoveredDevice]:
+    """The three-inverter capture with the first inverter fed by two circuits."""
+    split = device_from_topics(
+        SPLIT_FEED_CIRCUIT,
+        {
+            **_TREE[SOLAR_CIRCUIT],
+            "connection/feeds-device-id": FIRST_PV,
+            "info/name": "Solar Inverter Second Feed",
+            "info/spaces": "9,11",
+        },
+    )
+    return [*_multi_inverter_children(), split]
+
+
+def test_every_circuit_feeding_an_inverter_is_labeled_pv_whatever_the_order() -> None:
+    """Both halves of a split feed carry PV power; labelling only one reads the other as a load."""
+    children = _split_feed_children()
+    labelled = {SOLAR_CIRCUIT: "pv", SECOND_SOLAR_CIRCUIT: "pv", SPLIT_FEED_CIRCUIT: "pv"}
+    labelled.update(dict.fromkeys(CHARGER_CIRCUITS, "evse"))
+
+    for order in (children, list(reversed(children))):
+        snapshot = build_snapshot(_device(PANEL), order)
+
+        assert {cid: c.device_type for cid, c in snapshot.circuits.items() if c.device_type != "circuit"} == labelled
+        assert snapshot.pv_inverters[SOLAR_CIRCUIT].device_id == FIRST_PV
+
+
+def test_the_primary_inverter_is_chosen_by_breaker_space_not_by_tree_order() -> None:
+    children = _multi_inverter_children()
+    forward = build_snapshot(_device(PANEL), children)
+    backward = build_snapshot(_device(PANEL), list(reversed(children)))
+
+    assert forward.pv.device_id == SECOND_PV
+    assert backward.pv == forward.pv
+    assert forward.pv == forward.pv_inverters[SECOND_SOLAR_CIRCUIT]
+
+
+def test_an_inverter_without_a_feeding_circuit_is_primary_only_when_alone() -> None:
+    lone = [device for device in _multi_inverter_children() if device.device_id not in (FIRST_PV, SECOND_PV)]
+
+    snapshot = build_snapshot(_device(PANEL), lone)
+
+    assert snapshot.pv.device_id == UNFED_PV
+    assert set(snapshot.pv_inverters) == {UNFED_PV}
+
+
+def test_unfed_inverters_fall_back_to_the_lowest_device_id() -> None:
+    first = [device for device in _children() if device.device_id != "pv"]
+    pv_topics = _TREE["pv"]
+    unfed = [device_from_topics(device_id, pv_topics) for device_id in ("pv-b", "pv-a")]
+
+    primary = TreeRoles([*first, *unfed]).pv
+
+    assert primary is not None
+    assert primary.device_id == "pv-a"
+
+
+def test_the_serial_is_carried_where_published_and_absent_otherwise() -> None:
+    snapshot = build_snapshot(_device(PANEL), _multi_inverter_children())
+
+    assert snapshot.pv_inverters[SECOND_SOLAR_CIRCUIT].serial_number == "SN1234"
+    assert snapshot.pv_inverters[SOLAR_CIRCUIT].serial_number is None
+    # Recorded at installation, and carried as-is: each inverter its own figure.
+    assert snapshot.pv_inverters[SECOND_SOLAR_CIRCUIT].nameplate_capacity_w == 4000.0
+    assert snapshot.pv_inverters[SOLAR_CIRCUIT].nameplate_capacity_w == 10000.0
+
+
+def test_extra_inverters_are_modeled_not_adopted() -> None:
+    snapshot = build_snapshot(_device(PANEL), _multi_inverter_children())
+
+    assert not [device for device in snapshot.adopted_devices if device.device_type == "energy.ebus.device.pv"]
+
+
+def _with_vendor_reading(device: DiscoveredDevice, value: str) -> DiscoveredDevice:
+    """The same device with one vendor node declared and valued."""
+    topics = dict(_TREE["pv"])
+    description = json.loads(topics["$description"])
+    description["nodes"]["acme"] = {
+        "name": "acme",
+        "type": "energy.ebus.capability.vendor.acme.string",
+        "properties": {"string-voltage": {"name": "String voltage", "datatype": "float", "unit": "V"}},
+    }
+    topics["$description"] = json.dumps(description)
+    topics["acme/string-voltage"] = value
+    return device_from_topics(device.device_id, topics)
+
+
+def test_each_inverters_vendor_readings_are_filed_under_that_inverter() -> None:
+    """With more than one inverter, `pv` is keyed per inverter, never one for all."""
+    readings = {FIRST_PV: "301.0", SECOND_PV: "302.0", UNFED_PV: "303.0"}
+    children = [
+        _with_vendor_reading(device, readings[device.device_id]) if device.device_id in readings else device
+        for device in _multi_inverter_children()
+    ]
+
+    snapshot = build_snapshot(_device(PANEL), children)
+
+    rows = {row.subject: row.value for row in snapshot.extension_properties if row.subject.kind == "pv"}
+    assert rows == {
+        ExtensionSubject(kind="pv", instance_key=SOLAR_CIRCUIT): "301.0",
+        ExtensionSubject(kind="pv", instance_key=SECOND_SOLAR_CIRCUIT): "302.0",
+        ExtensionSubject(kind="pv", instance_key=UNFED_PV): "303.0",
+    }
+
+
+def test_a_single_inverters_vendor_readings_keep_the_singleton_subject() -> None:
+    children = [_with_vendor_reading(device, "300.0") if device.device_id == "pv" else device for device in _children()]
+
+    snapshot = build_snapshot(_device(PANEL), children)
+
+    assert [row.subject for row in snapshot.extension_properties if row.subject.kind == "pv"] == [
+        ExtensionSubject(kind="pv")
+    ]
+
+
+def test_a_single_inverter_reads_as_it_did_before(snapshot: SpanPanelSnapshot) -> None:
+    """One inverter keeps its device id at r202639, and `pv` is that inverter."""
+    assert set(snapshot.pv_inverters) == {SOLAR_CIRCUIT}
+    assert snapshot.pv == snapshot.pv_inverters[SOLAR_CIRCUIT]
+    assert snapshot.pv.device_id == "pv"
+    assert snapshot.pv.node_id == SOLAR_CIRCUIT
+    # Declared and unpublished in the capture, which is the usual state.
+    assert snapshot.pv.serial_number is None

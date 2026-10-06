@@ -19,7 +19,13 @@ import uuid
 import httpx
 
 from ._http import CA_CERT_PATH, V2_STATUS_PATH, _Reply, _request
-from .exceptions import SpanPanelAPIError, SpanPanelAuthError, SpanPanelInsufficientPrivilegeError, SpanPanelServerError
+from .exceptions import (
+    SpanPanelAPIError,
+    SpanPanelAuthError,
+    SpanPanelInsufficientPrivilegeError,
+    SpanPanelPassphraseUnavailableError,
+    SpanPanelServerError,
+)
 from .models import HomieSchemaTypes, PassphraseRotation, V2AuthResponse, V2HomieSchema, V2StatusInfo
 
 _LOGGER = logging.getLogger(__name__)
@@ -171,6 +177,11 @@ def _str(val: object) -> str:
     return str(val) if val is not None else ""
 
 
+def _optional_str(val: object) -> str | None:
+    """Extract a string from a JSON-decoded value that the panel may send as null or omit."""
+    return None if val is None else str(val)
+
+
 def _int(val: object) -> int:
     """Extract an int from a JSON-decoded value."""
     if isinstance(val, int):
@@ -181,6 +192,24 @@ def _int(val: object) -> int:
 
 
 HTTP_TOO_MANY_REQUESTS = 429
+
+#: The ``detail`` a registration 422 carries when the panel cannot read its own
+#: passphrase. Compared whole and quoted in the exception message, which is safe
+#: only because it is this fixed string and never anything the panel echoed.
+REGISTRATION_UNAVAILABLE_DETAIL = "Dashboard password is not available"
+
+
+def _error_detail(response: httpx.Response) -> str | None:
+    """The ``detail`` string of an error body, or None when there is no such string."""
+    try:
+        parsed = response.json()
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    detail = parsed.get("detail")
+    return detail if isinstance(detail, str) else None
+
 
 #: Default attempts and base backoff used when the panel rate-limits a request.
 CA_CERT_MAX_ATTEMPTS = 5
@@ -240,10 +269,15 @@ async def register_v2(
             this call to ``https://``; ``None`` is byte-identical to 3.0.1.
 
     Returns:
-        V2AuthResponse with access token and MQTT broker credentials
+        V2AuthResponse with access token and MQTT broker credentials. From firmware
+        r202639 the broker password and passphrase are ``None`` when the panel
+        cannot read its passphrase; the access token is still valid.
 
     Raises:
         SpanPanelAuthError: Invalid passphrase or auth failure
+        SpanPanelPassphraseUnavailableError: The panel cannot read its own passphrase
+        SpanPanelServerError: The panel is not ready to register clients (any 5xx,
+            including the 503 it answers before its serial number is known); retryable
         SpanPanelConnectionError: Cannot reach panel
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response
@@ -267,6 +301,29 @@ async def register_v2(
         json=payload,
     )
 
+    sent = () if passphrase is None else (passphrase,)
+
+    if reply.status_code >= 500:
+        # From r202639 the panel answers 503 until it knows its own serial
+        # number, which is a panel still starting rather than a refusal. The
+        # same class `get_homie_schema` raises for a booting panel, so one retry
+        # clause covers both.
+        _log_auth_failure(reply.endpoint, reply.response, sent)
+        raise SpanPanelServerError(
+            f"Panel not ready: HTTP {reply.status_code} from /api/v2/auth/register",
+            status_code=reply.status_code,
+        )
+
+    if reply.status_code == 422 and _error_detail(reply.response) == REGISTRATION_UNAVAILABLE_DETAIL:
+        # Checked before the general 422 below, which means "credential not
+        # accepted". This one is the panel failing to read its own passphrase,
+        # and telling a user theirs is wrong would be false.
+        _log_auth_failure(reply.endpoint, reply.response, sent)
+        raise SpanPanelPassphraseUnavailableError(
+            f"Panel cannot register clients: {REGISTRATION_UNAVAILABLE_DETAIL} (HTTP 422)",
+            status_code=reply.status_code,
+        )
+
     if reply.status_code in (401, 403, 422):
         # Status only, matching the shape the branch below already uses. The body
         # is logged at DEBUG instead: a 422 from the panel's validation layer
@@ -276,39 +333,40 @@ async def register_v2(
         # passphrase goes with it because this is the one place in the library
         # that knows what was sent, and the panel is under no obligation to
         # quote it back under a key that names it.
-        _log_auth_failure(reply.endpoint, reply.response, () if passphrase is None else (passphrase,))
+        _log_auth_failure(reply.endpoint, reply.response, sent)
         raise SpanPanelAuthError(f"Authentication failed (HTTP {reply.status_code})")
 
     if reply.status_code != 200:
         raise SpanPanelAPIError(f"Unexpected response from /api/v2/auth/register: HTTP {reply.status_code}")
 
+    # The two credentials are not required: from r202639 the panel sends them
+    # as null, or may omit them, when it cannot read its passphrase, and the
+    # access token beside them is still good. Both read as None either way.
     data = reply.json_object(
         "accessToken",
         "tokenType",
         "iatMs",
         "ebusBrokerUsername",
-        "ebusBrokerPassword",
         "ebusBrokerHost",
         "ebusBrokerMqttsPort",
         "ebusBrokerWsPort",
         "ebusBrokerWssPort",
         "hostname",
         "serialNumber",
-        "hopPassphrase",
     )
     return V2AuthResponse(
         access_token=_str(data["accessToken"]),
         token_type=_str(data["tokenType"]),
         iat_ms=_int(data["iatMs"]),
         ebus_broker_username=_str(data["ebusBrokerUsername"]),
-        ebus_broker_password=_str(data["ebusBrokerPassword"]),
+        ebus_broker_password=_optional_str(data.get("ebusBrokerPassword")),
         ebus_broker_host=_str(data["ebusBrokerHost"]),
         ebus_broker_mqtts_port=_int(data["ebusBrokerMqttsPort"]),
         ebus_broker_ws_port=_int(data["ebusBrokerWsPort"]),
         ebus_broker_wss_port=_int(data["ebusBrokerWssPort"]),
         hostname=_str(data["hostname"]),
         serial_number=_str(data["serialNumber"]),
-        hop_passphrase=_str(data["hopPassphrase"]),
+        hop_passphrase=_optional_str(data.get("hopPassphrase")),
     )
 
 

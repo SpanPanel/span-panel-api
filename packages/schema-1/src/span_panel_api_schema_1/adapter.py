@@ -18,7 +18,8 @@ tree, and the SDK repopulates — so there is no resync hook to wire or forget.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Final
 
 from ebus_sdk import Controller
 
@@ -28,11 +29,15 @@ from span_panel_api_schema_1.circuits import priority_is_settable, relay_is_sett
 from span_panel_api_schema_1.const import (
     HOMIE_DOMAIN,
     HOMIE_VERSION,
+    NODE_CONNECTION,
     NODE_INFO,
     NODE_LOAD_SHED,
     NODE_SHED,
     NODE_SWITCH,
     PROP_ASSERTED_ISLANDING_STATE,
+    PROP_FED_BY_DEVICE_ID,
+    PROP_FEEDS_DEVICE_ID,
+    PROP_FIRMWARE_VERSION,
     PROP_MODEL,
     PROP_NAME,
     PROP_PRIORITY,
@@ -41,8 +46,9 @@ from span_panel_api_schema_1.const import (
     TYPE_CIRCUIT,
 )
 from span_panel_api_schema_1.description import declared_settable, device_type, node_properties
+from span_panel_api_schema_1.devices import feed_circuit_ids
 from span_panel_api_schema_1.field_metadata import build_field_metadata
-from span_panel_api_schema_1.panel import integer
+from span_panel_api_schema_1.panel import integer, text
 from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot, harmonised_evse_keys
 from span_panel_api_schema_1.transport import ControllerRoutes
 
@@ -54,6 +60,33 @@ if TYPE_CHECKING:
     from span_panel_api.models import FieldMetadata, SpanPanelSnapshot, V2HomieSchema
 
 _LOGGER = logging.getLogger(__name__)
+
+FEED_GRACE_S: Final = 2.0
+"""How long an inverter's feed may stay unvalued once everything else has arrived.
+
+A retained `connection/feeds-device-id` lands in the same burst as its circuit's
+name. One still missing this long after the rest of the tree's labels is taken
+as absent: a DER may be published with no connection record at all.
+"""
+
+
+def _unvalued_feeds_for_unplaced_pvs(roles: TreeRoles) -> list[str]:
+    """Circuits whose feed has not arrived, while an inverter has no known source.
+
+    Empty when every inverter is placed, by a circuit's
+    `connection/feeds-device-id` or a lugs device's `connection/fed-by-device-id`:
+    no value still to arrive can then change any inverter's key.
+    """
+    placed = set(feed_circuit_ids(roles.circuits))
+    placed.update(text(lugs, NODE_CONNECTION, PROP_FED_BY_DEVICE_ID) for lugs in roles.lugs)
+    if all(pv.device_id in placed for pv in roles.pvs):
+        return []
+    return [
+        circuit.device_id
+        for circuit in roles.circuits
+        if PROP_FEEDS_DEVICE_ID in circuit.get_node_properties(NODE_CONNECTION)
+        and circuit.get_property(NODE_CONNECTION, PROP_FEEDS_DEVICE_ID) is None
+    ]
 
 
 class SchemaOneAdapter:
@@ -67,9 +100,18 @@ class SchemaOneAdapter:
     schema_major = "schema_1"
     SUPPORTS_DATA_MODEL_VERSIONS: tuple[str, str] = (">=1.0", "<2.0")
 
-    def __init__(self, serial_number: str, schema: V2HomieSchema) -> None:
+    def __init__(
+        self,
+        serial_number: str,
+        schema: V2HomieSchema,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._serial_number = serial_number
         self._schema = schema
+        self._clock = clock
+        self._feed_wait_since: float | None = None
+        self._feed_wait_reported = False
         self._routes = ControllerRoutes()
         self._controller = Controller(root_device_id=serial_number, mqttc=self._routes)
         self._property_callbacks: list[Callable[[str, str, str, str | None], None]] = []
@@ -169,10 +211,30 @@ class SchemaOneAdapter:
         way to get a placeholder. Under parent/child every mapped device has
         the same exposure, so a DER missing the model it declared is reported
         alongside a circuit missing its name.
+
+        An inverter's feeding circuit is waited on too, because it decides the
+        inverter's `pv_inverters` key, and a key that moved after the first
+        snapshot would move every entity built on it. A circuit feeding nothing
+        publishes no `connection/feeds-device-id` value at all, so an unvalued
+        one is ambiguous; it is reported only while some inverter is still
+        unplaced (no circuit feeds it and no lugs device names it as its
+        source), which is the one case its value could still change a key.
+
+        The panel itself is reported while a declared BESS waits on the
+        panel's declared firmware version, which decides the BESS meter's frame.
+
+        The feed wait is bounded by `FEED_GRACE_S`. A DER may be published with
+        no connection record pointing at it, and then no value is coming; a
+        retained feed lands in the same burst as its circuit's name, so once
+        every name, model and firmware version has arrived, a feed still
+        unvalued after the grace is taken as absent. The inverter is then keyed
+        by its device id, reported once at INFO rather than the transport
+        warning after the full name timeout. The grace restarts whenever
+        anything else is missing again.
         """
         roles = TreeRoles(self._children())
         missing = [circuit.device_id for circuit in roles.circuits if not circuit.get_property(NODE_INFO, PROP_NAME)]
-        ders = (roles.bess, roles.pv, *roles.evse)
+        ders = (roles.bess, *roles.pvs, *roles.evse)
         missing.extend(
             device.device_id
             for device in ders
@@ -180,7 +242,44 @@ class SchemaOneAdapter:
             and PROP_MODEL in device.get_node_properties(NODE_INFO)
             and device.get_property(NODE_INFO, PROP_MODEL) is None
         )
+        missing.extend(self._firmware_version_pending(roles))
+        feeds = _unvalued_feeds_for_unplaced_pvs(roles)
+        if feeds and not missing:
+            now = self._clock()
+            if self._feed_wait_since is None:
+                self._feed_wait_since = now
+            if now - self._feed_wait_since >= FEED_GRACE_S:
+                if not self._feed_wait_reported:
+                    _LOGGER.info(
+                        "No connection record names %d circuit(s) as an inverter's feed; "
+                        "inverters without one are keyed by device id",
+                        len(feeds),
+                    )
+                    self._feed_wait_reported = True
+                feeds = []
+        elif missing:
+            self._feed_wait_since = None
+        missing.extend(feeds)
         return missing
+
+    def _firmware_version_pending(self, roles: TreeRoles) -> list[str]:
+        """The panel itself, while a declared BESS waits on the panel's firmware version.
+
+        The release build in the panel's `info/firmware-version` decides which
+        frame the BESS meter is read in. A first snapshot built before it lands
+        falls back to comparing signs with `power-flows/battery`, and a later one
+        may read the other way, so the battery's power would flip once after
+        connect. Only a declared property is waited on: a panel that does not
+        promise one is never held for it.
+        """
+        root = self._controller.get_root(self._serial_number)
+        if roles.bess is None or root is None:
+            return []
+        if PROP_FIRMWARE_VERSION not in root.get_node_properties(NODE_INFO):
+            return []
+        if root.get_property(NODE_INFO, PROP_FIRMWARE_VERSION) is None:
+            return [root.device_id]
+        return []
 
     def find_node_by_type(self, type_str: str) -> str | None:
         """Return the id of the first device declaring `type_str`.

@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "3.5.0"
+version = "3.6.0"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -58,8 +58,12 @@ dependencies = [
 # makes every public protocol member mandatory of every adapter wheel — so a 1.0.0
 # adapter installed against this bootstrap is rejected at discovery rather than
 # working in a degraded way. The two must move together.
-schema-0 = ["span-panel-api-schema-0>=1.1.0"]
-schema-1 = ["span-panel-api-schema-1>=1.1.0"]
+# Raised to 1.2.0 for 3.6.0 for a different reason: no protocol member changed,
+# so a 1.1.x adapter is still accepted, but it fills neither `pv_inverters` nor
+# the inverter identity fields 3.6.0 adds. Upgrading through the extra is what
+# brings the adapters that do.
+schema-0 = ["span-panel-api-schema-0>=1.2.0"]
+schema-1 = ["span-panel-api-schema-1>=1.2.0"]
 
 [project.urls]
 Homepage = "https://github.com/SpanPanel/span-panel-api"

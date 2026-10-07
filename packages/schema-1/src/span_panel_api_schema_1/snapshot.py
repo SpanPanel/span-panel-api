@@ -143,7 +143,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
     # A DER's device type decides how its feeding circuit is labelled, so the
     # circuit inherits it — matching the flat adapter, where the same circuit
     # reports device_type "pv" rather than "circuit". Every inverter's circuit,
-    # not only the one `snapshot.pv` describes: a PV circuit left labeled
+    # however many are commissioned: a PV circuit left labeled
     # "circuit" is read as a load, with its power in the opposite sign. Read
     # from the circuit side rather than through `feeds`, which keeps one circuit
     # per DER: every circuit of a DER fed by several carries its power.

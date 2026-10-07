@@ -194,7 +194,7 @@ def test_every_inverter_is_a_snapshot_keyed_by_its_feeding_circuit_or_its_device
 
 
 def test_every_inverters_feeding_circuit_is_labeled_pv() -> None:
-    """Not only the one `snapshot.pv` describes: an unlabeled PV circuit reads as a load."""
+    """Every inverter's circuit, however many are commissioned: an unlabeled PV circuit reads as a load."""
     snapshot = build_snapshot(_device(PANEL), _multi_inverter_children())
 
     assert {cid for cid, c in snapshot.circuits.items() if c.device_type == "pv"} == {SOLAR_CIRCUIT, SECOND_SOLAR_CIRCUIT}

@@ -78,7 +78,8 @@ class SpanPVSnapshot:
 
     A panel may commission more than one inverter, and from firmware r202639 each
     is published as its own device. `SpanPanelSnapshot.pv_inverters` carries all
-    of them; `SpanPanelSnapshot.pv` carries one, chosen as that field documents.
+    of them; `SpanPanelSnapshot.pv` is the lone inverter, or describes several
+    together, as that field documents.
     """
 
     vendor_name: str | None = None  # pv/vendor-name

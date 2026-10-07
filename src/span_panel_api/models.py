@@ -78,7 +78,8 @@ class SpanPVSnapshot:
 
     A panel may commission more than one inverter, and from firmware r202639 each
     is published as its own device. `SpanPanelSnapshot.pv_inverters` carries all
-    of them; `SpanPanelSnapshot.pv` carries one, chosen as that field documents.
+    of them; `SpanPanelSnapshot.pv` is the lone inverter, or describes several
+    together, as that field documents.
     """
 
     vendor_name: str | None = None  # pv/vendor-name
@@ -117,6 +118,10 @@ class SpanPVSnapshot:
     it does not know) and is deliberately distinct from `False`. The enum has
     three members, `OK,LOST,DEGRADED`, and no UNKNOWN, so absence is the only
     way to say it.
+
+    On a `pv` that describes several inverters together, `None` also means no
+    link is reported down and not every one is reported up, so it is never
+    `True` while any inverter's link is unreported; see `SpanPanelSnapshot.pv`.
     """
 
     serial_number: str | None = None
@@ -141,7 +146,8 @@ class SpanPVSnapshot:
     Named after `SpanEvseSnapshot.node_id`, which plays the same role for
     chargers. It is the feeding circuit's id when a circuit feeds the inverter,
     because that id stays put when the inverter's own device id changes, and
-    `device_id` otherwise.
+    `device_id` otherwise. `None` also on a `pv` that describes several
+    inverters together.
     """
 
 
@@ -1182,13 +1188,13 @@ class SpanPanelSnapshot:
     circuits: dict[str, SpanCircuitSnapshot] = field(default_factory=dict)
     battery: SpanBatterySnapshot = field(default_factory=SpanBatterySnapshot)
     pv: SpanPVSnapshot = field(default_factory=SpanPVSnapshot)
-    """One PV inverter, or the empty snapshot when none is commissioned.
+    """The lone PV inverter, or the inverters together; the empty snapshot when none is commissioned.
 
-    With a single inverter it is that inverter. With several it is the one whose
-    feeding circuit occupies the lowest breaker space; an inverter with no
-    feeding circuit ranks after every circuit-fed one, and remaining ties go to
-    the lowest device id. Kept for consumers written before `pv_inverters`,
-    which carries every inverter, this one included.
+    With one inverter it is that inverter, identical to its `pv_inverters` entry. With several it describes them together
+    and identifies none of them: vendor and model where every inverter shares one, the sum of their installed DC sizes where
+    every inverter publishes one, and their link down if any is reported down, up if every one is reported up, unknown
+    otherwise. It never carries an inverter's device id, key, serial, firmware, feeding circuit or position. A consumer that
+    needs one inverter reads `pv_inverters`.
     """
     pv_inverters: dict[str, SpanPVSnapshot] = field(default_factory=dict)
     """Every commissioned PV inverter, keyed by `SpanPVSnapshot.node_id`.

@@ -194,7 +194,9 @@ def _fingerprint(snapshot: SpanPanelSnapshot) -> dict[str, object]:
         ),
         "evse": sorted(snapshot.evse),
         "battery_serial": snapshot.battery.serial_number,
-        "pv_product": snapshot.pv.product_name,
+        "pv_model": snapshot.pv.model,
+        # Each inverter's key: one that changes over a reconnect is a new device to a consumer.
+        "pv_inverters": sorted(snapshot.pv_inverters),
     }
 
 
@@ -370,10 +372,12 @@ async def seed_broker(fixture: Path, host: str, port: int, stop: asyncio.Event) 
     reconnecting client replays, and the ticking meters are what proves live
     traffic resumed rather than merely the burst arriving.
     """
-    import paho.mqtt.client as paho  # imported here so the flat path needs no seeder
+    # Imported here so the flat path needs no seeder.
+    import paho.mqtt.client as paho
+    from paho.mqtt.enums import CallbackAPIVersion
 
     tree: dict[str, dict[str, str]] = json.loads(fixture.read_text(encoding="utf-8"))
-    client = paho.Client(callback_api_version=paho.CallbackAPIVersion.VERSION2)
+    client = paho.Client(callback_api_version=CallbackAPIVersion.VERSION2)
     client.connect(host, port, keepalive=60)
     client.loop_start()
 

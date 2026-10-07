@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "3.6.0"
+version = "3.6.1"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -63,7 +63,8 @@ dependencies = [
 # the inverter identity fields 3.6.0 adds. Upgrading through the extra is what
 # brings the adapters that do.
 schema-0 = ["span-panel-api-schema-0>=1.2.0"]
-schema-1 = ["span-panel-api-schema-1>=1.2.0"]
+# Raised to 1.2.1 for 3.6.1: that adapter stops ranking one inverter as pv.
+schema-1 = ["span-panel-api-schema-1>=1.2.1"]
 
 [project.urls]
 Homepage = "https://github.com/SpanPanel/span-panel-api"

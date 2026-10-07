@@ -9,7 +9,19 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
-## [1.2.0]
+## [1.2.1]
+
+No inverter is primary any more. Requires `span-panel-api` **3.6.1 or newer**. 1.2.0 was withdrawn from PyPI; this release carries its changes, listed under 1.2.0 below, except how `pv` is chosen, which this release replaces.
+
+### Changed
+
+- **`pv` describes the inverters together when a panel commissions more than one**, with their shared vendor and model, the sum of their installed DC sizes and a link that is down if any is down, rather than the one on the lowest breaker space.
+
+### Removed
+
+- **`snapshot.primary_pv` and `TreeRoles.pv`**, which singled out one inverter as `pv`.
+
+## [1.2.0] [YANKED]
 
 Every PV inverter a panel commissions is read, and the battery's power keeps its sign on firmware r202639. Requires `span-panel-api` **3.6.0 or newer**.
 

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from span_panel_api.models import ExtensionSubject, SpanPanelSnapshot, SpanPVSnapshot
 from span_panel_api_schema_1.adoption import build_adopted_devices
-from span_panel_api_schema_1.circuits import build_circuit, circuit_tabs
+from span_panel_api_schema_1.circuits import build_circuit
 from span_panel_api_schema_1.const import (
     NODE_CONNECTION,
     NODE_INFO,
@@ -75,7 +75,8 @@ class TreeRoles:
         self.evse: list[DiscoveredDevice] = []
         self.bess: DiscoveredDevice | None = None
         # Every inverter, in tree order. From r202639 each commissioned inverter
-        # is its own device; earlier firmware published one.
+        # is its own device; earlier firmware published one. None of them is
+        # primary.
         self.pvs: list[DiscoveredDevice] = []
         self.mid: DiscoveredDevice | None = None
 
@@ -94,33 +95,37 @@ class TreeRoles:
             elif declared == TYPE_MID and self.mid is None:
                 self.mid = device
 
-        self.pv: DiscoveredDevice | None = primary_pv(self.pvs, self.circuits)
 
+def _pv_for(inverters: Sequence[SpanPVSnapshot]) -> SpanPVSnapshot:
+    """`SpanPanelSnapshot.pv`: the lone inverter, or the inverters together.
 
-def primary_pv(pvs: Sequence[DiscoveredDevice], circuits: Sequence[DiscoveredDevice]) -> DiscoveredDevice | None:
-    """The inverter ``snapshot.pv`` describes, chosen the same way on every build.
-
-    The order depends only on what the panel publishes, never on the order the
-    devices were discovered in:
-
-    1. an inverter whose feeding circuit publishes its breaker spaces, before
-       one with no feeding circuit (or a circuit that publishes none);
-    2. among those, the lowest breaker space the feeding circuit occupies;
-    3. then the lowest device id.
-
-    A single inverter is chosen whatever it publishes, so a panel with one
-    inverter reads exactly as it did before more than one could be published.
+    No inverter stands for the others. With several, `pv` identifies none of
+    them -- no device id, key, serial, firmware or feeding circuit -- and
+    carries only what describes them together: the vendor and model where every
+    inverter shares one, the sum of their installed DC sizes where every
+    inverter publishes one, and their link as a three-valued AND (down if any
+    is reported down, up if every one is reported up, unknown otherwise).
+    Independent of order.
     """
-    if not pvs:
-        return None
-    feeds = feed_circuit_ids(list(circuits))
-    lowest_tab = {circuit.device_id: min(circuit_tabs(circuit), default=None) for circuit in circuits}
-
-    def rank(device: DiscoveredDevice) -> tuple[int, int, str]:
-        tab = lowest_tab.get(feeds.get(device.device_id, ""))
-        return (0, tab, device.device_id) if tab is not None else (1, 0, device.device_id)
-
-    return min(pvs, key=rank)
+    if not inverters:
+        return SpanPVSnapshot()
+    if len(inverters) == 1:
+        return inverters[0]
+    vendors = {inverter.vendor_name for inverter in inverters}
+    models = {inverter.model for inverter in inverters}
+    nameplates = [inverter.nameplate_capacity_w for inverter in inverters if inverter.nameplate_capacity_w is not None]
+    links = [inverter.connected for inverter in inverters]
+    connected: bool | None = None
+    if any(link is False for link in links):
+        connected = False
+    elif all(link is True for link in links):
+        connected = True
+    return SpanPVSnapshot(
+        vendor_name=vendors.pop() if len(vendors) == 1 else None,
+        model=models.pop() if len(models) == 1 else None,
+        nameplate_capacity_w=sum(nameplates) if len(nameplates) == len(inverters) else None,
+        connected=connected,
+    )
 
 
 def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], ready_since: float = 0.0) -> SpanPanelSnapshot:
@@ -214,7 +219,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
             ("panel", panel),
             ("battery", roles.bess),
             ("mid", roles.mid),
-            *((("pv", roles.pv),) if len(roles.pvs) == 1 else ()),
+            *((("pv", roles.pvs[0]),) if len(roles.pvs) == 1 else ()),
         )
         if device is not None
     ]
@@ -297,7 +302,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
             firmware_version=fields.firmware_version,
             power_flow_battery=fields.power_flow_battery,
         ),
-        pv=pv_inverters[pv_inverter_key(roles.pv, feeds)] if roles.pv is not None else SpanPVSnapshot(),
+        pv=_pv_for(list(pv_inverters.values())),
         pv_inverters=pv_inverters,
         mid=build_mid(roles.mid, device_names),
         # Gated on the node being declared, not on any value: every limit this

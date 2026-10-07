@@ -161,8 +161,8 @@ def _multi_inverter_children() -> list[DiscoveredDevice]:
 
     The second inverter's circuit sits on lower breaker spaces than the captured
     solar circuit, which once made the library rank it first; nothing ranks
-    inverters now. Only the second inverter publishes a serial; the others leave it unpublished,
-    which is the common case.
+    inverters now. Only the second inverter publishes a serial; the others leave
+    it unpublished, which is the common case.
     """
     tree = {device_id: dict(topics) for device_id, topics in _TREE.items()}
     pv_topics = tree.pop("pv")
@@ -246,30 +246,56 @@ def test_with_several_inverters_pv_describes_them_together() -> None:
     assert forward.pv.feed_circuit_id is None
     assert forward.pv.serial_number is None
     assert forward.pv.software_version is None
+    assert forward.pv.relative_position is None
     assert forward.pv.vendor_name == forward.pv_inverters[SOLAR_CIRCUIT].vendor_name
     assert forward.pv.model == forward.pv_inverters[SOLAR_CIRCUIT].model
-    assert forward.pv.nameplate_capacity_w == sum(
-        inverter.nameplate_capacity_w or 0.0 for inverter in forward.pv_inverters.values()
-    )
+    assert forward.pv.nameplate_capacity_w == 24000.0
     # Two links reported up and one unreported: not known to be all up, not known down.
     assert forward.pv.connected is None
 
 
 def test_one_link_down_is_the_link_down() -> None:
-    """Three-valued: a link known down decides, whatever an unreported one would say."""
+    """Three-valued: a link known down decides, whatever the others say.
+
+    The lost link is the first inverter's, on the higher breaker spaces, so the
+    removed lowest-space rule, which described the second inverter, read it up.
+    """
     lost = device_from_topics(
-        SECOND_SOLAR_CIRCUIT,
-        {
-            **_TREE[SOLAR_CIRCUIT],
-            "connection/feeds-device-id": SECOND_PV,
-            "connection/feeds-device-status": "LOST",
-            "info/name": "Garage Solar",
-            "info/spaces": "5,7",
-        },
+        SOLAR_CIRCUIT,
+        {**_TREE[SOLAR_CIRCUIT], "connection/feeds-device-id": FIRST_PV, "connection/feeds-device-status": "LOST"},
     )
-    children = [lost if device.device_id == SECOND_SOLAR_CIRCUIT else device for device in _multi_inverter_children()]
+    children = [lost if device.device_id == SOLAR_CIRCUIT else device for device in _multi_inverter_children()]
 
     assert build_snapshot(_device(PANEL), children).pv.connected is False
+
+
+def test_every_link_up_is_the_link_up() -> None:
+    fed = [device for device in _multi_inverter_children() if device.device_id != UNFED_PV]
+
+    assert build_snapshot(_device(PANEL), fed).pv.connected is True
+
+
+def test_one_unpublished_nameplate_leaves_the_sum_unknown() -> None:
+    unsized = {topic: value for topic, value in _TREE["pv"].items() if topic != "info/nominal-power"}
+    children = [
+        device_from_topics(SECOND_PV, unsized) if device.device_id == SECOND_PV else device
+        for device in _multi_inverter_children()
+    ]
+
+    assert build_snapshot(_device(PANEL), children).pv.nameplate_capacity_w is None
+
+
+def test_a_vendor_not_shared_is_unknown() -> None:
+    children = [
+        (
+            device_from_topics(SECOND_PV, {**_TREE["pv"], "info/vendor-name": "SolarEdge"})
+            if device.device_id == SECOND_PV
+            else device
+        )
+        for device in _multi_inverter_children()
+    ]
+
+    assert build_snapshot(_device(PANEL), children).pv.vendor_name is None
 
 
 def test_what_several_inverters_do_not_share_is_unknown() -> None:
@@ -278,10 +304,10 @@ def test_what_several_inverters_do_not_share_is_unknown() -> None:
         for device in _multi_inverter_children()
     ]
 
-    pv = build_snapshot(_device(PANEL), children).pv
+    snapshot = build_snapshot(_device(PANEL), children)
 
-    assert pv.model is None
-    assert pv.vendor_name == build_snapshot(_device(PANEL), children).pv_inverters[SOLAR_CIRCUIT].vendor_name
+    assert snapshot.pv.model is None
+    assert snapshot.pv.vendor_name == snapshot.pv_inverters[SOLAR_CIRCUIT].vendor_name
 
 
 def test_a_lone_inverter_is_pv_whatever_feeds_it() -> None:

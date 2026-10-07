@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
-## [3.6.1]
+## [3.6.1b1]
 
 3.6.0 was withdrawn from PyPI; this release carries its changes, listed under 3.6.0 below, except how `pv` is chosen, which this release replaces.
 

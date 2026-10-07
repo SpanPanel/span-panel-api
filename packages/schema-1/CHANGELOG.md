@@ -9,7 +9,7 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
-## [1.2.1]
+## [1.2.1b1]
 
 No inverter is primary any more. Requires `span-panel-api` **3.6.1 or newer**. 1.2.0 was withdrawn from PyPI; this release carries its changes, listed under 1.2.0 below, except how `pv` is chosen, which this release replaces.
 

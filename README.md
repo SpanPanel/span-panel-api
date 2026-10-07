@@ -148,21 +148,25 @@ transport-specific classes.
 
 All panel state is represented as immutable, frozen dataclasses:
 
-| Dataclass             | Content                                                                                                                                                            |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `SpanPanelSnapshot`   | Complete panel state: power, energy, grid/DSM state, hardware status, per-leg voltages, power flows, lugs current, shed forecast, circuits, battery, PV, EVSE, MID |
-| `SpanCircuitSnapshot` | Per-circuit: power, energy, relay state, priority, tabs, device type, breaker rating, current, `$target` pending state                                             |
-| `SpanBatterySnapshot` | BESS: SoC percentage, SoE kWh, own meter reading, communication state, link health, `model` / `part_number`, nameplate capacity                                    |
-| `SpanPVSnapshot`      | PV inverter: link health, `model` / `part_number`, nameplate capacity                                                                                              |
-| `SpanEvseSnapshot`    | EVSE (EV charger): status, lock state, advertised current, link health, `model` / `part_number` / serial / version metadata                                        |
-| `SpanMidSnapshot`     | Microgrid Interconnect Device: islanding state, grid state, grid-forming entity                                                                                    |
-| `AdoptedDevice`       | A device type this library models nothing for, carried whole: identity, readings, proxy link                                                                       |
-| `ExtensionProperty`   | A vendor property on a device this library _does_ model, with its value and the subject it hangs off                                                               |
+- **`SpanPanelSnapshot`**: complete panel state. Identity (serial, firmware, vendor, model, hardware version), panel size, main breaker rating, main relay, door and proximity state, uptime, network links with the Wi-Fi SSID and vendor cloud, grid and
+  feedthrough power and energy, grid/DSM state, run configuration, dominant power source, grid islandability, per-leg voltages, power flows, lugs current and whether the lugs are the service entrance, shed policy and forecast. It holds `circuits`,
+  `battery`, `pv`, `pv_inverters`, `evse`, `mid`, `pcs`, `adopted_devices` and `extension_properties`.
+- **`SpanCircuitSnapshot`**: one circuit. Id, name, relay state and requester, power, energy and their update times, tabs, 240 V, breaker rating, current, priority, user controllability, sheddable / never-backup / always-on flags, device type, relative
+  position, PCS management and priority, and the `$target` pending state for relay and priority.
+- **`SpanBatterySnapshot`**: the BESS. SoE percentage and kWh, its own meter reading, communication state, link health, vendor / `model` / `part_number` / serial / version, nameplate capacity.
+- **`SpanPVSnapshot`**: one PV inverter. Link health, vendor / `model` / serial / version, nameplate capacity (the array's DC size), feeding circuit, relative position, its wire `device_id` and its `node_id`, which is its key in `pv_inverters`.
+  `SpanPanelSnapshot.pv` is the lone inverter, or describes several together.
+- **`SpanEvseSnapshot`**: one EV charger. `node_id`, feeding circuit, status, lock state, advertised current, link health, vendor / `model` / `part_number` / serial / version, charge-current limit, ceiling, pending target and settability, and the effective
+  limit it applies.
+- **`SpanMidSnapshot`**: the Microgrid Interconnect Device. `node_id`, islanding state, grid state, grid-forming entity and its device name, vendor / `model` / serial / software and hardware version.
+- **`SpanPcsSnapshot`**: the Power Control System. Enabled and active, the enforced import limit and its binding constraint, and each import constraint's limit, enablement and active state (feed, operator, off-grid, requested).
+- **`AdoptedDevice`**: a device type this library models nothing for, carried whole. Identity (id, type, name, vendor, model, serial, versions), its declared parent, whether a peer proxies it, and its readings.
+- **`ExtensionProperty`**: a vendor property on a device this library _does_ model. The subject it hangs off, its node and property ids, datatype / unit / format, settability, value, and whether its node has curated siblings.
 
-Identity is normalised across every DER class: **`model` is the human designation and `part_number` is the SKU**, on `battery`, `evse` and `pv` alike. `product_name` was retired in 3.0.0 — see the changelog, because `battery.model` changes value for
-existing flat users at that upgrade.
+Identity is normalised across every DER class: **`model` is the human designation**, on `battery`, `evse` and `pv` alike, and **`part_number` is the SKU**, on `battery` and `evse`; `SpanPVSnapshot` has no SKU field. `product_name` was retired in 3.0.0 —
+see the changelog, because `battery.model` changes value for existing flat users at that upgrade.
 
-`mid`, `adopted_devices`, `extension_properties` and the per-DER link-health fields exist only under the parent/child schema. They are `None` or empty on a flat panel rather than absent, so a consumer reads the same snapshot type either way.
+`mid`, `pcs`, `adopted_devices`, `extension_properties` and the per-DER link-health fields exist only under the parent/child schema. They are `None` or empty on a flat panel rather than absent, so a consumer reads the same snapshot type either way.
 
 ## Usage
 

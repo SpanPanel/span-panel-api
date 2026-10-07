@@ -100,9 +100,9 @@ def _pv_for(inverters: Sequence[SpanPVSnapshot]) -> SpanPVSnapshot:
     """`SpanPanelSnapshot.pv`: the lone inverter, or the inverters together.
 
     No inverter stands for the others. With several, `pv` identifies none of
-    them -- no device id, key, serial, firmware or feeding circuit -- and
-    carries only what describes them together: the vendor and model where every
-    inverter shares one, the sum of their installed DC sizes where every
+    them -- no device id, key, serial, firmware, feeding circuit or position --
+    and carries only what describes them together: the vendor and model where
+    every inverter shares one, the sum of their installed DC sizes where every
     inverter publishes one, and their link as a three-valued AND (down if any
     is reported down, up if every one is reported up, unknown otherwise).
     Independent of order.
@@ -143,10 +143,10 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
     # A DER's device type decides how its feeding circuit is labelled, so the
     # circuit inherits it — matching the flat adapter, where the same circuit
     # reports device_type "pv" rather than "circuit". Every inverter's circuit,
-    # however many are commissioned: a PV circuit left labeled
-    # "circuit" is read as a load, with its power in the opposite sign. Read
-    # from the circuit side rather than through `feeds`, which keeps one circuit
-    # per DER: every circuit of a DER fed by several carries its power.
+    # however many are commissioned: a PV circuit left labeled "circuit" is
+    # read as a load, with its power in the opposite sign. Read from the
+    # circuit side rather than through `feeds`, which keeps one circuit per
+    # DER: every circuit of a DER fed by several carries its power.
     kind_by_der = {device.device_id: "pv" for device in roles.pvs} | {device.device_id: "evse" for device in roles.evse}
     der_type_by_circuit = {
         circuit.device_id: kind

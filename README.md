@@ -161,7 +161,7 @@ All panel state is represented as immutable, frozen dataclasses:
 - **`SpanMidSnapshot`**: the Microgrid Interconnect Device. `node_id`, islanding state, grid state, grid-forming entity and its device name, vendor / `model` / serial / software and hardware version.
 - **`SpanPcsSnapshot`**: the Power Control System. Enabled and active, the enforced import limit and its binding constraint, and each import constraint's limit, enablement and active state (feed, operator, off-grid, requested).
 - **`AdoptedDevice`**: a device type this library models nothing for, carried whole. Identity (id, type, name, vendor, model, serial, versions), its declared parent, whether a peer proxies it, and its readings.
-- **`ExtensionProperty`**: a vendor property on a device this library _does_ model. The subject it hangs off, its node and property ids, datatype / unit / format, settability, value, and whether its node has curated siblings.
+- **`ExtensionProperty`**: a vendor property on a device this library _does_ model. The subject it hangs off, its node and property ids and its `path`, datatype / unit / format, settability, value, and whether its node has curated siblings.
 
 Identity is normalised across every DER class: **`model` is the human designation**, on `battery`, `evse` and `pv` alike, and **`part_number` is the SKU**, on `battery` and `evse`; `SpanPVSnapshot` has no SKU field. `product_name` was retired in 3.0.0 —
 see the changelog, because `battery.model` changes value for existing flat users at that upgrade.
@@ -588,7 +588,7 @@ src/span_panel_api/          # distribution: span-panel-api (no parser)
 ├── dispatch.py              # select_adapter_key() — what does this panel need?
 ├── exceptions.py            # Exception hierarchy
 ├── factory.py               # create_span_client() → SpanMqttClient
-├── models.py                # Snapshot dataclasses (panel, circuit, battery, PV, EVSE, MID, adopted)
+├── models.py                # Snapshot dataclasses (panel, circuit, battery, PV, EVSE, MID, PCS, adopted, extension)
 ├── phase_validation.py      # Electrical phase utilities
 ├── protocol.py              # PEP 544 protocols, SchemaAdapter, PanelCapability flags
 ├── schema_drift.py          # Reporting a panel that outruns what we can read

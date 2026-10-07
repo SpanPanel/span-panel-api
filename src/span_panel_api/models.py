@@ -118,6 +118,10 @@ class SpanPVSnapshot:
     it does not know) and is deliberately distinct from `False`. The enum has
     three members, `OK,LOST,DEGRADED`, and no UNKNOWN, so absence is the only
     way to say it.
+
+    On a `pv` that describes several inverters together, `None` also means no
+    link is reported down and not every one is reported up, so it is never
+    `True` while any inverter's link is unreported; see `SpanPanelSnapshot.pv`.
     """
 
     serial_number: str | None = None
@@ -142,8 +146,8 @@ class SpanPVSnapshot:
     Named after `SpanEvseSnapshot.node_id`, which plays the same role for
     chargers. It is the feeding circuit's id when a circuit feeds the inverter,
     because that id stays put when the inverter's own device id changes, and
-    `device_id` otherwise. `None` on the empty snapshot and on a `pv` that
-    describes several inverters together.
+    `device_id` otherwise. `None` also on a `pv` that describes several
+    inverters together.
     """
 
 
@@ -1189,8 +1193,8 @@ class SpanPanelSnapshot:
     With one inverter it is that inverter, identical to its `pv_inverters` entry. With several it describes them together
     and identifies none of them: vendor and model where every inverter shares one, the sum of their installed DC sizes where
     every inverter publishes one, and their link down if any is reported down, up if every one is reported up, unknown
-    otherwise. It never carries an inverter's device id, key, serial, firmware or feeding circuit. A consumer that needs one
-    inverter reads `pv_inverters`.
+    otherwise. It never carries an inverter's device id, key, serial, firmware, feeding circuit or position. A consumer that
+    needs one inverter reads `pv_inverters`.
     """
     pv_inverters: dict[str, SpanPVSnapshot] = field(default_factory=dict)
     """Every commissioned PV inverter, keyed by `SpanPVSnapshot.node_id`.

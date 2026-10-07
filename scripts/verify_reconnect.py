@@ -195,6 +195,8 @@ def _fingerprint(snapshot: SpanPanelSnapshot) -> dict[str, object]:
         "evse": sorted(snapshot.evse),
         "battery_serial": snapshot.battery.serial_number,
         "pv_model": snapshot.pv.model,
+        # Each inverter's key: one that changes over a reconnect is a new device to a consumer.
+        "pv_inverters": sorted(snapshot.pv_inverters),
     }
 
 

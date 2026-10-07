@@ -9,13 +9,13 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 
 ## [3.6.1]
 
-3.6.0 was withdrawn from PyPI; this release carries its changes, listed under 3.6.0 below.
+3.6.0 was withdrawn from PyPI; this release carries its changes, listed under 3.6.0 below, except how `pv` is chosen, which this release replaces.
 
 ### Changed
 
 - **`SpanPanelSnapshot.pv` is documented as the lone inverter or the inverters together**, and the `schema-1` extra requires `span-panel-api-schema-1` 1.2.1 or newer.
 
-## [3.6.0]
+## [3.6.0] [YANKED]
 
 The snapshot carries every PV inverter a panel commissions, and registration copes with a panel that cannot read its own passphrase.
 

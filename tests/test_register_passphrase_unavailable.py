@@ -134,7 +134,7 @@ class TestFactoryRefusesAPasswordlessBroker:
 
 
 def test_status_tolerates_the_hardware_version_field() -> None:
-    """r202639 adds a required ``hardwareVersion`` to ``/api/v2/status``; it is read past, not rejected."""
+    """r202639 adds a required ``hardwareVersion`` to ``/api/v2/status``; it is read, not rejected."""
     status = V2StatusInfo.from_status_payload(
         {
             "serialNumber": "SYN-0000-0001",
@@ -144,5 +144,8 @@ def test_status_tolerates_the_hardware_version_field() -> None:
         }
     )
     assert status == V2StatusInfo(
-        serial_number="SYN-0000-0001", firmware_version="spanos2/r202639/03", proximity_proven=False
+        serial_number="SYN-0000-0001",
+        firmware_version="spanos2/r202639/03",
+        proximity_proven=False,
+        hardware_version="UNKNOWN",
     )

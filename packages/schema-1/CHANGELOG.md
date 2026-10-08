@@ -11,36 +11,35 @@ Pre-releases are not listed separately. A beta is a step towards the next public
 
 ## [1.2.1]
 
-No inverter is primary any more. Requires `span-panel-api` **3.6.1 or newer**. 1.2.0 was withdrawn from PyPI; this release carries its changes, listed under 1.2.0 below, except how `pv` is chosen, which this release replaces.
+Every PV inverter a panel commissions is read, and the battery's power keeps its sign on firmware r202639. Requires `span-panel-api` **3.6.1 or newer**.
+
+### Added
+
+- **Every PV inverter is read, not only the first**, each landing in `pv_inverters` with its serial number when published, its device id and its key.
+- **`pv.serial_number` is read from `info/serial-number`**, so that property no longer appears as a discovery row.
+- **`TreeRoles.pvs` and `devices.pv_inverter_key`** list every inverter and give an inverter's key.
+- **`span_panel_api_schema_1.firmware.release_build`** reads the six-digit release build number out of a firmware version string, or returns `None` when it has none.
+- **`build_battery` takes keyword-only `firmware_version` and `power_flow_battery`** to pick the BESS meter's wire frame, and `SchemaOneAdapter` a keyword-only `clock` for the wait on feeding circuits, and both behave as before without them.
 
 ### Changed
 
-- **`pv` describes the inverters together when a panel commissions more than one**, with their shared vendor and model, the sum of their installed DC sizes and a link that is down if any is down, rather than the one on the lowest breaker space.
+- **`pv` describes the inverters together when a panel commissions more than one**, with their shared vendor and model, the sum of their installed DC sizes and a link that is down if any is down, rather than whichever came first in the device tree.
 
 ### Removed
 
-- **`snapshot.primary_pv` and `TreeRoles.pv`**, which singled out one inverter as `pv`.
-
-## [1.2.0] [YANKED]
-
-Every PV inverter a panel commissions is read, and the battery's power keeps its sign on firmware r202639. Requires `span-panel-api` **3.6.0 or newer**.
+- **`TreeRoles.pv`**, which held only the first inverter, replaced by `TreeRoles.pvs`.
 
 ### Fixed
 
-- **A second inverter's feeding circuit is labeled `device_type="pv"`**, so its power no longer reads as a load with the opposite sign.
-- **A PV inverter wired through two breakers now reports its power and link status consistently**, with both circuits labeled `pv` and its feed and link status read from the one with the lowest circuit id.
-- **`pv` is the inverter on the lowest breaker space when more than one is commissioned**, rather than whichever came first in the device tree.
+- **Every inverter's feeding circuit is labeled `device_type="pv"`**, so a second inverter's power no longer reads as a load with the opposite sign.
+- **A PV inverter or charger wired through two breakers reports its power and link status consistently**, with both circuits labeled for it and its feed and link status read from the one with the lowest circuit id.
 - **Each inverter's extension properties are filed under that inverter**, with its `pv_inverters` key as the `instance_key` when more than one is commissioned.
 - **The first snapshot waits briefly for the circuits that feed an inverter**, so an inverter's key and its circuit's label do not change just after connecting.
 - **`battery.power_w` is discharge-positive on firmware r202639 and later, from the first snapshot on**, where a charging battery read positive.
 
-### Added
+## [1.2.0] [YANKED]
 
-- **`span_panel_api_schema_1.firmware.release_build`** reads the six-digit release build number out of a firmware version string, or returns `None` when it has none.
-- **`build_battery` takes keyword-only `firmware_version` and `power_flow_battery`** to pick the BESS meter's wire frame, and behaves as before without them.
-- **Every PV inverter is read, not only the first**, each landing in `pv_inverters` with its serial number when published, its device id and its key.
-- **`TreeRoles.pvs` lists every inverter**, and `snapshot.primary_pv`, `devices.pv_inverter_key` and `circuits.circuit_tabs` choose the one `pv` describes, give an inverter's key, and read a circuit's breaker spaces.
-- **`pv.serial_number` is read from `info/serial-number`**, so that property no longer appears as a discovery row.
+Withdrawn from PyPI; 1.2.1 replaces it.
 
 ## [1.1.4]
 

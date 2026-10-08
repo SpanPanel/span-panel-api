@@ -32,8 +32,8 @@ So `span-panel-api 3.0.0` and `span-panel-api-schema-0 1.0.0` are unrelated numb
 
 Adapters declare a floor on the bootstrap (`span-panel-api>=3.0.0,<4.0`). That dependency is why the versions committed in the manifests are load-bearing: they participate in resolution, so they are not placeholders that a release process may overwrite.
 
-Those floors name **stable** versions on purpose. A specifier that names a prerelease is pip's own signal that prereleases are acceptable for that requirement, so a floor left pointing at a beta would leave a released install willing to resolve a future
-beta of its sibling without anyone asking for one.
+A released version's floors name **stable** versions on purpose. A specifier that names a prerelease is pip's own signal that prereleases are acceptable for that requirement, so a floor left pointing at a beta would leave a released install willing to
+resolve a future beta of its sibling without anyone asking for one. A beta is the one exception; see [Pre-releases](#pre-releases).
 
 ## How a tag selects a distribution
 
@@ -81,6 +81,9 @@ A mismatch is a hard failure with both numbers in the message, so the common mis
    **Changelogs carry public versions only.** A beta gets no heading of its own: fold its changes into the entry for the public version it is working towards, described against the **last public release** rather than against the beta before it. A fix that
    only repairs something an earlier beta broke does not appear at all — from the point of view of somebody upgrading between released versions, it never happened. This keeps the file answering the question a reader actually has ("what changes if I
    upgrade?") instead of narrating development.
+
+   So the heading names the public version even while the manifest carries a beta's number: a beta's bump changes the manifests and the lockfile, never a changelog heading. A version withdrawn from PyPI keeps a one-line `## [X.Y.Z] [YANKED]` entry naming
+   the version that replaces it, and its surviving changes move into that version's entry, still described against the last public release.
 
 2. **Merge to `develop`** (or `main`, once this work is no longer prototype) and let CI go green.
 3. **Create a GitHub Release:**
@@ -196,8 +199,7 @@ print('adapters:', installed_adapter_keys())
 
 Expected: `adapters: []` then a named `SpanPanelAdapterMissingError` in the first, `adapters: ['schema_0']` in the second, and both keys in the third.
 
-Add `--pre` only when the versions being verified are pre-releases. It is not the default verb any more: from 3.0.0 onwards every distribution here publishes stable versions, and no floor in any manifest names a prerelease — which is deliberate, since a
-specifier that names one is pip's own signal that prereleases are acceptable for that requirement.
+Add `--pre` only when the versions being verified are pre-releases. A final's floors never name a prerelease, so verifying one needs no `--pre`.
 
 ## Pre-releases
 
@@ -207,6 +209,10 @@ Versions like `3.0.0b1` are pre-releases in both places that matter:
 - **GitHub** should have "Set as a pre-release" ticked, which keeps them out of the repository's "Latest release" slot.
 
 The publish workflow itself does not care — `on: release: published` fires either way.
+
+**A beta's floors name betas, and the final restores stable ones.** A beta built against a sibling's beta floors on that beta (`span-panel-api>=3.6.1b1` in the adapter, `span-panel-api-schema-1>=1.2.1b1` in the extra), because no stable floor can express
+it: `>=3.6.1` excludes `3.6.1b1`, which sorts before it, and `>=3.6.0` admits a stable version that lacks what the beta needs. The final's bump moves every such floor back to the stable version (`>=3.6.1`, `>=1.2.1`); check the built wheels'
+`Requires-Dist` for a leftover `b` or `rc` before tagging.
 
 ## When the emitter releases
 

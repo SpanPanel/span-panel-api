@@ -9,19 +9,11 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 
 ## [3.6.1]
 
-3.6.0 was withdrawn from PyPI; this release carries its changes, listed under 3.6.0 below, except how `pv` is chosen, which this release replaces.
-
-### Changed
-
-- **`SpanPanelSnapshot.pv` is documented as the lone inverter or the inverters together**, and the `schema-1` extra requires `span-panel-api-schema-1` 1.2.1 or newer.
-
-## [3.6.0] [YANKED]
-
 The snapshot carries every PV inverter a panel commissions, and registration copes with a panel that cannot read its own passphrase.
 
 ### Added
 
-- **`SpanPanelSnapshot.pv_inverters`** carries every commissioned PV inverter, keyed by its feeding circuit's id, which stays put when firmware r202639 renames a panel's inverters, or by its device id where no circuit feeds it.
+- **`SpanPanelSnapshot.pv_inverters`** carries every commissioned PV inverter, keyed by its feeding circuit's id, which stays put when firmware r202639 changes a panel's PV device ids, or by its device id where no circuit feeds it.
 - **`SpanPVSnapshot.serial_number`, `device_id` and `node_id`** give an inverter's serial number when one is published, its id on the wire, and its key in `pv_inverters`.
 - **`SpanEvseSnapshot.effective_charge_current_limit_a`** is the charge-current limit a charger is applying, its user limit when one is published and its ceiling otherwise, since from firmware r202639 a SPAN Drive publishes a user limit only once someone
   sets one.
@@ -29,10 +21,16 @@ The snapshot carries every PV inverter a panel commissions, and registration cop
 
 ### Changed
 
+- **`SpanPanelSnapshot.pv` describes the inverters together when more than one is commissioned**, carrying only their shared vendor and model, the sum of their installed DC sizes and a link that is down if any is down, rather than whichever one the adapter
+  met first.
+- **`SpanPVSnapshot.nameplate_capacity_w` is documented as the array's DC size recorded at installation**, an informational figure and never a ceiling on PV power.
 - **`V2AuthResponse.ebus_broker_password` and `hop_passphrase` are `str | None`**, `None` when a panel on firmware r202639 or later cannot read its passphrase yet still issues a valid access token.
 - **`register_v2` raises `SpanPanelServerError` with `status_code` for any 5xx**, including the 503 a panel on firmware r202639 answers until it knows its serial number, where it raised a plain `SpanPanelAPIError`.
-- **`SpanPanelSnapshot.pv` is the inverter on the lowest breaker space when more than one is commissioned**, rather than whichever one the adapter met first.
-- **`SpanPVSnapshot.nameplate_capacity_w` is documented as the array's DC size recorded at installation**, an informational figure and never a ceiling on PV power.
+- **The `schema-0` and `schema-1` extras require `span-panel-api-schema-0` 1.2.0 and `span-panel-api-schema-1` 1.2.1 or newer**, the adapters that fill `pv_inverters`.
+
+## [3.6.0] [YANKED]
+
+Withdrawn from PyPI; 3.6.1 replaces it.
 
 ## [3.5.0]
 

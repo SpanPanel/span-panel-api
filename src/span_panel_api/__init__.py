@@ -211,7 +211,7 @@ __all__ = [  # noqa: RUF022
     # Added 2026-10-02 (3.5.0): a 403 from a reduced-privilege token. A subclass
     # of SpanPanelAuthError, so every existing except clause keeps its meaning.
     "SpanPanelInsufficientPrivilegeError",
-    # Added 2026-10-06 (3.6.0): registration reached a panel that cannot read its own
+    # Added 2026-10-06 (3.6.1): registration reached a panel that cannot read its own
     # passphrase. A subclass of SpanPanelAPIError, so existing except clauses
     # keep their meaning; deliberately not a SpanPanelAuthError, because the
     # passphrase the user supplied may be correct.

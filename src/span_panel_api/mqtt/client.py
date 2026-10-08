@@ -1788,10 +1788,11 @@ class SpanMqttClient:
         the rebuilt tree until some value happened to change.
 
         The gate always opens. A wait that times out serves the tree as it is, and
-        so does one the adapter breaks by raising: nothing awaits a rebuild's
-        settle, so an escaping exception would close the gate for the tree's whole
-        life without a word. Cancellation is not a failure and still propagates;
-        `close()` relies on it.
+        an adapter that raises is waited out to the same deadline (see
+        `_wait_for_circuit_names`). The guard here is the last resort behind that:
+        nothing awaits a rebuild's settle, so an exception escaping the wait itself
+        would close the gate for the tree's whole life without a word.
+        Cancellation is not a failure and still propagates; `close()` relies on it.
 
         Only the client's first wait, which is connect's, reports a timeout as a
         warning. A label that is never published would otherwise be warned about
@@ -1821,22 +1822,42 @@ class SpanMqttClient:
         its own clock and must be able to expire while the panel is silent.
         A timeout is not fatal: entities fall back to placeholder names, and
         what is still missing is logged at `timeout_level`.
+
+        A poll that raises counts as one that found labels missing, and the
+        wait goes on to its deadline. A transient fault then costs nothing, and
+        cannot open the gate early on whatever names happen to have arrived --
+        which, on a first install, a consumer turns into permanent entity ids.
+        The fault is reported at ERROR once per wait, with its exception.
         """
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            missing = adapter.circuit_nodes_missing_names()
-            if not missing:
+        fault_reported = False
+        while True:
+            missing: list[str] | None
+            try:
+                missing = adapter.circuit_nodes_missing_names()
+            except Exception:  # pylint: disable=broad-exception-caught
+                missing = None
+                if not fault_reported:
+                    _LOGGER.error(
+                        "Could not ask the parser which of the panel's labels are missing; waiting them out",
+                        exc_info=True,
+                    )
+                    fault_reported = True
+            if missing is not None and not missing:
                 _LOGGER.debug("All circuit names received")
                 return
+            if time.monotonic() >= deadline:
+                break
             await asyncio.sleep(_CIRCUIT_NAMES_POLL_INTERVAL_S)
 
-        still_missing = adapter.circuit_nodes_missing_names()
-        if still_missing:
+        if missing is None:
+            _LOGGER.log(timeout_level, "Timed out waiting for circuit names (the parser could not say which are missing)")
+        else:
             _LOGGER.log(
                 timeout_level,
                 "Timed out waiting for circuit names (%d still missing): %s",
-                len(still_missing),
-                still_missing[:5],
+                len(missing),
+                missing[:5],
             )
 
     def _create_dispatch_task(self) -> None:

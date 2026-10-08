@@ -200,9 +200,9 @@ def panel_size_from_model(model: str) -> int:
     device publishes no size property.
 
     The highest *occupied* space is not a substitute: it is a lower bound, so a
-    40-space panel whose highest occupied slot is 36 would report 36, and a
-    consumer laying out positions `1..panel_size` would silently lose every
-    position above it.
+    panel whose highest occupied slot is below its size would report that slot,
+    and a consumer laying out positions `1..panel_size` would silently lose
+    every position above it.
 
     Unknown models return 0 and log, because inventing a size is worse than
     reporting none: a wrong total lays out positions that are not there, or

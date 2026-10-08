@@ -120,7 +120,7 @@ from typing import Any
 
 import pytest
 
-from span_panel_api.models import V2HomieSchema
+from span_panel_api.models import SpanPanelSnapshot, V2HomieSchema
 from span_panel_api_schema_0 import SchemaZeroAdapter
 from span_panel_api_schema_1 import SchemaOneAdapter
 
@@ -462,7 +462,7 @@ def test_der_identity_reads_the_same_on_both_adapters(flat: Any, parent_child: A
             )
 
 
-def _circuit_orphans(flat: Any, parent_child: Any) -> set[str]:
+def _circuit_orphans(flat: SpanPanelSnapshot, parent_child: SpanPanelSnapshot) -> set[str]:
     """Circuit fields populated on flat and absent on v1.0, over every shared circuit."""
     orphans: set[str] = set()
     for circuit_id in sorted(set(flat.circuits) & set(parent_child.circuits)):

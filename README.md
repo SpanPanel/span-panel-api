@@ -148,8 +148,8 @@ transport-specific classes.
 
 All panel state is represented as immutable, frozen dataclasses:
 
-- **`SpanPanelSnapshot`**: complete panel state. Identity (serial, firmware, vendor, model, hardware version), panel size, main breaker rating, main relay, door and proximity state, uptime, network links with the Wi-Fi SSID and vendor cloud, grid and
-  feedthrough power and energy, grid/DSM state, run configuration, dominant power source, grid islandability, per-leg voltages, power flows, lugs current and whether the lugs are the service entrance, shed policy and forecast. It holds `circuits`,
+- **`SpanPanelSnapshot`**: complete panel state. Identity (serial, firmware, vendor, model, hardware version), panel size, main breaker rating, main relay, door state, connection uptime on a flat panel, network links with the Wi-Fi SSID and vendor cloud,
+  grid and feedthrough power and energy, grid/DSM state, run configuration, dominant power source, grid islandability, per-leg voltages, power flows, lugs current and whether the lugs are the service entrance, shed policy and forecast. It holds `circuits`,
   `battery`, `pv`, `pv_inverters`, `evse`, `mid`, `pcs`, `adopted_devices` and `extension_properties`.
 - **`SpanCircuitSnapshot`**: one circuit. Id, name, relay state and requester, power, energy and their update times, tabs, 240 V, breaker rating, current, priority, user controllability, sheddable / never-backup / always-on flags, device type, relative
   position, PCS management and priority, and the `$target` pending state for relay and priority.
@@ -167,6 +167,9 @@ Identity is normalised across every DER class: **`model` is the human designatio
 see the changelog, because `battery.model` changes value for existing flat users at that upgrade.
 
 `mid`, `pcs`, `adopted_devices`, `extension_properties` and the per-DER link-health fields exist only under the parent/child schema. They are `None` or empty on a flat panel rather than absent, so a consumer reads the same snapshot type either way.
+
+`uptime_s` and a circuit's update times are the reverse: only the flat parser measures them, and they are `None` under the parent/child schema. Neither schema publishes proximity, so `SpanPanelSnapshot.proximity_proven` is always `None`; the panel's own
+answer is `V2StatusInfo.proximity_proven`, from `GET /api/v2/status`.
 
 ## Usage
 

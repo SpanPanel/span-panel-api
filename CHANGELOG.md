@@ -9,18 +9,20 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 
 ## [Unreleased]
 
-Values the panel never published are reported as unknown rather than as a fabricated constant, and snapshots carry only the circuits the panel publishes.
+Snapshot fields that held a fabricated constant can now be unknown, and with `span-panel-api-schema-0` and `span-panel-api-schema-1` 1.3.0 or newer the parsers report them as unknown and stop synthesising unoccupied positions.
 
 ### Changed
 
-- **`SpanPanelSnapshot.proximity_proven` is now `bool | None` and always `None`**, where it was effectively a constant `True`, because neither MQTT schema publishes a proximity property and the panel's own answer is `V2StatusInfo.proximity_proven`.
-- **`SpanPanelSnapshot.uptime_s` is now `int | None`, and `None` on a parent/child panel and before the panel first reports ready**, where it was a constant `0`.
-- **`SpanCircuitSnapshot.instant_power_update_time_s` and `energy_accum_update_time_s` are now `int | None`, and `None` until the reading has arrived and always on a parent/child panel**, where they were `0`.
+- **BREAKING FOR CONSUMERS: `SpanPanelSnapshot.proximity_proven` becomes `bool | None`**, and with `span-panel-api-schema-0` and `span-panel-api-schema-1` 1.3.0 or newer it is always `None`, where it was effectively a constant `True`, because neither MQTT
+  schema publishes a proximity property and the panel's own answer is `V2StatusInfo.proximity_proven`.
+- **BREAKING FOR CONSUMERS: `SpanPanelSnapshot.uptime_s` becomes `int | None`**, and with those parsers it is `None` on a parent/child panel and before a flat panel first reports ready, where it was a constant `0`.
+- **BREAKING FOR CONSUMERS: `SpanCircuitSnapshot.instant_power_update_time_s` and `energy_accum_update_time_s` become `int | None` and default to `None`**, and with those parsers they are `None` until the reading has arrived and always on a parent/child
+  panel, where they were `0`.
 
 ### Removed
 
-- **BREAKING: snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data**, so `SpanPanelSnapshot.circuits` holds only real circuits and `panel_size` alone states the panel's total
-  positions.
+- **BREAKING: with `span-panel-api-schema-0` and `span-panel-api-schema-1` 1.3.0 or newer, snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data**, so `SpanPanelSnapshot.circuits`
+  holds only real circuits and `panel_size` alone states the panel's total positions.
 
 ## [3.6.2]
 

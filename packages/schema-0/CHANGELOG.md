@@ -11,11 +11,14 @@ Pre-releases are not listed separately. A beta is a step towards the next public
 
 ## [Unreleased]
 
+Requires `span-panel-api` **3.7.0 or newer**, whose snapshot fields accept the unknown values this parser now reports.
+
 ### Changed
 
 - **`proximity_proven` is `None`**, where it was `True` on every snapshot because it read readiness rather than any proximity property.
 - **`uptime_s` is `None` before the panel first reports ready**, where it was `0`.
-- **A circuit's `instant_power_update_time_s` and `energy_accum_update_time_s` are `None` until the reading arrives, and `HomiePropertyAccumulator.get_timestamp()` returns `None` for a property never received**, where both gave `0`.
+- **A circuit's `instant_power_update_time_s` and `energy_accum_update_time_s` are `None` until the reading arrives**, where they were `0`.
+- **BREAKING FOR CONSUMERS: `HomiePropertyAccumulator.get_timestamp()` returns `int | None`, and `None` for a property never received**, where it returned `0`.
 
 ### Removed
 

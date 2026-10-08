@@ -67,12 +67,14 @@ type NodeDeclarations = Mapping[str, Mapping[str, PropertyDeclaration]]
 class SyntheticDevice:
     """One device of a synthetic tree: its declaration and its retained values.
 
-    `values` is keyed `node/property`, the topic suffix the broker retains, and
-    every key in it is declared in `nodes`.
+    `name` is the `$description.name`, fixed when the device is built, so dropping
+    a value never changes the description. `values` is keyed `node/property`, the
+    topic suffix the broker retains, and every key in it is declared in `nodes`.
     """
 
     device_id: str
     device_type: str
+    name: str
     nodes: NodeDeclarations
     values: Mapping[str, str]
 
@@ -99,7 +101,7 @@ _DECLARATIONS: Final[NodeDeclarations] = {
     "info": {
         "name": {"name": "Name", "datatype": "string"},
         "spaces": {"name": "Breaker space number(s), comma-separated", "datatype": "string"},
-        "nominal-voltage": {"name": "Nominal circuit voltage", "datatype": "float", "unit": "V"},
+        "nominal-voltage": {"name": "Rated voltage of the circuit", "datatype": "float", "unit": "V"},
         "serial-number": {"name": "Serial number", "datatype": "string"},
         "vendor-name": {"name": "Vendor name", "datatype": "string"},
         "model": {"name": "Model", "datatype": "string"},
@@ -116,7 +118,7 @@ _DECLARATIONS: Final[NodeDeclarations] = {
         "voltage-a": {"name": "L1 voltage", "datatype": "float", "unit": "V"},
         "voltage-b": {"name": "L2 voltage", "datatype": "float", "unit": "V"},
         "busbar-current": {"name": "Busbar current", "datatype": "float", "unit": "A"},
-        "frequency": {"name": "Line frequency", "datatype": "float", "unit": "Hz"},
+        "frequency": {"name": "AC frequency", "datatype": "float", "unit": "Hz"},
     },
     "switch": {
         "relay": {"name": "Relay state", "datatype": "enum", "format": "UNKNOWN,OPEN,CLOSED"},
@@ -133,7 +135,7 @@ _DECLARATIONS: Final[NodeDeclarations] = {
         "rating": {"name": "Breaker rating", "datatype": "integer", "unit": "A"},
         "poles": {"name": "Number of breaker poles", "datatype": "integer", "format": "1:4:1"},
         "protection-functions": {
-            "name": "Protections this breaker provides",
+            "name": "Protection types",
             "datatype": "enum",
             "format": "OVERCURRENT,SHORT_CIRCUIT,GROUND_FAULT,ARC_FAULT",
         },
@@ -227,6 +229,7 @@ def panel(
     return SyntheticDevice(
         device_id=PANEL_ID,
         device_type=_TYPE_PANEL,
+        name="Panel",
         nodes={**nodes, "info": {**nodes["info"], "model": model_declaration}},
         values=values,
     )
@@ -248,6 +251,7 @@ def lugs(direction: Literal["UPSTREAM", "DOWNSTREAM"], *, overcurrent_protection
     return SyntheticDevice(
         device_id=f"lugs-{direction.lower()}",
         device_type=_TYPE_LUGS,
+        name=f"{direction.capitalize()} lugs",
         nodes=_declare(values),
         values=values,
     )
@@ -264,25 +268,38 @@ def hosted_circuit(
     feed_status: str = "OK",
     nominal_voltage_v: float | None = None,
     protection_functions: Sequence[str] = (),
+    relay: bool = True,
+    meter_shared_with: Sequence[str] = (),
+    relay_shared_with: Sequence[str] = (),
 ) -> SyntheticDevice:
     """A circuit occupying `spaces`, with a breaker and a controllable relay.
 
-    One pole per space. The connection node is declared only when the circuit
-    has a role or feeds a device; the nominal voltage and the protection
-    functions only when given. `feeds_role` is any string, so a value outside
-    the catalog's set can be published too.
+    One pole per space. With `relay` false the circuit declares no `switch` node
+    at all. The connection node is declared only when the circuit has a role or
+    feeds a device; the nominal voltage, the protection functions and each
+    shared-with list only when given. `feeds_role` and the shared-with lists are
+    published exactly as given, so an out-of-set role, or a list naming the
+    circuit itself or an id no device has, can be published too.
     """
+    if relay_shared_with and not relay:
+        raise ValueError(f"{device_id} has no relay to share")
+    circuit_name = name if name is not None else f"Circuit {device_id}"
     values = {
-        "info/name": name if name is not None else f"Circuit {device_id}",
+        "info/name": circuit_name,
         "info/spaces": ",".join(str(space) for space in spaces),
         **_meter(reading),
-        "switch/relay": "CLOSED",
-        "switch/relay-controllable": "true",
-        "switch/relay-requester": "NONE",
         "breaker/rating": "20",
         "breaker/poles": str(len(spaces)),
         "load-shed/priority": "SOC_THRESHOLD",
     }
+    if relay:
+        values["switch/relay"] = "CLOSED"
+        values["switch/relay-controllable"] = "true"
+        values["switch/relay-requester"] = "NONE"
+    if meter_shared_with:
+        values["meter/shared-with-device-ids"] = ",".join(meter_shared_with)
+    if relay_shared_with:
+        values["switch/shared-with-device-ids"] = ",".join(relay_shared_with)
     if feeds_role is not None:
         values["connection/feeds-role"] = feeds_role
     if feeds is not None:
@@ -296,6 +313,7 @@ def hosted_circuit(
     return SyntheticDevice(
         device_id=device_id,
         device_type=_TYPE_CIRCUIT,
+        name=circuit_name,
         nodes=_declare(values, settable=("switch/relay", "load-shed/priority")),
         values=values,
     )
@@ -308,7 +326,9 @@ def space_less_meter(device_id: str = "meter-a", *, reading: MeterReading = METE
     `switch` node, so no relay.
     """
     values = _meter(reading)
-    return SyntheticDevice(device_id=device_id, device_type=_TYPE_CIRCUIT, nodes=_declare(values), values=values)
+    return SyntheticDevice(
+        device_id=device_id, device_type=_TYPE_CIRCUIT, name="Meter", nodes=_declare(values), values=values
+    )
 
 
 def shared_pair(first: str = "c-1", second: str = "c-2", *, space: int = 1) -> tuple[SyntheticDevice, SyntheticDevice]:
@@ -319,9 +339,7 @@ def shared_pair(first: str = "c-1", second: str = "c-2", *, space: int = 1) -> t
     """
 
     def member(device_id: str, peer: str) -> SyntheticDevice:
-        circuit = hosted_circuit(device_id, (space,))
-        values = {**circuit.values, "meter/shared-with-device-ids": peer, "switch/shared-with-device-ids": peer}
-        return replace(circuit, nodes=_declare(values, settable=("switch/relay", "load-shed/priority")), values=values)
+        return hosted_circuit(device_id, (space,), meter_shared_with=(peer,), relay_shared_with=(peer,))
 
     return member(first, second), member(second, first)
 
@@ -338,6 +356,7 @@ def evse(device_id: str = "evse-a", *, lock_settable: bool = True) -> SyntheticD
     return SyntheticDevice(
         device_id=device_id,
         device_type=_TYPE_EVSE,
+        name="Charger",
         nodes=_declare(values, settable=("switch/lock-state",) if lock_settable else ()),
         values=values,
     )
@@ -354,7 +373,9 @@ def battery(device_id: str = "battery-a") -> SyntheticDevice:
         "meter/active-power": _number(0.0),
         "status/communication-state": "OK",
     }
-    return SyntheticDevice(device_id=device_id, device_type=_TYPE_BESS, nodes=_declare(values), values=values)
+    return SyntheticDevice(
+        device_id=device_id, device_type=_TYPE_BESS, name="Battery", nodes=_declare(values), values=values
+    )
 
 
 def circuit_fed_battery(
@@ -422,7 +443,7 @@ def _retained(device: SyntheticDevice, *, root_id: str | None, children: Sequenc
         "homie": "5.0",
         "version": 1,
         "type": device.device_type,
-        "name": device.values.get("info/name", device.device_id),
+        "name": device.name,
         "nodes": {
             node: {"name": node, "type": f"{_CAPABILITY_PREFIX}.{node}", "properties": dict(properties)}
             for node, properties in device.nodes.items()

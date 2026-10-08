@@ -39,11 +39,25 @@ def _description(topics: RetainedTopicTree, device_id: str) -> dict[str, object]
     return description
 
 
-def _declared(topics: RetainedTopicTree, device_id: str) -> set[str]:
-    """Every `node/property` the device's description declares."""
+def _nodes(topics: RetainedTopicTree, device_id: str) -> dict[str, dict[str, dict[str, object]]]:
+    """The device's declared nodes: node id -> property id -> declaration."""
     nodes = _description(topics, device_id)["nodes"]
     assert isinstance(nodes, dict)
-    return {f"{node}/{prop}" for node, body in nodes.items() for prop in body["properties"]}
+    declared: dict[str, dict[str, dict[str, object]]] = {}
+    for node, body in nodes.items():
+        assert isinstance(node, str) and isinstance(body, dict)
+        properties = body["properties"]
+        assert isinstance(properties, dict)
+        declared[node] = {}
+        for prop, declaration in properties.items():
+            assert isinstance(prop, str) and isinstance(declaration, dict)
+            declared[node][prop] = {str(key): value for key, value in declaration.items()}
+    return declared
+
+
+def _declared(topics: RetainedTopicTree, device_id: str) -> set[str]:
+    """Every `node/property` the device's description declares."""
+    return {f"{node}/{prop}" for node, properties in _nodes(topics, device_id).items() for prop in properties}
 
 
 def _valued(topics: RetainedTopicTree, device_id: str) -> set[str]:
@@ -63,9 +77,14 @@ _TREES: dict[str, RetainedTopicTree] = {
     "declared feeds role": tree(panel(), hosted_circuit("c-1", (1,), feeds_role="LOADS")),
     "out-of-set feeds role": tree(panel(), hosted_circuit("c-1", (1,), feeds_role="NOT_A_ROLE")),
     "shared meter and relay": tree(panel(), *shared_pair()),
+    "shared-with lists naming the circuit itself and an unknown id": tree(
+        panel(),
+        hosted_circuit("c-1", (1,), meter_shared_with=("c-1", "c-9"), relay_shared_with=("c-9",)),
+    ),
+    "circuit without a relay": tree(panel(), hosted_circuit("c-1", (1,), relay=False)),
     "panel and circuit readings": tree(
         panel(busbar_current_a=12.5, frequency_hz=60.02),
-        lugs("UPSTREAM", overcurrent_protection_a=125),
+        lugs("UPSTREAM", overcurrent_protection_a=150),
         lugs("DOWNSTREAM"),
         hosted_circuit("c-1", (1, 3), nominal_voltage_v=240.0, protection_functions=("OVERCURRENT", "ARC_FAULT")),
     ),
@@ -134,10 +153,31 @@ def test_a_hosted_circuit_publishes_its_spaces_and_a_controllable_relay() -> Non
     assert topics["c-1"]["info/spaces"] == "5,7"
     assert topics["c-1"]["breaker/poles"] == "2"
     assert topics["c-1"]["switch/relay-controllable"] == "true"
-    nodes = _description(topics, "c-1")["nodes"]
-    assert isinstance(nodes, dict)
-    assert nodes["switch"]["properties"]["relay"]["settable"] is True
+    nodes = _nodes(topics, "c-1")
+    assert nodes["switch"]["relay"]["settable"] is True
     assert "connection" not in nodes
+    assert "shared-with-device-ids" not in nodes["meter"]
+
+
+def test_a_circuit_without_a_relay_declares_no_switch_node() -> None:
+    topics = tree(panel(), hosted_circuit("c-1", (1,), relay=False))
+
+    assert "switch" not in _nodes(topics, "c-1")
+    assert topics["c-1"]["info/spaces"] == "1"
+
+
+def test_a_relay_cannot_be_shared_by_a_circuit_without_one() -> None:
+    with pytest.raises(ValueError, match="c-1"):
+        hosted_circuit("c-1", (1,), relay=False, relay_shared_with=("c-2",))
+
+
+def test_shared_with_lists_are_published_as_given() -> None:
+    """The circuit's own id and an id no device has are published, not filtered:
+    dropping them is the adapter's job."""
+    topics = tree(panel(), hosted_circuit("c-1", (1,), meter_shared_with=("c-1", "c-9"), relay_shared_with=("c-9",)))
+
+    assert topics["c-1"]["meter/shared-with-device-ids"] == "c-1,c-9"
+    assert topics["c-1"]["switch/shared-with-device-ids"] == "c-9"
 
 
 def test_a_declared_feeds_role_is_valued_as_given() -> None:
@@ -162,7 +202,7 @@ def test_the_readings_are_declared_only_where_given() -> None:
     plain = tree(panel(), lugs("UPSTREAM"), hosted_circuit("c-1", (1,)))
     read = tree(
         panel(busbar_current_a=12.5, frequency_hz=60.02),
-        lugs("UPSTREAM", overcurrent_protection_a=125),
+        lugs("UPSTREAM", overcurrent_protection_a=150),
         hosted_circuit("c-1", (1,), nominal_voltage_v=120.0, protection_functions=("OVERCURRENT", "GROUND_FAULT")),
     )
     readings = {
@@ -175,15 +215,13 @@ def test_the_readings_are_declared_only_where_given() -> None:
         assert not paths & _declared(plain, device_id)
         assert paths <= _declared(read, device_id) & _valued(read, device_id)
     assert read[PANEL_ID]["meter/frequency"] == "60.02"
-    assert read["lugs-upstream"]["connection/overcurrent-protection"] == "125"
+    assert read["lugs-upstream"]["connection/overcurrent-protection"] == "150"
     assert read["c-1"]["breaker/protection-functions"] == "OVERCURRENT,GROUND_FAULT"
 
 
 def test_the_panel_advertises_the_model_it_reports_unless_told_otherwise() -> None:
     def model_format(device_id: str, topics: RetainedTopicTree) -> object:
-        nodes = _description(topics, device_id)["nodes"]
-        assert isinstance(nodes, dict)
-        return nodes["info"]["properties"]["model"]["format"]
+        return _nodes(topics, device_id)["info"]["model"]["format"]
 
     assert model_format(PANEL_ID, tree(panel(model="MAIN_32"))) == "MAIN_32"
     advertised = tree(panel(model="UNKNOWN", advertised_models=("UNKNOWN", "MAIN_32")))
@@ -200,10 +238,7 @@ def test_panel_with_positions_hosts_one_circuit_per_position() -> None:
 
 def test_the_charger_lock_is_settable_unless_told_otherwise() -> None:
     def lock_declaration(topics: RetainedTopicTree) -> dict[str, object]:
-        nodes = _description(topics, "evse-a")["nodes"]
-        assert isinstance(nodes, dict)
-        declaration: dict[str, object] = nodes["switch"]["properties"]["lock-state"]
-        return declaration
+        return _nodes(topics, "evse-a")["switch"]["lock-state"]
 
     assert lock_declaration(tree(panel(), evse("evse-a")))["settable"] is True
     assert "settable" not in lock_declaration(tree(panel(), evse("evse-a", lock_settable=False)))
@@ -228,6 +263,23 @@ def test_the_tree_links_every_device_to_its_parent() -> None:
     for device_id in ("battery-a", "c-1", "meter-a"):
         assert _description(topics, device_id)["parent"] == PANEL_ID
         assert _description(topics, device_id)["root"] == PANEL_ID
+
+
+def test_dropping_values_never_changes_the_description() -> None:
+    circuit = hosted_circuit("c-1", (1,), name="Workshop")
+
+    before = tree(panel(), circuit)
+    after = tree(panel(), without_values(circuit))
+
+    assert after["c-1"]["$description"] == before["c-1"]["$description"]
+    assert _description(after, "c-1")["name"] == "Workshop"
+
+
+@pytest.mark.parametrize("topics", list(_TREES.values()), ids=list(_TREES))
+def test_no_description_names_a_device_by_its_id(topics: RetainedTopicTree) -> None:
+    """A device id posing as a name would mask every name fallback under test."""
+    for device_id in topics:
+        assert _description(topics, device_id)["name"] != device_id
 
 
 def test_the_tree_refuses_a_device_id_twice() -> None:

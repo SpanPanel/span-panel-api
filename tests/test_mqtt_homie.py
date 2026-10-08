@@ -1146,6 +1146,9 @@ class TestSpanMqttClientSnapshot:
         client._adapter.handle_message(f"{PREFIX}/$state", "ready")
         client._adapter.handle_message(f"{PREFIX}/$description", _make_description(_core_description()))
         client._adapter.handle_message(f"{PREFIX}/core/software-version", "test-fw")
+        # Fed directly rather than through `_on_message`, so the readiness gate
+        # is passed explicitly.
+        await client._settle(client._adapter)
 
         snapshot = await client.get_snapshot()
         assert snapshot.serial_number == SERIAL

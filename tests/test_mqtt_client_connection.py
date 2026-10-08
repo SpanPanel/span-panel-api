@@ -71,6 +71,9 @@ class _FakeAdapter:
     def topics_to_subscribe(self) -> list[str]:
         return [WILDCARD_TOPIC_FMT.format(serial="test-serial")]
 
+    def circuit_nodes_missing_names(self) -> list[str]:
+        return []
+
 
 class TestRegisterConnectionCallback:
     """Callback subscription API — structural only (fan-out is tested in Task 4)."""
@@ -325,9 +328,21 @@ class TestGetSnapshotLiveness:
         client = _make_client()
         client._bridge = _FakeBridge(connected=True)
         client._adapter = _FakeAdapter(ready=True, snapshot=sentinel)
+        # Ready and labelled: the readiness gate opens for it.
+        await client._settle(client._adapter)
 
         snapshot = await client.get_snapshot()
         assert snapshot is sentinel
+
+    async def test_raises_stale_while_labels_are_still_arriving(self) -> None:
+        """A complete tree whose labels have not passed the readiness gate is not handed out."""
+        client = _make_client()
+        client._bridge = _FakeBridge(connected=True)
+        client._adapter = _FakeAdapter(ready=True, snapshot=_make_sentinel_snapshot())
+
+        with pytest.raises(SpanPanelStaleDataError) as exc_info:
+            await client.get_snapshot()
+        assert "labels" in str(exc_info.value).lower()
 
     async def test_raised_exception_is_span_panel_error(self) -> None:
         client = _make_client()
@@ -403,6 +418,8 @@ class TestStaleSnapshotDispatchGuard:
         client = _make_client()
         client._bridge = _FakeBridge(connected=True)
         client._adapter = _FakeAdapter(ready=True, snapshot=snapshot_sentinel)
+        # Ready and labelled: the readiness gate opens for it.
+        await client._settle(client._adapter)
 
         calls: list[SpanPanelSnapshot] = []
 

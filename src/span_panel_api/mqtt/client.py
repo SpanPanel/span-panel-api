@@ -193,6 +193,15 @@ class SpanMqttClient:
         self._schema_change_callbacks: list[Callable[[str | None, str | None], None]] = []
         self._live = False
         self._ready_event: asyncio.Event | None = None
+        # The readiness gate's latch. A tree is dispatchable once it is complete
+        # *and* its labels have settled, and the second half is a wait rather than
+        # a predicate: `_settle` polls the adapter until nothing is missing or the
+        # wait runs out, then records the adapter it settled here. Keyed on the
+        # adapter instance, so every new tree -- connect, a bridge rebuild, a
+        # generation swap -- starts unsettled without anything having to reset it.
+        self._settled_adapter: SchemaAdapter | None = None
+        self._settling_adapter: SchemaAdapter | None = None
+        self._settle_task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._snapshot_timer: asyncio.TimerHandle | None = None
@@ -513,12 +522,19 @@ class SpanMqttClient:
             await self.close()
             raise SpanPanelConnectionError(f"Timed out waiting for Homie device ready ({self._serial_number})") from exc
 
-        _LOGGER.debug("MQTT: Homie device ready, waiting for circuit names...")
+        _LOGGER.debug("MQTT: Homie device ready, waiting for its labels...")
 
-        # Wait for circuit name properties to arrive (retained messages
-        # may arrive after $state=ready). Without this, the first snapshot
-        # has empty circuit names and entities are created without labels.
-        await self._wait_for_circuit_names(timeout=_CIRCUIT_NAMES_TIMEOUT_S)
+        # The tree's labels arrive as retained values that may land after it is
+        # complete. The ready edge in `_on_message` started the one wait every
+        # tree goes through, so connect returns only once the first snapshot a
+        # caller can take carries them.
+        # `wait` rather than awaiting the task: `close()` cancels it, and that must
+        # end this wait rather than surface here as a cancellation of connect().
+        settle = self._settle_task
+        if settle is not None:
+            await asyncio.wait([settle])
+            if not settle.cancelled():
+                settle.result()
 
         self._assert_transports_agree_on_schema_generation()
         _LOGGER.debug("MQTT: Connection fully established")
@@ -755,6 +771,8 @@ class SpanMqttClient:
             raise SpanPanelStaleDataError("MQTT broker disconnected")
         if not self._adapter.is_ready():
             raise SpanPanelStaleDataError("Homie device not ready")
+        if not self._snapshot_ready(self._adapter):
+            raise SpanPanelStaleDataError("Homie device not ready: its labels are still arriving")
         return self._adapter.build_snapshot()
 
     # -- CircuitControlProtocol --------------------------------------------
@@ -1370,11 +1388,13 @@ class SpanMqttClient:
         adapter.handle_message(topic, payload)
 
         # Check if device just became ready
-        if not was_ready and adapter.is_ready() and self._ready_event is not None:
-            self._ready_event.set()
+        if not was_ready and adapter.is_ready():
+            if self._ready_event is not None:
+                self._ready_event.set()
+            self._start_settling(adapter)
 
         # Dispatch snapshot callbacks if streaming
-        if self._streaming and adapter.is_ready() and self._loop is not None:
+        if self._streaming and self._snapshot_ready(adapter) and self._loop is not None:
             if self._snapshot_interval <= 0:
                 # Real-time mode — dispatch immediately, no debounce.
                 self._create_dispatch_task()
@@ -1693,6 +1713,8 @@ class SpanMqttClient:
         old paho client is torn down and the new one is wired up. Discards
         any stale `$state=disconnected` cached during the outage so the
         new subscription's retained messages repopulate from a clean slate.
+        The fresh adapter is unsettled by construction, so nothing is
+        dispatched from it until its labels have passed the readiness gate.
 
         Schema-derived state (`_schema`, `_schema_hash`,
         `_previous_schema_types`) is intentionally preserved — the Homie
@@ -1719,15 +1741,66 @@ class SpanMqttClient:
         _LOGGER.debug("Pre-rebuild — resetting Homie accumulator")
         self._build_adapter(self._schema)
 
-    async def _wait_for_circuit_names(self, timeout: float) -> None:
-        """Wait for all circuit-like nodes to have a ``name`` property.
+    # -- The readiness gate ------------------------------------------------
+    #
+    # One gate for every snapshot this client hands out, whichever path built the
+    # tree it comes from. A tree is complete once every device has described
+    # itself; its labels -- circuit names, DER models, the feed links that key an
+    # inverter and type its circuit -- are separate retained values that a broker
+    # may replay after the last description. `connect()` used to wait those out
+    # on its own, so the first snapshot after a bridge rebuild was dispatched from
+    # a tree that had its shape and not its labels: an inverter keyed by its
+    # device id, and its feeding circuit read as a load, for one dispatch.
+    #
+    # The adapter answers what is still missing (`circuit_nodes_missing_names`,
+    # which also bounds the feed wait with its own grace). The waiting itself
+    # lives here, once, and runs for every tree from its ready edge.
 
-        Retained MQTT messages may arrive after the Homie device transitions
-        to ready. This polls the schema adapter at short intervals and
-        returns as soon as all circuit names are populated, or when the
-        timeout elapses (non-fatal — entities will use fallback names).
+    def _snapshot_ready(self, adapter: SchemaAdapter) -> bool:
+        """Whether `adapter`'s tree may be handed out: complete, and its labels settled."""
+        return adapter.is_ready() and self._settled_adapter is adapter
+
+    def _start_settling(self, adapter: SchemaAdapter) -> None:
+        """Start the label wait for `adapter`'s tree, unless it is settled or already settling.
+
+        Called on every ready edge. A tree can drop out of readiness and return
+        within one adapter's life -- a device commissioned mid-session is
+        undescribed for a moment -- and that is not a new tree, so it neither
+        restarts a wait in progress nor reopens a settled one.
         """
-        adapter = self._require_adapter()
+        if self._loop is None or self._settled_adapter is adapter or self._settling_adapter is adapter:
+            return
+        self._settling_adapter = adapter
+        task = self._loop.create_task(self._settle(adapter), name="span_mqtt_settle_labels")
+        self._settle_task = task
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _settle(self, adapter: SchemaAdapter) -> None:
+        """Wait out `adapter`'s labels, open the gate for it, and dispatch what it now holds.
+
+        A tree replaced while this waited -- a second rebuild, a generation swap --
+        is left unsettled: its successor has a wait of its own.
+
+        The dispatch is not optional. The replay is a burst, and a panel can be
+        quiet once it ends; without it a streaming consumer would see nothing from
+        the rebuilt tree until some value happened to change.
+        """
+        await self._wait_for_circuit_names(adapter, timeout=_CIRCUIT_NAMES_TIMEOUT_S)
+        if self._adapter is not adapter:
+            return
+        self._settled_adapter = adapter
+        if self._streaming:
+            self._create_dispatch_task()
+
+    async def _wait_for_circuit_names(self, adapter: SchemaAdapter, timeout: float) -> None:
+        """Wait until `adapter` reports nothing missing, or the timeout elapses.
+
+        Polls `circuit_nodes_missing_names` at short intervals rather than
+        reacting to messages, because the adapter's feed grace is measured on
+        its own clock and must be able to expire while the panel is silent.
+        A timeout is not fatal: entities fall back to placeholder names.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             missing = adapter.circuit_nodes_missing_names()
@@ -1783,18 +1856,19 @@ class SpanMqttClient:
         """Build snapshot and send to all registered callbacks.
 
         Guarded by the same liveness predicate as get_snapshot() — if the
-        bridge has disconnected or the Homie device is not ready, no
-        dispatch occurs. This prevents a pending debounce timer that was
-        scheduled just before a disconnect from delivering a stale
-        snapshot to subscribers after the fact.
+        bridge has disconnected, or the tree is not ready or its labels have
+        not settled, no dispatch occurs. This prevents a pending debounce timer
+        that was scheduled just before a disconnect or a rebuild from delivering
+        a stale or half-replayed snapshot to subscribers after the fact.
         """
         bridge = self._bridge
         adapter = self._adapter
-        if bridge is None or not bridge.is_connected() or adapter is None or not adapter.is_ready():
+        if bridge is None or not bridge.is_connected() or adapter is None or not self._snapshot_ready(adapter):
             _LOGGER.debug(
-                "Skipping stale snapshot dispatch (bridge_connected=%s, homie_ready=%s)",
+                "Skipping stale snapshot dispatch (bridge_connected=%s, homie_ready=%s, labels_settled=%s)",
                 bridge is not None and bridge.is_connected(),
                 adapter is not None and adapter.is_ready(),
+                adapter is not None and self._settled_adapter is adapter,
             )
             return
         snapshot = adapter.build_snapshot()

@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.6.2]
+
+A reconnect waits for the panel's labels before handing out a snapshot, as connecting always has.
+
+### Changed
+
+- **`get_snapshot()` raises `SpanPanelStaleDataError` while a rebuilt tree's names and feed links are still arriving**, as it already did while the tree itself was, and for at most the same wait connecting allows.
+- **`connect()` no longer raises an adapter's error from its wait for the panel's labels**, logging it at ERROR and serving the tree as it is, and only connect warns about labels that never arrive, while a reconnect logs that timeout at DEBUG.
+- **The `schema-1` extra requires `span-panel-api-schema-1` 1.2.2 or newer**, the adapter that restarts its feed-link wait correctly.
+
+### Fixed
+
+- **A reconnect no longer produces a snapshot in which a PV inverter is keyed by its device id or its feeding circuit reads as a load**, because after the broker connection is rebuilt no snapshot is dispatched until the replayed tree's circuit names and
+  feed links have arrived.
+
 ## [3.6.1]
 
 The snapshot carries every PV inverter a panel commissions, and registration copes with a panel that cannot read its own passphrase.

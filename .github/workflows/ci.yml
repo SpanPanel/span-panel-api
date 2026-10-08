@@ -1,10 +1,12 @@
 name: CI
 
 on:
+  # Pre-release lines live on `prerelease/<version>` branches and ship betas from
+  # there, so they are held to the same checks as main.
   push:
-    branches: [ main ]
+    branches: [ main, "prerelease/**" ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, "prerelease/**" ]
   # Push and pull_request both arrive by webhook, so a dropped delivery leaves a
   # commit with no run at all -- which reads the same as a commit that passed.
   # Dispatch re-runs this against any ref on demand -- a branch, or a tag when

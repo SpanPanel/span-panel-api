@@ -240,7 +240,14 @@ class HomieDeviceConsumer:
                 circuit = self._build_circuit(node_id, device_type, relative_position)
                 updated_circuits[circuit.circuit_id] = circuit
 
-        return dataclasses.replace(cached, circuits=updated_circuits)
+        # Uptime is a clock, not a property, so no dirty node announces that it
+        # moved; carrying the cached value would freeze it between full builds.
+        return dataclasses.replace(cached, circuits=updated_circuits, uptime_s=self._uptime_s())
+
+    def _uptime_s(self) -> int | None:
+        """Connection uptime since $state==ready, measured here; none before the first ready."""
+        ready_since = self._acc.ready_since
+        return int(time.monotonic() - ready_since) if ready_since > 0.0 else None
 
     def _find_lugs_node(self, direction: str) -> str | None:
         """Find the lugs node with a specific direction.
@@ -655,9 +662,6 @@ class HomieDeviceConsumer:
         dsm_state = self._derive_dsm_state(core_node, grid_power, power_flow_grid)
         current_run_config = self._derive_run_config(dsm_state, grid_islandable, dominant_power_source)
 
-        # Connection uptime since $state==ready, measured here; none before the first ready
-        uptime = int(time.monotonic() - self._acc.ready_since) if self._acc.ready_since > 0.0 else None
-
         return SpanPanelSnapshot(
             serial_number=self._acc.serial_number,
             firmware_version=firmware,
@@ -674,7 +678,7 @@ class HomieDeviceConsumer:
             # No flat property reports proximity. Readiness is not a stand-in:
             # a snapshot is only built once ready, so it would always say True.
             proximity_proven=None,
-            uptime_s=uptime,
+            uptime_s=self._uptime_s(),
             eth0_link=eth0,
             wlan_link=wlan,
             wwan_link=wwan_connected,

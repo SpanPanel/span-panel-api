@@ -21,6 +21,10 @@ Pre-releases are not listed separately. A beta is a step towards the next public
 
 - **BREAKING: snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data.**
 
+### Fixed
+
+- **`uptime_s` keeps advancing while only circuits change**, where a snapshot rebuilt for changed circuits alone carried the previous snapshot's uptime forward until something panel-level changed.
+
 ## [1.2.0]
 
 The panel's one inverter is reported through `pv_inverters` as well as `pv`. Requires `span-panel-api` **3.6.0 or newer**.

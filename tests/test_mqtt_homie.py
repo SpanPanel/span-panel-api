@@ -905,6 +905,23 @@ class TestSnapshotCaching:
         assert circuit.instant_power_w == 200.0
         assert snap2.firmware_version == snap1.firmware_version
 
+    def test_uptime_advances_across_a_circuit_only_rebuild(self, monkeypatch: pytest.MonkeyPatch):
+        """A partial rebuild must not carry the cached uptime: nothing dirty announces a clock."""
+        acc, consumer = _build_ready_consumer()
+        node = "aabbccdd-1122-3344-5566-778899001122"
+        acc.handle_message(f"{PREFIX}/{node}/active-power", "-100.0")
+        snap1 = consumer.build_snapshot()
+        assert snap1.uptime_s is not None
+
+        later = time.monotonic() + 100.0
+        monkeypatch.setattr(time, "monotonic", lambda: later)
+        acc.handle_message(f"{PREFIX}/{node}/active-power", "-200.0")
+        snap2 = consumer.build_snapshot()
+
+        assert snap2.circuits["aabbccdd112233445566778899001122"].instant_power_w == 200.0
+        assert snap2.uptime_s is not None
+        assert snap2.uptime_s >= snap1.uptime_s + 100
+
     def test_dirty_core_triggers_full_rebuild(self):
         acc, consumer = _build_ready_consumer()
         acc.handle_message(f"{PREFIX}/core/software-version", "v1")

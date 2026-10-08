@@ -517,6 +517,46 @@ def test_the_feed_grace_starts_only_once_everything_else_has_arrived() -> None:
     assert SOLAR_CIRCUIT in adapter.circuit_nodes_missing_names()
 
 
+def test_the_feed_grace_restarts_once_every_inverter_has_been_placed() -> None:
+    """A grace is spent on one wait, not carried into the next.
+
+    The first inverter's feed is waited on and arrives. Later the panel
+    commissions a second inverter whose feed has not landed yet; that wait gets
+    a full grace of its own rather than inheriting the first one's start time,
+    which has long since run out and would key the new inverter by its device id
+    the moment it appears.
+    """
+    second_circuit = "5be1d2c3a4f5061728394a5b6c7d8e9f"
+    second_pv = "pv-2"
+    now = [100.0]
+    adapter = SchemaOneAdapter(PANEL, _schema(), clock=lambda: now[0])
+    _feed(adapter, omit=("connection/feeds-device-id",))
+    assert SOLAR_CIRCUIT in adapter.circuit_nodes_missing_names()
+    adapter.handle_message(
+        f"ebus/5/{SOLAR_CIRCUIT}/connection/feeds-device-id", _TREE[SOLAR_CIRCUIT]["connection/feeds-device-id"]
+    )
+    assert adapter.circuit_nodes_missing_names() == []
+
+    now[0] += FEED_GRACE_S + 1
+    description = json.loads(_TREE[PANEL]["$description"])
+    description["children"] = [*description["children"], second_circuit, second_pv]
+    tree = {
+        PANEL: {**_TREE[PANEL], "$description": json.dumps(description)},
+        second_pv: {**_TREE["pv"], "info/model": "SE7600H-B"},
+        second_circuit: {
+            topic: value for topic, value in _TREE[SOLAR_CIRCUIT].items() if topic != "connection/feeds-device-id"
+        }
+        | {"info/name": "Garage Solar", "info/spaces": "5,7"},
+    }
+    _feed(adapter, [PANEL, second_pv, second_circuit], tree=tree)
+    assert {inverter.device_id for inverter in adapter.build_snapshot().pv_inverters.values()} == {
+        "pv",
+        second_pv,
+    }, "precondition: the second inverter was commissioned"
+
+    assert second_circuit in adapter.circuit_nodes_missing_names()
+
+
 def test_the_panel_firmware_version_is_waited_on_when_a_battery_is_declared() -> None:
     """The release build in the panel's firmware version decides the BESS meter's frame.
 

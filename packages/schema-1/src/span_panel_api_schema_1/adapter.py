@@ -230,7 +230,9 @@ class SchemaOneAdapter:
         unvalued after the grace is taken as absent. The inverter is then keyed
         by its device id, reported once at INFO rather than the transport
         warning after the full name timeout. The grace restarts whenever
-        anything else is missing again.
+        anything else is missing again, and once every inverter is placed, so
+        an inverter that appears after another's feed has arrived, within the
+        same wait, gets a whole grace of its own.
         """
         roles = TreeRoles(self._children())
         missing = [circuit.device_id for circuit in roles.circuits if not circuit.get_property(NODE_INFO, PROP_NAME)]
@@ -257,8 +259,13 @@ class SchemaOneAdapter:
                     )
                     self._feed_wait_reported = True
                 feeds = []
-        elif missing:
+        else:
+            # No feed is being waited out on its own: something else is still
+            # missing, or every inverter is placed. Either way a later feed wait
+            # is a new one and gets the whole grace.
             self._feed_wait_since = None
+            if not feeds:
+                self._feed_wait_reported = False
         missing.extend(feeds)
         return missing
 

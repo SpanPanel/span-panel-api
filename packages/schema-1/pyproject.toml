@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api-schema-1"
-version = "1.2.1"
+version = "1.2.2"
 description = "Parent/child schema (data-model-version 1.x) parser for span-panel-api"
 authors = [
     {name = "SpanPanel"}
@@ -26,7 +26,9 @@ dependencies = [
     # parser fills. Against an earlier one, building a snapshot fails on those
     # arguments.
     # Raised to 3.6.1, whose SpanPanelSnapshot.pv documents what this parser builds.
-    "span-panel-api>=3.6.1,<4.0",
+    # Raised to 3.6.2, which waits on this parser's missing labels after a bridge
+    # rebuild as well as on connect; the fix spans both, so the pair moves together.
+    "span-panel-api>=3.6.2,<4.0",
     # Only this distribution depends on the eBus SDK. The bootstrap and
     # schema-0 stay clean, so a flat-panel install never pulls it in — which is
     # what bounds the release coupling this dependency introduces to panels on

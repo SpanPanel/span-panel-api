@@ -9,6 +9,15 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [1.2.2]
+
+Requires `span-panel-api` **3.6.2 or newer**, which waits on this parser's missing labels after a reconnect as well as on connect.
+
+### Fixed
+
+- **`circuit_nodes_missing_names()` gives an inverter that appears after another inverter's feed link has arrived, within the same wait, a full grace for its own**, rather than reporting nothing missing the moment it appears and so letting it be keyed by
+  its device id.
+
 ## [1.2.1]
 
 Every PV inverter a panel commissions is read, and the battery's power keeps its sign on firmware r202639. Requires `span-panel-api` **3.6.1 or newer**.

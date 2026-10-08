@@ -660,7 +660,10 @@ class V2HomieSchema:
     """Response from GET /api/v2/homie/schema."""
 
     firmware_version: str
-    types_schema_hash: str  # SHA-256, first 16 hex chars
+    # SHA-256, first 16 hex chars, compared by the client between connects: over
+    # ``types`` on a flat panel, and over ``deviceClasses`` on parent/child, where
+    # the panel's own ``deviceClassesSchemaHash`` is used when it publishes one.
+    types_schema_hash: str
     types: HomieSchemaTypes
     # The flat-vs-parent/child discriminator, and the reason this endpoint is
     # fetched before MQTT is opened rather than during connect(). Absent on flat

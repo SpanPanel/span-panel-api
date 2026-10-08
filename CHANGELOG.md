@@ -13,6 +13,11 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 
 - **`V2StatusInfo.hardware_version` reports the hardware version string from `GET /api/v2/status`.**
 
+### Fixed
+
+- **`V2HomieSchema.types_schema_hash` on data model 1.0 is the panel's published `deviceClassesSchemaHash`, or a hash of `deviceClasses` when none is published, where it was one constant for every such panel**; a flat panel's value is unchanged, and a
+  value stored from 3.6.x differs once on a data model 1.0 panel.
+
 ## [3.6.2]
 
 A reconnect waits for the panel's labels before handing out a snapshot, as connecting always has.

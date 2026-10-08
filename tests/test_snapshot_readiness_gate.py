@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import gc
+import logging
 from functools import partial
 from unittest.mock import AsyncMock, MagicMock
 
@@ -65,10 +67,12 @@ def _broker(mqtt_client_mock: MagicMock, monkeypatch: pytest.MonkeyPatch) -> Mag
     return mqtt_client_mock
 
 
-def _client(clock: Callable[[], float] | None = None) -> SpanMqttClient:
-    factory: Callable[[str, V2HomieSchema], SchemaAdapter] = (
-        SchemaOneAdapter if clock is None else partial(SchemaOneAdapter, clock=clock)
-    )
+def _client(
+    clock: Callable[[], float] | None = None,
+    factory: Callable[[str, V2HomieSchema], SchemaAdapter] | None = None,
+) -> SpanMqttClient:
+    if factory is None:
+        factory = SchemaOneAdapter if clock is None else partial(SchemaOneAdapter, clock=clock)
     return SpanMqttClient(
         host="192.168.1.1",
         serial_number=PANEL,
@@ -222,5 +226,161 @@ async def test_a_debounce_timer_armed_before_the_rebuild_does_not_dispatch_the_h
     await asyncio.sleep(_LET_TASKS_RUN_S)
 
     assert dispatched == [], "the pending timer dispatched the half-replayed tree"
+
+    await client.close()
+
+
+# ---------------------------------------------------------------------------
+# The gate always opens, exactly once, for the tree that is current
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_slow_settle_of_a_replaced_tree_never_closes_the_live_trees_gate(
+    broker: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two rebuilds in a row: the first tree is still waiting when the second settles.
+
+    The first tree's wait ends later, on its feed grace. It must leave the gate
+    as the second tree set it rather than claim it for a parser nothing feeds
+    any more, which would hold every snapshot until the next rebuild.
+    """
+    monkeypatch.setattr(client_module, "_CIRCUIT_NAMES_POLL_INTERVAL_S", 0.01)
+    now = [100.0]
+    client = _client(clock=lambda: now[0])
+    dispatched = await _connected_and_streaming(client)
+    before = _shape(await client.get_snapshot())
+
+    client._on_pre_rebuild()
+    _replay_labels(client, _TREE, hold=(FEED,))
+    await asyncio.sleep(_LET_TASKS_RUN_S)
+    client._on_pre_rebuild()
+    _replay_labels(client, _TREE)
+    await asyncio.sleep(_LET_TASKS_RUN_S)
+    assert dispatched, "precondition: the second tree settled and dispatched"
+
+    now[0] += FEED_GRACE_S
+    await asyncio.sleep(_LET_TASKS_RUN_S)
+    dispatched.clear()
+
+    assert _shape(await client.get_snapshot()) == before
+    client._on_message(f"ebus/5/{PANEL}/power-flows/pv", "1000")
+    await asyncio.sleep(_LET_TASKS_RUN_S)
+    assert dispatched, "the live tree's gate was closed by the replaced tree's late settle"
+
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_the_name_timeout_opens_the_gate_after_a_rebuild_and_says_so_only_at_debug(
+    broker: MagicMock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A label that never arrives costs one bounded wait, then the tree is served as it is.
+
+    Only connect's wait warns. A panel with a circuit that is never named would
+    otherwise log the same warning on every broker reconnect.
+    """
+    monkeypatch.setattr(client_module, "_CIRCUIT_NAMES_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(client_module, "_CIRCUIT_NAMES_TIMEOUT_S", 0.1)
+    client = _client()
+    dispatched = await _connected_and_streaming(client)
+
+    client._on_pre_rebuild()
+    with caplog.at_level(logging.DEBUG, logger="span_panel_api.mqtt.client"):
+        _replay_labels(client, _TREE, hold=("info/name",))
+        await asyncio.sleep(_LET_TASKS_RUN_S)
+        assert dispatched == [], "the missing names were not waited on"
+        await asyncio.sleep(0.1 + _LET_TASKS_RUN_S)
+
+    assert dispatched, "the name timeout expired and the gate stayed closed"
+    timeouts = [r for r in caplog.records if r.getMessage().startswith("Timed out waiting for circuit names")]
+    assert [r.levelno for r in timeouts] == [logging.DEBUG]
+
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_the_name_timeout_on_connect_still_warns(
+    broker: MagicMock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The first wait of the client's life is the one a user can act on: name the circuit."""
+    monkeypatch.setattr(client_module, "_CIRCUIT_NAMES_POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(client_module, "_CIRCUIT_NAMES_TIMEOUT_S", 0.1)
+    client = _client()
+
+    with caplog.at_level(logging.DEBUG, logger="span_panel_api.mqtt.client"):
+        connect = asyncio.create_task(client.connect())
+        await asyncio.sleep(_LET_TASKS_RUN_S)
+        _replay_labels(client, _TREE, hold=("info/name",))
+        await asyncio.wait_for(connect, timeout=5.0)
+
+    timeouts = [r for r in caplog.records if r.getMessage().startswith("Timed out waiting for circuit names")]
+    assert [r.levelno for r in timeouts] == [logging.WARNING]
+
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_close_during_a_settle_cancels_it_and_nothing_dispatches_afterwards(
+    broker: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unload must not leave a wait running that later dispatches into a torn-down consumer."""
+    monkeypatch.setattr(client_module, "_CIRCUIT_NAMES_POLL_INTERVAL_S", 0.01)
+    now = [100.0]
+    client = _client(clock=lambda: now[0])
+    dispatched = await _connected_and_streaming(client)
+    unobserved: list[dict[str, object]] = []
+    asyncio.get_running_loop().set_exception_handler(lambda _loop, context: unobserved.append(context))
+
+    client._on_pre_rebuild()
+    _replay_labels(client, _TREE, hold=(FEED,))
+    await asyncio.sleep(_LET_TASKS_RUN_S)
+    settle = client._settle_task
+    assert settle is not None and not settle.done(), "precondition: the rebuilt tree is still settling"
+
+    await client.close()
+    now[0] += FEED_GRACE_S
+    await asyncio.sleep(_LET_TASKS_RUN_S)
+    del settle
+    gc.collect()
+
+    assert client._settle_task is not None and client._settle_task.cancelled()
+    assert dispatched == []
+    assert unobserved == []
+
+
+@pytest.mark.asyncio
+async def test_a_settle_that_raises_still_opens_the_gate_and_reports_it_at_error(
+    broker: MagicMock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An adapter that cannot answer what is missing must not hold every snapshot for the tree's life.
+
+    Nothing awaits a rebuild's settle, so an escaping exception would close the
+    gate silently: no snapshot again, and the panel reported offline, until the
+    next rebuild. It fails open, as the timeout does, and says why at ERROR.
+    """
+    failing = [False]
+
+    class _Faulty(SchemaOneAdapter):
+        def circuit_nodes_missing_names(self) -> list[str]:
+            if failing[0]:
+                raise RuntimeError("cannot read the tree")
+            return super().circuit_nodes_missing_names()
+
+    client = _client(factory=_Faulty)
+    dispatched = await _connected_and_streaming(client)
+    before = _shape(await client.get_snapshot())
+
+    failing[0] = True
+    client._on_pre_rebuild()
+    with caplog.at_level(logging.DEBUG, logger="span_panel_api.mqtt.client"):
+        _replay_labels(client, _TREE)
+        await asyncio.sleep(_LET_TASKS_RUN_S)
+
+    assert dispatched, "the raising settle left the gate closed"
+    assert _shape(dispatched[-1]) == before
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert errors[0].exc_info is not None and isinstance(errors[0].exc_info[1], RuntimeError)
 
     await client.close()

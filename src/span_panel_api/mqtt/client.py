@@ -202,6 +202,7 @@ class SpanMqttClient:
         self._settled_adapter: SchemaAdapter | None = None
         self._settling_adapter: SchemaAdapter | None = None
         self._settle_task: asyncio.Task[None] | None = None
+        self._has_settled = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._snapshot_timer: asyncio.TimerHandle | None = None
@@ -1785,21 +1786,41 @@ class SpanMqttClient:
         The dispatch is not optional. The replay is a burst, and a panel can be
         quiet once it ends; without it a streaming consumer would see nothing from
         the rebuilt tree until some value happened to change.
+
+        The gate always opens. A wait that times out serves the tree as it is, and
+        so does one the adapter breaks by raising: nothing awaits a rebuild's
+        settle, so an escaping exception would close the gate for the tree's whole
+        life without a word. Cancellation is not a failure and still propagates;
+        `close()` relies on it.
+
+        Only the client's first wait, which is connect's, reports a timeout as a
+        warning. A label that is never published would otherwise be warned about
+        again on every broker reconnect, and the user can act on it once.
         """
-        await self._wait_for_circuit_names(adapter, timeout=_CIRCUIT_NAMES_TIMEOUT_S)
+        first = not self._has_settled
+        self._has_settled = True
+        try:
+            await self._wait_for_circuit_names(
+                adapter,
+                timeout=_CIRCUIT_NAMES_TIMEOUT_S,
+                timeout_level=logging.WARNING if first else logging.DEBUG,
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            _LOGGER.error("Could not tell whether the panel's labels have arrived; serving its tree as it is", exc_info=True)
         if self._adapter is not adapter:
             return
         self._settled_adapter = adapter
         if self._streaming:
             self._create_dispatch_task()
 
-    async def _wait_for_circuit_names(self, adapter: SchemaAdapter, timeout: float) -> None:
+    async def _wait_for_circuit_names(self, adapter: SchemaAdapter, timeout: float, timeout_level: int) -> None:
         """Wait until `adapter` reports nothing missing, or the timeout elapses.
 
         Polls `circuit_nodes_missing_names` at short intervals rather than
         reacting to messages, because the adapter's feed grace is measured on
         its own clock and must be able to expire while the panel is silent.
-        A timeout is not fatal: entities fall back to placeholder names.
+        A timeout is not fatal: entities fall back to placeholder names, and
+        what is still missing is logged at `timeout_level`.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -1811,7 +1832,8 @@ class SpanMqttClient:
 
         still_missing = adapter.circuit_nodes_missing_names()
         if still_missing:
-            _LOGGER.warning(
+            _LOGGER.log(
+                timeout_level,
                 "Timed out waiting for circuit names (%d still missing): %s",
                 len(still_missing),
                 still_missing[:5],

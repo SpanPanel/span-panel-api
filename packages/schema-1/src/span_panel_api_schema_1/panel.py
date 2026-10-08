@@ -35,7 +35,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, NamedTuple
 
-from span_panel_api.models import SpanCircuitSnapshot, SpanPcsSnapshot
+from span_panel_api.models import SpanPcsSnapshot
 from span_panel_api_schema_1.const import (
     CLOUD_CONNECTED,
     NODE_BREAKER,
@@ -89,7 +89,6 @@ from span_panel_api_schema_1.const import (
     TYPE_BESS,
     TYPE_PV,
     UNKNOWN,
-    UNMAPPED_TAB_PREFIX,
 )
 
 if TYPE_CHECKING:
@@ -201,20 +200,19 @@ def panel_size_from_model(model: str) -> int:
     device publishes no size property.
 
     The highest *occupied* space is not a substitute: it is a lower bound, so a
-    40-space panel whose highest occupied slot is 36 would report 36 and every
-    position above it would silently cease to exist. Since unoccupied positions
-    are exactly `total - occupied`, that would delete the integration's
-    unmapped-circuit sensors rather than merely miscount a display value.
+    40-space panel whose highest occupied slot is 36 would report 36, and a
+    consumer laying out positions `1..panel_size` would silently lose every
+    position above it.
 
     Unknown models return 0 and log, because inventing a size is worse than
-    reporting none: a wrong total fabricates unmapped positions that are not
-    there, or hides real ones.
+    reporting none: a wrong total lays out positions that are not there, or
+    hides real ones.
     """
     size = PANEL_SIZE_BY_MODEL.get(model.strip().upper())
     if size is None:
         if model:
             _LOGGER.warning(
-                "Unknown panel model %r; panel size unavailable and unmapped positions cannot be derived. Known models: %s",
+                "Unknown panel model %r; panel size unavailable. Known models: %s",
                 model,
                 ", ".join(sorted(PANEL_SIZE_BY_MODEL)),
             )
@@ -248,45 +246,11 @@ def panel_model_drift(panel: DiscoveredDevice) -> tuple[str, ...]:
     ]
     if unknown:
         _LOGGER.warning(
-            "Panel advertises model(s) %s that this adapter cannot size; "
-            "unmapped positions would be wrong for such a panel. Known: %s",
+            "Panel advertises model(s) %s that this adapter cannot size; its panel size would be reported as 0. Known: %s",
             ", ".join(unknown),
             ", ".join(sorted(PANEL_SIZE_BY_MODEL)),
         )
     return tuple(unknown)
-
-
-def build_unmapped_tabs(panel_size: int, occupied: set[int]) -> dict[str, SpanCircuitSnapshot]:
-    """Synthesise a zero-power entry for every unoccupied breaker position.
-
-    The integration surfaces these as unmapped-circuit sensors, gated by its
-    own `enable_unmapped_circuit_sensors` option, and builds entity ids from
-    the circuit id — so the `unmapped_tab_<n>` naming is a compatibility
-    contract with entities that already exist, not an internal detail.
-
-    Reproducible under v1.0 only because the model gives a true total: the tree
-    itself lists occupied positions and says nothing about the rest. A panel
-    whose model is unrecognised yields nothing rather than a guess.
-    """
-    unmapped: dict[str, SpanCircuitSnapshot] = {}
-    for tab in range(1, panel_size + 1):
-        if tab in occupied:
-            continue
-        circuit_id = f"{UNMAPPED_TAB_PREFIX}{tab}"
-        unmapped[circuit_id] = SpanCircuitSnapshot(
-            circuit_id=circuit_id,
-            name=f"Unmapped Tab {tab}",
-            relay_state="CLOSED",
-            instant_power_w=0.0,
-            produced_energy_wh=0.0,
-            consumed_energy_wh=0.0,
-            tabs=[tab],
-            priority=UNKNOWN,
-            is_user_controllable=False,
-            is_sheddable=False,
-            is_never_backup=False,
-        )
-    return unmapped
 
 
 def find_lugs(devices: list[DiscoveredDevice], upstream: bool) -> DiscoveredDevice | None:

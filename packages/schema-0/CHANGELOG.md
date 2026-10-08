@@ -9,6 +9,18 @@ rather than by this version number. A release here means this parser changed, ne
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [Unreleased]
+
+### Changed
+
+- **`proximity_proven` is `None`**, where it was `True` on every snapshot because it read readiness rather than any proximity property.
+- **`uptime_s` is `None` before the panel first reports ready**, where it was `0`.
+- **A circuit's `instant_power_update_time_s` and `energy_accum_update_time_s` are `None` until the reading arrives, and `HomiePropertyAccumulator.get_timestamp()` returns `None` for a property never received**, where both gave `0`.
+
+### Removed
+
+- **BREAKING: snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data.**
+
 ## [1.2.0]
 
 The panel's one inverter is reported through `pv_inverters` as well as `pv`. Requires `span-panel-api` **3.6.0 or newer**.

@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [Unreleased]
+
+Values the panel never published are reported as unknown rather than as a fabricated constant, and snapshots carry only the circuits the panel publishes.
+
+### Changed
+
+- **`SpanPanelSnapshot.proximity_proven` is now `bool | None` and always `None`**, where it was effectively a constant `True`, because neither MQTT schema publishes a proximity property and the panel's own answer is `V2StatusInfo.proximity_proven`.
+- **`SpanPanelSnapshot.uptime_s` is now `int | None`, and `None` on a parent/child panel and before the panel first reports ready**, where it was a constant `0`.
+- **`SpanCircuitSnapshot.instant_power_update_time_s` and `energy_accum_update_time_s` are now `int | None`, and `None` until the reading has arrived and always on a parent/child panel**, where they were `0`.
+
+### Removed
+
+- **BREAKING: snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data**, so `SpanPanelSnapshot.circuits` holds only real circuits and `panel_size` alone states the panel's total
+  positions.
+
 ## [3.6.2]
 
 A reconnect waits for the panel's labels before handing out a snapshot, as connecting always has.

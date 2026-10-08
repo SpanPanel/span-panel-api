@@ -49,8 +49,12 @@ class SpanCircuitSnapshot:
     breaker_rating_a: float | None = None
     always_on: bool = False  # v2 new: circuit/always-on
     relay_requester: str = "UNKNOWN"  # v2 new: circuit/relay-requester
-    energy_accum_update_time_s: int = 0  # v1: poll timestamp | v2: MQTT arrival time
-    instant_power_update_time_s: int = 0  # v1: poll timestamp | v2: MQTT arrival time
+    # Epoch seconds at which the reading last changed, as received over MQTT.
+    # Flat only: the tree adapter records no such time, and a reading that has
+    # not arrived has no time either, so both are `None` rather than a `0` that
+    # reads as 1970.
+    energy_accum_update_time_s: int | None = None  # flat: MQTT receipt time
+    instant_power_update_time_s: int | None = None  # flat: MQTT receipt time
     relay_state_target: str | None = None  # v2: $target for relay (desired state)
     priority_target: str | None = None  # v2: $target for shed-priority (desired state)
 
@@ -1072,8 +1076,16 @@ class SpanPanelSnapshot:
 
     # Hardware status — v1 field names preserved
     door_state: str  # v1: direct | v2: core/door
-    proximity_proven: bool  # v1: proximity sensor | v2: MQTT auth + $state==ready
-    uptime_s: int  # v1: panel uptime | v2: connection uptime since $state==ready
+    # Neither MQTT schema publishes a proximity property, so a snapshot never
+    # knows: always `None`. Being connected and ready proves the client holds
+    # broker credentials, not that anyone stood at the panel. The panel's own
+    # answer is `V2StatusInfo.proximity_proven`, from the REST status endpoint.
+    proximity_proven: bool | None
+    # Seconds since this client last saw the panel's `$state` turn `ready`: a
+    # connection uptime measured here, not the panel's own uptime, which no
+    # schema publishes. Flat only; `None` from the tree adapter, and before the
+    # first `ready`.
+    uptime_s: int | None
     eth0_link: bool  # v1: direct | v2: core/ethernet
     wlan_link: bool  # v1: direct | v2: core/wifi
     wwan_link: bool  # v1: direct | v2: vendor-cloud == "CONNECTED"

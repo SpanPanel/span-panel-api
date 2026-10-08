@@ -336,9 +336,9 @@ class TestPropertyStorage:
 
 
 class TestTimestampTracking:
-    def test_timestamp_zero_for_unknown(self):
+    def test_timestamp_none_for_unknown(self):
         acc = HomiePropertyAccumulator(SERIAL)
-        assert acc.get_timestamp("node", "prop") == 0
+        assert acc.get_timestamp("node", "prop") is None
 
     def test_timestamp_set_on_property(self):
         acc = HomiePropertyAccumulator(SERIAL)
@@ -346,6 +346,7 @@ class TestTimestampTracking:
         acc.handle_message(f"{PREFIX}/core/power", "100")
         after = int(time.time())
         ts = acc.get_timestamp("core", "power")
+        assert ts is not None
         assert before <= ts <= after
 
     def test_timestamp_updates_on_overwrite(self):

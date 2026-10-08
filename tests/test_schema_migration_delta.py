@@ -107,7 +107,8 @@ no Drives. It would attest the panel and circuit rows, which is where the two
 real orphans are.
 
 Circuits are 96% of the entity surface and are attested. That is the useful half,
-and it is clean.
+and every reading on it survives; the only circuit orphans are the two receipt
+timestamps in `EXPECTED_ORPHANS`, which no entity is built on.
 """
 
 from __future__ import annotations
@@ -145,6 +146,20 @@ EXPECTED_ORPHANS: dict[str, str] = {
     "panel.grid_islandable": (
         "no v1.0 source; the flat panel advertised islandability as a panel property and "
         "the redesign expresses it through the presence of a MID instead"
+    ),
+    # The three below read as identity until the tree adapter stopped filling them
+    # with `0`: a population diff counts a fabricated value as published, the same
+    # blind spot `_SENTINEL` describes. None is a panel reading on either side, and
+    # no consumer entity is built on any of them.
+    "panel.uptime_s": (
+        "a connection uptime the flat consumer measures from its own readiness clock, "
+        "not a panel reading; no device publishes one and the tree adapter keeps no such clock"
+    ),
+    "circuit.energy_accum_update_time_s": (
+        "the time the flat accumulator received an energy value; the tree adapter records no receipt times"
+    ),
+    "circuit.instant_power_update_time_s": (
+        "the time the flat accumulator received a power value; the tree adapter records no receipt times"
     ),
 }
 
@@ -447,15 +462,21 @@ def test_der_identity_reads_the_same_on_both_adapters(flat: Any, parent_child: A
             )
 
 
-def test_no_circuit_field_is_orphaned(flat: Any, parent_child: Any) -> None:
-    """Circuits are 96% of the entity surface and the attested part of the flat
-    reference, so this is the strongest claim the harness can make."""
+def _circuit_orphans(flat: Any, parent_child: Any) -> set[str]:
+    """Circuit fields populated on flat and absent on v1.0, over every shared circuit."""
     orphans: set[str] = set()
     for circuit_id in sorted(set(flat.circuits) & set(parent_child.circuits)):
         _, found = _classify("circuit", flat.circuits[circuit_id], parent_child.circuits[circuit_id])
         orphans |= found
+    return orphans
 
-    assert not orphans, f"circuit fields that stop being published after the migration: {sorted(orphans)}"
+
+def test_no_circuit_field_is_orphaned(flat: Any, parent_child: Any) -> None:
+    """Circuits are 96% of the entity surface and the attested part of the flat
+    reference, so this is the strongest claim the harness can make. The only
+    exceptions are the decided ones in `EXPECTED_ORPHANS`."""
+    unexplained = sorted(_circuit_orphans(flat, parent_child) - set(EXPECTED_ORPHANS))
+    assert not unexplained, f"circuit fields that stop being published after the migration: {unexplained}"
 
 
 def test_every_orphan_is_a_decision_someone_made(flat: Any, parent_child: Any) -> None:
@@ -464,7 +485,7 @@ def test_every_orphan_is_a_decision_someone_made(flat: Any, parent_child: Any) -
     An unexpected entry here is a user-visible regression — an entity that exists
     today, keeps its name, and stops updating.
     """
-    orphans: set[str] = set()
+    orphans = _circuit_orphans(flat, parent_child)
     for scope, before, after in (
         ("panel", flat, parent_child),
         ("battery", flat.battery, parent_child.battery),

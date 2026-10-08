@@ -8,7 +8,8 @@ therefore reaches the SDK; importing `bootstrap` does not.
 `devices_from_tree` stays beside the capture for the reason it was written: a
 tree is not directly usable, every consumer of it has to replay the retained
 topics through `DiscoveredDevice` first, and separating the two would put the
-same twelve lines in each of the test modules that read it.
+same twelve lines in each of the test modules that read it. `replay` is the same
+step one level up, for a test that wants the adapter rather than the devices.
 
 **The bytes come out of the installed wheel, not out of this tree.** The capture
 is package data of `span-panel-api-schema-1` — read through
@@ -27,6 +28,9 @@ import json
 
 from ebus_sdk.homie import DiscoveredDevice
 
+from span_panel_api.models import V2HomieSchema
+from span_panel_api_schema_1 import SchemaOneAdapter
+
 type RetainedTopicTree = Mapping[str, Mapping[str, str]]
 """A retained-topic capture: device id -> topic -> payload, all strings.
 
@@ -38,6 +42,8 @@ _PARENT_CHILD_TREE = files("span_panel_api_schema_1") / "reference" / "parent_ch
 
 _DEFAULT_STATE = "ready"
 _DOMAIN = "ebus"
+_HOMIE_VERSION = "5"
+_INFO = "info"
 
 
 def parent_child_tree() -> RetainedTopicTree:
@@ -81,3 +87,37 @@ def devices_from_tree(tree: RetainedTopicTree) -> list[DiscoveredDevice]:
     build devices the same way.
     """
     return [device_from_topics(device_id, topics) for device_id, topics in tree.items()]
+
+
+def replay(tree: RetainedTopicTree, root_id: str) -> SchemaOneAdapter:
+    """Feed a whole tree to a fresh adapter the way the broker replays it.
+
+    Every message goes through `handle_message`, so the tree takes the SDK's real
+    discovery path rather than a stubbed one. The root comes first, then the
+    rest in the tree's order. That is the friendly order, not a requirement: the
+    SDK routes a child only once its parent is ready, and the adapter holds a
+    message that arrives earlier until its route exists.
+
+    The REST half of connecting is answered from the tree itself: the schema's
+    firmware and data-model versions are the ones the root retains, so a test
+    never states a second firmware beside the one its tree publishes.
+    """
+    root = tree[root_id]
+    adapter = SchemaOneAdapter(
+        root_id,
+        V2HomieSchema(
+            firmware_version=root.get(f"{_INFO}/firmware-version", ""),
+            types_schema_hash="sha256:test",
+            types={},
+            data_model_version=root.get(f"{_INFO}/data-model-version", "1.0"),
+        ),
+    )
+    for device_id in [root_id, *(other for other in tree if other != root_id)]:
+        topics = tree[device_id]
+        prefix = f"{_DOMAIN}/{_HOMIE_VERSION}/{device_id}"
+        adapter.handle_message(f"{prefix}/$description", topics["$description"])
+        adapter.handle_message(f"{prefix}/$state", topics.get("$state", _DEFAULT_STATE))
+        for topic, value in topics.items():
+            if not topic.startswith("$"):
+                adapter.handle_message(f"{prefix}/{topic}", value)
+    return adapter

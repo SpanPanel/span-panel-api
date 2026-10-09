@@ -28,6 +28,8 @@ dependencies = [
     # Raised to 3.6.1, whose SpanPanelSnapshot.pv documents what this parser builds.
     # Raised to 3.6.2, which waits on this parser's missing labels after a bridge
     # rebuild as well as on connect; the fix spans both, so the pair moves together.
+    # To rise to 3.8.0b1 when that release is cut: this parser fills snapshot
+    # fields new in it and imports `device_id_order` from its models.
     "span-panel-api>=3.6.2,<4.0",
     # Only this distribution depends on the eBus SDK. The bootstrap and
     # schema-0 stay clean, so a flat-panel install never pulls it in — which is

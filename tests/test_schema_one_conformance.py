@@ -233,6 +233,14 @@ _SPAN_EXTENSIONS: dict[tuple[str, str], str] = {
         "which is stored energy with an abstract unit — a different quantity with a confusable name."
     ),
     (const.NODE_SWITCH, "lock-state"): "EVSE connector lock",
+    (const.NODE_METER, "busbar-current"): (
+        "the panel's busbar current. Not in the public meter catalog (0.4), which carries "
+        "the line frequency the panel publishes beside it."
+    ),
+    (const.NODE_INFO, "nominal-voltage"): (
+        "a circuit's rated voltage. Not in the public info catalog (0.3); the panel declares "
+        "it on the circuit's identity node."
+    ),
     ("config", "max-charge-current"): (
         "the EVSE's commissioned charge-current ceiling, in SPAN's pre-catalog spelling. "
         "No `config` capability exists upstream at all; the catalogued surface is "
@@ -281,6 +289,29 @@ _NOT_EXERCISED_BY_THE_EMITTER: dict[tuple[str, str], str] = {
         "same reason as `installer-max` above. `test_the_entity_reads_the_catalogued_spelling` "
         "in test_schema_one_charge_limit.py drives it from a synthetic description, which is "
         "evidence of a parser and not of a producer -- which is what this entry records."
+    ),
+    ("meter", "busbar-current"): (
+        "a panel reading the emitter's reference tree does not declare. The reference captures "
+        "publish it, and test_panel_properties_captures.py reads it from each of them."
+    ),
+    ("meter", "frequency"): (
+        "the line frequency, which the emitter's reference tree does not declare. The reference "
+        "captures publish it, and test_panel_properties_captures.py reads it from each of them."
+    ),
+    ("connection", "overcurrent-protection"): (
+        "the upstream lugs' protection rating, which the emitter's reference tree does not "
+        "declare. The reference captures publish it, and test_panel_properties_captures.py "
+        "reads it from each of them."
+    ),
+    ("info", "nominal-voltage"): (
+        "a circuit's rated voltage, which the emitter's reference tree does not declare. The "
+        "reference captures publish it, and test_panel_properties_captures.py reads it from "
+        "each of them."
+    ),
+    ("breaker", "protection-functions"): (
+        "the protections a circuit's breaker provides, which the emitter's reference tree "
+        "does not declare. The reference captures publish them, and "
+        "test_panel_properties_captures.py reads them from each of them."
     ),
     ("connection", "feeds-role"): (
         "what a circuit feeds when that is not itself a device on the tree. The emitter's "

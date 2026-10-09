@@ -19,42 +19,18 @@ from collections.abc import Mapping
 from typing import Final
 
 _ACCEPTANCE = "tests/test_schema_one_other_models.py"
-_COMPANIONS = "tests/test_schema_one_acceptance_companions.py"
 
-_READINGS = "the panel and circuit readings"
-_SHARED = "the shared meters and relays"
-
-_UNPUBLISHED_IS_NONE = f"None for an undeclared reading or shared-with lands with {_READINGS} and {_SHARED}"
-
-PENDING: Final[Mapping[str, str]] = {
-    f"{_ACCEPTANCE}::test_the_panel_meter_reads_busbar_current_and_frequency": (
-        f"busbar current and frequency land with {_READINGS}"
-    ),
-    f"{_ACCEPTANCE}::test_a_circuit_reads_its_nominal_voltage_and_protection_functions": (
-        f"nominal voltage and protection functions land with {_READINGS}"
-    ),
-    f"{_ACCEPTANCE}::test_the_model_properties_carry_metadata_from_their_declarations": (
-        f"field metadata for the new readings lands with {_READINGS}, "
-        f"and shared-with stops being a discovered property with {_SHARED}"
-    ),
-    f"{_ACCEPTANCE}::test_the_shipped_tree_resolves_every_mapped_row": (
-        f"field metadata for the new readings lands with {_READINGS}"
-    ),
-    f"{_ACCEPTANCE}::test_the_model_properties_are_not_extension_properties": (
-        f"the new readings and shared-with leave the extension rows with {_READINGS} and {_SHARED}"
-    ),
-    f"{_ACCEPTANCE}::test_every_model_property_is_none_where_not_published": _UNPUBLISHED_IS_NONE,
-    f"{_ACCEPTANCE}::test_the_reference_main_32_publishes_none_of_them": _UNPUBLISHED_IS_NONE,
-    f"{_COMPANIONS}::test_the_shipped_tree_reads_busbar_current_and_frequency": (
-        f"busbar current and frequency land with {_READINGS}"
-    ),
-}
+PENDING: Final[Mapping[str, str]] = {}
 
 _DEVICE_TYPE_AS_PUBLISHED = "the library keeps device_type as published; a SOLAR feeds-role is carried by feeds_role"
 
 DIVERGENT: Final[Mapping[str, str]] = {
     f"{_ACCEPTANCE}::test_a_circuit_whose_feeds_role_is_solar_is_labeled_pv": _DEVICE_TYPE_AS_PUBLISHED,
     f"{_ACCEPTANCE}::test_the_shipped_tree_has_the_other_model_shape": _DEVICE_TYPE_AS_PUBLISHED,
+    f"{_ACCEPTANCE}::test_the_shipped_tree_reports_its_other_model_only_properties_as_discovered": (
+        "the upstream lugs' connection/overcurrent-protection is read into upstream_protection_rating_a, "
+        "so it is an addressed property rather than a discovered one"
+    ),
 }
 
 assert not PENDING.keys() & DIVERGENT.keys(), "a test is either pending or divergent, never both"

@@ -44,6 +44,7 @@ from span_panel_api_schema_1.const import (
     PROP_ACTIVE_POWER,
     PROP_EXPORTED_ENERGY,
     PROP_IMPORTED_ENERGY,
+    PROP_OVERCURRENT_PROTECTION,
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_EVSE,
@@ -85,6 +86,8 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     (TYPE_PANEL, NODE_STATUS, "cloud-connection", "panel.vendor_cloud"),
     (TYPE_PANEL, NODE_METER, "voltage-a", "panel.l1_voltage"),
     (TYPE_PANEL, NODE_METER, "voltage-b", "panel.l2_voltage"),
+    (TYPE_PANEL, NODE_METER, "busbar-current", "panel.busbar_current_a"),
+    (TYPE_PANEL, NODE_METER, "frequency", "panel.frequency_hz"),
     (TYPE_PANEL, NODE_BREAKER, "rating", "panel.main_breaker_rating_a"),
     (TYPE_PANEL, NODE_POWER_FLOWS, "pv", "panel.power_flow_pv"),
     (TYPE_PANEL, NODE_POWER_FLOWS, "battery", "panel.power_flow_battery"),
@@ -131,6 +134,8 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
     (TYPE_CIRCUIT, NODE_METER, "exported-energy", "circuit.consumed_energy_wh"),
     (TYPE_CIRCUIT, NODE_BREAKER, "rating", "circuit.breaker_rating_a"),
     (TYPE_CIRCUIT, NODE_BREAKER, "poles", "circuit.is_240v"),
+    (TYPE_CIRCUIT, NODE_BREAKER, "protection-functions", "circuit.protection_functions"),
+    (TYPE_CIRCUIT, NODE_INFO, "nominal-voltage", "circuit.nominal_voltage_v"),
     # --- Circuit `connection` -> the DER the circuit feeds ---------------------
     # The one place a row's device type and its field path deliberately disagree.
     # v1.0 states the enclosure/DER relationship on the *circuit*, so the panel's
@@ -179,6 +184,23 @@ _PROPERTY_FIELD_MAP: tuple[tuple[str, str, str, str], ...] = (
 )
 
 
+_OPTIONAL_PROPERTIES: frozenset[str] = frozenset(
+    {
+        "panel.busbar_current_a",
+        "panel.frequency_hz",
+        "panel.upstream_protection_rating_a",
+        "circuit.nominal_voltage_v",
+        "circuit.protection_functions",
+    }
+)
+"""Rows whose property a device may leave out of a node it does declare.
+
+A device that declares the node without the property yields no entry for these,
+rather than `resolved=False`: the property is optional on that node, so its
+absence is not a gap.
+"""
+
+
 def build_field_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMetadata]:
     """Collect metadata for every mapped field the tree actually declares.
 
@@ -216,12 +238,13 @@ def build_field_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMeta
         if found is not None:
             unit, datatype = found
             metadata[field_path] = FieldMetadata(unit=unit, datatype=datatype)
-        elif _node_declared(present_type_nodes, device_type, node_id):
+        elif field_path not in _OPTIONAL_PROPERTIES and _node_declared(present_type_nodes, device_type, node_id):
             # The node is here and does not declare the property: a real gap,
             # distinct from the hardware simply not being installed.
             metadata[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
     metadata.update(_lugs_metadata(devices, upstream=True, fields=_UPSTREAM_LUGS_FIELDS))
     metadata.update(_lugs_metadata(devices, upstream=False, fields=_DOWNSTREAM_LUGS_FIELDS))
+    metadata.update(_lugs_metadata(devices, upstream=True, fields=_UPSTREAM_LUGS_CONNECTION_FIELDS, node_id=NODE_CONNECTION))
     metadata.update(_charge_limit_metadata(devices))
     # Namespaced, so a consumer partitions them out before it reads the map as
     # an inventory of produced fields. See `build_discovery`.
@@ -323,9 +346,19 @@ _DOWNSTREAM_LUGS_FIELDS: tuple[tuple[str, str], ...] = (
     (PROP_CURRENT_B, "panel.downstream_l2_current_a"),
 )
 
+# The protection ahead of the upstream lugs, from their `connection` node rather
+# than their meter, and resolved by direction for the same reason.
+_UPSTREAM_LUGS_CONNECTION_FIELDS: tuple[tuple[str, str], ...] = (
+    (PROP_OVERCURRENT_PROTECTION, "panel.upstream_protection_rating_a"),
+)
+
 
 def _lugs_metadata(
-    devices: list[DiscoveredDevice], *, upstream: bool, fields: tuple[tuple[str, str], ...]
+    devices: list[DiscoveredDevice],
+    *,
+    upstream: bool,
+    fields: tuple[tuple[str, str], ...],
+    node_id: str = NODE_METER,
 ) -> dict[str, FieldMetadata]:
     """Metadata for one lugs device, resolved by direction rather than by type.
 
@@ -333,10 +366,11 @@ def _lugs_metadata(
     value can never disagree about which device is which.
 
     Carries the same three-way contract as the table-driven loop, on the same
-    (device, node) granularity: no lugs device in this direction, or no `meter`
-    node on it, means no entry, while a `meter` node that omits a property is a
-    declared gap. Both directions run through here so the two halves of
-    `panel.*` cannot drift into answering to different rules.
+    (device, node) granularity: no lugs device in this direction, or no
+    `node_id` node on it, means no entry, while a node that omits a property is
+    a declared gap unless the property is optional (`_OPTIONAL_PROPERTIES`).
+    Both directions run through here so the two halves of `panel.*` cannot
+    drift into answering to different rules.
 
     A lugs device that publishes no `info/direction` is invisible to `find_lugs`
     and so yields no entry, which is deliberate: the mapper reads its values
@@ -346,16 +380,17 @@ def _lugs_metadata(
     if lugs is None:
         return {}
 
-    meter = declared_nodes(lugs.description or {}).get(NODE_METER)
-    if meter is None:
+    node = declared_nodes(lugs.description or {}).get(node_id)
+    if node is None:
         return {}
 
-    declared = declared_properties(meter)
+    declared = declared_properties(node)
     found: dict[str, FieldMetadata] = {}
     for property_id, field_path in fields:
         definition = declared.get(property_id)
         if definition is None:
-            found[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
+            if field_path not in _OPTIONAL_PROPERTIES:
+                found[field_path] = FieldMetadata(unit=None, datatype="unknown", resolved=False)
             continue
         found[field_path] = FieldMetadata(
             unit=optional_str(definition.get("unit")),
@@ -504,6 +539,7 @@ _ADDRESSED: frozenset[tuple[str, str, str]] = (
     | frozenset(
         (TYPE_LUGS, NODE_METER, property_id) for property_id, _ in (*_UPSTREAM_LUGS_FIELDS, *_DOWNSTREAM_LUGS_FIELDS)
     )
+    | frozenset((TYPE_LUGS, NODE_CONNECTION, property_id) for property_id, _ in _UPSTREAM_LUGS_CONNECTION_FIELDS)
     | frozenset(_CONSUMED_WITHOUT_A_ROW)
     | frozenset(_CONSUMED_OFF_SNAPSHOT)
 )

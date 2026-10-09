@@ -620,6 +620,7 @@ class V2StatusInfo:
     serial_number: str
     firmware_version: str
     proximity_proven: bool | None = None  # Added in firmware 202609; None on older panels
+    hardware_version: str | None = None  # Added in firmware r202639: `1.2`, `2.0` or `UNKNOWN`; None on older panels
 
     @classmethod
     def from_status_payload(cls, payload: Mapping[str, object]) -> V2StatusInfo:
@@ -637,16 +638,21 @@ class V2StatusInfo:
         panel that may not fully support it, so a partial body is information,
         not a failure.
 
-        ``proximity_proven`` is the exception and stays ``None`` unless the panel
+        ``proximity_proven`` is an exception and stays ``None`` unless the panel
         published a real boolean. Absent and false are different facts there —
         firmware below 202609 does not report it at all — and coercing whatever
-        arrived would turn a string ``"false"`` into ``True``.
+        arrived would turn a string ``"false"`` into ``True``. ``hardware_version``
+        is likewise ``None`` unless the panel published a real string: firmware
+        below r202639 omits it, and a stringified number or object would read as
+        a version the panel never reported.
         """
         raw_proximity = payload.get("proximityProven")
+        raw_hardware_version = payload.get("hardwareVersion")
         return cls(
             serial_number=str(payload.get("serialNumber", "")),
             firmware_version=str(payload.get("firmwareVersion", "")),
             proximity_proven=raw_proximity if isinstance(raw_proximity, bool) else None,
+            hardware_version=raw_hardware_version if isinstance(raw_hardware_version, str) else None,
         )
 
 
@@ -658,7 +664,10 @@ class V2HomieSchema:
     """Response from GET /api/v2/homie/schema."""
 
     firmware_version: str
-    types_schema_hash: str  # SHA-256, first 16 hex chars
+    # SHA-256, first 16 hex chars, compared by the client between connects: over
+    # ``types`` on a flat panel, and over ``deviceClasses`` on parent/child, where
+    # the panel's own ``deviceClassesSchemaHash`` is used when it publishes one.
+    types_schema_hash: str
     types: HomieSchemaTypes
     # The flat-vs-parent/child discriminator, and the reason this endpoint is
     # fetched before MQTT is opened rather than during connect(). Absent on flat

@@ -11,6 +11,10 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 
 Snapshot fields that held a fabricated constant can now be unknown, and with `span-panel-api-schema-0` and `span-panel-api-schema-1` 1.3.0 or newer the parsers report them as unknown and stop synthesising unoccupied positions.
 
+### Added
+
+- **`V2StatusInfo.hardware_version` reports the hardware version string from `GET /api/v2/status`.**
+
 ### Changed
 
 - **BREAKING FOR CONSUMERS: `SpanPanelSnapshot.proximity_proven` becomes `bool | None`**, and with `span-panel-api-schema-0` and `span-panel-api-schema-1` 1.3.0 or newer it is always `None`, where it was effectively a constant `True`, because neither MQTT
@@ -23,6 +27,11 @@ Snapshot fields that held a fabricated constant can now be unknown, and with `sp
 
 - **BREAKING: with `span-panel-api-schema-0` and `span-panel-api-schema-1` 1.3.0 or newer, snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data**, so `SpanPanelSnapshot.circuits`
   holds only real circuits and `panel_size` alone states the panel's total positions.
+
+### Fixed
+
+- **`V2HomieSchema.types_schema_hash` on data model 1.0 is the panel's published `deviceClassesSchemaHash`, or a hash of `deviceClasses` when none is published, where it was one constant for every such panel**; a flat panel's value is unchanged, and a
+  value stored from 3.6.x differs once on a data model 1.0 panel.
 
 ## [3.6.2]
 

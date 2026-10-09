@@ -9,7 +9,7 @@ client (which only covers v1 endpoints).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 import hashlib
 import json
 import logging
@@ -454,6 +454,32 @@ async def download_ca_cert(
     raise SpanPanelAPIError(f"Failed to download CA cert: HTTP {last_status}")
 
 
+def _schema_hash(data: Mapping[str, object]) -> str:
+    """The schema hash ``V2HomieSchema.types_schema_hash`` reports.
+
+    A parent/child panel publishes its schema as ``deviceClasses``, with its own
+    ``deviceClassesSchemaHash`` over that block, in place of flat firmware's
+    ``types``. Hashing ``types`` there hashed an absent block, so every such
+    panel got one constant key. The published hash is taken as is when it is a
+    non-empty string; otherwise ``deviceClasses`` is hashed here.
+
+    SPAN's public API changelog states that ``deviceClassesSchemaHash`` is
+    computed over the new structure, so it differs from a ``typesSchemaHash``
+    even where the property content is unchanged, and that a cached
+    ``typesSchemaHash`` is not to be compared against it. A key held from a
+    release that hashed ``types`` therefore differs once on such a panel.
+
+    A flat panel's key is exactly what earlier releases computed, so a value
+    stored for a flat panel still matches.
+    """
+    published = data.get("deviceClassesSchemaHash")
+    if isinstance(published, str) and published:
+        return published
+    hashed = data["deviceClasses"] if "deviceClasses" in data else data.get("types", {})
+    canonical = json.dumps(hashed, sort_keys=True)
+    return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
 async def get_homie_schema(
     host: str,
     timeout: float = 10.0,
@@ -527,15 +553,9 @@ async def get_homie_schema(
             if isinstance(props, dict):
                 types[str(type_name)] = {str(k): v for k, v in props.items()}
 
-    # Compute schema hash from types key names for change detection
-    # The panel provides this implicitly via the firmware version + types structure
-    # We derive a hash for caching; the fixture README documents the expected value
-    types_json = json.dumps(data.get("types", {}), sort_keys=True)
-    schema_hash = "sha256:" + hashlib.sha256(types_json.encode()).hexdigest()[:16]
-
     # Read before anything else interprets the payload. A parent/child response
-    # carries `deviceClasses` where this one reads `types`, so every field below
-    # degrades to empty for such a panel — which is harmless only because this
+    # carries `deviceClasses` where this one reads `types`, so `types` degrades
+    # to empty for such a panel — which is harmless only because this
     # value routes it to a different parser before those fields are used.
     # Absence is the flat signal and must stay distinct from an empty string.
     raw_data_model_version = data.get("dataModelVersion")
@@ -543,7 +563,7 @@ async def get_homie_schema(
 
     return V2HomieSchema(
         firmware_version=str(data.get("firmwareVersion", "")),
-        types_schema_hash=schema_hash,
+        types_schema_hash=_schema_hash(data),
         types=types,
         data_model_version=data_model_version,
     )

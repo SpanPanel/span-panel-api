@@ -75,8 +75,10 @@ from span_panel_api_schema_1.const import (
     PROP_VENDOR_NAME,
     UNKNOWN,
 )
+from span_panel_api_schema_1.description import declared_settable, node_properties
 from span_panel_api_schema_1.firmware import release_build
 from span_panel_api_schema_1.panel import integer, number, resolve_grid_forming_device_name, text
+from span_panel_api_schema_1.transport import control_target
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -353,6 +355,11 @@ def build_evse(
         connected=_connected(feed_statuses.get(evse.device_id)),
         status=text(evse, NODE_STATUS, PROP_STATUS, UNKNOWN),
         lock_state=text(evse, NODE_SWITCH, PROP_LOCK_STATE, UNKNOWN),
+        lock_control=(
+            control_target(evse.device_id, NODE_SWITCH, PROP_LOCK_STATE)
+            if declared_settable(node_properties(evse, NODE_SWITCH).get(PROP_LOCK_STATE))
+            else None
+        ),
         advertised_current_a=number(evse, NODE_METER, PROP_ADVERTISED_CURRENT),
         vendor_name=_optional(text(evse, NODE_INFO, PROP_VENDOR_NAME)),
         model=_optional(text(evse, NODE_INFO, PROP_MODEL)),

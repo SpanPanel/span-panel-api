@@ -3,8 +3,8 @@
 A gate that cannot fail proves nothing. So each kind of failure is planted in the
 adapter's snapshot, over a small cut of the public r202639 capture, and the
 harness must name it: a value with no wire behind it, one behind only unvalued
-properties, one under the wrong transform, and a published property that reaches
-nothing.
+properties, a wrong sign (on a captured zero too), a derivation that breaks its
+rule, and a published property that reaches nothing.
 """
 
 from __future__ import annotations
@@ -36,9 +36,19 @@ def _mapping(value: object) -> dict[str, object]:
     return {str(key): item for key, item in value.items()}
 
 
+def _power(record: Mapping[str, object]) -> float | None:
+    raw = _mapping(record.get("numeric_properties", {})).get("meter/active-power")
+    return float(raw) if isinstance(raw, str) else None
+
+
 @pytest.fixture
 def small_capture(tmp_path: Path) -> Path:
-    """The capture with one circuit, and no PV: the panel, its lugs, its battery and MID, and that circuit."""
+    """The capture cut to the panel, its lugs, its battery and MID, and one circuit drawing power.
+
+    A circuit at a non-zero reading, so that a wrong sign shows in the captured
+    value itself; the battery reads 0 W, so a wrong sign there shows only in the
+    values the perturbation publishes.
+    """
     tree = _mapping(json.loads(CAPTURE.read_text(encoding="utf-8")))
     devices = _mapping(tree["devices"])
     circuits = sorted(
@@ -46,7 +56,8 @@ def small_capture(tmp_path: Path) -> Path:
         for device_id, entry in devices.items()
         if _mapping(_mapping(entry)["description"]).get("type") == TYPE_CIRCUIT
     )
-    dropped = set(circuits[1:]) | {
+    drawing = next(device_id for device_id in circuits if _power(_mapping(devices[device_id])) not in (None, 0.0))
+    dropped = {device_id for device_id in circuits if device_id != drawing} | {
         device_id for device_id, entry in devices.items() if _mapping(_mapping(entry)["description"]).get("type") == TYPE_PV
     }
     kept: dict[str, object] = {}
@@ -107,13 +118,16 @@ def test_a_value_behind_only_unvalued_properties_is_fabricated(small_capture: Pa
     assert report.unowned_leaves() == frozenset()
 
 
-def test_a_value_under_the_wrong_transform_is_mismatched(small_capture: Path, plant: Callable[[Plant], None]) -> None:
-    """Circuit power left in the enclosure frame, where a load reads negative."""
+def test_a_wrong_sign_is_mismatched(small_capture: Path, plant: Callable[[Plant], None]) -> None:
+    """Circuit power left in the enclosure frame, where a load reads negative.
+
+    Flipped as `0.0 - x`, which never yields -0.0, so the sign itself is what fails.
+    """
 
     def unnegated(snapshot: SpanPanelSnapshot) -> SpanPanelSnapshot:
         circuits = {
             circuit_id: replace(
-                circuit, instant_power_w=None if circuit.instant_power_w is None else -circuit.instant_power_w
+                circuit, instant_power_w=None if circuit.instant_power_w is None else 0.0 - circuit.instant_power_w
             )
             for circuit_id, circuit in snapshot.circuits.items()
         }
@@ -123,6 +137,44 @@ def test_a_value_under_the_wrong_transform_is_mismatched(small_capture: Path, pl
     report = run_cell(small_capture, MAIN32_RULES)
     assert [leaf.rsplit(".", 1)[1] for leaf in report.mismatched] == ["instant_power_w"]
     assert report.failing_rows() == {RowKey("circuit", "meter/active-power")}
+
+
+def test_a_wrong_sign_on_a_reading_captured_at_zero_is_mismatched(
+    small_capture: Path, plant: Callable[[Plant], None]
+) -> None:
+    """The battery's frame on r202639, where the capture's battery reads 0 W.
+
+    A captured zero reads the same under either sign, so only the values the
+    perturbation publishes can show the frame is wrong.
+    """
+    plant(
+        lambda snapshot: replace(
+            snapshot,
+            battery=replace(
+                snapshot.battery,
+                power_w=None if snapshot.battery.power_w is None else 0.0 - snapshot.battery.power_w,
+            ),
+        )
+    )
+    report = run_cell(small_capture, MAIN32_RULES)
+    assert report.mismatched == ("battery.power_w",)
+    assert report.failing_rows() == {RowKey("bess", "meter/active-power")}
+
+
+def test_a_derivation_that_breaks_its_rule_is_mismatched(small_capture: Path, plant: Callable[[Plant], None]) -> None:
+    """A breaker read as 240 V exactly when it has fewer than two poles."""
+    plant(
+        lambda snapshot: replace(
+            snapshot,
+            circuits={
+                circuit_id: replace(circuit, is_240v=not circuit.is_240v)
+                for circuit_id, circuit in snapshot.circuits.items()
+            },
+        )
+    )
+    report = run_cell(small_capture, MAIN32_RULES)
+    assert [leaf.rsplit(".", 1)[1] for leaf in report.mismatched] == ["is_240v"]
+    assert report.failing_rows() == {RowKey("circuit", "breaker/poles")}
 
 
 def test_a_published_property_that_reaches_nothing_is_silently_dropped(

@@ -14,6 +14,7 @@ leaf needs is how a list of reasons turns into an allowlist.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Final
 
 from .harness import ANY_LEAF, CellRules, Derivation, DropReason, RowKey, Transform, TransformKind
@@ -29,11 +30,53 @@ BESS_METER_DISCHARGE_POSITIVE_FROM_BUILD: Final = 202639
 """Mirrors `devices.BESS_METER_DISCHARGE_POSITIVE_FROM_BUILD`, restated so the rule is checked rather than borrowed."""
 
 
+def _number(raw: str) -> float | None:
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _two_poles_or_more(raw: str, value: object) -> bool:
+    poles = _number(raw)
+    return value is (poles is not None and poles >= 2)
+
+
+def _not_true(raw: str, value: object) -> bool:
+    return value is (raw.strip().lower() != "true")
+
+
+def _is_connected_cloud(raw: str, value: object) -> bool:
+    return value is (raw == "CONNECTED")
+
+
+def _is_ok_link(raw: str, value: object) -> bool:
+    return value is (raw == "OK")
+
+
+def _listed_spaces(raw: str, value: object) -> bool:
+    """The integers in a comma-separated list, in order; a part that is not one is skipped."""
+    spaces: list[int] = []
+    for part in raw.split(","):
+        try:
+            spaces.append(int(part.strip()))
+        except ValueError:
+            continue
+    return value == tuple(spaces)
+
+
 def _transforms() -> dict[RowKey, dict[str, Transform]]:
     table: dict[RowKey, dict[str, Transform]] = {}
 
-    def add(role: str, node_property: str, family: str, kind: TransformKind, cite: str) -> None:
-        table.setdefault(RowKey(role, node_property), {})[family] = Transform(kind, cite)
+    def add(
+        role: str,
+        node_property: str,
+        family: str,
+        kind: TransformKind,
+        cite: str,
+        holds: Callable[[str, object], bool] | None = None,
+    ) -> None:
+        table.setdefault(RowKey(role, node_property), {})[family] = Transform(kind, cite, holds=holds)
 
     # --- panel -------------------------------------------------------------
     panel_fields = "panel.PanelFields"
@@ -62,6 +105,7 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
         "panel.wwan_link",
         _DERIVED,
         "panel.PanelFields: the cloud link is CONNECTED, as flat reported it",
+        _is_connected_cloud,
     )
     add("panel", "meter/voltage-a", "panel.l1_voltage", _IDENTITY, panel_fields)
     add("panel", "meter/voltage-b", "panel.l2_voltage", _IDENTITY, panel_fields)
@@ -144,13 +188,20 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
     add("circuit", "meter/exported-energy", "circuit.consumed_energy_wh", _IDENTITY, f"{circuit}: the accumulators swap")
     add("circuit", "meter/current", "circuit.current_a", _IDENTITY, circuit)
     add("circuit", "breaker/rating", "circuit.breaker_rating_a", _IDENTITY, circuit)
-    add("circuit", "breaker/poles", "circuit.is_240v", _DERIVED, f"{circuit}: two poles or more")
+    add("circuit", "breaker/poles", "circuit.is_240v", _DERIVED, f"{circuit}: two poles or more", _two_poles_or_more)
     add("circuit", "info/name", "circuit.name", _LITERAL, circuit)
-    add("circuit", "info/spaces", "circuit.tabs", _DERIVED, "circuits._tabs parses the list of spaces")
+    add("circuit", "info/spaces", "circuit.tabs", _DERIVED, "circuits._tabs parses the list of spaces", _listed_spaces)
     add("circuit", "switch/relay", "circuit.relay_state", _LITERAL, circuit)
     add("circuit", "switch/relay-requester", "circuit.relay_requester", _LITERAL, circuit)
     add("circuit", "switch/relay-controllable", "circuit.is_user_controllable", _BOOL, circuit)
-    add("circuit", "switch/relay-controllable", "circuit.always_on", _DERIVED, f"{circuit}: not relay-controllable")
+    add(
+        "circuit",
+        "switch/relay-controllable",
+        "circuit.always_on",
+        _DERIVED,
+        f"{circuit}: not relay-controllable",
+        _not_true,
+    )
     add(
         "circuit",
         "switch/relay-controllable",
@@ -182,6 +233,7 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
             f"{der}.connected",
             _DERIVED,
             "devices.feed_connection_statuses and devices._connected: OK is a working link",
+            _is_ok_link,
         )
 
     # --- lugs --------------------------------------------------------------
@@ -223,6 +275,7 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
             "battery.connected",
             _DERIVED,
             "devices.connection_status_for and devices._connected: OK is a working link",
+            _is_ok_link,
         )
         add(
             role,
@@ -255,7 +308,7 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
     add("mid", "info/vendor-name", "mid.vendor_name", _LITERAL, mid)
     add("mid", "info/model", "mid.model", _LITERAL, mid)
     add("mid", "info/serial-number", "mid.serial_number", _LITERAL, mid)
-    add("mid", "info/serial-number", "mid.node_id", _DERIVED, f"{mid}: the serial, else the device id")
+    add("mid", "info/serial-number", "mid.node_id", _LITERAL, f"{mid}: the serial where one is published")
     add("mid", "info/firmware-version", "mid.software_version", _LITERAL, mid)
     add("mid", "info/hardware-version", "mid.hardware_version", _LITERAL, mid)
     add("mid", "grid/islanding-state", "mid.islanding_state", _LITERAL, mid)

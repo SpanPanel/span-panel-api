@@ -21,8 +21,10 @@ documented transform, and no value appears that nothing on the wire produced.
    unvalued one is perturbed on a replay of its own, since nothing on the wire
    returns a property to unvalued. The session must end equal to the baseline.
 4. *Classify* each declared property instance by its effect into a `Fate`.
-5. *Check values.* Every leaf a valued property moves must equal the wire value
-   under the transform `CellRules` documents for it.
+5. *Check values.* Every leaf a property moves, at its captured value and at each
+   perturbed one, must follow from that wire value under the transform `CellRules`
+   documents for it. The perturbed values matter: a captured zero reads the same
+   under identity and negation.
 6. *Audit leaves.* Every non-empty leaf that no valued property moves must be
    a derivation `CellRules` documents; anything else is fabricated.
 
@@ -33,7 +35,7 @@ given cell lives in its `CellRules`.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from enum import StrEnum
 import json
@@ -117,6 +119,8 @@ class Transform:
     cite: str
     earlier: tuple[int, TransformKind] | None = None
     """``(build, kind)``: before release build ``build`` the wire carries ``kind`` instead."""
+    holds: Callable[[str, object], bool] | None = None
+    """For a derivation simple enough to state: whether ``value`` follows from the wire value ``raw``."""
 
     def kind_for(self, firmware: str) -> TransformKind:
         """The transform for a panel on ``firmware``.
@@ -522,6 +526,8 @@ class _Instance:
     addressed: bool
     extra: bool
     effect: set[str] = field(default_factory=set)
+    perturbed: list[tuple[str, dict[str, object]]] = field(default_factory=list)
+    """Each value published, and what every leaf it moved then held."""
     fate: Fate = Fate.SILENT
     deferred: bool = False
 
@@ -583,7 +589,10 @@ def _measure(capture: _Capture, instances: list[_Instance], baseline: Mapping[st
         target = session if instance.raw is not None else _replay(capture)
         for candidate in _candidates(instance.declaration, instance.raw, property_id, references):
             target.handle_message(topic, candidate)
-            instance.effect |= _moved(baseline, _flatten(target))
+            leaves = _flatten(target)
+            moved = _moved(baseline, leaves)
+            instance.effect |= moved
+            instance.perturbed.append((candidate, {leaf: leaves[leaf] for leaf in moved if leaf in leaves}))
         if instance.raw is not None:
             session.handle_message(topic, instance.raw)
     unrestored = _moved(baseline, _flatten(session))
@@ -672,7 +681,7 @@ def _observe(raw: str, value: object) -> str:
 
 
 def _compatible(observed: str, expected: TransformKind, raw: str) -> bool:
-    if expected == TransformKind.DERIVED or observed == expected:
+    if observed == expected:
         return True
     # A zero reads the same under identity and negation.
     if expected == TransformKind.NEGATE and observed == TransformKind.IDENTITY and _number(raw) == 0.0:
@@ -688,36 +697,51 @@ def _check_values(
     failures: dict[str, set[RowKey]],
     notes: dict[str, str],
 ) -> set[str]:
+    """Every value a property's own wire value set, held to the transform documented for it.
+
+    The captured value and every perturbed one alike. A captured zero reads the
+    same under identity and negation, so a sign defect on a property the capture
+    holds at zero shows only in the values the perturbation published.
+    """
     mismatched: set[str] = set()
     for instance in instances:
-        if instance.fate not in (Fate.MAPPED, Fate.EXTENSION) or instance.raw is None:
-            # An unvalued source's leaves are the leaf audit's to judge.
+        if instance.fate not in (Fate.MAPPED, Fate.EXTENSION):
             continue
-        raw = instance.raw
-        for leaf in sorted(instance.effect):
-            if leaf.startswith(("ctl.", "ready.", "adopted[")) or leaf not in baseline:
-                continue
-            if _instance(leaf) == raw:
-                continue  # this property is the instance's snapshot key
-            value = baseline[leaf]
-            problem: str | None = None
-            if leaf.startswith("ext["):
-                if value != raw:
-                    problem = f"extension value {value!r} is not the wire value {raw!r}"
-            else:
-                transform = rules.transform_for(instance.key, family(leaf))
-                if transform is None:
-                    problem = f"no documented transform from {instance.key.node_property}"
-                else:
-                    expected = transform.kind_for(capture.firmware)
-                    observed = _observe(raw, value)
-                    if not _compatible(observed, expected, raw):
-                        problem = f"{raw!r} -> {value!r} is {observed}, documented {expected} ({transform.cite})"
-            if problem is not None:
-                mismatched.add(leaf)
-                failures.setdefault(leaf, set()).add(instance.key)
-                notes[leaf] = f"{instance.key.role} {instance.key.node_property}: {problem}"
+        observations: list[tuple[str, Mapping[str, object]]] = list(instance.perturbed)
+        if instance.raw is not None:
+            # An unvalued source's captured leaves are the leaf audit's to judge.
+            observations.insert(0, (instance.raw, {leaf: baseline[leaf] for leaf in instance.effect if leaf in baseline}))
+        for raw, values in observations:
+            # A property can be the snapshot key of the leaves it moves, as a charger's
+            # serial is; those leaves are keyed by it, not valued by it.
+            keys = {raw} if instance.raw is None else {raw, instance.raw}
+            for leaf, value in sorted(values.items()):
+                if leaf.startswith(("ctl.", "ready.", "adopted[")) or _instance(leaf) in keys:
+                    continue
+                problem = _transform_problem(instance.key, leaf, raw, value, rules, capture.firmware)
+                if problem is not None:
+                    mismatched.add(leaf)
+                    failures.setdefault(leaf, set()).add(instance.key)
+                    notes[leaf] = f"{instance.key.role} {instance.key.node_property}: {problem}"
     return mismatched
+
+
+def _transform_problem(key: RowKey, leaf: str, raw: str, value: object, rules: CellRules, firmware: str) -> str | None:
+    """What is wrong with ``value`` as what ``raw`` on ``key`` set ``leaf`` to, or `None`."""
+    if leaf.startswith("ext["):
+        return None if value == raw else f"extension value {value!r} is not the wire value {raw!r}"
+    transform = rules.transform_for(key, family(leaf))
+    if transform is None:
+        return f"no documented transform from {key.node_property}"
+    expected = transform.kind_for(firmware)
+    if expected == TransformKind.DERIVED:
+        if transform.holds is None or transform.holds(raw, value):
+            return None
+        return f"{raw!r} -> {value!r} breaks the documented derivation ({transform.cite})"
+    observed = _observe(raw, value)
+    if _compatible(observed, expected, raw):
+        return None
+    return f"{raw!r} -> {value!r} is {observed}, documented {expected} ({transform.cite})"
 
 
 # --- the leaf audit ---------------------------------------------------------

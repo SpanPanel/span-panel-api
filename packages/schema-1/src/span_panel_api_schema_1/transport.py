@@ -43,10 +43,34 @@ from typing import TYPE_CHECKING, Any
 
 from paho.mqtt.client import topic_matches_sub
 
+from span_panel_api.models import ControlTarget
+from span_panel_api_schema_1.const import HOMIE_DOMAIN, HOMIE_VERSION
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def control_target(device_id: str, node: str, prop: str) -> ControlTarget:
+    """One device/node/property address as both a set topic and an observation key.
+
+    The triple is returned alongside the topic rather than left for the
+    transport to parse back out of it: the transport is the one component
+    that is supposed to know nothing about this schema's topic grammar, and
+    under parent/child the device is a peer of the panel rather than a node
+    beneath it, so the grammar is not even the flat one.
+
+    The spelling here is the spelling the adapter's property callbacks report
+    under, because a write is verified by matching one against the other.
+    """
+    return ControlTarget(
+        topic=f"{HOMIE_DOMAIN}/{HOMIE_VERSION}/{device_id}/{node}/{prop}/set",
+        device_id=device_id,
+        node_id=node,
+        property_id=prop,
+    )
+
 
 # Ceiling on messages held for a route that has not appeared. Sized well past a
 # full panel — a 48-space enclosure with every DER runs to a few thousand

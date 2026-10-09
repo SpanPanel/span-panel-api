@@ -412,6 +412,22 @@ class SpanEvseSnapshot:
     set topic when it is not.
     """
 
+    lock_control: ControlTarget | None = None
+    """Where the charger's connector lock is commanded, and which property reports it. v1.0 only.
+
+    Addresses `switch/lock-state` on the charger's own device, and is present
+    only where that declaration carries `$settable`: absence is refusal, so a
+    lock the charger reports but does not accept writes to has no target. The
+    value written is one of `lock_state_options`. `None` on the flat schema.
+    """
+
+    lock_state_options: tuple[str, ...] | None = None
+    """The values the charger's `switch/lock-state` declares in its `$format`. v1.0 only.
+
+    What a lock command may write: a value outside them is refused rather than
+    published. `None` where the charger declares no lock or no `$format`.
+    """
+
     connected: bool | None = None
     """The enclosure's view of the link to this charger, v1.0 only.
 

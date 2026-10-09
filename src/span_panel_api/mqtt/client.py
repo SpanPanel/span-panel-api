@@ -48,6 +48,11 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+LOCK_STATE_LOCKED = "LOCKED"
+"""The `switch/lock-state` value that locks a charger's connector, as the panel declares it."""
+LOCK_STATE_UNLOCKED = "UNLOCKED"
+"""The `switch/lock-state` value that unlocks it."""
+
 # How long to wait for circuit name properties after device ready.
 # Retained messages typically arrive within 1-2s, but allow headroom.
 _CIRCUIT_NAMES_TIMEOUT_S = 10.0
@@ -948,6 +953,41 @@ class SpanMqttClient:
                 message=f"{amps} A is outside what EVSE {node_id!r} accepts",
             )
         return await self._publish_control(target, payload, self._control_deadlines.evse_charge_limit)
+
+    # -- EvseLockControlProtocol -------------------------------------------
+
+    async def set_evse_lock(self, node_id: str, locked: bool) -> PublishOutcome:
+        """Lock or unlock one commissioned charger's connector.
+
+        Args:
+            node_id: the key this charger has in `SpanPanelSnapshot.evse`
+            locked: True to lock, False to unlock
+
+        **The snapshot is the authorisation**, as for an adopted property: the
+        charger's `lock_control` is the topic, and it is set only where the
+        charger declares `switch/lock-state` settable. The value must be one the
+        declaration's `$format` lists, so a charger that spells its states
+        differently is refused rather than sent a word it does not know.
+        """
+        value = LOCK_STATE_LOCKED if locked else LOCK_STATE_UNLOCKED
+        charger = self._require_adapter().build_snapshot().evse.get(node_id)
+        target = None if charger is None else charger.lock_control
+        if charger is None or target is None:
+            await self._refuse_control(
+                device_id=node_id,
+                value=value,
+                detail="no such control",
+                message=f"No settable lock on EVSE {node_id!r}",
+            )
+        if value not in (charger.lock_state_options or ()):
+            await self._refuse_control(
+                target=target,
+                device_id=target.device_id,
+                value=value,
+                detail="value not declared",
+                message=f"EVSE {node_id!r} does not declare the lock state {value}",
+            )
+        return await self._publish_control(target, value, self._control_deadlines.evse_lock)
 
     # -- AdoptedControlProtocol --------------------------------------------
 

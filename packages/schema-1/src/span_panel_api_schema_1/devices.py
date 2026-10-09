@@ -75,8 +75,10 @@ from span_panel_api_schema_1.const import (
     PROP_VENDOR_NAME,
     UNKNOWN,
 )
+from span_panel_api_schema_1.description import declared_settable, node_properties
 from span_panel_api_schema_1.firmware import release_build
 from span_panel_api_schema_1.panel import integer, number, resolve_grid_forming_device_name, text
+from span_panel_api_schema_1.transport import control_target
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -327,6 +329,15 @@ def build_pv(
     )
 
 
+def _declared_format(device: DiscoveredDevice, node: str, prop: str) -> tuple[str, ...] | None:
+    """The members an enum property's declaration lists in `$format`, or None where it lists none."""
+    declaration = node_properties(device, node).get(prop)
+    listed = None if declaration is None else declaration.get("format")
+    if not isinstance(listed, str) or not listed:
+        return None
+    return tuple(member.strip() for member in listed.split(",") if member.strip())
+
+
 def build_evse(
     evse: DiscoveredDevice, feeds: dict[str, str], *, node_id: str, feed_statuses: dict[str, str]
 ) -> SpanEvseSnapshot:
@@ -354,6 +365,12 @@ def build_evse(
         connected=_connected(feed_statuses.get(evse.device_id)),
         status=text(evse, NODE_STATUS, PROP_STATUS, UNKNOWN),
         lock_state=text(evse, NODE_SWITCH, PROP_LOCK_STATE, UNKNOWN),
+        lock_control=(
+            control_target(evse.device_id, NODE_SWITCH, PROP_LOCK_STATE)
+            if declared_settable(node_properties(evse, NODE_SWITCH).get(PROP_LOCK_STATE))
+            else None
+        ),
+        lock_state_options=_declared_format(evse, NODE_SWITCH, PROP_LOCK_STATE),
         advertised_current_a=number(evse, NODE_METER, PROP_ADVERTISED_CURRENT),
         vendor_name=_optional(text(evse, NODE_INFO, PROP_VENDOR_NAME)),
         model=_optional(text(evse, NODE_INFO, PROP_MODEL)),
@@ -390,7 +407,7 @@ def _limit_target(evse: DiscoveredDevice, surface: ChargeLimitSurface | None) ->
         return None
     try:
         return int(float(raw))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 

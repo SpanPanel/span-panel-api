@@ -50,7 +50,7 @@ from span_panel_api_schema_1.devices import feed_circuit_ids
 from span_panel_api_schema_1.field_metadata import build_field_metadata
 from span_panel_api_schema_1.panel import integer, text
 from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot, harmonised_evse_keys
-from span_panel_api_schema_1.transport import ControllerRoutes
+from span_panel_api_schema_1.transport import ControllerRoutes, control_target
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -329,7 +329,7 @@ class SchemaOneAdapter:
         """Where this circuit's relay is commanded, or None if it may not be.
 
         **None where the panel declares the relay non-commandable**, by either of
-        the two signals `relay_is_settable` reads. `_target` is pure string
+        the two signals `relay_is_settable` reads. `control_target` is pure string
         formatting from a device id, so building the topic unconditionally aimed
         a write at a circuit the panel commissioned as always-on — every part of
         the refusal was already in the tree, and nothing consulted it.
@@ -346,7 +346,7 @@ class SchemaOneAdapter:
         device = self._child(circuit_id)
         if device is None or not relay_is_settable(device):
             return None
-        return self._target(circuit_id, NODE_SWITCH, PROP_RELAY)
+        return control_target(circuit_id, NODE_SWITCH, PROP_RELAY)
 
     def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget | None:
         """Where this circuit's shed priority is written, or None if it may not be.
@@ -363,7 +363,7 @@ class SchemaOneAdapter:
         device = self._child(circuit_id)
         if device is None or not priority_is_settable(device):
             return None
-        return self._target(circuit_id, NODE_LOAD_SHED, PROP_PRIORITY)
+        return control_target(circuit_id, NODE_LOAD_SHED, PROP_PRIORITY)
 
     def has_circuit(self, circuit_id: str) -> bool:
         """Whether the tree carries a circuit under this id.
@@ -419,7 +419,7 @@ class SchemaOneAdapter:
         root = self._controller.get_root(self._serial_number)
         if not declared_settable(node_properties(root, NODE_SHED).get(PROP_ASSERTED_ISLANDING_STATE)):
             return None
-        return self._target(self._serial_number, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
+        return control_target(self._serial_number, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
 
     def dominant_power_source_payload(self, value: str) -> str | None:
         """Translate a flat `dominant-power-source` value into an assertion.
@@ -468,7 +468,7 @@ class SchemaOneAdapter:
         if writable is None:
             return None
         device, surface, limit = writable
-        return self._target(device.device_id, surface.node, limit.property_id)
+        return control_target(device.device_id, surface.node, limit.property_id)
 
     def evse_charge_limit_payload(self, node_id: str, amps: int) -> str | None:
         """The payload to publish for `amps`, or None if it may not be published.
@@ -534,25 +534,6 @@ class SchemaOneAdapter:
                 return None
             return device, surface, surface.limit
         return None
-
-    def _target(self, device_id: str, node: str, prop: str) -> ControlTarget:
-        """One device/node/property address as both a set topic and an observation key.
-
-        The triple is returned alongside the topic rather than left for the
-        transport to parse back out of it: the transport is the one component
-        that is supposed to know nothing about this schema's topic grammar, and
-        under parent/child the device is a peer of the panel rather than a node
-        beneath it, so the grammar is not even the flat one.
-
-        The spelling here is the spelling `_on_property_changed` reports under,
-        because a write is verified by matching one against the other.
-        """
-        return ControlTarget(
-            topic=f"{HOMIE_DOMAIN}/{HOMIE_VERSION}/{device_id}/{node}/{prop}/set",
-            device_id=device_id,
-            node_id=node,
-            property_id=prop,
-        )
 
     def _require_root(self) -> DiscoveredDevice:
         """The root, or a clear error if discovery has not finished.

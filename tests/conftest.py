@@ -76,8 +76,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 
 def _is_test_function(module: object, name: str) -> bool:
-    """Whether `name` is a function pytest collects from `module` under the default `test` prefix."""
-    return name.startswith("test") and callable(getattr(module, name, None))
+    """Whether `name` is a function pytest collects from `module` under the default `test` prefix.
+
+    At module level or as a method of one of the module's `Test` classes.
+    """
+    if not name.startswith("test"):
+        return False
+    if callable(getattr(module, name, None)):
+        return True
+    return any(
+        isinstance(owner, type) and owner_name.startswith("Test") and callable(getattr(owner, name, None))
+        for owner_name, owner in vars(module).items()
+    )
 
 
 @pytest.fixture(autouse=True)

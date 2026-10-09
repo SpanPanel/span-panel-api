@@ -178,6 +178,10 @@ EXPECTED_PUBLIC_API = {
     # SpanPanelAuthError, so no existing except clause starts telling a user
     # their passphrase is wrong.
     "SpanPanelPassphraseUnavailableError",
+    # Added 2026-10-09: registration refused with HTTP 429. A subclass of
+    # SpanPanelAPIError, which register_v2 already raised for a 429, so every
+    # existing except clause keeps catching it.
+    "SpanPanelRateLimitError",
     "SpanPanelServerError",
     "SpanPanelStaleDataError",
     # Added 2026-08-31 (3.4.0): a bootstrap REST call that failed *verification*

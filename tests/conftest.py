@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import itertools
 import json
 import os
 from pathlib import Path
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterable
 from unittest.mock import MagicMock, patch
 
 import paho.mqtt.client as paho
@@ -50,44 +51,55 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Mark every test `expected_failures.py` lists as a strict expected failure.
 
-    A row naming anything but a test function of its collected module is a typo,
-    a rename or a helper that would silently mark nothing, so it stops the run.
+    A row naming a file that does not exist, or a test that file does not
+    define, is a typo, a rename or a deletion that would silently mark nothing,
+    so it stops the run. The check reads the files themselves rather than what
+    this run collected, so a partial run (`-k`, one file) judges every row the
+    same way a full one does.
     """
-    modules: dict[str, object] = {}
+    stale = stale_rows(EXPECTED_FAILURES, config.rootpath)
+    if stale:
+        raise pytest.UsageError(f"expected_failures.py names tests that do not exist: {', '.join(stale)}")
     for item in items:
         if not isinstance(item, pytest.Function):
             continue
         path = item.nodeid.partition("::")[0]
-        modules[path] = item.module
         reason = EXPECTED_FAILURES.get(f"{path}::{item.originalname}")
         if reason is not None:
             item.add_marker(pytest.mark.xfail(strict=True, reason=reason))
 
-    stale = [
-        key
-        for key in EXPECTED_FAILURES
-        if (path := key.partition("::")[0]) in modules and not _is_test_function(modules[path], key.partition("::")[2])
-    ]
-    if stale:
-        raise pytest.UsageError(f"expected_failures.py names tests that do not exist: {', '.join(sorted(stale))}")
+
+def stale_rows(rows: Iterable[str], root: Path) -> list[str]:
+    """The rows, sorted, whose file under `root` is missing or defines no such test."""
+    defined: dict[str, frozenset[str]] = {}
+    stale: list[str] = []
+    for key in rows:
+        path, _, name = key.partition("::")
+        if path not in defined:
+            defined[path] = _test_functions(root / path)
+        if name not in defined[path]:
+            stale.append(key)
+    return sorted(stale)
 
 
-def _is_test_function(module: object, name: str) -> bool:
-    """Whether `name` is a function pytest collects from `module` under the default `test` prefix.
+def _test_functions(path: Path) -> frozenset[str]:
+    """The test functions `path` defines under the default `test` prefix, or none if it is not a file.
 
-    At module level or as a method of one of the module's `Test` classes.
+    At module level or as a method of one of its `Test` classes, read from the
+    source, so nothing is imported to answer.
     """
-    if not name.startswith("test"):
-        return False
-    if callable(getattr(module, name, None)):
-        return True
-    return any(
-        isinstance(owner, type) and owner_name.startswith("Test") and callable(getattr(owner, name, None))
-        for owner_name, owner in vars(module).items()
-    )
+    if not path.is_file():
+        return frozenset()
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    functions = (ast.FunctionDef, ast.AsyncFunctionDef)
+    names = {node.name for node in tree.body if isinstance(node, functions)}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            names.update(member.name for member in node.body if isinstance(member, functions))
+    return frozenset(name for name in names if name.startswith("test"))
 
 
 @pytest.fixture(autouse=True)

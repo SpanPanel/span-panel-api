@@ -3,8 +3,8 @@
 Keyed by pytest node id without parameters or class (`<file>::<function>`), so
 every parametrized case of a listed function is expected to fail. `conftest.py` marks
 each one `xfail(strict=True)`: a listed test that starts passing fails the run
-until its row is deleted, and a row naming anything but a test function of its
-module stops the run.
+until its row is deleted, and a row naming a file that does not exist, or a test
+function that file does not define, stops the run, partial runs included.
 
 `PENDING` rows assert behaviour a later change brings; that change deletes
 them. `DIVERGENT` rows assert behaviour this library deliberately does not

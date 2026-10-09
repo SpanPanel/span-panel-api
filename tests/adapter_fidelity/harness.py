@@ -542,10 +542,21 @@ class _Instance:
     deferred: bool = False
 
 
+OUTSIDE_PANEL_ROLE: Final = "meter-outside-panel"
+"""The role of a circuit-typed device that declares no breaker space: a meter outside the panel.
+
+Its own role, because the library reads it in the opposite frame from a hosted
+circuit (`circuits.build_circuit` and `SpanCircuitSnapshot.measures_outside_panel`),
+so one row could not document both.
+"""
+
+
 def _role(capture: _Capture, device: _Device) -> str:
     if device.device_id == capture.root_id:
         return "panel"
     short = device.device_type.removeprefix(DEVICE_TYPE_PREFIX)
+    if device.device_type == TYPE_CIRCUIT and "info/spaces" not in device.declared:
+        return OUTSIDE_PANEL_ROLE
     if device.device_type.startswith(TYPE_LUGS):
         direction = device.values.get("info/direction", "").strip().lower()
         return f"lugs-{direction}" if direction else "lugs"

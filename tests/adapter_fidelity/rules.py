@@ -20,7 +20,7 @@ from typing import Final
 from span_panel_api.models import FEEDS_ROLES, PROTECTION_FUNCTIONS
 from span_panel_api_schema_1.const import PANEL_POSITIONS_BY_MODEL
 
-from .harness import ANY_LEAF, CellRules, Derivation, DropReason, RowKey, Transform, TransformKind
+from .harness import ANY_LEAF, OUTSIDE_PANEL_ROLE, CellRules, Derivation, DropReason, RowKey, Transform, TransformKind
 
 _IDENTITY: Final = TransformKind.IDENTITY
 _NEGATE: Final = TransformKind.NEGATE
@@ -317,6 +317,32 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
             _is_ok_link,
         )
 
+    # --- a circuit-typed device with no breaker space -----------------------
+    outside = "circuits.build_circuit: a meter outside the panel reads import-positive, as published"
+    add(OUTSIDE_PANEL_ROLE, "meter/active-power", "circuit.instant_power_w", _IDENTITY, outside)
+    add(
+        OUTSIDE_PANEL_ROLE,
+        "meter/imported-energy",
+        "circuit.consumed_energy_wh",
+        _IDENTITY,
+        f"{outside}: imported is consumed",
+    )
+    add(
+        OUTSIDE_PANEL_ROLE,
+        "meter/exported-energy",
+        "circuit.produced_energy_wh",
+        _IDENTITY,
+        f"{outside}: exported is produced",
+    )
+    add(OUTSIDE_PANEL_ROLE, "meter/current", "circuit.current_a", _IDENTITY, outside)
+    add(
+        OUTSIDE_PANEL_ROLE,
+        "meter/shared-with-device-ids",
+        "circuit.meter_shared_with",
+        _DERIVED,
+        "circuits._shared_with: the listed ids naming another circuit of the snapshot, in device_id_order",
+    )
+
     # --- lugs --------------------------------------------------------------
     lugs_meter = "panel.PanelFields: the lugs read import-positive and pass through"
     for role, power, consumed, produced, current_a, current_b in (
@@ -440,6 +466,14 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
         "evse", "info/serial-number", ANY_LEAF, _DERIVED, "snapshot.harmonised_evse_keys: the charger is keyed by its serial"
     )
     add("evse", "info/firmware-version", "evse.software_version", _LITERAL, evse)
+    # The charge-current pair, in either spelling the charger's description declares.
+    charge_limit = f"{evse} through charge_limit.resolve_charge_limit, read as an integer"
+    for node, ceiling, limit in (
+        ("config", "max-charge-current", "user-max-charge-current"),
+        ("charge-limit", "installer-max", "owner-limit"),
+    ):
+        add("evse", f"{node}/{ceiling}", "evse.charge_current_ceiling_a", _INT, charge_limit)
+        add("evse", f"{node}/{limit}", "evse.charge_current_limit_a", _INT, charge_limit)
     return table
 
 
@@ -501,4 +535,9 @@ _DEFERRED: Final = {
     ),
 }
 
-MAIN32_RULES: Final = CellRules(transforms=_transforms(), derivations=_DERIVATIONS, drops=_DROPS, deferred=_DEFERRED)
+TRANSFORMS: Final = _transforms()
+"""Every documented transform, shared by every cell: a transform states what the library does, whichever capture shows it."""
+
+DROPS: Final = _DROPS
+
+MAIN32_RULES: Final = CellRules(transforms=TRANSFORMS, derivations=_DERIVATIONS, drops=_DROPS, deferred=_DEFERRED)

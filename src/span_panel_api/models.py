@@ -561,6 +561,13 @@ class SpanBatterySnapshot:
     # its battery values whether or not one is installed.
     present: bool | None = None
 
+    # The circuit whose `connection/feeds-device-id` names this battery, v1.0
+    # only. Where it is set and no device claims the battery through a
+    # `fed-by-*` record, `connected` is that circuit's `feeds-device-status`.
+    # None where no circuit feeds the battery, as when it sits ahead of the
+    # upstream lugs, and on the flat schema.
+    feed_circuit_id: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class FieldMetadata:

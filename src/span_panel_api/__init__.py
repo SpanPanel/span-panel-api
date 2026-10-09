@@ -29,6 +29,7 @@ from .exceptions import (
     SpanPanelError,
     SpanPanelInsufficientPrivilegeError,
     SpanPanelPassphraseUnavailableError,
+    SpanPanelRateLimitError,
     SpanPanelSchemaVersionError,
     SpanPanelServerError,
     SpanPanelStaleDataError,
@@ -235,6 +236,10 @@ __all__ = [  # noqa: RUF022
     # keep their meaning; deliberately not a SpanPanelAuthError, because the
     # passphrase the user supplied may be correct.
     "SpanPanelPassphraseUnavailableError",
+    # Registration refused with HTTP 429, carrying the panel's `Retry-After` in
+    # seconds. A subclass of SpanPanelAPIError, so existing except clauses keep
+    # their meaning; not a SpanPanelAuthError, because no credential was judged.
+    "SpanPanelRateLimitError",
     "SpanPanelServerError",
     "SpanPanelStaleDataError",
     # Added 2026-08-31 (3.4.0): a bootstrap REST call that failed verification

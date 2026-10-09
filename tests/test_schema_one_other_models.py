@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 import pytest
 
+from conftest import flat_schema
 from reference_payloads.schema_one import RetainedTopicTree, device_from_topics, other_model_tree, parent_child_tree
 from span_panel_api.models import FieldMetadata, SpanPanelSnapshot, SpanPVSnapshot, V2HomieSchema, is_discovery_path
+from span_panel_api_schema_0 import SchemaZeroAdapter
 from span_panel_api_schema_1 import SchemaOneAdapter
 from span_panel_api_schema_1.const import TYPE_CIRCUIT
 from span_panel_api_schema_1.field_metadata import build_field_metadata
@@ -262,6 +265,52 @@ def test_a_feeds_device_id_naming_no_der_is_not_overridden_by_the_role() -> None
     tree[SOLAR]["connection/feeds-device-id"] = "something-else"
 
     assert _snapshot(tree).circuits[SOLAR].device_type == "circuit"
+
+
+# --- whether a panel publishes solar roles structurally ---------------------
+
+_FLAT_WIRE = Path(__file__).parent / "fixtures" / "flat_wire.json"
+_FLAT_SERIAL = "sim-40t-001"
+
+
+def _other_model_snapshot() -> SpanPanelSnapshot:
+    return _shipped()
+
+
+def _parent_child_snapshot() -> SpanPanelSnapshot:
+    return _snapshot(parent_child_tree())
+
+
+def _flat_snapshot() -> SpanPanelSnapshot:
+    """The flat capture replayed the way the retained store delivers it."""
+    capture: dict[str, dict[str, str]] = json.loads(_FLAT_WIRE.read_text())
+    adapter = SchemaZeroAdapter(serial_number=_FLAT_SERIAL, schema=flat_schema(40))
+    for device in sorted(capture):
+        for key in sorted(capture[device]):
+            adapter.handle_message(f"ebus/5/{device}/{key}", capture[device][key])
+    return adapter.build_snapshot()
+
+
+def test_a_panel_that_declares_feeds_role_publishes_solar_roles() -> None:
+    assert _other_model_snapshot().publishes_solar_roles is True
+    assert _snapshot(_tree()).publishes_solar_roles is True
+
+
+def test_main_32_and_the_flat_schema_do_not() -> None:
+    assert _parent_child_snapshot().publishes_solar_roles is False
+    assert _flat_snapshot().publishes_solar_roles is False
+
+
+@pytest.mark.parametrize("role", [None, "LOADS"])
+def test_the_declaration_decides_not_the_value(role: str | None) -> None:
+    """A declared role with no value yet, or naming no solar, still marks the panel."""
+    tree = _tree()
+    if role is None:
+        del tree[SOLAR]["connection/feeds-role"]
+    else:
+        tree[SOLAR]["connection/feeds-role"] = role
+
+    assert _snapshot(tree).publishes_solar_roles is True
 
 
 # --- info/model UNKNOWN -----------------------------------------------------

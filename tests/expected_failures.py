@@ -23,6 +23,11 @@ _READINGS = "the panel and circuit readings"
 _SHARED = "the shared meters and relays"
 
 PENDING: Final[Mapping[str, str]] = {
+    f"{_ACCEPTANCE}::test_a_panel_that_declares_feeds_role_publishes_solar_roles": (
+        f"publishes_solar_roles lands with {_POSITIONS}"
+    ),
+    f"{_ACCEPTANCE}::test_main_32_and_the_flat_schema_do_not": f"publishes_solar_roles lands with {_POSITIONS}",
+    f"{_ACCEPTANCE}::test_the_declaration_decides_not_the_value": f"publishes_solar_roles lands with {_POSITIONS}",
     f"{_ACCEPTANCE}::test_an_unknown_model_sizes_nothing_without_warning": (
         f"an UNKNOWN model sized 0 without a warning lands with {_POSITIONS}"
     ),

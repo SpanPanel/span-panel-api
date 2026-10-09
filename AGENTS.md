@@ -59,3 +59,15 @@ Captures are byte copies and must stay that way:
 The schema-1 reference tree (`packages/schema-1/src/span_panel_api_schema_1/reference/parent_child_tree.json`) is package data, produced by `scripts/capture_parent_child_reference.py` from `scripts/reference_panel.yaml` with the pinned emitter;
 DEVELOPMENT.md, "Regenerating a vendored capture", has the procedure. Change the manifest, never the output, and keep every circuit inside the position range `PANEL_POSITIONS_BY_MODEL` gives the panel's model: the adapter reports the table's range and
 warns once for a panel whose circuits fall outside it. A changed capture is a release of the adapter that ships it (RELEASE.md).
+
+## Lessons from review
+
+What a change must do is decided before it is written; these are the checks made while writing and verifying it. Each was a defect that review has already caught at least once, in this repository or in the emitter it is tested against.
+
+- **Prove a test or a guard by breaking what it guards.** Revert the fix or mutate the code and confirm the test fails; a guard that survives every mutation guards nothing. Assert what a consumer can observe, the snapshot value or the published outcome,
+  not an internal step.
+- **A test that keeps documentation runnable reads the documentation.** A hand-copied recipe pins the sequence but lets the document rot.
+- **Check the changelog as it will ship.** Check where each entry lands, since a new heading inserted above an entry re-files it with no deletion in the diff, and re-derive every count or list against the source at the tag.
+- **Read data as published.** A `null` or empty value in a capture means unpublished, never zero. A predicate that reads declared metadata refuses what it cannot interpret instead of guessing.
+- **One capture is not the firmware.** Check a change against every capture available; panels on the same firmware release do not always publish a value in the same form.
+- **Measure claims.** A statement about a real panel, broker or built artifact is checked there, and a result is reported only after it has actually been run.

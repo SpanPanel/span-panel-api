@@ -152,6 +152,8 @@ PROP_COMMUNICATION_STATE = "communication-state"
 # -- Values -----------------------------------------------------------------
 
 PRIORITY_NEVER = "NEVER"
+PRIORITY_OFF_GRID = "OFF_GRID"
+PRIORITY_SOC_THRESHOLD = "SOC_THRESHOLD"
 UNKNOWN = "UNKNOWN"
 CLOUD_CONNECTED = "CONNECTED"
 

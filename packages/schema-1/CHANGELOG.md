@@ -24,6 +24,10 @@ Requires `span-panel-api` **3.7.0 or newer**, whose snapshot fields accept the u
 
 - **BREAKING: snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data**, and `panel.build_unmapped_tabs` and `const.UNMAPPED_TAB_PREFIX` are gone with them.
 
+### Fixed
+
+- **A circuit whose shed priority is `UNKNOWN` is no longer reported as sheddable.**
+
 ## [1.2.2]
 
 Requires `span-panel-api` **3.6.2 or newer**, which waits on this parser's missing labels after a reconnect as well as on connect.

@@ -212,6 +212,12 @@ class SchemaOneAdapter:
         the same exposure, so a DER missing the model it declared is reported
         alongside a circuit missing its name.
 
+        Only a declared label is waited for. A circuit-typed device whose
+        description declares no `info/name` -- a meter outside the panel
+        declares no `info` node at all -- has no name coming, and waiting for
+        one would hold every connect and every tree rebuild to the full
+        timeout.
+
         An inverter's feeding circuit is waited on too, because it decides the
         inverter's `pv_inverters` key, and a key that moved after the first
         snapshot would move every entity built on it. A circuit feeding nothing
@@ -235,7 +241,11 @@ class SchemaOneAdapter:
         same wait, gets a whole grace of its own.
         """
         roles = TreeRoles(self._children())
-        missing = [circuit.device_id for circuit in roles.circuits if not circuit.get_property(NODE_INFO, PROP_NAME)]
+        missing = [
+            circuit.device_id
+            for circuit in roles.circuits
+            if PROP_NAME in circuit.get_node_properties(NODE_INFO) and not circuit.get_property(NODE_INFO, PROP_NAME)
+        ]
         ders = (roles.bess, *roles.pvs, *roles.evse)
         missing.extend(
             device.device_id

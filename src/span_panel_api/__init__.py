@@ -43,6 +43,7 @@ from .models import (
     ADOPTION_TOPOLOGY_NODE,
     DISCOVERY_NAMESPACE,
     FEEDS_ROLES,
+    PROTECTION_FUNCTIONS,
     AdoptedDevice,
     AdoptedProperty,
     ControlTarget,
@@ -53,6 +54,7 @@ from .models import (
     FieldMetadata,
     HomieSchemaTypes,
     PassphraseRotation,
+    ProtectionFunction,
     SpanBatterySnapshot,
     SpanCircuitSnapshot,
     SpanEvseSnapshot,
@@ -157,6 +159,10 @@ __all__ = [  # noqa: RUF022
     # `SpanCircuitSnapshot.feeds_role`.
     "FEEDS_ROLES",
     "FeedsRole",
+    # What a circuit's `breaker/protection-functions` lists, read into
+    # `SpanCircuitSnapshot.protection_functions`.
+    "PROTECTION_FUNCTIONS",
+    "ProtectionFunction",
     # The circuits one meter measures, from `SpanCircuitSnapshot.meter_shared_with`.
     "shared_meter_groups",
     # Factory

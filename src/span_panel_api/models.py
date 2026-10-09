@@ -24,6 +24,12 @@ type FeedsRole = Literal["LOADS", "SUBPANEL", "SOLAR", "STORAGE", "GENERATOR", "
 FEEDS_ROLES: Final[tuple[FeedsRole, ...]] = ("LOADS", "SUBPANEL", "SOLAR", "STORAGE", "GENERATOR", "MIXED", "UNUSED")
 """Every `FeedsRole`, for reading a wire value into one."""
 
+type ProtectionFunction = Literal["OVERCURRENT", "SHORT_CIRCUIT", "GROUND_FAULT", "ARC_FAULT"]
+"""One protection a circuit's breaker provides, as `breaker/protection-functions` lists it."""
+
+PROTECTION_FUNCTIONS: Final[tuple[ProtectionFunction, ...]] = ("OVERCURRENT", "SHORT_CIRCUIT", "GROUND_FAULT", "ARC_FAULT")
+"""Every `ProtectionFunction`, for reading a wire value into one."""
+
 
 @dataclass(frozen=True, slots=True)
 class SpanCircuitSnapshot:
@@ -110,6 +116,18 @@ class SpanCircuitSnapshot:
     """The other circuits this circuit's relay also switches, by circuit id.
 
     From `switch/shared-with-device-ids`, read as `meter_shared_with` is.
+    """
+
+    nominal_voltage_v: float | None = None
+    """The circuit's rated voltage, from `info/nominal-voltage`.
+
+    `None` where the circuit declares none or has not published it.
+    """
+    protection_functions: tuple[ProtectionFunction, ...] | None = None
+    """The protections the circuit's breaker provides, from `breaker/protection-functions`.
+
+    In published order, without any value outside `PROTECTION_FUNCTIONS`.
+    `None` where the breaker declares none or has not published them.
     """
 
     feeds_role: FeedsRole | None = None
@@ -1249,6 +1267,23 @@ class SpanPanelSnapshot:
 
     `hardware_version` rather than `hw_version`: the snapshot spells fields out,
     and `DeviceInfo(hw_version=...)` is the consumer's abbreviation, not ours.
+    """
+
+    busbar_current_a: float | None = None
+    """The panel's busbar current, from its `meter/busbar-current`. v1.0 only.
+
+    `None` where the panel declares none or has not published it.
+    """
+    frequency_hz: float | None = None
+    """The line frequency, from the panel's `meter/frequency`. v1.0 only.
+
+    `None` where the panel declares none or has not published it.
+    """
+    upstream_protection_rating_a: int | None = None
+    """The rating of the protection ahead of the upstream lugs, in amperes. v1.0 only.
+
+    From the upstream lugs' `connection/overcurrent-protection`; `None` where
+    they declare none or have not published it.
     """
 
     first_position: int | None = None

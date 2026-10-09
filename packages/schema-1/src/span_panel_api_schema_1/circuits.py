@@ -33,7 +33,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from span_panel_api.models import FEEDS_ROLES, FeedsRole, SpanCircuitSnapshot, device_id_order
+from span_panel_api.models import (
+    FEEDS_ROLES,
+    PROTECTION_FUNCTIONS,
+    FeedsRole,
+    ProtectionFunction,
+    SpanCircuitSnapshot,
+    device_id_order,
+)
 from span_panel_api_schema_1.const import (
     NODE_BREAKER,
     NODE_CONNECTION,
@@ -50,8 +57,10 @@ from span_panel_api_schema_1.const import (
     PROP_IMPORTED_ENERGY,
     PROP_MANAGED,
     PROP_NAME,
+    PROP_NOMINAL_VOLTAGE,
     PROP_POLES,
     PROP_PRIORITY,
+    PROP_PROTECTION_FUNCTIONS,
     PROP_RATING,
     PROP_RELAY,
     PROP_RELAY_CONTROLLABLE,
@@ -272,6 +281,19 @@ def _feeds_role(device: DiscoveredDevice) -> FeedsRole | None:
     return next((role for role in FEEDS_ROLES if role == published), None)
 
 
+def _protection_functions(device: DiscoveredDevice) -> tuple[ProtectionFunction, ...] | None:
+    """The published `breaker/protection-functions`, in order, or None when unpublished.
+
+    A comma-separated list of the enum's members; a value outside
+    `PROTECTION_FUNCTIONS` is dropped rather than passed on.
+    """
+    published = device.get_property(NODE_BREAKER, PROP_PROTECTION_FUNCTIONS)
+    if published is None:
+        return None
+    listed = [part.strip() for part in str(published).split(",")]
+    return tuple(function for part in listed for function in PROTECTION_FUNCTIONS if function == part)
+
+
 def _shared_with(device: DiscoveredDevice, node: str, circuit_ids: Collection[str]) -> tuple[str, ...] | None:
     """One node's `shared-with-device-ids`, resolved to the other circuits of the snapshot.
 
@@ -336,6 +358,8 @@ def build_circuit(
         is_never_backup=not priority_settable,
         device_type=device_type,
         relative_position=relative_position,
+        nominal_voltage_v=_number(device, NODE_INFO, PROP_NOMINAL_VOLTAGE),
+        protection_functions=_protection_functions(device),
         feeds_role=_feeds_role(device),
         meter_shared_with=_shared_with(device, NODE_METER, circuit_ids),
         relay_shared_with=_shared_with(device, NODE_SWITCH, circuit_ids),

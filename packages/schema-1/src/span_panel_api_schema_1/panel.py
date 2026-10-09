@@ -59,6 +59,7 @@ from span_panel_api_schema_1.const import (
     PROP_ACTIVE_POWER,
     PROP_ASSERTED_ISLANDING_STATE,
     PROP_BINDING_CONSTRAINT,
+    PROP_BUSBAR_CURRENT,
     PROP_CAPABLE,
     PROP_CLOUD_CONNECTION,
     PROP_CONFIDENCE,
@@ -67,6 +68,7 @@ from span_panel_api_schema_1.const import (
     PROP_EXPORTED_ENERGY,
     PROP_FED_BY_DEVICE_ID,
     PROP_FIRMWARE_VERSION,
+    PROP_FREQUENCY,
     PROP_FULL_CHARGE_TIME_TO_PRIORITY_SHED,
     PROP_FULL_CHARGE_TOTAL_TIME_REMAINING,
     PROP_GRID_FORMING_ENTITY,
@@ -74,6 +76,7 @@ from span_panel_api_schema_1.const import (
     PROP_IMPORT_LIMIT,
     PROP_IMPORTED_ENERGY,
     PROP_MODEL,
+    PROP_OVERCURRENT_PROTECTION,
     PROP_POLICY,
     PROP_RATING,
     PROP_RELAY,
@@ -445,6 +448,9 @@ class PanelFields:
         # the entity does not change meaning between adapters.
         self.wwan_link = self.vendor_cloud == CLOUD_CONNECTED
 
+        self.busbar_current_a = number(panel, NODE_METER, PROP_BUSBAR_CURRENT)
+        self.frequency_hz = number(panel, NODE_METER, PROP_FREQUENCY)
+        self.upstream_protection_rating_a = integer(upstream_lugs, NODE_CONNECTION, PROP_OVERCURRENT_PROTECTION)
         self.l1_voltage = number(panel, NODE_METER, PROP_VOLTAGE_A)
         self.l2_voltage = number(panel, NODE_METER, PROP_VOLTAGE_B)
         rating = number(panel, NODE_BREAKER, PROP_RATING)

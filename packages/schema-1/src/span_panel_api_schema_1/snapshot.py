@@ -282,6 +282,9 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
         vendor_name=fields.vendor_name,
         model=fields.model,
         hardware_version=fields.hardware_version,
+        busbar_current_a=fields.busbar_current_a,
+        frequency_hz=fields.frequency_hz,
+        upstream_protection_rating_a=fields.upstream_protection_rating_a,
         first_position=first_position,
         last_position=last_position,
         publishes_solar_roles=any(

@@ -281,5 +281,6 @@ FAST_CONTROL_DEADLINES = ControlDeadlines(
     priority=0.05,
     dominant_power_source=0.05,
     evse_charge_limit=0.05,
+    evse_lock=0.05,
     adopted_property=0.05,
 )

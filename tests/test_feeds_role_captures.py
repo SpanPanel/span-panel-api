@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from reference_payloads.captures import CAPTURES, capture_snapshot, capture_tree
+from reference_payloads.captures import CAPTURES, capture_adapter, capture_snapshot, capture_tree
 from span_panel_api import FEEDS_ROLES
 
 
@@ -23,3 +23,8 @@ def test_the_captures_declare_feeds_roles() -> None:
         for stem in CAPTURES
         for circuit_id in capture_tree(stem).circuits()
     )
+
+
+@pytest.mark.parametrize("stem", CAPTURES)
+def test_the_feeds_role_a_circuit_declares_is_not_reported_as_discovered(stem: str) -> None:
+    assert "discovered.circuit/connection/feeds-role" not in capture_adapter(stem).build_field_metadata()

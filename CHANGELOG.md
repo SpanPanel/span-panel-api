@@ -23,6 +23,8 @@ Snapshot fields that held a fabricated constant can now be unknown, and with `sp
 - **BREAKING FOR CONSUMERS: `SpanPanelSnapshot.uptime_s` becomes `int | None`**, and with those parsers it is `None` on a parent/child panel and before a flat panel first reports ready, where it was a constant `0`.
 - **BREAKING FOR CONSUMERS: `SpanCircuitSnapshot.instant_power_update_time_s` and `energy_accum_update_time_s` become `int | None` and default to `None`**, and with those parsers they are `None` until the reading has arrived and always on a parent/child
   panel, where they were `0`.
+- **BREAKING FOR CONSUMERS: `SpanCircuitSnapshot.is_240v` becomes `bool | None`**, and with `span-panel-api-schema-1` 1.4.0 or newer it is `None` where the pole count is unpublished.
+- **BREAKING FOR CONSUMERS: `SpanPanelSnapshot.lugs_at_service_entrance` becomes `bool | None`**, and with `span-panel-api-schema-1` 1.4.0 or newer it is `None` while the upstream lugs declare their feed but leave it unpublished.
 - **The `schema-0` extra requires `span-panel-api-schema-0` 1.3.0 or newer and the `schema-1` extra requires `span-panel-api-schema-1` 1.4.0 or newer**, the adapters that report these values as unknown; schema-1 1.4.0 also fills the snapshot fields this
   release adds.
 

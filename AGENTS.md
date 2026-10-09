@@ -49,8 +49,9 @@ Ported acceptance tests are never edited. A strict xfail stops at its first fail
 
 Captures are byte copies and must stay that way:
 
-- `tests/fixtures/captures/` holds the reference captures with their upstream `LICENSE` and a `README.md` naming the upstream repository, path and commit; `SHA256SUMS` pins every file, and `tests/test_captures_unchanged.py` checks it. The two captures in
-  `tests/fixtures/` are pinned the same way by `tests/adapter_fidelity/test_main32_fidelity.py`.
+- `tests/fixtures/captures/` holds the reference captures with their upstream `LICENSE` and a `README.md` naming the upstream repository, path and commit; `SHA256SUMS` pins each capture and the `LICENSE` by SHA-256. `tests/test_captures_unchanged.py`
+  checks every pin, requires a pin for every capture and the directory to hold nothing but the pinned files, `README.md` and `SHA256SUMS`; those two are this repository's records and are not pinned. The two captures in `tests/fixtures/` are pinned the same
+  way by `tests/adapter_fidelity/test_main32_fidelity.py`.
 - `.pre-commit-config.yaml` excludes them from every hook that rewrites files. Keep any new capture path in those excludes.
 - A capture is replaced only by copying it again from its upstream commit and updating the pins, never by editing it.
 

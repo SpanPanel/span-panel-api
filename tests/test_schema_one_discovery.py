@@ -267,7 +267,9 @@ def test_an_off_snapshot_route_that_became_observable_must_be_retired() -> None:
 
 
 _FEEDS_ROLE: Declaration = (TYPE_CIRCUIT, "connection", "feeds-role")
-_ABSENT_FROM_THE_CAPTURE: frozenset[Declaration] = frozenset({_FEEDS_ROLE})
+_METER_SHARED_WITH: Declaration = (TYPE_CIRCUIT, "meter", "shared-with-device-ids")
+_SWITCH_SHARED_WITH: Declaration = (TYPE_CIRCUIT, "switch", "shared-with-device-ids")
+_ABSENT_FROM_THE_CAPTURE: frozenset[Declaration] = frozenset({_FEEDS_ROLE, _METER_SHARED_WITH, _SWITCH_SHARED_WITH})
 """Addressed entries the capture never declares, each proved on a synthetic declaration below."""
 
 _A_LOAD_CIRCUIT = "0ab966b95f92a6a51ec548485aa85f54"
@@ -308,6 +310,30 @@ def test_feeds_role_moves_the_snapshot_on_a_circuit_that_declares_it() -> None:
     moved = {path for path, value in after.items() if baseline.get(path) != value}
     assert moved == {f"circuits@{_A_LOAD_CIRCUIT}.feeds_role"}
     assert _FEEDS_ROLE in _CONSUMED_WITHOUT_A_ROW
+
+
+_ANOTHER_LOAD_CIRCUIT = "d3724e0d660ba506aa79c1cafe5d1181"
+
+
+@pytest.mark.parametrize(
+    ("declaration", "field"),
+    [(_METER_SHARED_WITH, "meter_shared_with"), (_SWITCH_SHARED_WITH, "relay_shared_with")],
+)
+def test_shared_with_moves_the_snapshot_on_a_circuit_that_declares_it(declaration: Declaration, field: str) -> None:
+    """The experiment above, run on a circuit given the declaration the capture lacks."""
+    _type, node, prop = declaration
+    tree = _tree()
+    description = json.loads(tree[_A_LOAD_CIRCUIT]["$description"])
+    description["nodes"][node]["properties"][prop] = {"datatype": "string"}
+    tree[_A_LOAD_CIRCUIT]["$description"] = json.dumps(description)
+    tree[_A_LOAD_CIRCUIT][f"{node}/{prop}"] = "probe-value"
+    baseline = _snapshot_fields(_snapshot(tree))
+    tree[_A_LOAD_CIRCUIT][f"{node}/{prop}"] = _ANOTHER_LOAD_CIRCUIT
+    after = _snapshot_fields(_snapshot(tree))
+
+    moved = {path for path, value in after.items() if baseline.get(path) != value}
+    assert moved == {f"circuits@{_A_LOAD_CIRCUIT}.{field}"}
+    assert declaration in _CONSUMED_WITHOUT_A_ROW
 
 
 def test_no_addressed_entry_duplicates_a_metadata_row() -> None:

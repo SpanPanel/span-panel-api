@@ -63,6 +63,7 @@ from .models import (
     V2HomieSchema,
     V2StatusInfo,
     is_discovery_path,
+    shared_meter_groups,
 )
 from .mqtt import (
     ControlCommand,
@@ -155,6 +156,8 @@ __all__ = [  # noqa: RUF022
     # `SpanCircuitSnapshot.feeds_role`.
     "FEEDS_ROLES",
     "FeedsRole",
+    # The circuits one meter measures, from `SpanCircuitSnapshot.meter_shared_with`.
+    "shared_meter_groups",
     # Factory
     "create_span_client",
     # Detection

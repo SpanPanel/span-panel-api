@@ -88,6 +88,10 @@ EXPECTED_PUBLIC_API = {
     # the field defaults to `None`, and the flat schema declares no roles.
     "FEEDS_ROLES",
     "FeedsRole",
+    # Added 2026-10-09: groups the circuits that share one meter, from
+    # `SpanCircuitSnapshot.meter_shared_with`. Purely additive -- a snapshot in
+    # which no circuit shares a meter has no groups.
+    "shared_meter_groups",
     # Factory
     "create_span_client",
     # Detection

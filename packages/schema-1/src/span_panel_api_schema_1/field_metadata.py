@@ -433,6 +433,9 @@ _CONSUMED_WITHOUT_A_ROW: tuple[tuple[str, str, str], ...] = (
     # --- Circuit topology and PCS membership --------------------------------
     (TYPE_CIRCUIT, NODE_CONNECTION, "feeds-device-id"),
     (TYPE_CIRCUIT, NODE_CONNECTION, "feeds-role"),
+    # Device references, resolved to the circuit ids of the snapshot.
+    (TYPE_CIRCUIT, NODE_METER, "shared-with-device-ids"),
+    (TYPE_CIRCUIT, NODE_SWITCH, "shared-with-device-ids"),
     (TYPE_CIRCUIT, NODE_PCS, "managed"),
     (TYPE_CIRCUIT, NODE_PCS, "priority"),
     # --- Lugs direction and the upstream device's link -----------------------

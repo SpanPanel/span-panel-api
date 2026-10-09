@@ -89,6 +89,7 @@ from .protocol import (
     CircuitControlProtocol,
     ControlInterceptionProtocol,
     EvseControlProtocol,
+    EvseLockControlProtocol,
     PanelCapability,
     PanelControlProtocol,
     SpanPanelClientProtocol,
@@ -111,6 +112,9 @@ __all__ = [  # noqa: RUF022
     # snapshot rather than by its arguments -- a device the adapter models
     # produces no AdoptedDevice and so cannot be addressed through it.
     "AdoptedControlProtocol",
+    # A charger's connector lock, authorised by `SpanEvseSnapshot.lock_control`.
+    # A protocol of its own so `EvseControlProtocol`'s implementers are unchanged.
+    "EvseLockControlProtocol",
     # Added 2026-08-25 (3.1.0): one veto/observe point for every control
     # command. A protocol of its own rather than a member on the four control
     # protocols, which would break their implementers a second time in one

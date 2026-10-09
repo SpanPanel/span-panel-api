@@ -266,7 +266,7 @@ def test_either_signal_alone_is_enough_to_refuse() -> None:
 
 
 def test_a_circuit_the_tree_does_not_carry_yields_no_target(adapter: SchemaOneAdapter) -> None:
-    """`_target` is string formatting, so an unknown id used to produce a topic."""
+    """`control_target` is string formatting, so an unknown id used to produce a topic."""
     assert adapter.set_circuit_relay_target("0" * 32) is None
     assert adapter.set_circuit_priority_target("0" * 32) is None
 
@@ -409,7 +409,7 @@ def test_a_device_that_declares_no_priority_yields_no_priority_target(adapter: S
     """A BESS, a MID and the lugs declare no `load-shed` node at all.
 
     They have published no shed priority for anything to be settable *on*, and
-    `_target` is pure string formatting from a device id — so this is the case
+    `control_target` is pure string formatting from a device id — so this is the case
     that produced a write topic for a control the device never offered. It is
     asserted separately from the settability tests because it does not depend on
     them: an id in the tree is not a control, whatever any `$settable` says.

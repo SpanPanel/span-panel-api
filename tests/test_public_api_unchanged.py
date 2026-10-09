@@ -60,6 +60,9 @@ EXPECTED_PUBLIC_API = {
     "ExtensionProperty",
     "ExtensionSubject",
     "AdoptedControlProtocol",
+    # Added 2026-10-09: a charger's connector lock. A protocol of its own, so
+    # `EvseControlProtocol` and its implementers are unchanged.
+    "EvseLockControlProtocol",
     # Added 2026-08-25 (3.1.0): one veto/observe point for every control
     # command, the consumer-side half of its authorisation gate. A protocol of
     # its own so the four control protocols are not broken twice in one release.

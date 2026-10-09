@@ -50,3 +50,8 @@ def test_a_flat_panel_offers_no_lock_control() -> None:
     snapshot = SchemaZeroAdapter(serial_number="sim-40t-001", schema=flat_schema(40)).build_snapshot()
 
     assert all(charger.lock_control is None for charger in snapshot.evse.values())
+
+
+def test_the_declared_lock_states_are_reported() -> None:
+    assert _charger(evse("evse-a")).lock_state_options == ("UNLOCKED", "LOCKED")
+    assert _charger(evse("evse-a", lock_settable=False)).lock_state_options == ("UNLOCKED", "LOCKED")

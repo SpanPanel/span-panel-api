@@ -125,6 +125,19 @@ class EvseControlProtocol(Protocol):
 
 
 @runtime_checkable
+class EvseLockControlProtocol(Protocol):
+    """Control protocol for a commissioned EV charger's connector lock.
+
+    A protocol of its own rather than a member on `EvseControlProtocol`, which
+    would break that protocol's implementers. The write is authorised by the
+    snapshot: only a charger whose `SpanEvseSnapshot.lock_control` is set can be
+    addressed, and only with a value its `lock_state_options` lists.
+    """
+
+    async def set_evse_lock(self, node_id: str, locked: bool) -> PublishOutcome: ...
+
+
+@runtime_checkable
 class AdoptedControlProtocol(Protocol):
     """Control protocol for settable properties on a device nothing here models.
 

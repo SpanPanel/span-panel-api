@@ -40,3 +40,20 @@ def test_the_captures_hold_a_settable_lock() -> None:
         for device_id in capture_tree(stem).devices
         if capture_tree(stem).device_type(device_id) == _EVSE_TYPE
     )
+
+
+@pytest.mark.parametrize("stem", CAPTURES)
+def test_each_charger_reports_the_lock_states_it_declares(stem: str) -> None:
+    tree, snapshot = capture_tree(stem), capture_snapshot(stem)
+    declared = sorted(
+        tuple(
+            json.loads(tree.devices[device_id].description)["nodes"]["switch"]["properties"]["lock-state"]["format"].split(
+                ","
+            )
+        )
+        for device_id in tree.devices
+        if tree.device_type(device_id) == _EVSE_TYPE
+        and "lock-state" in json.loads(tree.devices[device_id].description)["nodes"].get("switch", {}).get("properties", {})
+    )
+
+    assert sorted(charger.lock_state_options for charger in snapshot.evse.values() if charger.lock_state_options) == declared

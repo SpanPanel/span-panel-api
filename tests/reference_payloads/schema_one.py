@@ -22,10 +22,11 @@ it, and a real consumer gets this tree off a broker.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from importlib.resources import files
 import json
 from pathlib import Path
+import time
 
 from ebus_sdk.homie import DiscoveredDevice
 
@@ -103,7 +104,7 @@ def devices_from_tree(tree: RetainedTopicTree) -> list[DiscoveredDevice]:
     return [device_from_topics(device_id, topics) for device_id, topics in tree.items()]
 
 
-def replay(tree: RetainedTopicTree, root_id: str) -> SchemaOneAdapter:
+def replay(tree: RetainedTopicTree, root_id: str, *, clock: Callable[[], float] = time.monotonic) -> SchemaOneAdapter:
     """Feed a whole tree to a fresh adapter the way the broker replays it.
 
     Every message goes through `handle_message`, so the tree takes the SDK's real
@@ -115,6 +116,9 @@ def replay(tree: RetainedTopicTree, root_id: str) -> SchemaOneAdapter:
     The REST half of connecting is answered from the tree itself: the schema's
     firmware and data-model versions are the ones the root retains, so a test
     never states a second firmware beside the one its tree publishes.
+
+    `clock` is the adapter's monotonic source, for a test that steps through a
+    grace the adapter waits out.
     """
     root = tree[root_id]
     adapter = SchemaOneAdapter(
@@ -125,6 +129,7 @@ def replay(tree: RetainedTopicTree, root_id: str) -> SchemaOneAdapter:
             types={},
             data_model_version=root.get(f"{_INFO}/data-model-version", "1.0"),
         ),
+        clock=clock,
     )
     for device_id in [root_id, *(other for other in tree if other != root_id)]:
         topics = tree[device_id]

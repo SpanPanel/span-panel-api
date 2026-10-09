@@ -846,8 +846,7 @@ class AsyncMqttBridge:
         retrying with it.
 
         Recovery target: CA rotation (firmware upgrade), stale paho client
-        internal state, stuck Homie accumulator. See the design doc at
-        SpanPanel_Docs/span-panel-api/2026-05-17-mqtt-ca-refresh-on-reconnect-design.md.
+        internal state, stuck Homie accumulator.
         """
         if self._loop is None:
             return False

@@ -506,8 +506,7 @@ Everything below is additive. Each field is `None` or empty on a panel that publ
   `MQTT_FULL_REBUILD_AFTER_FAILURES` (3) consecutive failures, or immediately on any `ssl.SSLError`. The previous behavior pinned the panel's CA certificate into the paho client once at `connect()` time and re-used it across all reconnect attempts; if the
   panel rotated its private CA — most plausibly during a firmware upgrade — every subsequent reconnect raised `ssl.SSLCertVerificationError` (caught by the broad `OSError` clause and silently retried) and the bridge could not recover without a config-entry
   reload. The rebuild mirrors what a manual reload does without going through HA's `config_entry` teardown, so entities stay registered and the integration's grace-period logic continues to apply unchanged. The threshold-cadence design (counter reset on
-  every rebuild attempt, success or fail) keeps the recovery path active throughout extended outages — multi-day disconnections recover whenever the panel becomes usable again, including if the CA rotates a second time mid-outage. See
-  `SpanPanel_Docs/span-panel-api/2026-05-17-mqtt-ca-refresh-on-reconnect-design.md` for the full design.
+  every rebuild attempt, success or fail) keeps the recovery path active throughout extended outages — multi-day disconnections recover whenever the panel becomes usable again, including if the CA rotates a second time mid-outage.
 
 ### Added
 

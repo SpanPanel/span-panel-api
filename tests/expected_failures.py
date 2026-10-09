@@ -11,8 +11,8 @@ them. `DIVERGENT` rows assert behaviour this library deliberately does not
 have; they stay until the test or the decision changes. A strict xfail stops at
 its first failing line, so a companion asserts what each `DIVERGENT` test checks
 after its divergent line: `test_schema_one_acceptance_companions.py` for the
-device-tree tests, and the cases after the acceptance tests in
-`test_register_rate_limit.py` for registration.
+device-tree tests, and `test_register_rate_limit_companions.py` for
+registration.
 """
 
 from __future__ import annotations

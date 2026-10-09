@@ -241,6 +241,8 @@ def build_battery(
     bess: DiscoveredDevice | None,
     owners: list[DiscoveredDevice],
     *,
+    feeds: Mapping[str, str] | None = None,
+    feed_statuses: Mapping[str, str] | None = None,
     firmware_version: str | None = None,
     power_flow_battery: float | None = None,
 ) -> SpanBatterySnapshot:
@@ -249,11 +251,20 @@ def build_battery(
     `firmware_version` is the enclosure's ``info/firmware-version`` and
     `power_flow_battery` its ``power-flows/battery``; together they pick the
     BESS meter's wire frame. Omitted, they leave the old frame assumed.
+
+    The link status is the owner's ``fed-by-*`` record where a device claims
+    the battery that way, as the upstream lugs do for a battery ahead of them.
+    Otherwise it is the record of the circuit that feeds the battery, from
+    `feeds` and `feed_statuses` (``feed_circuit_ids`` and
+    ``feed_connection_statuses``), as it is for an inverter or a charger.
     """
     if bess is None:
         return SpanBatterySnapshot(present=False)
 
+    feed_circuit_id = (feeds or {}).get(bess.device_id)
     status = connection_status_for(bess.device_id, owners)
+    if status is None:
+        status = (feed_statuses or {}).get(bess.device_id)
     raw_power_w = number(bess, NODE_METER, PROP_ACTIVE_POWER)
     charge_positive_on_wire = _bess_meter_is_charge_positive(firmware_version, raw_power_w, power_flow_battery)
 
@@ -280,6 +291,7 @@ def build_battery(
         # would have to pick one.
         communication_state=_optional(text(bess, NODE_STATUS, PROP_COMMUNICATION_STATE)),
         present=True,
+        feed_circuit_id=feed_circuit_id,
     )
 
 

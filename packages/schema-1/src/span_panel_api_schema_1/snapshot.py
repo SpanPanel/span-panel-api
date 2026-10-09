@@ -295,6 +295,8 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
         battery=build_battery(
             roles.bess,
             owners,
+            feeds=feeds,
+            feed_statuses=feed_statuses,
             firmware_version=fields.firmware_version,
             power_flow_battery=fields.power_flow_battery,
         ),

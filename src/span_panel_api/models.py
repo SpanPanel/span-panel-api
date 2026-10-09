@@ -487,6 +487,13 @@ class SpanBatterySnapshot:
     # it, and the migration guide warns against conflating them.
     communication_state: str | None = None  # v2: bess status/communication-state
 
+    # Whether the panel's device tree declares a battery, v1.0 only. True from the
+    # moment the battery describes itself, before any of its values arrive, so a
+    # battery whose state of charge is never published is still a battery. None
+    # on the flat schema, which has no battery device to declare and publishes
+    # its battery values whether or not one is installed.
+    present: bool | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class FieldMetadata:
@@ -1296,7 +1303,7 @@ class SpanPanelSnapshot:
     apart — every limit in this capture is a legal `0.0`.
     """
 
-    lugs_at_service_entrance: bool = True
+    lugs_at_service_entrance: bool | None = True
     """Whether this enclosure's upstream lugs *are* the utility connection point.
 
     `False` means something sits between the utility and the main lugs, so the
@@ -1326,6 +1333,9 @@ class SpanPanelSnapshot:
     firmware predates enclosure chaining and publishes no way to express it, so a
     flat panel's lugs are its service entrance. schema_0 leaves it alone for that
     reason.
+
+    `None` while the lugs declare `connection/fed-by-device-id` and have not
+    published it: the feed may yet name a device, so neither answer is known.
 
     A defaulted snapshot field rather than a `SchemaAdapter` member, for the
     reason `adopted_devices` gives above: the protocol derives its required

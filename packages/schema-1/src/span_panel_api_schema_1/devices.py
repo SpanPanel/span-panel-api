@@ -244,14 +244,14 @@ def build_battery(
     firmware_version: str | None = None,
     power_flow_battery: float | None = None,
 ) -> SpanBatterySnapshot:
-    """Build the battery snapshot. An uncommissioned panel yields the empty one.
+    """Build the battery snapshot. A tree with no battery yields the empty one, marked absent.
 
     `firmware_version` is the enclosure's ``info/firmware-version`` and
     `power_flow_battery` its ``power-flows/battery``; together they pick the
     BESS meter's wire frame. Omitted, they leave the old frame assumed.
     """
     if bess is None:
-        return SpanBatterySnapshot()
+        return SpanBatterySnapshot(present=False)
 
     status = connection_status_for(bess.device_id, owners)
     raw_power_w = number(bess, NODE_METER, PROP_ACTIVE_POWER)
@@ -279,6 +279,7 @@ def build_battery(
         # than collapsed to a bool: DEGRADED is neither OK nor LOST, and a bool
         # would have to pick one.
         communication_state=_optional(text(bess, NODE_STATUS, PROP_COMMUNICATION_STATE)),
+        present=True,
     )
 
 

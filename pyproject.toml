@@ -245,7 +245,11 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 explicit_package_bases = true
-mypy_path = "src"
+# `tests` because the suite imports its support packages top-level
+# (`from reference_payloads.schema_one import ...`), the way pytest's rootdir puts
+# `tests/` on `sys.path`; the support packages the mypy hook checks resolve the same
+# way here.
+mypy_path = "src:tests"
 # Excluded by name for the reason `[tool.ruff]` gives above: the capture script is
 # checked like the library, and the hand-run tools written before that was expected
 # are not.

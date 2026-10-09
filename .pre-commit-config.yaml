@@ -103,11 +103,14 @@ repos:
         # names tests/, which is fine — that flag governs directory discovery, and
         # a file passed by name is checked regardless.
         #
+        # `tests/adapter_fidelity/` is checked for the same reason: its harness and
+        # rules are the support code every adapter fidelity cell is measured with.
+        #
         # `scripts/capture_parent_child_reference.py` is checked for the same reason:
         # every schema_1 test is written against what it writes, which is not the place
         # for the one part of the tree nothing type-checks. The hand-run scripts beside
         # it stay out — see `pyproject.toml`, which names them one by one.
-        exclude: '^src/span_panel_api/generated_client/.*|scripts/(?!capture_parent_child_reference\.py$).*|tests/(?!reference_payloads/).*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|scripts/(?!capture_parent_child_reference\.py$).*|tests/(?!reference_payloads/|adapter_fidelity/).*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # Pylint for code quality
   - repo: https://github.com/pycqa/pylint

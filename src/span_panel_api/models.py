@@ -487,6 +487,13 @@ class SpanBatterySnapshot:
     # it, and the migration guide warns against conflating them.
     communication_state: str | None = None  # v2: bess status/communication-state
 
+    # Whether the panel's device tree declares a battery, v1.0 only. True from the
+    # moment the battery describes itself, before any of its values arrive, so a
+    # battery whose state of charge is never published is still a battery. None
+    # on the flat schema, which has no battery device to declare and publishes
+    # its battery values whether or not one is installed.
+    present: bool | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class FieldMetadata:

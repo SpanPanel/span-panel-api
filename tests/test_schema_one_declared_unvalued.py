@@ -1,7 +1,8 @@
-"""Declared but unvalued: a model never published.
+"""Declared but unvalued: a battery before it reports, and a model never published.
 
 A `$description` says what a device has; its values arrive separately, and some
-never do. A declared model with no value holds connecting only for `FEED_GRACE_S`, because the model
+never do. The declaration alone decides that a battery is present. A declared
+model with no value holds connecting only for `FEED_GRACE_S`, because the model
 fills device metadata and nothing else: a value that lands later changes the
 battery's or the charger's model and moves no key.
 """
@@ -13,12 +14,39 @@ import logging
 
 import pytest
 
-from reference_payloads.schema_one import replay
+from conftest import flat_schema
+from reference_payloads.schema_one import parent_child_tree, replay
 from reference_payloads.synthetic_trees import PANEL_ID, battery, evse, hosted_circuit, panel, tree, without_values
+from span_panel_api_schema_0 import SchemaZeroAdapter
 from span_panel_api_schema_1.adapter import FEED_GRACE_S
 
 _MODEL = "info/model"
+_REFERENCE_PANEL = "example-40t-001"
 _START = 100.0
+
+
+def test_a_declared_battery_is_present_before_it_reports() -> None:
+    snapshot = replay(tree(panel(), without_values(battery())), PANEL_ID).build_snapshot()
+
+    assert snapshot.battery.present is True
+    assert (snapshot.battery.soe_percentage, snapshot.battery.soe_kwh, snapshot.battery.model) == (None, None, None)
+
+
+def test_a_tree_without_a_battery_reports_absent() -> None:
+    snapshot = replay(tree(panel(), hosted_circuit("c-1", (1,))), PANEL_ID).build_snapshot()
+
+    assert snapshot.battery.present is False
+
+
+def test_a_flat_panel_does_not_answer_battery_presence() -> None:
+    """The flat schema has no device for a battery, so it cannot say whether one is there."""
+    adapter = SchemaZeroAdapter(serial_number="sim-40t-001", schema=flat_schema(40))
+
+    assert adapter.build_snapshot().battery.present is None
+
+
+def test_the_reference_tree_reports_its_battery_present() -> None:
+    assert replay(parent_child_tree(), _REFERENCE_PANEL).build_snapshot().battery.present is True
 
 
 def test_a_declared_model_is_waited_on_until_the_grace_runs_out(caplog: pytest.LogCaptureFixture) -> None:

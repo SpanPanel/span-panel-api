@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+import re
 from typing import Final, Literal
 
 # Homie schema type: {type_name: {property_name: {attribute: value}}}
@@ -93,6 +94,22 @@ class SpanCircuitSnapshot:
     is net import. Read from the device's declaration, never from its values, so
     a meter that has not reported yet is already outside the panel. Such a meter
     has no relay, no breaker and no shed priority, and occupies no position.
+    """
+
+    meter_shared_with: tuple[str, ...] | None = None
+    """The other circuits this circuit's meter also measures, by circuit id.
+
+    From `meter/shared-with-device-ids`, without the circuit itself or an id
+    naming no circuit in the snapshot, ordered by `device_id_order`. `None`
+    where the circuit declares no such list or has not published it; `()` where
+    it lists no circuit the snapshot holds. The peers' readings are the same
+    meter's, so a consumer never adds them up; `shared_meter_groups` groups
+    them.
+    """
+    relay_shared_with: tuple[str, ...] | None = None
+    """The other circuits this circuit's relay also switches, by circuit id.
+
+    From `switch/shared-with-device-ids`, read as `meter_shared_with` is.
     """
 
     feeds_role: FeedsRole | None = None
@@ -565,6 +582,48 @@ reading a row can look it up without translating it.
 """
 
 _DISCOVERY_PREFIX = f"{DISCOVERY_NAMESPACE}."
+
+
+def device_id_order(device_id: str) -> tuple[str | int, ...]:
+    """Sort key for device ids under which digit runs compare as numbers.
+
+    `circuit-9` sorts before `circuit-10`. Splitting on a captured digit run
+    leaves the runs at the odd positions and the text between them at the even
+    ones, so every position holds the same type in every key.
+    """
+    parts = re.split(r"(\d+)", device_id)
+    return tuple(int(part) if index % 2 else part for index, part in enumerate(parts))
+
+
+def shared_meter_groups(circuits: Mapping[str, SpanCircuitSnapshot]) -> dict[str, tuple[str, ...]]:
+    """The circuits one meter measures, grouped and keyed by their first member.
+
+    A group holds every circuit linked through `meter_shared_with`, in
+    `device_id_order`, and its key is the first of them. A circuit that names no
+    known peer and is named by none is in no group. Only membership: no reading
+    is combined, because every member already reports the one meter's values.
+    """
+    links: dict[str, set[str]] = {}
+    for circuit_id, circuit in circuits.items():
+        for peer in circuit.meter_shared_with or ():
+            if peer in circuits and peer != circuit_id:
+                links.setdefault(circuit_id, set()).add(peer)
+                links.setdefault(peer, set()).add(circuit_id)
+    groups: dict[str, tuple[str, ...]] = {}
+    seen: set[str] = set()
+    for start in sorted(links, key=device_id_order):
+        if start in seen:
+            continue
+        members = {start}
+        pending = [start]
+        while pending:
+            for peer in links[pending.pop()] - members:
+                members.add(peer)
+                pending.append(peer)
+        seen |= members
+        ordered = tuple(sorted(members, key=device_id_order))
+        groups[ordered[0]] = ordered
+    return groups
 
 
 def discovery_path(device_type: str, node_id: str, property_id: str) -> str:

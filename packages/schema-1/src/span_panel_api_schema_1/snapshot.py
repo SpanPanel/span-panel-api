@@ -160,8 +160,11 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
     # uses, and this loop is where a circuit's is decided -- deriving it a
     # second time downstream would be a second implementation free to drift.
     circuit_subjects: list[tuple[DiscoveredDevice, ExtensionSubject]] = []
+    circuit_ids = frozenset(circuit.device_id for circuit in roles.circuits)
     for circuit in roles.circuits:
-        snapshot = build_circuit(circuit, device_type=der_type_by_circuit.get(circuit.device_id, "circuit"))
+        snapshot = build_circuit(
+            circuit, device_type=der_type_by_circuit.get(circuit.device_id, "circuit"), circuit_ids=circuit_ids
+        )
         circuits[snapshot.circuit_id] = snapshot
         circuit_subjects.append((circuit, ExtensionSubject(kind="circuit", instance_key=snapshot.circuit_id)))
 

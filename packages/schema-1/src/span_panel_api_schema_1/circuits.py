@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from span_panel_api.models import FEEDS_ROLES, FeedsRole, SpanCircuitSnapshot
+from span_panel_api.models import FEEDS_ROLES, FeedsRole, SpanCircuitSnapshot, device_id_order
 from span_panel_api_schema_1.const import (
     NODE_BREAKER,
     NODE_CONNECTION,
@@ -56,6 +56,7 @@ from span_panel_api_schema_1.const import (
     PROP_RELAY,
     PROP_RELAY_CONTROLLABLE,
     PROP_RELAY_REQUESTER,
+    PROP_SHARED_WITH_DEVICE_IDS,
     PROP_SPACES,
     UNKNOWN,
 )
@@ -63,6 +64,8 @@ from span_panel_api_schema_1.description import declared_settable, node_properti
 from span_panel_api_schema_1.panel import declares_node
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from ebus_sdk.homie import DiscoveredDevice
 
 
@@ -269,10 +272,31 @@ def _feeds_role(device: DiscoveredDevice) -> FeedsRole | None:
     return next((role for role in FEEDS_ROLES if role == published), None)
 
 
+def _shared_with(device: DiscoveredDevice, node: str, circuit_ids: Collection[str]) -> tuple[str, ...] | None:
+    """One node's `shared-with-device-ids`, resolved to the other circuits of the snapshot.
+
+    A circuit's snapshot key is its device id, so resolving keeps the listed ids
+    that name another circuit, in `device_id_order`. `None` while the list is
+    undeclared or unpublished; an empty tuple where it names no known circuit.
+    """
+    published = device.get_property(node, PROP_SHARED_WITH_DEVICE_IDS)
+    if published is None:
+        return None
+    listed = {part.strip() for part in str(published).split(",")}
+    return tuple(sorted((listed & set(circuit_ids)) - {device.device_id}, key=device_id_order))
+
+
 def build_circuit(
-    device: DiscoveredDevice, device_type: str = "circuit", relative_position: str = ""
+    device: DiscoveredDevice,
+    device_type: str = "circuit",
+    relative_position: str = "",
+    circuit_ids: Collection[str] = frozenset(),
 ) -> SpanCircuitSnapshot:
-    """Build one circuit snapshot from its v1.0 device."""
+    """Build one circuit snapshot from its v1.0 device.
+
+    `circuit_ids` is every circuit device id in the tree, against which the
+    circuit's shared-with lists are resolved.
+    """
     outside = not declares_spaces(device)
     raw_power = _number(device, NODE_METER, PROP_ACTIVE_POWER)
     # A hosted circuit is negated so positive means consumption; a meter outside
@@ -313,6 +337,8 @@ def build_circuit(
         device_type=device_type,
         relative_position=relative_position,
         feeds_role=_feeds_role(device),
+        meter_shared_with=_shared_with(device, NODE_METER, circuit_ids),
+        relay_shared_with=_shared_with(device, NODE_SWITCH, circuit_ids),
         # Unknown without a pole count: a meter outside the panel has no
         # breaker, and a breaker whose count has not arrived has not said.
         is_240v=None if poles is None else poles >= 2,

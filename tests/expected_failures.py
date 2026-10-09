@@ -45,20 +45,8 @@ PENDING: Final[Mapping[str, str]] = {
     ),
     f"{_ACCEPTANCE}::test_every_model_property_is_none_where_not_published": _UNPUBLISHED_IS_NONE,
     f"{_ACCEPTANCE}::test_the_reference_main_32_publishes_none_of_them": _UNPUBLISHED_IS_NONE,
-    f"{_ACCEPTANCE}::test_shared_with_resolves_to_other_circuits_in_device_id_order": (
-        f"shared-with resolved to circuit ids lands with {_SHARED}"
-    ),
-    f"{_ACCEPTANCE}::test_shared_with_orders_instance_numbers_numerically": (
-        f"shared-with in numeric instance order lands with {_SHARED}"
-    ),
-    f"{_ACCEPTANCE}::test_a_shared_group_naming_no_known_circuit_is_still_shared": (
-        f"an empty shared-with for a declared group lands with {_SHARED}"
-    ),
     f"{_COMPANIONS}::test_the_shipped_tree_reads_busbar_current_and_frequency": (
         f"busbar current and frequency land with {_READINGS}"
-    ),
-    f"{_COMPANIONS}::test_the_shipped_tree_resolves_its_shared_relay": (
-        f"shared-with resolved to circuit ids lands with {_SHARED}"
     ),
 }
 

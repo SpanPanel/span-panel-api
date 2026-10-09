@@ -8,7 +8,7 @@ derivations are defined by the migration guide, not invented here:
 ======================  ===========================================================
 Flat property           v1.0 source
 ======================  ===========================================================
-``always-on``           ``switch/relay-controllable``, inverted
+``always-on``           ``switch/relay-controllable``, inverted, where a relay is declared
 ``never-backup``        ``$settable`` on ``load-shed/priority``, inverted
 ``sheddable``           computed: ``priority != NEVER and relay-controllable``
 ======================  ===========================================================
@@ -19,6 +19,14 @@ frame: a normal load reads **negative** ``active-power`` and accumulates
 ``exported-energy`` (the panel exported it *to* the circuit). The snapshot
 reports consumption as positive, so power is negated and the two energy
 accumulators are swapped.
+
+**A circuit-typed device that declares no breaker space is a meter outside the
+panel**, and none of that applies to it. Its ``active-power`` is already
+import-positive (positive = flowing into the panel), so it is reported as
+published, with ``imported-energy`` as consumed and ``exported-energy`` as
+produced: consumed minus produced is net import. The classification reads the
+declaration, never a value, so a meter that has not reported is already outside
+the panel and a hosted circuit that has not reported is still hosted.
 """
 
 from __future__ import annotations
@@ -50,6 +58,7 @@ from span_panel_api_schema_1.const import (
     UNKNOWN,
 )
 from span_panel_api_schema_1.description import declared_settable, node_properties
+from span_panel_api_schema_1.panel import declares_node
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
@@ -79,10 +88,11 @@ def _number(device: DiscoveredDevice, node: str, prop: str) -> float | None:
 def _flag(device: DiscoveredDevice, node: str, prop: str, *, default: bool) -> bool:
     """Read a Homie boolean. Absent means `default`, which is not always False.
 
-    `relay-controllable` absent has to mean *controllable*, because the
-    property exists to mark the exception (an always-on circuit). Defaulting it
-    to False would silently make every circuit uncontrollable on a panel that
-    omits it.
+    `relay-controllable` absent has to mean *controllable* on a device that
+    declares a relay, because the property exists to mark the exception (an
+    always-on circuit). Defaulting it to False would silently make every circuit
+    uncontrollable on a panel that omits it. See `_relay_controllable` for a
+    device that declares no relay.
     """
     raw = device.get_property(node, prop)
     if raw is None or raw == "":
@@ -114,6 +124,28 @@ def _optional_integer(device: DiscoveredDevice, node: str, prop: str) -> int | N
     """
     raw = _number(device, node, prop)
     return None if raw is None else int(raw)
+
+
+def declares_spaces(device: DiscoveredDevice) -> bool:
+    """Whether the device's `$description` declares ``info/spaces``.
+
+    The hosted-or-outside question, asked of the declaration because a value
+    cannot answer it: a hosted circuit whose spaces have not arrived yet and a
+    meter that has none read the same until the values land, and a consumer
+    that keyed the sign of a reading on that gap would book the first readings
+    of every hosted circuit backwards.
+    """
+    return PROP_SPACES in node_properties(device, NODE_INFO)
+
+
+def _relay_controllable(device: DiscoveredDevice) -> bool:
+    """``switch/relay-controllable``, defaulting to whether a relay is declared at all.
+
+    A device that declares no ``switch`` node has no relay to command, so it is
+    not controllable whatever it leaves unpublished; one that declares the node
+    and leaves the property unvalued is, for the reason `_flag` gives.
+    """
+    return _flag(device, NODE_SWITCH, PROP_RELAY_CONTROLLABLE, default=declares_node(device, NODE_SWITCH))
 
 
 def _tabs(device: DiscoveredDevice) -> list[int]:
@@ -226,21 +258,28 @@ def relay_is_settable(device: DiscoveredDevice) -> bool:
     specification's rule showing up in hardware. The vendored capture carries
     the same pattern on its five.
     """
-    return _settable(device, NODE_SWITCH, PROP_RELAY) and _flag(device, NODE_SWITCH, PROP_RELAY_CONTROLLABLE, default=True)
+    return _settable(device, NODE_SWITCH, PROP_RELAY) and _relay_controllable(device)
 
 
 def build_circuit(
     device: DiscoveredDevice, device_type: str = "circuit", relative_position: str = ""
 ) -> SpanCircuitSnapshot:
     """Build one circuit snapshot from its v1.0 device."""
+    outside = not declares_spaces(device)
     raw_power = _number(device, NODE_METER, PROP_ACTIVE_POWER)
-    # Negate so positive means consumption. The guard keeps -0.0 out of the
-    # snapshot, where it would compare equal to 0.0 but format as "-0.0".
-    # A meter that has not reported stays `None` rather than becoming 0.0 W —
-    # see `SpanCircuitSnapshot` for why absent and zero must not collapse.
-    instant_power_w = None if raw_power is None else (0.0 if raw_power == 0.0 else -raw_power)
+    # A hosted circuit is negated so positive means consumption; a meter outside
+    # the panel is already import-positive and is reported as published. The
+    # guard keeps -0.0 out of the snapshot, where it would compare equal to 0.0
+    # but format as "-0.0". A meter that has not reported stays `None` rather
+    # than becoming 0.0 W — see `SpanCircuitSnapshot` for why absent and zero
+    # must not collapse.
+    frame = 1.0 if outside else -1.0
+    instant_power_w = None if raw_power is None else (0.0 if raw_power == 0.0 else frame * raw_power)
+    imported_wh = _number(device, NODE_METER, PROP_IMPORTED_ENERGY)
+    exported_wh = _number(device, NODE_METER, PROP_EXPORTED_ENERGY)
+    poles = _number(device, NODE_BREAKER, PROP_POLES)
 
-    relay_controllable = _flag(device, NODE_SWITCH, PROP_RELAY_CONTROLLABLE, default=True)
+    relay_controllable = _relay_controllable(device)
     priority = _text(device, NODE_LOAD_SHED, PROP_PRIORITY, UNKNOWN)
     priority_settable = priority_is_settable(device)
 
@@ -249,11 +288,12 @@ def build_circuit(
         name=_text(device, NODE_INFO, PROP_NAME),
         relay_state=_text(device, NODE_SWITCH, PROP_RELAY, UNKNOWN),
         instant_power_w=instant_power_w,
-        # The panel *imported* this energy from the circuit, so the circuit
-        # produced it. Named from the panel's perspective, reported from the
-        # circuit's.
-        produced_energy_wh=_number(device, NODE_METER, PROP_IMPORTED_ENERGY),
-        consumed_energy_wh=_number(device, NODE_METER, PROP_EXPORTED_ENERGY),
+        # On a hosted circuit the panel *imported* this energy from the
+        # circuit, so the circuit produced it: named from the panel's
+        # perspective, reported from the circuit's. A meter outside the panel
+        # measures the panel's own import, so its imported energy is consumed.
+        produced_energy_wh=exported_wh if outside else imported_wh,
+        consumed_energy_wh=imported_wh if outside else exported_wh,
         tabs=_tabs(device),
         priority=priority,
         # `always-on` is `not relay-controllable`, and the flat schema derived
@@ -264,10 +304,13 @@ def build_circuit(
         is_never_backup=not priority_settable,
         device_type=device_type,
         relative_position=relative_position,
-        is_240v=(_number(device, NODE_BREAKER, PROP_POLES) or 1) >= 2,
+        # Unknown without a pole count: a meter outside the panel has no
+        # breaker, and a breaker whose count has not arrived has not said.
+        is_240v=None if poles is None else poles >= 2,
         current_a=_number(device, NODE_METER, PROP_CURRENT),
         breaker_rating_a=_number(device, NODE_BREAKER, PROP_RATING),
-        always_on=not relay_controllable,
+        # A relay locked closed. A device with no relay is not "on" at all.
+        always_on=declares_node(device, NODE_SWITCH) and not relay_controllable,
         relay_requester=_text(device, NODE_SWITCH, PROP_RELAY_REQUESTER, UNKNOWN),
         relay_state_target=device.get_property_target(NODE_SWITCH, PROP_RELAY),
         priority_target=device.get_property_target(NODE_LOAD_SHED, PROP_PRIORITY),
@@ -282,4 +325,5 @@ def build_circuit(
         # policy, both, or neither, so they are read separately and named apart.
         pcs_managed=_optional_flag(device, NODE_PCS, PROP_MANAGED),
         pcs_priority=_optional_integer(device, NODE_PCS, PROP_PRIORITY),
+        measures_outside_panel=outside,
     )

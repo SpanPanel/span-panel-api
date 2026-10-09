@@ -1169,6 +1169,27 @@ class SpanPanelSnapshot:
     and `DeviceInfo(hw_version=...)` is the consumer's abbreviation, not ours.
     """
 
+    first_position: int | None = None
+    """The panel's first breaker position. v1.0 only.
+
+    From the reported model where its range is known, otherwise the lowest
+    occupied space, and widened to any occupied space outside the model's
+    range. `None` on the flat schema and where neither is known. Together with
+    `last_position` it says which positions exist, occupied or not; no circuit
+    is made up for an empty one.
+    """
+    last_position: int | None = None
+    """The panel's last breaker position. v1.0 only; see `first_position`."""
+
+    publishes_solar_roles: bool = False
+    """Whether any circuit declares `connection/feeds-role`.
+
+    The declaration decides, not the value: a circuit that declares the role
+    before publishing it, or declares a role other than solar, still marks the
+    panel as one that says where its solar is. `False` on the flat schema,
+    which declares no roles.
+    """
+
     # `shed/policy`, v1.0 only: how the panel decides what to shed, and the two
     # SoC thresholds that make its behaviour predictable. The wire carries one
     # `json` document; these are the parsed answer plus the document itself.

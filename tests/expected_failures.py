@@ -21,24 +21,12 @@ from typing import Final
 _ACCEPTANCE = "tests/test_schema_one_other_models.py"
 _COMPANIONS = "tests/test_schema_one_acceptance_companions.py"
 
-_POSITIONS = "the breaker position range"
 _READINGS = "the panel and circuit readings"
 _SHARED = "the shared meters and relays"
 
-_SOLAR_ROLES = f"whether a panel publishes solar roles lands with {_POSITIONS}"
 _UNPUBLISHED_IS_NONE = f"None for an undeclared reading or shared-with lands with {_READINGS} and {_SHARED}"
 
 PENDING: Final[Mapping[str, str]] = {
-    f"{_ACCEPTANCE}::test_a_panel_that_declares_feeds_role_publishes_solar_roles": _SOLAR_ROLES,
-    f"{_ACCEPTANCE}::test_main_32_and_the_flat_schema_do_not": _SOLAR_ROLES,
-    f"{_ACCEPTANCE}::test_the_declaration_decides_not_the_value": _SOLAR_ROLES,
-    f"{_ACCEPTANCE}::test_an_unknown_model_sizes_nothing_without_warning": (
-        f"an UNKNOWN model sized 0 without a warning lands with {_POSITIONS}"
-    ),
-    f"{_ACCEPTANCE}::test_an_unknown_model_reads_as_absent_so_a_consumer_falls_back": (
-        f"an UNKNOWN model reading as None lands with {_POSITIONS}"
-    ),
-    f"{_ACCEPTANCE}::test_unknown_in_the_model_enum_is_not_drift": f"model drift ignoring UNKNOWN lands with {_POSITIONS}",
     f"{_ACCEPTANCE}::test_the_panel_meter_reads_busbar_current_and_frequency": (
         f"busbar current and frequency land with {_READINGS}"
     ),

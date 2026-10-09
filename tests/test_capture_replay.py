@@ -90,7 +90,8 @@ def test_the_snapshot_identifies_the_panel_its_tree_declares(stem: str) -> None:
     assert None not in declared.values(), declared
     assert snapshot.serial_number == declared["info/serial-number"]
     assert snapshot.firmware_version == declared["info/firmware-version"]
-    assert snapshot.model == declared["info/model"]
+    # `UNKNOWN` is a member of the model enum that names no model, so it reads as absent.
+    assert snapshot.model == (None if declared["info/model"] == "UNKNOWN" else declared["info/model"])
 
 
 @pytest.mark.parametrize("stem", CAPTURES)

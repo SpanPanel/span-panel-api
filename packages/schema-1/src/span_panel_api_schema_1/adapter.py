@@ -48,7 +48,7 @@ from span_panel_api_schema_1.const import (
 from span_panel_api_schema_1.description import declared_settable, device_type, node_properties
 from span_panel_api_schema_1.devices import feed_circuit_ids
 from span_panel_api_schema_1.field_metadata import build_field_metadata
-from span_panel_api_schema_1.panel import integer, text
+from span_panel_api_schema_1.panel import integer, positions_outside_model, text
 from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot, harmonised_evse_keys
 from span_panel_api_schema_1.transport import ControllerRoutes, control_target
 
@@ -113,6 +113,7 @@ class SchemaOneAdapter:
         self._clock = clock
         self._grace_since: dict[str, float] = {}
         self._grace_reported: set[str] = set()
+        self._positions_reported = False
         self._routes = ControllerRoutes()
         self._controller = Controller(root_device_id=serial_number, mqttc=self._routes)
         self._property_callbacks: list[Callable[[str, str, str, str | None], None]] = []
@@ -187,7 +188,34 @@ class SchemaOneAdapter:
 
     def build_snapshot(self) -> SpanPanelSnapshot:
         root = self._require_root()
-        return build_snapshot(root, self._children())
+        snapshot = build_snapshot(root, self._children())
+        self._report_positions_outside_model(snapshot)
+        return snapshot
+
+    def _report_positions_outside_model(self, snapshot: SpanPanelSnapshot) -> None:
+        """Warn once per panel when its circuits occupy spaces outside its model's range.
+
+        The snapshot keeps reporting the model's range, so such a circuit lies
+        outside the positions a consumer lays out until the table is corrected.
+        """
+        if self._positions_reported:
+            return
+        outside = positions_outside_model(
+            snapshot.model, (tab for circuit in snapshot.circuits.values() for tab in circuit.tabs)
+        )
+        if outside is None:
+            return
+        (first, last), (lowest, highest) = outside
+        _LOGGER.warning(
+            "Panel model %s has breaker positions %d-%d, but its circuits occupy spaces %d-%d; "
+            "the snapshot reports the model's positions",
+            snapshot.model,
+            first,
+            last,
+            lowest,
+            highest,
+        )
+        self._positions_reported = True
 
     def build_field_metadata(self) -> dict[str, FieldMetadata]:
         root = self._controller.get_root(self._serial_number)

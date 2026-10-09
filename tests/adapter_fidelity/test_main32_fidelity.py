@@ -51,6 +51,12 @@ CELLS = {
 }
 
 
+_UPSTREAM_NOTICES = {
+    "distribution-enclosure-simulator.LICENSE": "6174860cd3289ce0d1a39a186e9bbf907504dbac4ef0e00ab0d490d4a0fc2501",
+}
+"""Upstream files in `FIXTURES` copied beside the captures, byte for byte from the same tag, and the SHA-256 of each."""
+
+
 @cache
 def _report(cell: str) -> FidelityReport:
     return run_cell(CELLS[cell].capture, MAIN32_RULES)
@@ -110,6 +116,12 @@ def test_no_device_is_named_by_its_own_id(cell: str) -> None:
 @pytest.mark.parametrize("cell", sorted(CELLS))
 def test_the_capture_is_the_published_one(cell: str) -> None:
     assert hashlib.sha256(CELLS[cell].capture.read_bytes()).hexdigest() == CELLS[cell].sha256
+
+
+@pytest.mark.parametrize("notice", sorted(_UPSTREAM_NOTICES))
+def test_the_upstream_license_is_the_published_one(notice: str) -> None:
+    """The captures are distributed under the license they were published with, unedited."""
+    assert hashlib.sha256((FIXTURES / notice).read_bytes()).hexdigest() == _UPSTREAM_NOTICES[notice]
 
 
 def test_every_intentional_drop_and_derivation_cites_code() -> None:

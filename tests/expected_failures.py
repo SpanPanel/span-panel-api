@@ -8,7 +8,9 @@ module stops the run.
 
 `PENDING` rows assert behaviour a later change brings; that change deletes
 them. `DIVERGENT` rows assert behaviour this library deliberately does not
-have; they stay until the test or the decision changes.
+have; they stay until the test or the decision changes. A strict xfail stops at
+its first failing line, so `test_schema_one_acceptance_companions.py` asserts
+what each `DIVERGENT` test checks after its divergent line.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from collections.abc import Mapping
 from typing import Final
 
 _ACCEPTANCE = "tests/test_schema_one_other_models.py"
+_COMPANIONS = "tests/test_schema_one_acceptance_companions.py"
 
 _POSITIONS = "the breaker position range"
 _READINGS = "the panel and circuit readings"
@@ -62,6 +65,12 @@ PENDING: Final[Mapping[str, str]] = {
     ),
     f"{_ACCEPTANCE}::test_a_shared_group_naming_no_known_circuit_is_still_shared": (
         f"an empty shared-with for a declared group lands with {_SHARED}"
+    ),
+    f"{_COMPANIONS}::test_the_shipped_tree_reads_busbar_current_and_frequency": (
+        f"busbar current and frequency land with {_READINGS}"
+    ),
+    f"{_COMPANIONS}::test_the_shipped_tree_resolves_its_shared_relay": (
+        f"shared-with resolved to circuit ids lands with {_SHARED}"
     ),
 }
 

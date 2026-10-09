@@ -16,6 +16,9 @@ machinery than 59 KB in two wheels. That reverses the 3.1.0 decision, whose reas
 **Synthetic trees live beside the loaders.** `synthetic_trees.py` builds parent/child trees by hand for shapes no capture here carries, each named by the builder that makes it. They are not captures and claim no provenance; every id and value is invented.
 They come out in the capture's `{device_id: {topic: payload}}` shape, so `replay` and `devices_from_tree` in `schema_one.py` read both alike.
 
+**The reference captures are the one exception to package data.** `captures.py` reads the masked panel captures vendored under `tests/fixtures/captures/`: no emitter release produces them, so there is nothing to regenerate them from, and a SHA-256 pin
+against their upstream commit keeps the copies honest instead. That directory's README records where they come from. `captures.py` turns each into the same `RetainedTopicTree` and replays it through `replay`.
+
 ## `homie_schema.json`
 
 The `GET /api/v2/homie/schema` response, captured from a live SPAN Panel running firmware `spanos2/r202603/05`. Unauthenticated endpoint. Serial numbers are masked (last 4 chars replaced with `XXXX`).

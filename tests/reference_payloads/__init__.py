@@ -26,6 +26,11 @@ hand, for shapes no reference payload carries. Its trees have the capture's
 shape, so `schema_one` reads them the same way, and it reaches the SDK for the
 same reason.
 
+`captures` reads the reference captures vendored under `tests/fixtures/captures/`
+and replays each through `schema_one`'s `replay`. They are the one set of bytes
+kept as a pinned copy rather than as package data, because no producer release
+generates them.
+
 Imported as a top-level package — `from reference_payloads.schema_one import
 ...` — because pytest puts `tests/` on `sys.path`, the same arrangement that
 makes `from conftest import ...` work throughout this suite.

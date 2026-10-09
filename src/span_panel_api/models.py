@@ -1291,11 +1291,12 @@ class SpanPanelSnapshot:
     first_position: int | None = None
     """The panel's first breaker position. v1.0 only.
 
-    From the reported model where its range is known, otherwise the lowest
-    occupied space, and widened to any occupied space outside the model's
-    range. `None` on the flat schema and where neither is known. Together with
-    `last_position` it says which positions exist, occupied or not; no circuit
-    is made up for an empty one.
+    The reported model's range as the adapter's model table gives it, where
+    the table knows the model, otherwise the lowest occupied space. An occupied
+    space outside a known model's range does not move it: the adapter warns
+    once for that panel instead. `None` on the flat schema and where neither is
+    known. Together with `last_position` it says which positions exist,
+    occupied or not; no circuit is made up for an empty one.
     """
     last_position: int | None = None
     """The panel's last breaker position. v1.0 only; see `first_position`."""

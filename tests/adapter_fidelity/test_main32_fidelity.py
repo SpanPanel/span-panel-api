@@ -96,7 +96,6 @@ def test_no_leaf_is_fabricated_outside_any_row(cell: str) -> None:
     assert _report(cell).unowned_leaves() == frozenset()
 
 
-@pytest.mark.xfail(strict=True, reason="fixed later in this PR")
 @pytest.mark.parametrize("cell", sorted(CELLS))
 def test_no_device_is_named_by_its_own_id(cell: str) -> None:
     """While a device forms the grid, the name shown for it is never its device id.

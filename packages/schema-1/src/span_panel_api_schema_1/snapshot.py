@@ -42,6 +42,7 @@ from span_panel_api_schema_1.field_metadata import addressed_rows
 from span_panel_api_schema_1.panel import (
     PanelFields,
     build_pcs,
+    device_display_name,
     find_lugs,
     panel_size_from_model,
     resolve_dominant_power_source,
@@ -174,12 +175,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
     # is what makes PANEL_BACKUP distinguishable from PANEL_OFF_GRID authoritatively
     # instead of guessed from a power source the way flat had to.
     device_types = {device.device_id: device_type(device) for device in children}
-    device_names: dict[str, str] = {}
-    for device in children:
-        description: dict[str, object] = device.description or {}
-        name = description.get("name")
-        if name:
-            device_names[device.device_id] = str(name)
+    device_names = {device.device_id: name for device in children if (name := device_display_name(device)) is not None}
     inverters = [device for device in children if device_type(device) == TYPE_INVERTER]
     islanding = resolve_islanding_state(roles.mid, panel)
 

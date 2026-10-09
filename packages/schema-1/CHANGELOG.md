@@ -27,6 +27,7 @@ Requires `span-panel-api` **3.7.0 or newer**, whose snapshot fields accept the u
 ### Fixed
 
 - **A circuit whose shed priority is `UNKNOWN` is no longer reported as sheddable.**
+- **The grid-forming device name falls back to vendor and model instead of showing a device id.**
 
 ## [1.2.2]
 

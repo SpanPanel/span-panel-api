@@ -72,3 +72,39 @@ class TestStatusPayload:
 
     def test_a_false_proximity_is_kept(self) -> None:
         assert V2StatusInfo.from_status_payload({"proximityProven": False}).proximity_proven is False
+
+
+R202639_STATUS_JSON = {"serialNumber": "SYN-0000-0001", "firmwareVersion": "spanos2/r202639/03"}
+
+
+class TestHardwareVersion:
+    """Firmware r202639 reports the panel's hardware version as `1.2`, `2.0` or `UNKNOWN`.
+
+    Older firmware omits the field, so absent stays `None` rather than becoming a string.
+    """
+
+    @pytest.mark.parametrize("version", ["1.2", "2.0", "UNKNOWN"])
+    def test_hardware_version_is_read_as_published(self, version: str) -> None:
+        status = V2StatusInfo.from_status_payload({**R202639_STATUS_JSON, "hardwareVersion": version})
+        assert status.hardware_version == version
+
+    def test_hardware_version_is_none_on_firmware_that_omits_it(self) -> None:
+        assert V2StatusInfo.from_status_payload(R202639_STATUS_JSON).hardware_version is None
+
+    @pytest.mark.parametrize(
+        "raw", [2.0, None, ["2.0"], {"v": "2.0"}, True], ids=["number", "null", "list", "object", "boolean"]
+    )
+    def test_hardware_version_is_read_only_as_a_string(self, raw: object) -> None:
+        """A malformed field is absent, never coerced."""
+        status = V2StatusInfo.from_status_payload({**R202639_STATUS_JSON, "hardwareVersion": raw})
+        assert status.hardware_version is None
+
+    @pytest.mark.asyncio
+    async def test_both_callers_read_it(self) -> None:
+        """The detector and `get_v2_status` share the one reader, so neither drops it."""
+        body = {**R202639_STATUS_JSON, "hardwareVersion": "2.0"}
+        probed = await detect_api_version(HOST, httpx_client=_client(body))
+        fetched = await get_v2_status(HOST, httpx_client=_client(body))
+        assert probed.status_info is not None
+        assert probed.status_info.hardware_version == "2.0"
+        assert fetched.hardware_version == "2.0"

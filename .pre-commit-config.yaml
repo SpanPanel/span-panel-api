@@ -4,14 +4,16 @@ repos:
     rev: v5.0.0
     hooks:
       # `packages/schema-1/spec/` holds byte copies of the eBus specification,
-      # verified by byte comparison in tests/test_schema_one_conformance.py. Any
-      # hook that rewrites a file must skip it: a "fix" there would silently
+      # verified by byte comparison in tests/test_schema_one_conformance.py, and
+      # `tests/fixtures/captures/` holds byte copies of upstream reference captures
+      # and their LICENSE, pinned by SHA-256 in tests/test_captures_unchanged.py.
+      # Any hook that rewrites a file must skip them: a "fix" there would
       # invalidate the comparison that makes the copies trustworthy. Non-mutating
       # checks (check-json) deliberately still run, since a corrupt copy should fail.
       - id: trailing-whitespace
-        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|^tests/fixtures/captures/(.*\.json|LICENSE)$|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
       - id: end-of-file-fixer
-        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|^tests/fixtures/captures/(.*\.json|LICENSE)$|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
       - id: check-yaml
         exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
       - id: check-toml
@@ -25,7 +27,7 @@ repos:
         exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
       - id: mixed-line-ending
         args: ['--fix=lf']
-        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|^tests/fixtures/captures/(.*\.json|LICENSE)$|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
 
   # Ruff for formatting and linting
   - repo: https://github.com/astral-sh/ruff-pre-commit

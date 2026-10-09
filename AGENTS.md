@@ -62,17 +62,12 @@ warns once for a panel whose circuits fall outside it. A changed capture is a re
 
 ## Lessons from review
 
-Each of these was a defect that review has already caught at least once, in this repository or in the emitter it is tested against.
+What a change must do is decided before it is written; these are the checks made while writing and verifying it. Each was a defect that review has already caught at least once, in this repository or in the emitter it is tested against.
 
 - **Prove a test or a guard by breaking what it guards.** Revert the fix or mutate the code and confirm the test fails; a guard that survives every mutation guards nothing. Assert what a consumer can observe, the snapshot value or the published outcome,
   not an internal step.
 - **A test that keeps documentation runnable reads the documentation.** A hand-copied recipe pins the sequence but lets the document rot.
-- **Docstrings and the README ship.** A docstring is in the wheel and is what `help()` and an IDE show, and a package README is its PyPI page. A recipe in either runs as written and describes every path the code has.
-- **A changelog is checked, not just written.** A `Fixed` entry is for a defect a released version had, not a revision between drafts. Check where each entry lands, since a new heading inserted above an entry re-files it with no deletion in the diff, and
-  re-derive every count or list against the source at the tag.
-- **The public surface is complete and nothing more.** Every type a public signature names is exported and recorded in `tests/test_public_api_unchanged.py`. Do not add a parameter or flag that gates nothing yet; a dormant surface reads as a feature and has
-  to be un-shipped later.
+- **Check the changelog as it will ship.** Check where each entry lands, since a new heading inserted above an entry re-files it with no deletion in the diff, and re-derive every count or list against the source at the tag.
 - **Read data as published.** A `null` or empty value in a capture means unpublished, never zero. A predicate that reads declared metadata refuses what it cannot interpret instead of guessing.
 - **One capture is not the firmware.** Check a change against every capture available; panels on the same firmware release do not always publish a value in the same form.
-- **Cite the specification.** Where the eBus specification and a migration guide disagree, the specification wins, and a rule it states is implemented against the signal it names.
 - **Measure claims.** A statement about a real panel, broker or built artifact is checked there, and a result is reported only after it has actually been run.

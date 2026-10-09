@@ -1,8 +1,10 @@
 """Declared but unvalued properties, over every reference capture.
 
 A panel can declare a property and never publish a value for it. Declaring it
-still says something: a declared battery is there before it reports. It may
-not stall connecting, and it may not be read as a value nobody published.
+still says something: a declared battery is there before it reports, and a
+declared feed for the upstream lugs that carries no value says the panel has
+not told us what feeds them. Neither may stall connecting, and neither may be
+read as a value nobody published.
 
 Properties over the whole capture set: each test selects its cases by what the
 capture declares and reads the values it expects from the same capture.
@@ -18,9 +20,12 @@ from reference_payloads.captures import CAPTURES, CaptureTree, capture_adapter, 
 from span_panel_api_schema_1.adapter import FEED_GRACE_S
 
 _BATTERY_TYPE = "energy.ebus.device.bess"
+_LUGS_TYPE = "energy.ebus.device.lugs"
 _DER_TYPES = frozenset({_BATTERY_TYPE, "energy.ebus.device.pv", "energy.ebus.device.evse"})
 
 _MODEL = "info/model"
+_DIRECTION = "info/direction"
+_FED_BY_DEVICE_ID = "connection/fed-by-device-id"
 
 
 def _batteries(tree: CaptureTree) -> tuple[str, ...]:
@@ -36,6 +41,16 @@ def _unvalued_models(tree: CaptureTree) -> tuple[str, ...]:
         and tree.declares(device_id, _MODEL)
         and tree.value(device_id, _MODEL) is None
     )
+
+
+def _upstream_lugs(tree: CaptureTree) -> str | None:
+    lugs = [
+        device_id
+        for device_id in tree.devices
+        if tree.device_type(device_id) == _LUGS_TYPE and tree.value(device_id, _DIRECTION) == "UPSTREAM"
+    ]
+    assert len(lugs) <= 1, lugs
+    return lugs[0] if lugs else None
 
 
 @pytest.mark.parametrize("stem", CAPTURES)
@@ -92,3 +107,20 @@ def test_the_device_model_wait_releases_after_the_grace(stem: str, caplog: pytes
 
 def test_the_captures_hold_a_device_model_that_is_never_published() -> None:
     assert any(_unvalued_models(capture_tree(stem)) for stem in CAPTURES)
+
+
+@pytest.mark.parametrize("stem", CAPTURES)
+def test_unvalued_upstream_feed_leaves_the_service_entrance_unknown(stem: str) -> None:
+    """Unknown where the upstream lugs declare their feed and publish none.
+
+    `False` where the feed names a device and `True` where the lugs do not
+    declare a feed or publish it empty.
+    """
+    tree = capture_tree(stem)
+    lugs = _upstream_lugs(tree)
+    expected: bool | None = True
+    if lugs is not None and tree.declares(lugs, _FED_BY_DEVICE_ID):
+        fed_by = tree.value(lugs, _FED_BY_DEVICE_ID)
+        expected = None if fed_by is None else not fed_by
+
+    assert capture_snapshot(stem).lugs_at_service_entrance is expected

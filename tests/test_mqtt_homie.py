@@ -255,8 +255,32 @@ class TestHomieCircuitSnapshot:
 
         snapshot = consumer.build_snapshot()
         circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
+        assert circuit.instant_power_update_time_s is not None
+        assert circuit.energy_accum_update_time_s is not None
         assert before <= circuit.instant_power_update_time_s <= after
         assert before <= circuit.energy_accum_update_time_s <= after
+
+    def test_circuit_timestamps_are_none_until_a_reading_arrives(self):
+        """A reading that never arrived has no receipt time, not one in 1970."""
+        _acc, consumer = _build_ready_consumer()
+        snapshot = consumer.build_snapshot()
+        circuit = snapshot.circuits["aabbccdd112233445566778899001122"]
+        assert circuit.instant_power_w is None
+        assert circuit.instant_power_update_time_s is None
+        assert circuit.energy_accum_update_time_s is None
+
+    def test_energy_timestamp_is_the_latest_counter_received(self):
+        """One counter is enough to have a receipt time; the absent one takes no part."""
+        acc, consumer = _build_ready_consumer()
+        node = "aabbccdd-1122-3344-5566-778899001122"
+        before = int(time.time())
+        acc.handle_message(f"{PREFIX}/{node}/imported-energy", "5.0")
+        after = int(time.time())
+
+        circuit = consumer.build_snapshot().circuits["aabbccdd112233445566778899001122"]
+        assert circuit.energy_accum_update_time_s is not None
+        assert before <= circuit.energy_accum_update_time_s <= after
+        assert circuit.instant_power_update_time_s is None
 
     def test_pv_metadata_node_annotates_circuit(self):
         """PV metadata node's feed property sets device_type and relative_position."""
@@ -362,16 +386,24 @@ class TestHomieCoreNode:
         assert snapshot.l2_voltage == 120.8
         assert snapshot.main_breaker_rating_a == 200
 
-    def test_proximity_proven_when_ready(self):
+    def test_proximity_is_unknown_even_when_ready(self):
+        """No flat property reports proximity, and readiness is not one."""
         _acc, consumer = _build_ready_consumer()
         snapshot = consumer.build_snapshot()
-        assert snapshot.proximity_proven is True
+        assert snapshot.proximity_proven is None
 
-    def test_uptime_increases(self):
+    def test_uptime_is_measured_once_ready(self):
         _acc, consumer = _build_ready_consumer()
         snapshot1 = consumer.build_snapshot()
-        # uptime should be >= 0
+        assert snapshot1.uptime_s is not None
         assert snapshot1.uptime_s >= 0
+
+    def test_uptime_is_unknown_before_the_first_ready(self):
+        """Built before `$state` ever read ready, there is no clock to measure from."""
+        acc = HomiePropertyAccumulator(SERIAL)
+        consumer = HomieDeviceConsumer(acc, panel_size=32)
+        acc.handle_message(f"{PREFIX}/$description", _make_description({"core": {"type": TYPE_CORE}}))
+        assert consumer.build_snapshot().uptime_s is None
 
 
 # ---------------------------------------------------------------------------
@@ -805,8 +837,8 @@ class TestHomiePanelSize:
         snapshot = consumer.build_snapshot()
         assert snapshot.panel_size == 40
 
-    def test_unmapped_tabs_use_panel_size(self):
-        """Unmapped tabs fill up to panel_size, not highest occupied tab."""
+    def test_snapshot_carries_only_published_circuits(self):
+        """Unoccupied positions are not synthesised as circuits; panel_size alone states the total."""
         nodes = {
             "core": {"type": TYPE_CORE},
             "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
@@ -815,21 +847,16 @@ class TestHomiePanelSize:
         consumer = HomieDeviceConsumer(acc_local, panel_size=8)
         acc_local.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
         acc_local.handle_message(f"{PREFIX}/$description", _make_description(nodes))
-        # Circuit at space 2 only — tabs 3-8 should be unmapped
         acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "2")
         acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
 
         snapshot = consumer.build_snapshot()
-        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
-        assert unmapped_ids == [
-            "unmapped_tab_1",
-            "unmapped_tab_3",
-            "unmapped_tab_4",
-            "unmapped_tab_5",
-            "unmapped_tab_6",
-            "unmapped_tab_7",
-            "unmapped_tab_8",
-        ]
+        assert list(snapshot.circuits) == ["aaaaaaaa111122223333444444444444"]
+        assert snapshot.panel_size == 8
+
+        # The partial rebuild of a dirty circuit adds nothing either.
+        acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/active-power", "-5.0")
+        assert list(consumer.build_snapshot().circuits) == ["aaaaaaaa111122223333444444444444"]
 
 
 # ---------------------------------------------------------------------------
@@ -877,6 +904,23 @@ class TestSnapshotCaching:
         circuit = snap2.circuits["aabbccdd112233445566778899001122"]
         assert circuit.instant_power_w == 200.0
         assert snap2.firmware_version == snap1.firmware_version
+
+    def test_uptime_advances_across_a_circuit_only_rebuild(self, monkeypatch: pytest.MonkeyPatch):
+        """A partial rebuild must not carry the cached uptime: nothing dirty announces a clock."""
+        acc, consumer = _build_ready_consumer()
+        node = "aabbccdd-1122-3344-5566-778899001122"
+        acc.handle_message(f"{PREFIX}/{node}/active-power", "-100.0")
+        snap1 = consumer.build_snapshot()
+        assert snap1.uptime_s is not None
+
+        later = time.monotonic() + 100.0
+        monkeypatch.setattr(time, "monotonic", lambda: later)
+        acc.handle_message(f"{PREFIX}/{node}/active-power", "-200.0")
+        snap2 = consumer.build_snapshot()
+
+        assert snap2.circuits["aabbccdd112233445566778899001122"].instant_power_w == 200.0
+        assert snap2.uptime_s is not None
+        assert snap2.uptime_s >= snap1.uptime_s + 100
 
     def test_dirty_core_triggers_full_rebuild(self):
         acc, consumer = _build_ready_consumer()
@@ -1284,8 +1328,7 @@ class TestHomieEdgeCases:
         acc.handle_message(f"{PREFIX}/bbbbbbbb-5555-6666-7777-888888888888/name", "Circuit B")
 
         snapshot = consumer.build_snapshot()
-        real_circuits = {k: v for k, v in snapshot.circuits.items() if not k.startswith("unmapped_tab_")}
-        assert len(real_circuits) == 2
+        assert len(snapshot.circuits) == 2
         assert snapshot.circuits["aaaaaaaa11112222333344444444444" + "4"].name == "Circuit A"
         assert snapshot.circuits["bbbbbbbb55556666777788888888888" + "8"].name == "Circuit B"
 
@@ -1298,16 +1341,12 @@ class TestHomieEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# HomieDeviceConsumer — unmapped tab synthesis
+# HomieDeviceConsumer — circuit tab derivation
 # ---------------------------------------------------------------------------
 
 
-class TestUnmappedTabSynthesis:
-    """Tests for _build_unmapped_tabs and dipole tab derivation.
-
-    All tests use panel_size=32 (from _build_ready_consumer) unless a
-    smaller panel is constructed explicitly.
-    """
+class TestCircuitTabs:
+    """Tests for single-pole and dipole tab derivation."""
 
     def test_single_pole_tabs(self):
         """Single-pole circuit gets tabs = [space]."""
@@ -1353,176 +1392,6 @@ class TestUnmappedTabSynthesis:
         snapshot = consumer.build_snapshot()
         circuit = snapshot.circuits["aaaaaaaa111122223333444444444444"]
         assert circuit.tabs == [30, 32]
-
-    def test_unmapped_tabs_generated(self):
-        """Unmapped positions fill up to panel_size (not highest tab)."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-            "bbbbbbbb-5555-6666-7777-888888888888": {"type": TYPE_CIRCUIT},
-        }
-        # Use panel_size=6 so the test is tractable
-        acc_local = HomiePropertyAccumulator(SERIAL)
-        consumer = HomieDeviceConsumer(acc_local, panel_size=6)
-        acc_local.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
-        acc_local.handle_message(f"{PREFIX}/$description", _make_description(nodes))
-        # Circuit A at space 1 (single-pole)
-        acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
-        acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
-        # Circuit B at space 3 (dipole → occupies 3 and 5)
-        acc_local.handle_message(f"{PREFIX}/bbbbbbbb-5555-6666-7777-888888888888/space", "3")
-        acc_local.handle_message(f"{PREFIX}/bbbbbbbb-5555-6666-7777-888888888888/dipole", "true")
-
-        snapshot = consumer.build_snapshot()
-
-        # panel_size=6, occupied: {1, 3, 5}, unmapped: {2, 4, 6}
-        assert "unmapped_tab_2" in snapshot.circuits
-        assert "unmapped_tab_4" in snapshot.circuits
-        assert "unmapped_tab_6" in snapshot.circuits
-        # Occupied positions should NOT have unmapped entries
-        assert "unmapped_tab_1" not in snapshot.circuits
-        assert "unmapped_tab_3" not in snapshot.circuits
-        assert "unmapped_tab_5" not in snapshot.circuits
-
-    def test_unmapped_tab_properties(self):
-        """Unmapped tab entries have zero power/energy and correct attributes."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-        }
-        acc_local = HomiePropertyAccumulator(SERIAL)
-        consumer = HomieDeviceConsumer(acc_local, panel_size=4)
-        acc_local.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
-        acc_local.handle_message(f"{PREFIX}/$description", _make_description(nodes))
-        acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
-        acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
-
-        snapshot = consumer.build_snapshot()
-        unmapped = snapshot.circuits["unmapped_tab_2"]
-
-        assert unmapped.circuit_id == "unmapped_tab_2"
-        assert unmapped.name == "Unmapped Tab 2"
-        assert unmapped.relay_state == "CLOSED"
-        assert unmapped.instant_power_w == 0.0
-        assert unmapped.produced_energy_wh == 0.0
-        assert unmapped.consumed_energy_wh == 0.0
-        assert unmapped.tabs == [2]
-        assert unmapped.priority == "UNKNOWN"
-        assert unmapped.is_user_controllable is False
-        assert unmapped.is_sheddable is False
-        assert unmapped.is_never_backup is False
-
-    def test_fully_occupied_panel_no_unmapped(self):
-        """When all positions are occupied, no unmapped tabs are generated."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-            "bbbbbbbb-5555-6666-7777-888888888888": {"type": TYPE_CIRCUIT},
-            "cccccccc-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-            "dddddddd-5555-6666-7777-888888888888": {"type": TYPE_CIRCUIT},
-        }
-        acc_local = HomiePropertyAccumulator(SERIAL)
-        consumer = HomieDeviceConsumer(acc_local, panel_size=4)
-        acc_local.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
-        acc_local.handle_message(f"{PREFIX}/$description", _make_description(nodes))
-        for i, node in enumerate(
-            [
-                "aaaaaaaa-1111-2222-3333-444444444444",
-                "bbbbbbbb-5555-6666-7777-888888888888",
-                "cccccccc-1111-2222-3333-444444444444",
-                "dddddddd-5555-6666-7777-888888888888",
-            ],
-            start=1,
-        ):
-            acc_local.handle_message(f"{PREFIX}/{node}/space", str(i))
-            acc_local.handle_message(f"{PREFIX}/{node}/dipole", "false")
-
-        snapshot = consumer.build_snapshot()
-        unmapped_ids = [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
-        assert unmapped_ids == []
-
-    def test_no_circuits_all_unmapped(self):
-        """When no circuits exist, all positions up to panel_size are unmapped."""
-        nodes = {"core": {"type": TYPE_CORE}}
-        acc_local = HomiePropertyAccumulator(SERIAL)
-        consumer = HomieDeviceConsumer(acc_local, panel_size=4)
-        acc_local.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
-        acc_local.handle_message(f"{PREFIX}/$description", _make_description(nodes))
-        snapshot = consumer.build_snapshot()
-        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
-        assert unmapped_ids == [
-            "unmapped_tab_1",
-            "unmapped_tab_2",
-            "unmapped_tab_3",
-            "unmapped_tab_4",
-        ]
-
-    def test_no_space_property_all_unmapped(self):
-        """Circuits without space property don't occupy any tabs."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-        }
-        acc_local = HomiePropertyAccumulator(SERIAL)
-        consumer = HomieDeviceConsumer(acc_local, panel_size=4)
-        acc_local.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
-        acc_local.handle_message(f"{PREFIX}/$description", _make_description(nodes))
-        # Don't set space property — circuit has no tabs
-        snapshot = consumer.build_snapshot()
-        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
-        assert unmapped_ids == [
-            "unmapped_tab_1",
-            "unmapped_tab_2",
-            "unmapped_tab_3",
-            "unmapped_tab_4",
-        ]
-
-    def test_unmapped_fills_to_panel_size(self):
-        """Unmapped tabs fill up to panel_size even if circuit is at low tab."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-        }
-        acc_local = HomiePropertyAccumulator(SERIAL)
-        consumer = HomieDeviceConsumer(acc_local, panel_size=8)
-        acc_local.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
-        acc_local.handle_message(f"{PREFIX}/$description", _make_description(nodes))
-        acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "2")
-        acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "false")
-
-        snapshot = consumer.build_snapshot()
-        # Occupied: {2}, unmapped: {1,3,4,5,6,7,8}
-        unmapped_ids = sorted(cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_"))
-        assert unmapped_ids == [
-            "unmapped_tab_1",
-            "unmapped_tab_3",
-            "unmapped_tab_4",
-            "unmapped_tab_5",
-            "unmapped_tab_6",
-            "unmapped_tab_7",
-            "unmapped_tab_8",
-        ]
-
-    def test_dipole_occupies_correct_tabs_in_unmapped_calc(self):
-        """Dipole circuits remove both occupied tabs from unmapped set."""
-        nodes = {
-            "core": {"type": TYPE_CORE},
-            "aaaaaaaa-1111-2222-3333-444444444444": {"type": TYPE_CIRCUIT},
-        }
-        acc_local = HomiePropertyAccumulator(SERIAL)
-        consumer = HomieDeviceConsumer(acc_local, panel_size=4)
-        acc_local.handle_message(f"{PREFIX}/$state", HOMIE_STATE_READY)
-        acc_local.handle_message(f"{PREFIX}/$description", _make_description(nodes))
-        # Dipole at space 1 → occupies 1 and 3
-        acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/space", "1")
-        acc_local.handle_message(f"{PREFIX}/aaaaaaaa-1111-2222-3333-444444444444/dipole", "true")
-
-        snapshot = consumer.build_snapshot()
-        # panel_size=4, occupied: {1, 3}, unmapped: {2, 4}
-        assert "unmapped_tab_1" not in snapshot.circuits
-        assert "unmapped_tab_2" in snapshot.circuits
-        assert "unmapped_tab_3" not in snapshot.circuits
-        assert "unmapped_tab_4" in snapshot.circuits
 
 
 # ---------------------------------------------------------------------------

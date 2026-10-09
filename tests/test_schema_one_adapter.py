@@ -185,8 +185,8 @@ def test_an_offline_child_does_not_block_readiness(adapter: SchemaOneAdapter) ->
 
 def test_readiness_waits_for_the_model_the_panel_declared() -> None:
     """Panel size comes from nowhere else, and a snapshot built a moment early
-    reports zero spaces — which erases every unmapped position rather than
-    mis-stating a number."""
+    reports zero spaces — leaving a consumer that lays out the panel's positions
+    with none to lay out."""
     adapter = SchemaOneAdapter(PANEL, _schema())
     _feed(adapter, omit=("info/model",))
 
@@ -219,8 +219,8 @@ def test_snapshot_is_built_from_the_discovered_tree(adapter: SchemaOneAdapter) -
     assert snapshot.panel_size == 40
     assert snapshot.circuits[SOLAR_CIRCUIT].name == "Solar Inverter"
     assert snapshot.battery.soe_percentage == pytest.approx(50.4104, rel=1e-4)
-    # 6 circuits occupying 9 positions (three are multi-pole), so 31 remain.
-    assert len(snapshot.circuits) == 37
+    # The tree's 6 circuits and nothing else: unoccupied positions are not circuits.
+    assert len(snapshot.circuits) == 6
 
 
 def test_building_a_snapshot_before_discovery_fails_loudly() -> None:

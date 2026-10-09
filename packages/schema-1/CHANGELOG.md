@@ -9,6 +9,21 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [Unreleased]
+
+Requires `span-panel-api` **3.7.0 or newer**, whose snapshot fields accept the unknown values this parser now reports.
+
+### Changed
+
+- **`proximity_proven` is `None`**, where it was a hard-coded `True`, because the tree publishes no proximity property.
+- **`uptime_s` is `None`**, where it was always `0`, because no device publishes an uptime and this parser keeps no readiness clock to measure one.
+
+### Removed
+
+- **BREAKING FOR CONSUMERS: `snapshot.build_snapshot()` no longer takes the `ready_since` argument**, which no caller in this repository passed, so a call that passes it by keyword or position now raises `TypeError`.
+
+- **BREAKING: snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data**, and `panel.build_unmapped_tabs` and `const.UNMAPPED_TAB_PREFIX` are gone with them.
+
 ## [1.2.2]
 
 Requires `span-panel-api` **3.6.2 or newer**, which waits on this parser's missing labels after a reconnect as well as on connect.

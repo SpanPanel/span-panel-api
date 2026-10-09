@@ -167,10 +167,10 @@ class SchemaOneAdapter:
 
         The model is required only when the root's description declares it: the
         panel's size comes from nowhere else, and a snapshot built a moment too
-        early reports zero spaces, which erases every unmapped position rather
-        than merely mis-stating a number. Asking only for what the panel itself
-        promised keeps a firmware that omits the property connectable — it
-        falls back to the drift warning in `panel_size_from_model`.
+        early reports zero spaces, which leaves a consumer laying out the
+        panel's positions with none to lay out. Asking only for what the panel
+        itself promised keeps a firmware that omits the property connectable —
+        it falls back to the drift warning in `panel_size_from_model`.
         """
         root = self._controller.get_root(self._serial_number)
         if root is None or root.state != STATE_READY or not root.description:

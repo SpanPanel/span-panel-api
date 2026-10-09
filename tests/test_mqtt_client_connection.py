@@ -494,8 +494,7 @@ def test_client_defaults_to_the_flat_adapter() -> None:
 
 def test_injected_factory_receives_serial_and_schema() -> None:
     """The factory must be called with the schema discovered at connect, not a
-    placeholder — the adapter reads panel size from it, which drives
-    unmapped-tab computation."""
+    placeholder — the adapter reads panel size from it."""
     from span_panel_api.models import V2HomieSchema
     from span_panel_api_schema_0 import SchemaZeroAdapter
     from span_panel_api.mqtt.client import SpanMqttClient

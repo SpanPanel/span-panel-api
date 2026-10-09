@@ -207,21 +207,6 @@ class TestFlatSchemaReadings:
         assert snapshot.instant_grid_power_w is None
         assert snapshot.feedthrough_power_w is None
 
-    def test_an_unoccupied_breaker_position_still_reads_zero(self) -> None:
-        """Not every zero is a fabrication.
-
-        An unmapped tab is synthesised, not parsed: it is a breaker position
-        with nothing behind it, so zero power and zero energy are what it
-        genuinely reports. Only readings the panel was asked for and did not
-        give become `None`.
-        """
-        unmapped = self._adapter().build_snapshot().circuits.get("unmapped_tab_2")
-
-        assert unmapped is not None
-        assert unmapped.instant_power_w == 0.0
-        assert unmapped.consumed_energy_wh == 0.0
-        assert unmapped.produced_energy_wh == 0.0
-
 
 class TestIslandingIsNotInferredFromSilence:
     """`dsm_state` reads a grid-power measurement, so it needed the same rule.

@@ -85,6 +85,16 @@ def _parse_int(value: str, default: int = 0) -> int:
         return default
 
 
+def _latest(*timestamps: int | None) -> int | None:
+    """The most recent of the timestamps that exist, or `None` when none do.
+
+    A property that has not arrived has no receipt time, so it takes no part
+    rather than standing in as `0`.
+    """
+    arrived = [timestamp for timestamp in timestamps if timestamp is not None]
+    return max(arrived) if arrived else None
+
+
 class HomieDeviceConsumer:
     """Build SPAN-specific snapshots from accumulated Homie property state.
 
@@ -220,12 +230,8 @@ class HomieDeviceConsumer:
         cached = self._cached_snapshot
 
         feed_metadata = self._build_feed_metadata()
-        updated_circuits: dict[str, SpanCircuitSnapshot] = {}
-        # Keep only non-unmapped circuits from cache, rebuild dirty ones
-        for cid, circ in cached.circuits.items():
-            if cid.startswith("unmapped_tab_"):
-                continue  # drop old unmapped entries; will recompute below
-            updated_circuits[cid] = circ
+        # Keep cached circuits, rebuild dirty ones
+        updated_circuits = dict(cached.circuits)
         for node_id in dirty:
             if self.is_circuit_node(node_id):
                 meta = feed_metadata.get(node_id, {})
@@ -234,11 +240,14 @@ class HomieDeviceConsumer:
                 circuit = self._build_circuit(node_id, device_type, relative_position)
                 updated_circuits[circuit.circuit_id] = circuit
 
-        # Recompute unmapped tabs based on current circuit set
-        unmapped = self._build_unmapped_tabs(updated_circuits)
-        updated_circuits.update(unmapped)
+        # Uptime is a clock, not a property, so no dirty node announces that it
+        # moved; carrying the cached value would freeze it between full builds.
+        return dataclasses.replace(cached, circuits=updated_circuits, uptime_s=self._uptime_s())
 
-        return dataclasses.replace(cached, circuits=updated_circuits)
+    def _uptime_s(self) -> int | None:
+        """Connection uptime since $state==ready, measured here; none before the first ready."""
+        ready_since = self._acc.ready_since
+        return int(time.monotonic() - ready_since) if ready_since > 0.0 else None
 
     def _find_lugs_node(self, direction: str) -> str | None:
         """Find the lugs node with a specific direction.
@@ -339,8 +348,8 @@ class HomieDeviceConsumer:
 
         always_on = _parse_bool(self._acc.get_prop(node_id, "always-on"))
 
-        # Timestamps from MQTT arrival time
-        energy_ts = max(
+        # Timestamps from MQTT receipt time, `None` until the reading arrives
+        energy_ts = _latest(
             self._acc.get_timestamp(node_id, "exported-energy"),
             self._acc.get_timestamp(node_id, "imported-energy"),
         )
@@ -524,39 +533,6 @@ class HomieDeviceConsumer:
 
         return "UNKNOWN"
 
-    def _build_unmapped_tabs(
-        self,
-        circuits: dict[str, SpanCircuitSnapshot],
-    ) -> dict[str, SpanCircuitSnapshot]:
-        """Synthesize unmapped tab entries for breaker positions with no circuit.
-
-        Creates zero-power SpanCircuitSnapshot entries for unoccupied positions
-        up to ``self._panel_size``.
-        """
-        occupied_tabs: set[int] = set()
-        for circuit in circuits.values():
-            occupied_tabs.update(circuit.tabs)
-
-        unmapped: dict[str, SpanCircuitSnapshot] = {}
-        for tab in range(1, self._panel_size + 1):
-            if tab not in occupied_tabs:
-                circuit_id = f"unmapped_tab_{tab}"
-                unmapped[circuit_id] = SpanCircuitSnapshot(
-                    circuit_id=circuit_id,
-                    name=f"Unmapped Tab {tab}",
-                    relay_state="CLOSED",
-                    instant_power_w=0.0,
-                    produced_energy_wh=0.0,
-                    consumed_energy_wh=0.0,
-                    tabs=[tab],
-                    priority="UNKNOWN",
-                    is_user_controllable=False,
-                    is_sheddable=False,
-                    is_never_backup=False,
-                )
-
-        return unmapped
-
     def _build_snapshot(self) -> SpanPanelSnapshot:
         """Build full snapshot from accumulated property values."""
         core_node = self._acc.find_node_by_type(TYPE_CORE)
@@ -670,10 +646,6 @@ class HomieDeviceConsumer:
                 circuit = self._build_circuit(node_id, device_type, relative_position)
                 circuits[circuit.circuit_id] = circuit
 
-        # Synthesize unmapped tab entries
-        unmapped = self._build_unmapped_tabs(circuits)
-        circuits.update(unmapped)
-
         # Battery, PV, and EVSE metadata
         battery = self._build_battery()
         pv = self._build_pv()
@@ -690,9 +662,6 @@ class HomieDeviceConsumer:
         dsm_state = self._derive_dsm_state(core_node, grid_power, power_flow_grid)
         current_run_config = self._derive_run_config(dsm_state, grid_islandable, dominant_power_source)
 
-        # Connection uptime since $state==ready
-        uptime = int(time.monotonic() - self._acc.ready_since) if self._acc.ready_since > 0.0 else 0
-
         return SpanPanelSnapshot(
             serial_number=self._acc.serial_number,
             firmware_version=firmware,
@@ -706,8 +675,10 @@ class HomieDeviceConsumer:
             dsm_state=dsm_state,
             current_run_config=current_run_config,
             door_state=door_state,
-            proximity_proven=self._acc.is_ready(),
-            uptime_s=uptime,
+            # No flat property reports proximity. Readiness is not a stand-in:
+            # a snapshot is only built once ready, so it would always say True.
+            proximity_proven=None,
+            uptime_s=self._uptime_s(),
             eth0_link=eth0,
             wlan_link=wlan,
             wwan_link=wwan_connected,

@@ -8,7 +8,6 @@ likes, and the type string is what the schema defines.
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING
 
 from span_panel_api.models import ExtensionSubject, SpanPanelSnapshot, SpanPVSnapshot
@@ -43,7 +42,6 @@ from span_panel_api_schema_1.field_metadata import addressed_rows
 from span_panel_api_schema_1.panel import (
     PanelFields,
     build_pcs,
-    build_unmapped_tabs,
     find_lugs,
     panel_size_from_model,
     resolve_dominant_power_source,
@@ -128,7 +126,7 @@ def _pv_for(inverters: Sequence[SpanPVSnapshot]) -> SpanPVSnapshot:
     )
 
 
-def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], ready_since: float = 0.0) -> SpanPanelSnapshot:
+def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) -> SpanPanelSnapshot:
     """Build a full snapshot from the panel and its descendants."""
     roles = TreeRoles(children)
     upstream = find_lugs(roles.lugs, upstream=True)
@@ -165,12 +163,8 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         circuits[snapshot.circuit_id] = snapshot
         circuit_subjects.append((circuit, ExtensionSubject(kind="circuit", instance_key=snapshot.circuit_id)))
 
-    occupied = {tab for circuit in circuits.values() for tab in circuit.tabs}
-    # Unoccupied positions are `total - occupied`, so this is only meaningful
-    # when the model gave a real total. An unknown model yields size 0 and no
-    # unmapped entries rather than a fabricated set.
+    # An unknown model yields size 0 rather than a guessed total.
     panel_size = panel_size_from_model(text(panel, NODE_INFO, PROP_MODEL))
-    circuits.update(build_unmapped_tabs(panel_size, occupied))
 
     # Owners are every device that can claim a DER through a `connection` node.
     owners = [*roles.lugs, *roles.circuits, panel]
@@ -259,10 +253,12 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice], re
         dsm_state=resolve_dsm_state(islanding),
         current_run_config=resolve_run_config(roles.mid, islanding, device_types),
         door_state=fields.door_state,
-        # The panel has no proximity sensor property; the flat adapter reports
-        # authenticated-and-ready, and the same holds here.
-        proximity_proven=True,
-        uptime_s=int(time.monotonic() - ready_since) if ready_since > 0.0 else 0,
+        # The panel publishes no proximity property, and being connected and
+        # ready is not one, so the snapshot does not know.
+        proximity_proven=None,
+        # No device publishes an uptime, and this adapter keeps no readiness
+        # clock of its own to measure one from.
+        uptime_s=None,
         eth0_link=fields.eth0_link,
         wlan_link=fields.wlan_link,
         wwan_link=fields.wwan_link,

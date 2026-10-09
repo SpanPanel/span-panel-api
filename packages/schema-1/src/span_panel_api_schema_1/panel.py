@@ -50,6 +50,7 @@ from span_panel_api_schema_1.const import (
     NODE_SHED,
     NODE_SHED_FORECAST,
     NODE_STATUS,
+    PANEL_POSITIONS_BY_MODEL,
     PANEL_SIZE_BY_MODEL,
     PCS_ACTIVE_SUFFIX,
     PCS_ENABLEMENT_SUFFIX,
@@ -92,7 +93,7 @@ from span_panel_api_schema_1.const import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from ebus_sdk.homie import DiscoveredDevice
 
@@ -206,11 +207,13 @@ def panel_size_from_model(model: str) -> int:
 
     Unknown models return 0 and log, because inventing a size is worse than
     reporting none: a wrong total lays out positions that are not there, or
-    hides real ones.
+    hides real ones. `UNKNOWN` is a member of the model enum that names no
+    model, so it returns 0 without logging on every snapshot.
     """
-    size = PANEL_SIZE_BY_MODEL.get(model.strip().upper())
+    normalized = model.strip().upper()
+    size = PANEL_SIZE_BY_MODEL.get(normalized)
     if size is None:
-        if model:
+        if model and normalized != UNKNOWN:
             _LOGGER.warning(
                 "Unknown panel model %r; panel size unavailable. Known models: %s",
                 model,
@@ -218,6 +221,45 @@ def panel_size_from_model(model: str) -> int:
             )
         return 0
     return size
+
+
+def panel_positions(model: str | None, occupied: Iterable[int]) -> tuple[int | None, int | None]:
+    """The panel's first and last breaker positions.
+
+    The reported model's range, exactly as `PANEL_POSITIONS_BY_MODEL` gives it,
+    where the table knows the model; an occupied space outside that range does
+    not move it (`positions_outside_model` says when one does). With no known
+    model, the lowest and highest occupied spaces, and `(None, None)` when none
+    is occupied. Only the range: nothing is filled in over it.
+    """
+    known = _model_positions(model)
+    if known is not None:
+        return known
+    spaces = set(occupied)
+    if not spaces:
+        return None, None
+    return min(spaces), max(spaces)
+
+
+def positions_outside_model(model: str | None, occupied: Iterable[int]) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """The model's position range and the occupied extremes, where a space lies outside the range.
+
+    `None` where the table does not know the model, or every occupied space lies
+    inside its range. A panel that answers otherwise disagrees with the table,
+    which is ours to correct; the range reported stays the table's.
+    """
+    known = _model_positions(model)
+    spaces = set(occupied)
+    if known is None or not spaces:
+        return None
+    extremes = (min(spaces), max(spaces))
+    if known[0] <= extremes[0] and extremes[1] <= known[1]:
+        return None
+    return known, extremes
+
+
+def _model_positions(model: str | None) -> tuple[int, int] | None:
+    return PANEL_POSITIONS_BY_MODEL.get(model.strip().upper()) if model else None
 
 
 def panel_model_drift(panel: DiscoveredDevice) -> tuple[str, ...]:
@@ -239,10 +281,11 @@ def panel_model_drift(panel: DiscoveredDevice) -> tuple[str, ...]:
     advertised = str(definition.get("format", ""))
     if not advertised:
         return ()
+    # `UNKNOWN` is a member that names no model, so there is no size to miss.
     unknown = [
         value.strip()
         for value in advertised.split(",")
-        if value.strip() and value.strip().upper() not in PANEL_SIZE_BY_MODEL
+        if value.strip() and value.strip().upper() not in {*PANEL_SIZE_BY_MODEL, UNKNOWN}
     ]
     if unknown:
         _LOGGER.warning(
@@ -368,7 +411,10 @@ class PanelFields:
         # one: the consumer owns the fallback text it has always shown, and a
         # default invented here would replace it with a different invention.
         self.vendor_name = text(panel, NODE_INFO, PROP_VENDOR_NAME) or None
-        self.model = text(panel, NODE_INFO, PROP_MODEL) or None
+        # `UNKNOWN` is a member of the model enum that names no model, so it
+        # reads as absent and the consumer keeps its own fallback.
+        model = text(panel, NODE_INFO, PROP_MODEL)
+        self.model = model if model and model.strip().upper() != UNKNOWN else None
         self.hardware_version = text(panel, NODE_INFO, PROP_HARDWARE_VERSION) or None
         self.main_relay_state = text(panel, NODE_STATUS, PROP_RELAY, UNKNOWN)
         self.door_state = text(panel, NODE_DOOR, PROP_STATE, UNKNOWN)

@@ -17,6 +17,7 @@ from span_panel_api_schema_1.const import (
     NODE_CONNECTION,
     NODE_INFO,
     PROP_FEEDS_DEVICE_ID,
+    PROP_FEEDS_ROLE,
     PROP_MODEL,
     PROP_SERIAL_NUMBER,
     TYPE_BESS,
@@ -27,7 +28,7 @@ from span_panel_api_schema_1.const import (
     TYPE_MID,
     TYPE_PV,
 )
-from span_panel_api_schema_1.description import device_type
+from span_panel_api_schema_1.description import device_type, node_properties
 from span_panel_api_schema_1.devices import (
     build_battery,
     build_evse,
@@ -43,6 +44,7 @@ from span_panel_api_schema_1.panel import (
     PanelFields,
     build_pcs,
     find_lugs,
+    panel_positions,
     panel_size_from_model,
     resolve_dominant_power_source,
     resolve_dsm_state,
@@ -165,6 +167,9 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
 
     # An unknown model yields size 0 rather than a guessed total.
     panel_size = panel_size_from_model(text(panel, NODE_INFO, PROP_MODEL))
+    first_position, last_position = panel_positions(
+        fields.model, (tab for circuit in circuits.values() for tab in circuit.tabs)
+    )
 
     # Owners are every device that can claim a DER through a `connection` node.
     owners = [*roles.lugs, *roles.circuits, panel]
@@ -274,6 +279,11 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
         vendor_name=fields.vendor_name,
         model=fields.model,
         hardware_version=fields.hardware_version,
+        first_position=first_position,
+        last_position=last_position,
+        publishes_solar_roles=any(
+            PROP_FEEDS_ROLE in node_properties(circuit, NODE_CONNECTION) for circuit in roles.circuits
+        ),
         shed_policy=fields.shed_policy,
         shed_policy_algorithm=fields.shed_policy_algorithm,
         shed_soc_threshold_shed_percent=fields.shed_soc_threshold_shed_percent,

@@ -8,6 +8,9 @@ look unchanged are addressed differently.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Final
+
 # -- Device classes ---------------------------------------------------------
 
 DEVICE_TYPE_PREFIX = "energy.ebus.device."
@@ -41,6 +44,7 @@ NODE_CONNECTION = "connection"
 # imports `panel` -- so the constant has to live below both of them.
 PROP_FEEDS_DEVICE_ID = "feeds-device-id"
 PROP_FEEDS_DEVICE_STATUS = "feeds-device-status"
+PROP_FEEDS_ROLE = "feeds-role"
 PROP_FED_BY_DEVICE_ID = "fed-by-device-id"
 PROP_FED_BY_DEVICE_STATUS = "fed-by-device-status"
 NODE_DOOR = "door"
@@ -190,6 +194,17 @@ PANEL_SIZE_BY_MODEL: dict[str, int] = {
     "MAIN_32": 32,
     "MAIN_40": 40,
     "MLO_48": 48,
+}
+
+# The first and last breaker position for each model. Keyed like
+# `PANEL_SIZE_BY_MODEL`, and like it the numbers are ours: the panel publishes
+# only which positions are occupied.
+PANEL_POSITIONS_BY_MODEL: Final[Mapping[str, tuple[int, int]]] = {
+    "MAIN_16": (9, 24),
+    "MLO_24": (1, 24),
+    "MAIN_32": (1, 32),
+    "MAIN_40": (9, 48),
+    "MLO_48": (1, 48),
 }
 
 # The Homie attribute that carries what the flat schema published as the

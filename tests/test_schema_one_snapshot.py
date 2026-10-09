@@ -50,25 +50,24 @@ def test_snapshot_carries_panel_identity(snapshot: SpanPanelSnapshot) -> None:
     assert snapshot.main_breaker_rating_a == 200
 
 
-def test_every_real_circuit_is_present(snapshot: SpanPanelSnapshot) -> None:
-    real = {cid for cid in snapshot.circuits if not cid.startswith("unmapped_tab_")}
-
-    assert len(real) == 6
-    assert SOLAR_CIRCUIT in real
+def test_the_snapshot_carries_only_the_circuits_the_tree_publishes(snapshot: SpanPanelSnapshot) -> None:
+    """Unoccupied positions are not synthesised as circuits: the tree publishes
+    nothing for them, and `panel_size` alone states the total."""
+    assert len(snapshot.circuits) == 6
+    assert SOLAR_CIRCUIT in snapshot.circuits
     assert snapshot.circuits[SOLAR_CIRCUIT].name == "Solar Inverter"
+    occupied = {tab for circuit in snapshot.circuits.values() for tab in circuit.tabs}
+    assert len(occupied) < snapshot.panel_size == 40
 
 
-def test_unoccupied_positions_are_filled_up_to_the_panel_size(snapshot: SpanPanelSnapshot) -> None:
-    """The feature the model lookup exists for: the tree lists occupied
-    positions and says nothing about the rest."""
-    occupied = {tab for cid, c in snapshot.circuits.items() if not cid.startswith("unmapped_tab_") for tab in c.tabs}
-    unmapped = {cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")}
-
-    assert len(occupied) + len(unmapped) == 40
-    assert "unmapped_tab_40" in unmapped
-    # Occupied positions are never synthesised.
-    for tab in occupied:
-        assert f"unmapped_tab_{tab}" not in unmapped
+def test_nothing_the_tree_does_not_publish_is_reported(snapshot: SpanPanelSnapshot) -> None:
+    """No device publishes a proximity proof or an uptime, and this adapter keeps
+    no receipt times, so all four read unknown rather than a constant."""
+    assert snapshot.proximity_proven is None
+    assert snapshot.uptime_s is None
+    for circuit in snapshot.circuits.values():
+        assert circuit.instant_power_update_time_s is None
+        assert circuit.energy_accum_update_time_s is None
 
 
 def test_a_circuit_feeding_a_der_reports_the_der_type(snapshot: SpanPanelSnapshot) -> None:
@@ -118,16 +117,15 @@ def test_the_grid_answers_are_read_from_the_mid_not_derived(snapshot: SpanPanelS
     assert snapshot.current_run_config == "PANEL_ON_GRID"
 
 
-def test_an_unsizable_panel_yields_no_unmapped_positions() -> None:
-    """A panel whose model we cannot size must not fabricate positions."""
+def test_an_unsizable_panel_reports_no_size_and_keeps_its_circuits() -> None:
+    """A panel whose model we cannot size reports no total rather than a guess,
+    and its circuits do not depend on the total."""
     panel = _device(PANEL)
     panel.update_property("info", "model", "MAIN_99")
 
     snapshot = build_snapshot(panel, _children())
 
     assert snapshot.panel_size == 0
-    assert not [cid for cid in snapshot.circuits if cid.startswith("unmapped_tab_")]
-    # Real circuits survive — only the synthesised ones depend on the total.
     assert len(snapshot.circuits) == 6
 
 
@@ -140,8 +138,9 @@ def test_a_panel_with_no_children_still_builds() -> None:
     # zero — see `test_absent_readings_are_not_zero`.
     assert snapshot.instant_grid_power_w is None
     assert snapshot.battery.soe_percentage is None
-    # Every position is unoccupied, so all 40 are synthesised.
-    assert len(snapshot.circuits) == 40
+    # No circuit has described itself, and unoccupied positions are not circuits.
+    assert snapshot.circuits == {}
+    assert snapshot.panel_size == 40
 
 
 # ---------------------------------------------------------------------------

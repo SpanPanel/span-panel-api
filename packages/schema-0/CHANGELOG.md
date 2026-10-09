@@ -9,6 +9,25 @@ rather than by this version number. A release here means this parser changed, ne
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [Unreleased]
+
+Requires `span-panel-api` **3.7.0 or newer**, whose snapshot fields accept the unknown values this parser now reports.
+
+### Changed
+
+- **`proximity_proven` is `None`**, where it was `True` on every snapshot because it read readiness rather than any proximity property.
+- **`uptime_s` is `None` before the panel first reports ready**, where it was `0`.
+- **A circuit's `instant_power_update_time_s` and `energy_accum_update_time_s` are `None` until the reading arrives**, where they were `0`.
+- **BREAKING FOR CONSUMERS: `HomiePropertyAccumulator.get_timestamp()` returns `int | None`, and `None` for a property never received**, where it returned `0`.
+
+### Removed
+
+- **BREAKING: snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data.**
+
+### Fixed
+
+- **`uptime_s` keeps advancing while only circuits change**, where a snapshot rebuilt for changed circuits alone carried the previous snapshot's uptime forward until something panel-level changed.
+
 ## [1.2.0]
 
 The panel's one inverter is reported through `pv_inverters` as well as `pv`. Requires `span-panel-api` **3.6.0 or newer**.

@@ -16,7 +16,6 @@ from reference_payloads.schema_one import device_from_topics, parent_child_tree
 from span_panel_api_schema_1.const import NODE_GRID, TYPE_BESS, TYPE_PV
 from span_panel_api_schema_1.panel import (
     PanelFields,
-    build_unmapped_tabs,
     find_lugs,
     panel_model_drift,
     panel_size_from_model,
@@ -245,8 +244,8 @@ def test_panel_size_reads_the_model_off_the_fixture() -> None:
 
 
 def test_an_unknown_model_yields_no_size_rather_than_a_guess() -> None:
-    """Inventing a size is worse than reporting none: a wrong total fabricates
-    unmapped positions that do not exist, or hides real ones."""
+    """Inventing a size is worse than reporting none: a wrong total lays out
+    positions that do not exist, or hides real ones."""
     assert panel_size_from_model("MAIN_99") == 0
     assert panel_size_from_model("") == 0
 
@@ -268,43 +267,6 @@ def test_a_model_we_cannot_size_is_reported_as_drift() -> None:
     panel.update_description(json.dumps(description))
 
     assert panel_model_drift(panel) == ("MAIN_64",)
-
-
-# ---------------------------------------------------------------------------
-# Unmapped positions — reproducible under v1.0 only because the model gives a total
-# ---------------------------------------------------------------------------
-
-
-def test_unmapped_tabs_fill_every_unoccupied_position() -> None:
-    unmapped = build_unmapped_tabs(panel_size=6, occupied={1, 3})
-
-    assert sorted(unmapped) == [
-        "unmapped_tab_2",
-        "unmapped_tab_4",
-        "unmapped_tab_5",
-        "unmapped_tab_6",
-    ]
-    assert unmapped["unmapped_tab_2"].tabs == [2]
-    assert unmapped["unmapped_tab_2"].instant_power_w == 0.0
-    assert unmapped["unmapped_tab_2"].name == "Unmapped Tab 2"
-
-
-def test_the_unmapped_id_format_matches_the_flat_adapter() -> None:
-    """The integration builds entity ids from this — `sensor.span_panel_
-    unmapped_tab_32_power` — so a rename would strand existing entities."""
-    unmapped = build_unmapped_tabs(panel_size=32, occupied=set(range(1, 32)))
-
-    assert list(unmapped) == ["unmapped_tab_32"]
-
-
-def test_a_fully_occupied_panel_has_no_unmapped_positions() -> None:
-    assert build_unmapped_tabs(panel_size=4, occupied={1, 2, 3, 4}) == {}
-
-
-def test_an_unsizable_panel_yields_no_unmapped_positions() -> None:
-    """Better nothing than a fabricated set: size 0 is what an unknown model
-    reports, and inventing positions would create phantom entities."""
-    assert build_unmapped_tabs(panel_size=0, occupied={1}) == {}
 
 
 # ---------------------------------------------------------------------------

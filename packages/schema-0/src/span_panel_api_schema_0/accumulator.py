@@ -118,9 +118,9 @@ class HomiePropertyAccumulator:
         """Get a property's reported value."""
         return self._property_values.get(node_id, {}).get(prop_id, default)
 
-    def get_timestamp(self, node_id: str, prop_id: str) -> int:
-        """Get the epoch timestamp of a property's last update."""
-        return self._property_timestamps.get(node_id, {}).get(prop_id, 0)
+    def get_timestamp(self, node_id: str, prop_id: str) -> int | None:
+        """Get the epoch timestamp of a property's last update, or None if it never arrived."""
+        return self._property_timestamps.get(node_id, {}).get(prop_id)
 
     def get_target(self, node_id: str, prop_id: str) -> str | None:
         """Get a property's target value, or None if no target set."""

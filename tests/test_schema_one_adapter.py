@@ -546,7 +546,7 @@ def test_the_feed_grace_restarts_once_every_inverter_has_been_placed() -> None:
         second_circuit: {
             topic: value for topic, value in _TREE[SOLAR_CIRCUIT].items() if topic != "connection/feeds-device-id"
         }
-        | {"info/name": "Garage Solar", "info/spaces": "5,7"},
+        | {"info/name": "Garage Solar", "info/spaces": "13,15"},
     }
     _feed(adapter, [PANEL, second_pv, second_circuit], tree=tree)
     assert {inverter.device_id for inverter in adapter.build_snapshot().pv_inverters.values()} == {

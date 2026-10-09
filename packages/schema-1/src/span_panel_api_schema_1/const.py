@@ -181,9 +181,9 @@ STATE_READY = "ready"
 # exists because of that split — the panel can tell us a model we have no size
 # for, and we would rather say so than guess.
 #
-# Total size matters beyond a display field: unoccupied positions are only
-# knowable as `total - occupied`, and synthesising them is what gives the
-# integration its unmapped-circuit sensors.
+# Total size matters beyond a display field: the tree lists only occupied
+# positions, so the total is the only way a consumer knows how many positions
+# to lay out, empty ones included.
 PANEL_SIZE_BY_MODEL: dict[str, int] = {
     "MAIN_16": 16,
     "MLO_24": 24,
@@ -191,11 +191,6 @@ PANEL_SIZE_BY_MODEL: dict[str, int] = {
     "MAIN_40": 40,
     "MLO_48": 48,
 }
-
-# Prefix for synthesised unoccupied-position entries. Must match the flat
-# adapter's, because the integration keys entities off it and a rename would
-# strand every existing unmapped-tab entity.
-UNMAPPED_TAB_PREFIX = "unmapped_tab_"
 
 # The Homie attribute that carries what the flat schema published as the
 # `never-backup` boolean. v1.0 retires the property and expresses it as

@@ -446,16 +446,6 @@ def test_a_circuit_with_no_pcs_node_participates_in_nothing() -> None:
     assert circuit.pcs_priority is None
 
 
-def test_a_synthesised_unmapped_position_carries_no_participation() -> None:
-    """Unmapped tabs are invented by the adapter, not published, so claiming a
-    PCS relationship for one would be a fabrication."""
-    circuits = _snapshot(parent_child_tree()).circuits
-    unmapped = next(circuit for circuit_id, circuit in circuits.items() if circuit_id.startswith("unmapped_tab_"))
-
-    assert unmapped.pcs_managed is None
-    assert unmapped.pcs_priority is None
-
-
 # ---------------------------------------------------------------------------
 # Metadata: only the result carries a row
 # ---------------------------------------------------------------------------

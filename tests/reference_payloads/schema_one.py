@@ -25,6 +25,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from importlib.resources import files
 import json
+from pathlib import Path
 
 from ebus_sdk.homie import DiscoveredDevice
 
@@ -39,6 +40,7 @@ wire exactly as the panel publishes it, and `update_description` parses it.
 """
 
 _PARENT_CHILD_TREE = files("span_panel_api_schema_1") / "reference" / "parent_child_tree.json"
+_OTHER_MODEL_TREE = Path(__file__).parent.parent / "fixtures" / "other_model_tree.json"
 
 _DEFAULT_STATE = "ready"
 _DOMAIN = "ebus"
@@ -56,6 +58,18 @@ def parent_child_tree() -> RetainedTopicTree:
     tree: object = json.loads(_PARENT_CHILD_TREE.read_text(encoding="utf-8"))
     if not isinstance(tree, dict):
         raise TypeError(f"{_PARENT_CHILD_TREE.name} is not a JSON object")
+    return tree
+
+
+def other_model_tree() -> RetainedTopicTree:
+    """The hand-authored tree `test_schema_one_other_models.py` reads.
+
+    Test data only, kept under `tests/fixtures/` rather than shipped with
+    schema-1: it is not a capture, and no downstream suite replays it.
+    """
+    tree: object = json.loads(_OTHER_MODEL_TREE.read_text(encoding="utf-8"))
+    if not isinstance(tree, dict):
+        raise TypeError(f"{_OTHER_MODEL_TREE.name} is not a JSON object")
     return tree
 
 

@@ -15,6 +15,7 @@ import pytest
 from paho.mqtt.client import ConnectFlags
 from paho.mqtt.reasoncodes import ReasonCode
 
+from expected_failures import EXPECTED_FAILURES
 import span_panel_api._http as _http_mod
 from span_panel_api.models import V2HomieSchema
 from span_panel_api.mqtt.control import ControlDeadlines
@@ -47,6 +48,36 @@ def _load_dotenv() -> None:
 
 
 _load_dotenv()
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark every test `expected_failures.py` lists as a strict expected failure.
+
+    A row naming anything but a test function of its collected module is a typo,
+    a rename or a helper that would silently mark nothing, so it stops the run.
+    """
+    modules: dict[str, object] = {}
+    for item in items:
+        if not isinstance(item, pytest.Function):
+            continue
+        path = item.nodeid.partition("::")[0]
+        modules[path] = item.module
+        reason = EXPECTED_FAILURES.get(f"{path}::{item.originalname}")
+        if reason is not None:
+            item.add_marker(pytest.mark.xfail(strict=True, reason=reason))
+
+    stale = [
+        key
+        for key in EXPECTED_FAILURES
+        if (path := key.partition("::")[0]) in modules and not _is_test_function(modules[path], key.partition("::")[2])
+    ]
+    if stale:
+        raise pytest.UsageError(f"expected_failures.py names tests that do not exist: {', '.join(sorted(stale))}")
+
+
+def _is_test_function(module: object, name: str) -> bool:
+    """Whether `name` is a function pytest collects from `module` under the default `test` prefix."""
+    return name.startswith("test") and callable(getattr(module, name, None))
 
 
 @pytest.fixture(autouse=True)

@@ -41,7 +41,8 @@ harness names it.
 
 - a `PENDING` row is behaviour a later change brings, and that change deletes the row: a listed test that starts passing fails the run until it is;
 - a `DIVERGENT` row is behaviour this library deliberately does not have, and stays until the test or the decision changes;
-- a row naming anything but a test function of its collected module stops the run.
+- a row naming a file that does not exist, or a test function that file does not define (at module level or on a `Test` class), stops the run. The check reads the files rather than the tests a run collected, so a partial run (`-k`, one file) judges every
+  row exactly as a full run does, and a renamed or deleted test file cannot orphan its rows.
 
 Ported acceptance tests are never edited. A strict xfail stops at its first failing line, so a companion file (`*_companions.py`) asserts what each divergent test checks after its divergent line.
 

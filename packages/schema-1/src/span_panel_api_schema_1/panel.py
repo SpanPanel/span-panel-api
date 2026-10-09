@@ -825,6 +825,29 @@ def resolve_dominant_power_source(
     return _POWER_SOURCE_BY_TYPE.get(device_types.get(forming, ""), UNKNOWN)
 
 
+def device_display_name(device: DiscoveredDevice) -> str | None:
+    """A device's readable name, or `None` when nothing it publishes names it.
+
+    Homie's `$description.name` (`Battery`, `Solar`, `SPAN Drive - Garage`) where it
+    is set and is not the device's own id. Real r202639 panels publish each non-root
+    device's id there, and an id shown as a name is the outcome
+    `resolve_grid_forming_device_name` exists to avoid. Otherwise the name comes from
+    the device's `info`: vendor and model together (`Tesla Powerwall 2 AC`), or the
+    model alone. A vendor alone names a maker rather than a device, so it gives `None`.
+
+    An empty value names nothing, exactly as an unpublished one does.
+    """
+    description: dict[str, object] = device.description or {}
+    name = description.get("name")
+    if name and str(name) != device.device_id:
+        return str(name)
+    vendor = text(device, NODE_INFO, PROP_VENDOR_NAME)
+    model = text(device, NODE_INFO, PROP_MODEL)
+    if vendor and model:
+        return f"{vendor} {model}"
+    return model or None
+
+
 def resolve_grid_forming_device_name(
     mid: DiscoveredDevice | None,
     device_names: Mapping[str, str],
@@ -833,9 +856,9 @@ def resolve_grid_forming_device_name(
 
     The wire value is a Homie device id -- `sim-40t-001-SIM-BESS-40T-001`. That means
     nothing to someone reading a dashboard: it is not a Home Assistant device id, and an
-    opaque string is worse than no string. Homie's `$description.name` is the device's
-    own display name (`Battery`, `Solar`, `SPAN Drive - Garage`), which is what a person
-    would recognise, so that is what gets surfaced.
+    opaque string is worse than no string. `device_names` holds each device's
+    `device_display_name`, which is what a person would recognise, so that is what gets
+    surfaced.
 
     `None` when the grid is forming (there is no device to name), when no MID publishes
     an answer, or when the id resolves to nothing -- the raw id is still on

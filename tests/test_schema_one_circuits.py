@@ -142,8 +142,8 @@ def test_relay_controllable_defaults_to_controllable_when_absent(kitchen: Discov
 
 
 def test_sheddable_is_computed_not_read(kitchen: DiscoveredDevice, solar: DiscoveredDevice) -> None:
-    """Retired with no replacement property: the guide defines it as
-    `priority != NEVER and relay-controllable`."""
+    """Retired with no replacement property, so derived: a shed priority
+    (`OFF_GRID` or `SOC_THRESHOLD`) and a controllable relay."""
     # Kitchen: priority SOC_THRESHOLD (not NEVER) and controllable -> sheddable
     assert build_circuit(kitchen).is_sheddable is True
     # Solar: priority NEVER and not controllable -> not sheddable
@@ -247,16 +247,16 @@ def test_every_catalogued_priority_is_carried_through_rather_than_repaired(kitch
     representativeness comes from the capture.
 
     Sheddability is asserted alongside because it is the derivation that would
-    hide a repaired value: `priority != NEVER and relay-controllable` makes every
-    member except `NEVER` sheddable, which is the answer the rule gives and not
-    one this reader should soften.
+    hide a repaired value: only a shed priority, `OFF_GRID` or `SOC_THRESHOLD`,
+    makes a controllable circuit sheddable, and `UNKNOWN` is "not yet known"
+    rather than a priority the panel sheds by.
     """
     kitchen.update_property("load-shed", "priority", declared)
 
     circuit = build_circuit(kitchen)
 
     assert circuit.priority == declared
-    assert circuit.is_sheddable is (declared != "NEVER")
+    assert circuit.is_sheddable is (declared in {"OFF_GRID", "SOC_THRESHOLD"})
 
 
 # ---------------------------------------------------------------------------

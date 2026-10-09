@@ -6,14 +6,17 @@ repos:
       # `packages/schema-1/spec/` holds byte copies of the eBus specification,
       # verified by byte comparison in tests/test_schema_one_conformance.py, and
       # `tests/fixtures/captures/` holds byte copies of upstream reference captures
-      # and their LICENSE, pinned by SHA-256 in tests/test_captures_unchanged.py.
-      # Any hook that rewrites a file must skip them: a "fix" there would
-      # invalidate the comparison that makes the copies trustworthy. Non-mutating
-      # checks (check-json) deliberately still run, since a corrupt copy should fail.
+      # and their LICENSE, pinned by SHA-256 in tests/test_captures_unchanged.py, and
+      # the two MAIN 32 captures in tests/fixtures/ are byte copies of upstream with
+      # that repository's LICENSE beside them, pinned by SHA-256 in
+      # tests/adapter_fidelity/test_main32_fidelity.py. Any hook that rewrites a file
+      # must skip them: a "fix" there would silently invalidate the comparison that
+      # makes the copies trustworthy. Non-mutating checks (check-json) deliberately
+      # still run, since a corrupt copy should fail.
       - id: trailing-whitespace
-        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|^tests/fixtures/captures/(.*\.json|LICENSE)$|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|^tests/fixtures/(captures/(.*\.json|LICENSE)|main32(_r202639)?-tree-v1\.json|distribution-enclosure-simulator\.LICENSE)$|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
       - id: end-of-file-fixer
-        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|^tests/fixtures/captures/(.*\.json|LICENSE)$|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|^tests/fixtures/(captures/(.*\.json|LICENSE)|main32(_r202639)?-tree-v1\.json|distribution-enclosure-simulator\.LICENSE)$|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
       - id: check-yaml
         exclude: '^src/span_panel_api/generated_client/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
       - id: check-toml
@@ -27,7 +30,7 @@ repos:
         exclude: '^src/span_panel_api/generated_client/.*|generate_client\.py|scripts/.*|tests/.*|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*|^examples/.*'
       - id: mixed-line-ending
         args: ['--fix=lf']
-        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|^tests/fixtures/captures/(.*\.json|LICENSE)$|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|^packages/schema-1/spec/.*|^tests/fixtures/(captures/(.*\.json|LICENSE)|main32(_r202639)?-tree-v1\.json|distribution-enclosure-simulator\.LICENSE)$|\..*_cache/.*|dist/.*|venv/.*|\.venv/.*'
 
   # Ruff for formatting and linting
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -105,11 +108,14 @@ repos:
         # names tests/, which is fine — that flag governs directory discovery, and
         # a file passed by name is checked regardless.
         #
+        # `tests/adapter_fidelity/` is checked for the same reason: its harness and
+        # rules are the support code every adapter fidelity cell is measured with.
+        #
         # `scripts/capture_parent_child_reference.py` is checked for the same reason:
         # every schema_1 test is written against what it writes, which is not the place
         # for the one part of the tree nothing type-checks. The hand-run scripts beside
         # it stay out — see `pyproject.toml`, which names them one by one.
-        exclude: '^src/span_panel_api/generated_client/.*|scripts/(?!capture_parent_child_reference\.py$).*|tests/(?!reference_payloads/).*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
+        exclude: '^src/span_panel_api/generated_client/.*|scripts/(?!capture_parent_child_reference\.py$).*|tests/(?!reference_payloads/|adapter_fidelity/).*|docs/.*|examples/.*|\..*_cache/.*|dist/.*|venv/.*'
 
   # Pylint for code quality
   - repo: https://github.com/pycqa/pylint

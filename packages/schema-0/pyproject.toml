@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api-schema-0"
-version = "1.2.0"
+version = "1.3.0b1"
 description = "Flat-schema (data-model-version absent) parser for span-panel-api"
 authors = [
     {name = "SpanPanel"}
@@ -19,7 +19,9 @@ dependencies = [
     # Raised to 3.6.0, the first bootstrap whose snapshot carries `pv_inverters`
     # and the inverter's `device_id` and `node_id`, which this parser fills.
     # Against an earlier one, building a snapshot fails on those arguments.
-    "span-panel-api>=3.6.0,<4.0",
+    # Raised to 3.7.0b1, whose snapshot fields accept the unknown values this
+    # parser now reports, where an earlier one types them as never unknown.
+    "span-panel-api>=3.7.0b1,<4.0",
 ]
 
 [project.urls]

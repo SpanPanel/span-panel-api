@@ -282,6 +282,12 @@ _NOT_EXERCISED_BY_THE_EMITTER: dict[tuple[str, str], str] = {
         "in test_schema_one_charge_limit.py drives it from a synthetic description, which is "
         "evidence of a parser and not of a producer -- which is what this entry records."
     ),
+    ("connection", "feeds-role"): (
+        "what a circuit feeds when that is not itself a device on the tree. The emitter's "
+        "reference tree declares no role on any circuit; the reference captures declare it on "
+        "their circuits and leave it unvalued there, so the values are driven by synthetic trees in "
+        "test_schema_one_feeds_role.py."
+    ),
 }
 
 

@@ -83,6 +83,11 @@ EXPECTED_PUBLIC_API = {
     # `None` on every existing consumer's data and nothing that reads the
     # snapshot today changes.
     "SpanPcsSnapshot",
+    # Added 2026-10-09: the closed set a circuit's `connection/feeds-role`
+    # declares, read into `SpanCircuitSnapshot.feeds_role`. Purely additive --
+    # the field defaults to `None`, and the flat schema declares no roles.
+    "FEEDS_ROLES",
+    "FeedsRole",
     # Factory
     "create_span_client",
     # Detection

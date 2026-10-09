@@ -33,9 +33,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from span_panel_api.models import SpanCircuitSnapshot
+from span_panel_api.models import FEEDS_ROLES, FeedsRole, SpanCircuitSnapshot
 from span_panel_api_schema_1.const import (
     NODE_BREAKER,
+    NODE_CONNECTION,
     NODE_INFO,
     NODE_LOAD_SHED,
     NODE_METER,
@@ -45,6 +46,7 @@ from span_panel_api_schema_1.const import (
     PROP_ACTIVE_POWER,
     PROP_CURRENT,
     PROP_EXPORTED_ENERGY,
+    PROP_FEEDS_ROLE,
     PROP_IMPORTED_ENERGY,
     PROP_MANAGED,
     PROP_NAME,
@@ -261,6 +263,12 @@ def relay_is_settable(device: DiscoveredDevice) -> bool:
     return _settable(device, NODE_SWITCH, PROP_RELAY) and _relay_controllable(device)
 
 
+def _feeds_role(device: DiscoveredDevice) -> FeedsRole | None:
+    """The declared `connection/feeds-role`, or None when unpublished or outside the role set."""
+    published = _text(device, NODE_CONNECTION, PROP_FEEDS_ROLE)
+    return next((role for role in FEEDS_ROLES if role == published), None)
+
+
 def build_circuit(
     device: DiscoveredDevice, device_type: str = "circuit", relative_position: str = ""
 ) -> SpanCircuitSnapshot:
@@ -304,6 +312,7 @@ def build_circuit(
         is_never_backup=not priority_settable,
         device_type=device_type,
         relative_position=relative_position,
+        feeds_role=_feeds_role(device),
         # Unknown without a pole count: a meter outside the panel has no
         # breaker, and a breaker whose count has not arrived has not said.
         is_240v=None if poles is None else poles >= 2,

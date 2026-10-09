@@ -11,10 +11,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Final, Literal
 
 # Homie schema type: {type_name: {property_name: {attribute: value}}}
 # Values are heterogeneous JSON (str, int, bool, nested dicts).
 type HomieSchemaTypes = dict[str, dict[str, object]]
+
+type FeedsRole = Literal["LOADS", "SUBPANEL", "SOLAR", "STORAGE", "GENERATOR", "MIXED", "UNUSED"]
+"""What a circuit feeds, as its `connection/feeds-role` declares it."""
+
+FEEDS_ROLES: Final[tuple[FeedsRole, ...]] = ("LOADS", "SUBPANEL", "SOLAR", "STORAGE", "GENERATOR", "MIXED", "UNUSED")
+"""Every `FeedsRole`, for reading a wire value into one."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +93,15 @@ class SpanCircuitSnapshot:
     is net import. Read from the device's declaration, never from its values, so
     a meter that has not reported yet is already outside the panel. Such a meter
     has no relay, no breaker and no shed priority, and occupies no position.
+    """
+
+    feeds_role: FeedsRole | None = None
+    """What the circuit feeds, from its `connection/feeds-role`.
+
+    `None` where the circuit declares no role, has not published it, or
+    publishes a value outside `FEEDS_ROLES`. Reported as declared and nothing
+    more: `device_type` stays as published, so a circuit whose role is solar is
+    still a circuit. The flat schema declares no roles.
     """
 
 

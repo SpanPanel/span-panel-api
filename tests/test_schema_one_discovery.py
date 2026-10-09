@@ -266,11 +266,48 @@ def test_an_off_snapshot_route_that_became_observable_must_be_retired() -> None:
     )
 
 
+_FEEDS_ROLE: Declaration = (TYPE_CIRCUIT, "connection", "feeds-role")
+_ABSENT_FROM_THE_CAPTURE: frozenset[Declaration] = frozenset({_FEEDS_ROLE})
+"""Addressed entries the capture never declares, each proved on a synthetic declaration below."""
+
+_A_LOAD_CIRCUIT = "0ab966b95f92a6a51ec548485aa85f54"
+"""A circuit that feeds no device, so nothing else labels it."""
+
+
 def test_no_addressed_entry_has_gone_stale() -> None:
     """A table entry outlives its declaration silently; the file only ever grows."""
     declared = _declared()
-    stale = [entry for entry in (*_CONSUMED_WITHOUT_A_ROW, *_CONSUMED_OFF_SNAPSHOT) if entry not in declared]
+    stale = [
+        entry
+        for entry in (*_CONSUMED_WITHOUT_A_ROW, *_CONSUMED_OFF_SNAPSHOT)
+        if entry not in declared and entry not in _ABSENT_FROM_THE_CAPTURE
+    ]
     assert not stale, f"addressed-property entries the reference tree no longer declares:\n{_rendered(stale)}"
+
+
+def test_an_entry_excused_from_the_capture_is_still_absent_from_it() -> None:
+    """Once the capture declares it, the experiment above can prove it directly."""
+    assert not (_ABSENT_FROM_THE_CAPTURE & _declared())
+
+
+def test_feeds_role_moves_the_snapshot_on_a_circuit_that_declares_it() -> None:
+    """The experiment above, run on a circuit given the declaration the capture lacks."""
+    _type, node, prop = _FEEDS_ROLE
+    tree = _tree()
+    description = json.loads(tree[_A_LOAD_CIRCUIT]["$description"])
+    description["nodes"][node]["properties"][prop] = {
+        "datatype": "enum",
+        "format": "LOADS,SUBPANEL,SOLAR,STORAGE,GENERATOR,MIXED,UNUSED",
+    }
+    tree[_A_LOAD_CIRCUIT]["$description"] = json.dumps(description)
+    tree[_A_LOAD_CIRCUIT][f"{node}/{prop}"] = "LOADS"
+    baseline = _snapshot_fields(_snapshot(tree))
+    tree[_A_LOAD_CIRCUIT][f"{node}/{prop}"] = "SOLAR"
+    after = _snapshot_fields(_snapshot(tree))
+
+    moved = {path for path, value in after.items() if baseline.get(path) != value}
+    assert moved == {f"circuits@{_A_LOAD_CIRCUIT}.feeds_role"}
+    assert _FEEDS_ROLE in _CONSUMED_WITHOUT_A_ROW
 
 
 def test_no_addressed_entry_duplicates_a_metadata_row() -> None:

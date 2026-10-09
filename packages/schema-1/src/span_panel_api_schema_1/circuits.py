@@ -10,8 +10,13 @@ Flat property           v1.0 source
 ======================  ===========================================================
 ``always-on``           ``switch/relay-controllable``, inverted
 ``never-backup``        ``$settable`` on ``load-shed/priority``, inverted
-``sheddable``           computed: ``priority != NEVER and relay-controllable``
+``sheddable``           computed: a shed priority and ``relay-controllable``
 ======================  ===========================================================
+
+A shed priority is ``OFF_GRID`` or ``SOC_THRESHOLD``. SPAN's r202633 changelog
+derives sheddable as ``priority != NEVER`` and asks consumers to treat ``UNKNOWN``
+as "not yet known" rather than as sheddable, so the rule names the priorities the
+panel sheds by instead of excluding the one it never sheds.
 
 Sign and direction are unchanged from the flat schema, and both are the reverse
 of what the property names suggest. Values are in the enclosure's reference
@@ -23,7 +28,7 @@ accumulators are swapped.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from span_panel_api.models import SpanCircuitSnapshot
 from span_panel_api_schema_1.const import (
@@ -33,7 +38,8 @@ from span_panel_api_schema_1.const import (
     NODE_METER,
     NODE_PCS,
     NODE_SWITCH,
-    PRIORITY_NEVER,
+    PRIORITY_OFF_GRID,
+    PRIORITY_SOC_THRESHOLD,
     PROP_ACTIVE_POWER,
     PROP_CURRENT,
     PROP_EXPORTED_ENERGY,
@@ -53,6 +59,9 @@ from span_panel_api_schema_1.description import declared_settable, node_properti
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
+
+_SHED_PRIORITIES: Final = frozenset({PRIORITY_OFF_GRID, PRIORITY_SOC_THRESHOLD})
+"""The `load-shed/priority` values the panel sheds a circuit by; see the module docstring."""
 
 
 def _text(device: DiscoveredDevice, node: str, prop: str, default: str = "") -> str:
@@ -260,7 +269,7 @@ def build_circuit(
         # user-controllability from `always-on` — so this is the same answer by
         # a shorter route.
         is_user_controllable=relay_controllable,
-        is_sheddable=priority != PRIORITY_NEVER and relay_controllable,
+        is_sheddable=priority in _SHED_PRIORITIES and relay_controllable,
         is_never_backup=not priority_settable,
         device_type=device_type,
         relative_position=relative_position,

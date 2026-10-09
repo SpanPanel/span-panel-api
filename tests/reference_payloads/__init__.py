@@ -21,6 +21,11 @@ Keeping the split means a test that needs the schema document never drags the
 SDK in behind it, which is the same reason the two payloads were in different
 distributions to begin with.
 
+`synthetic_trees` sits beside `schema_one` and builds parent/child trees by
+hand, for shapes no reference payload carries. Its trees have the capture's
+shape, so `schema_one` reads them the same way, and it reaches the SDK for the
+same reason.
+
 Imported as a top-level package — `from reference_payloads.schema_one import
 ...` — because pytest puts `tests/` on `sys.path`, the same arrangement that
 makes `from conftest import ...` work throughout this suite.

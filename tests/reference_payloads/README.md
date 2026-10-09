@@ -13,6 +13,9 @@ Captures of what a panel actually serves, read by this repository's test suite t
 a version of an adapter reads the same bytes that version was built and tested against, out of its own site-packages. The alternative is what the integration was doing: vendoring copies, and then maintaining a guard to keep the copies honest — more
 machinery than 59 KB in two wheels. That reverses the 3.1.0 decision, whose reasoning (no runtime path reads them) was true and turned out not to be the deciding cost. `tests/test_packaging.py` and CI both assert each adapter wheel carries its capture.
 
+**Synthetic trees live beside the loaders.** `synthetic_trees.py` builds parent/child trees by hand for shapes no capture here carries, each named by the builder that makes it. They are not captures and claim no provenance; every id and value is invented.
+They come out in the capture's `{device_id: {topic: payload}}` shape, so `replay` and `devices_from_tree` in `schema_one.py` read both alike.
+
 ## `homie_schema.json`
 
 The `GET /api/v2/homie/schema` response, captured from a live SPAN Panel running firmware `spanos2/r202603/05`. Unauthenticated endpoint. Serial numbers are masked (last 4 chars replaced with `XXXX`).

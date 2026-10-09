@@ -3,8 +3,8 @@
 Keyed by pytest node id without parameters (`<file>::<function>`), so every
 parametrized case of a listed function is expected to fail. `conftest.py` marks
 each one `xfail(strict=True)`: a listed test that starts passing fails the run
-until its row is deleted, and a row naming a function its module no longer has
-stops the run.
+until its row is deleted, and a row naming anything but a test function of its
+module stops the run.
 
 `PENDING` rows assert behaviour a later change brings; that change deletes
 them. `DIVERGENT` rows assert behaviour this library deliberately does not
@@ -22,12 +22,13 @@ _POSITIONS = "the breaker position range"
 _READINGS = "the panel and circuit readings"
 _SHARED = "the shared meters and relays"
 
+_SOLAR_ROLES = f"whether a panel publishes solar roles lands with {_POSITIONS}"
+_UNPUBLISHED_IS_NONE = f"None for an undeclared reading or shared-with lands with {_READINGS} and {_SHARED}"
+
 PENDING: Final[Mapping[str, str]] = {
-    f"{_ACCEPTANCE}::test_a_panel_that_declares_feeds_role_publishes_solar_roles": (
-        f"publishes_solar_roles lands with {_POSITIONS}"
-    ),
-    f"{_ACCEPTANCE}::test_main_32_and_the_flat_schema_do_not": f"publishes_solar_roles lands with {_POSITIONS}",
-    f"{_ACCEPTANCE}::test_the_declaration_decides_not_the_value": f"publishes_solar_roles lands with {_POSITIONS}",
+    f"{_ACCEPTANCE}::test_a_panel_that_declares_feeds_role_publishes_solar_roles": _SOLAR_ROLES,
+    f"{_ACCEPTANCE}::test_main_32_and_the_flat_schema_do_not": _SOLAR_ROLES,
+    f"{_ACCEPTANCE}::test_the_declaration_decides_not_the_value": _SOLAR_ROLES,
     f"{_ACCEPTANCE}::test_an_unknown_model_sizes_nothing_without_warning": (
         f"an UNKNOWN model sized 0 without a warning lands with {_POSITIONS}"
     ),
@@ -42,7 +43,8 @@ PENDING: Final[Mapping[str, str]] = {
         f"nominal voltage and protection functions land with {_READINGS}"
     ),
     f"{_ACCEPTANCE}::test_the_model_properties_carry_metadata_from_their_declarations": (
-        f"field metadata for the new readings lands with {_READINGS}"
+        f"field metadata for the new readings lands with {_READINGS}, "
+        f"and shared-with stops being a discovered property with {_SHARED}"
     ),
     f"{_ACCEPTANCE}::test_the_shipped_tree_resolves_every_mapped_row": (
         f"field metadata for the new readings lands with {_READINGS}"
@@ -50,12 +52,8 @@ PENDING: Final[Mapping[str, str]] = {
     f"{_ACCEPTANCE}::test_the_model_properties_are_not_extension_properties": (
         f"the new readings and shared-with leave the extension rows with {_READINGS} and {_SHARED}"
     ),
-    f"{_ACCEPTANCE}::test_every_model_property_is_none_where_not_published": (
-        f"None for an undeclared reading or shared-with lands with {_READINGS} and {_SHARED}"
-    ),
-    f"{_ACCEPTANCE}::test_the_reference_main_32_publishes_none_of_them": (
-        f"None for an undeclared reading or shared-with lands with {_READINGS} and {_SHARED}"
-    ),
+    f"{_ACCEPTANCE}::test_every_model_property_is_none_where_not_published": _UNPUBLISHED_IS_NONE,
+    f"{_ACCEPTANCE}::test_the_reference_main_32_publishes_none_of_them": _UNPUBLISHED_IS_NONE,
     f"{_ACCEPTANCE}::test_shared_with_resolves_to_other_circuits_in_device_id_order": (
         f"shared-with resolved to circuit ids lands with {_SHARED}"
     ),
@@ -73,5 +71,7 @@ DIVERGENT: Final[Mapping[str, str]] = {
     f"{_ACCEPTANCE}::test_a_circuit_whose_feeds_role_is_solar_is_labeled_pv": _DEVICE_TYPE_AS_PUBLISHED,
     f"{_ACCEPTANCE}::test_the_shipped_tree_has_the_other_model_shape": _DEVICE_TYPE_AS_PUBLISHED,
 }
+
+assert not PENDING.keys() & DIVERGENT.keys(), "a test is either pending or divergent, never both"
 
 EXPECTED_FAILURES: Final[Mapping[str, str]] = {**PENDING, **DIVERGENT}

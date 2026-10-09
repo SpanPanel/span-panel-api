@@ -53,8 +53,8 @@ _load_dotenv()
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Mark every test `expected_failures.py` lists as a strict expected failure.
 
-    A row naming a function its collected module does not define is a typo or a
-    rename that would silently stop marking anything, so it stops the run.
+    A row naming anything but a test function of its collected module is a typo,
+    a rename or a helper that would silently mark nothing, so it stops the run.
     """
     modules: dict[str, object] = {}
     for item in items:
@@ -69,10 +69,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     stale = [
         key
         for key in EXPECTED_FAILURES
-        if (path := key.partition("::")[0]) in modules and not hasattr(modules[path], key.partition("::")[2])
+        if (path := key.partition("::")[0]) in modules and not _is_test_function(modules[path], key.partition("::")[2])
     ]
     if stale:
         raise pytest.UsageError(f"expected_failures.py names tests that do not exist: {', '.join(sorted(stale))}")
+
+
+def _is_test_function(module: object, name: str) -> bool:
+    """Whether `name` is a function pytest collects from `module` under the default `test` prefix."""
+    return name.startswith("test") and callable(getattr(module, name, None))
 
 
 @pytest.fixture(autouse=True)

@@ -41,12 +41,14 @@ from .models import (
     ADOPTION_IDENTITY_NODE,
     ADOPTION_TOPOLOGY_NODE,
     DISCOVERY_NAMESPACE,
+    FEEDS_ROLES,
     AdoptedDevice,
     AdoptedProperty,
     ControlTarget,
     DiscoveredMetadata,
     ExtensionProperty,
     ExtensionSubject,
+    FeedsRole,
     FieldMetadata,
     HomieSchemaTypes,
     PassphraseRotation,
@@ -145,6 +147,10 @@ __all__ = [  # noqa: RUF022
     "SpanPVSnapshot",
     "SpanPanelSnapshot",
     "SpanPcsSnapshot",
+    # What a circuit's `connection/feeds-role` declares, read into
+    # `SpanCircuitSnapshot.feeds_role`.
+    "FEEDS_ROLES",
+    "FeedsRole",
     # Factory
     "create_span_client",
     # Detection

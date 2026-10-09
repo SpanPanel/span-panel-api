@@ -33,9 +33,9 @@ class SpanCircuitSnapshot:
     # fabricated zero as a reset and books the whole counter as an offset
     # (`SpanPanel/span#259`). A new circuit legitimately reads `0.0`, and the
     # two must stay tellable apart.
-    instant_power_w: float | None  # Positive = consumption
-    produced_energy_wh: float | None  # Generation/backfeed (Wh)
-    consumed_energy_wh: float | None  # Consumption (Wh)
+    instant_power_w: float | None  # Positive = consumption; import where `measures_outside_panel`
+    produced_energy_wh: float | None  # Generation/backfeed (Wh); export where `measures_outside_panel`
+    consumed_energy_wh: float | None  # Consumption (Wh); import where `measures_outside_panel`
     tabs: list[int]
     priority: str  # v1: MUST_HAVE | NICE_TO_HAVE | NON_ESSENTIAL | UNKNOWN
     #                 v2: NEVER | SOC_THRESHOLD | OFF_GRID | UNKNOWN
@@ -44,7 +44,10 @@ class SpanCircuitSnapshot:
     is_never_backup: bool  # v1: Circuit.isNeverBackup | v2: circuit/never-backup
     device_type: str = "circuit"  # "circuit" | "pv" | "evse"
     relative_position: str = ""  # PV/EVSE: "IN_PANEL" | "UPSTREAM" | "DOWNSTREAM"
-    is_240v: bool = False
+    # From the breaker's pole count. `None` where the circuit publishes no pole
+    # count: a meter outside the panel has no breaker, and a breaker whose count
+    # has not arrived has not said.
+    is_240v: bool | None = False
     current_a: float | None = None
     breaker_rating_a: float | None = None
     always_on: bool = False  # v2 new: circuit/always-on
@@ -70,6 +73,16 @@ class SpanCircuitSnapshot:
     # runtime) and a circuit may participate in one, both, or neither.
     pcs_managed: bool | None = None  # v2: circuit pcs/managed
     pcs_priority: int | None = None  # v2: circuit pcs/priority
+
+    measures_outside_panel: bool = False
+    """The device declares no breaker space: a meter outside the panel.
+
+    Power is import-positive (positive = flowing into the panel); consumed is
+    imported energy and produced is exported energy, so consumed minus produced
+    is net import. Read from the device's declaration, never from its values, so
+    a meter that has not reported yet is already outside the panel. Such a meter
+    has no relay, no breaker and no shed priority, and occupies no position.
+    """
 
 
 @dataclass(frozen=True, slots=True)

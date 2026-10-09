@@ -81,9 +81,13 @@ class Fate(StrEnum):
     CONTROL = "control/readiness only"
     INTENTIONAL = "intentionally dropped"
     LATENT = "latent"
-    """Declared and never valued here; the library addresses it, so it would be read."""
+    """Declared and never valued here; the library's tables address it, yet a value given to it moved nothing.
+
+    A drop waiting to happen if the panel starts publishing it, unless the read is
+    conditional on something this capture does not have.
+    """
     INERT = "inert"
-    """Declared and never valued here; nothing reads it."""
+    """Declared and never valued here; nothing addresses it, and a value given to it moved nothing."""
     SILENT = "silently dropped"
     """Valued, with no effect anywhere, and no code that says why."""
 
@@ -215,6 +219,12 @@ class FidelityReport:
     silently_dropped: tuple[RowKey, ...]
     deferred: tuple[RowKey, ...]
     """Rows that would be silently dropped, held back by a reason in `CellRules.deferred`."""
+    dropped_with_a_value: tuple[RowKey, ...]
+    """Rows with a valued instance dropped on purpose, deferrals aside.
+
+    A drop rule covers whole classes of property, so a cell pins this set: a
+    valued property newly dropped by a rule is reviewed before it passes.
+    """
     fabricated: tuple[str, ...]  # snapshot leaf paths
     mismatched: tuple[str, ...]  # snapshot leaf paths whose value breaks the transform
     declared_property_instances: int
@@ -828,6 +838,15 @@ def run_cell(tree_path: Path, rules: CellRules) -> FidelityReport:
         rows={key: tuple(sorted(found, key=_FATE_ORDER.__getitem__)) for key, found in sorted(fates.items())},
         silently_dropped=tuple(sorted({instance.key for instance in instances if instance.fate == Fate.SILENT})),
         deferred=tuple(sorted({instance.key for instance in instances if instance.deferred})),
+        dropped_with_a_value=tuple(
+            sorted(
+                {
+                    instance.key
+                    for instance in instances
+                    if instance.fate == Fate.INTENTIONAL and instance.raw is not None and not instance.deferred
+                }
+            )
+        ),
         fabricated=tuple(sorted(fabricated)),
         mismatched=tuple(sorted(mismatched)),
         declared_property_instances=len(instances),

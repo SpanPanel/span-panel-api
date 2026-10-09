@@ -11,6 +11,7 @@ spanos3/r202633/02, both published with the eBus panel simulator.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cache
 import hashlib
@@ -34,19 +35,36 @@ class _Cell:
     """Of the file as published at the eBus panel simulator's v0.9.0 tag."""
     deferred: tuple[RowKey, ...]
     """The rows this capture values and the library drops today, each deferred in the rules with its reason."""
+    dropped_with_a_value: Mapping[RowKey, str]
+    """The valued rows a drop rule covers here, each reviewed, with why dropping it is right."""
 
+
+_PEER_TYPE = (
+    "the declared type of the device the record names, which the library reads from that device's own "
+    "$description when it sorts the tree"
+)
+_DISPATCH = "chooses which adapter parses the tree, so it is consumed before any snapshot exists"
 
 CELLS = {
     "main32_r202639": _Cell(
         capture=FIXTURES / "main32_r202639-tree-v1.json",
         sha256="bf16d8ce21c2b685496700310286198664c6be1a62ea0fe12b1f15144ebfc086",
         deferred=(),
+        dropped_with_a_value={
+            RowKey("circuit", "connection/feeds-device-type"): _PEER_TYPE,
+            RowKey("lugs-upstream", "connection/fed-by-device-type"): _PEER_TYPE,
+            RowKey("panel", "info/data-model-version"): _DISPATCH,
+        },
     ),
     "main32_r202633": _Cell(
         capture=FIXTURES / "main32-tree-v1.json",
         sha256="0e92bbdca40f7d8d471e8edbfe2b49f986f2995512025bc67ffb4fcf20f7dd30",
         # The upstream lugs here are fed by another panel, and report that link OK.
         deferred=(RowKey("lugs-upstream", "connection/fed-by-device-status"),),
+        dropped_with_a_value={
+            RowKey("lugs-upstream", "connection/fed-by-device-type"): _PEER_TYPE,
+            RowKey("panel", "info/data-model-version"): _DISPATCH,
+        },
     ),
 }
 
@@ -75,6 +93,12 @@ def test_no_property_is_silently_dropped(cell: str) -> None:
 def test_only_the_recorded_rows_are_deferred(cell: str) -> None:
     """A deferral that no longer holds fails as surely as a new silent drop."""
     assert _report(cell).deferred == CELLS[cell].deferred
+
+
+@pytest.mark.parametrize("cell", sorted(CELLS))
+def test_only_the_reviewed_rows_are_dropped_with_a_value(cell: str) -> None:
+    """A drop rule covers a class of property; a valued one it newly covers waits for review here."""
+    assert _report(cell).dropped_with_a_value == tuple(sorted(CELLS[cell].dropped_with_a_value))
 
 
 @pytest.mark.parametrize("cell", sorted(CELLS))

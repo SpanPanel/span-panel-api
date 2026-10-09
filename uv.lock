@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14, <4.0"
 
 [manifest]
@@ -974,7 +974,7 @@ wheels = [
 
 [[package]]
 name = "span-panel-api"
-version = "3.7.0b1"
+version = "3.8.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -1057,7 +1057,7 @@ requires-dist = [{ name = "span-panel-api", editable = "." }]
 
 [[package]]
 name = "span-panel-api-schema-1"
-version = "1.3.0b1"
+version = "1.4.0b1"
 source = { editable = "packages/schema-1" }
 dependencies = [
     { name = "ebus-sdk" },

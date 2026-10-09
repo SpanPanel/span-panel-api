@@ -13,6 +13,7 @@ Snapshot fields that held a fabricated constant can now be unknown, and with `sp
 
 ### Added
 
+- **spanos3/r202639/03 batch 2: reads more of the data this firmware publishes.**
 - **`V2StatusInfo.hardware_version` reports the hardware version string from `GET /api/v2/status`.**
 
 ### Changed

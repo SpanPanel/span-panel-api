@@ -1,20 +1,26 @@
-"""Panel and circuit readings, read where the panel declares them.
+"""Panel and circuit readings, and the site properties that never become readings.
 
 The panel's busbar current and line frequency, the upstream lugs' overcurrent
 protection rating, and each circuit's nominal voltage and protection functions
 are read where the panel declares them and are `None` where it does not, or
 has not published them. Their field metadata comes from the declarations, and
 an undeclared one is absent rather than a gap.
+
+The site's name, address, coordinates and utility meter serial never become an
+extension or adopted reading, on whatever node a device declares them.
 """
 
 from __future__ import annotations
 
 from typing import get_args
 
+import pytest
+
 from conftest import flat_schema
 from reference_payloads.schema_one import devices_from_tree, replay
 from reference_payloads.synthetic_trees import (
     PANEL_ID,
+    PropertyDeclaration,
     SyntheticDevice,
     hosted_circuit,
     lugs,
@@ -25,7 +31,10 @@ from reference_payloads.synthetic_trees import (
 from span_panel_api import PROTECTION_FUNCTIONS, ProtectionFunction, SpanPanelSnapshot
 from span_panel_api.models import FieldMetadata
 from span_panel_api_schema_0 import SchemaZeroAdapter
+from span_panel_api_schema_1.const import SITE_PROPERTIES
 from span_panel_api_schema_1.field_metadata import build_field_metadata
+
+_STRING: PropertyDeclaration = {"name": "Site", "datatype": "string"}
 
 
 def _snapshot(*children: SyntheticDevice, root: SyntheticDevice | None = None) -> SpanPanelSnapshot:
@@ -119,6 +128,31 @@ def test_an_undeclared_reading_has_no_metadata_rather_than_a_gap() -> None:
         "circuit.protection_functions",
     ):
         assert path not in metadata
+
+
+@pytest.mark.parametrize("property_id", sorted(SITE_PROPERTIES))
+def test_a_site_property_on_any_node_never_becomes_a_reading(property_id: str) -> None:
+    """The identity node keeps them out where the panel declares them; this holds anywhere else."""
+    base = panel()
+    root = SyntheticDevice(
+        device_id=base.device_id,
+        device_type=base.device_type,
+        name=base.name,
+        nodes={**base.nodes, "site": {property_id: _STRING}},
+        values={**base.values, f"site/{property_id}": "example"},
+    )
+    vendor = SyntheticDevice(
+        device_id="vendor-a",
+        device_type="energy.ebus.device.example",
+        name="Vendor",
+        nodes={"site": {property_id: _STRING, "label": _STRING}},
+        values={f"site/{property_id}": "example", "site/label": "example"},
+    )
+    snapshot = _snapshot(vendor, root=root)
+
+    assert not [row for row in snapshot.extension_properties if row.property_id == property_id]
+    adopted = {row.property_id for device in snapshot.adopted_devices for row in device.properties}
+    assert adopted == {"label"}
 
 
 def test_a_flat_panel_reports_none_of_them() -> None:

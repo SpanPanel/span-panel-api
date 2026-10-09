@@ -1,6 +1,8 @@
-"""Panel and circuit readings, over every reference capture.
+"""Panel and circuit readings and the site properties, over every reference capture.
 
-Each reading equals the wire value its capture declares.
+Each reading equals the wire value its capture declares. No site property
+becomes an extension or adopted reading, while the two site readings the panel
+already offered, its postal code and time zone, still do.
 """
 
 from __future__ import annotations
@@ -9,8 +11,10 @@ import pytest
 
 from reference_payloads.captures import CAPTURES, capture_adapter, capture_snapshot, capture_tree
 from span_panel_api import PROTECTION_FUNCTIONS
+from span_panel_api_schema_1.const import SITE_PROPERTIES
 
 _LUGS_TYPE = "energy.ebus.device.lugs"
+_KEPT_SITE_READINGS = ("status/postal-code", "status/time-zone")
 _NEW_ROWS = (
     "panel.busbar_current_a",
     "panel.frequency_hz",
@@ -57,6 +61,18 @@ def test_the_captures_publish_the_new_readings() -> None:
     circuits = [circuit for snapshot in snapshots for circuit in snapshot.circuits.values()]
     assert any(circuit.protection_functions for circuit in circuits)
     assert any(circuit.nominal_voltage_v is not None for circuit in circuits)
+
+
+@pytest.mark.parametrize("stem", CAPTURES)
+def test_no_site_property_becomes_a_reading_but_postal_code_and_time_zone_still_do(stem: str) -> None:
+    tree, snapshot = capture_tree(stem), capture_snapshot(stem)
+    readings = {f"{row.node_id}/{row.property_id}" for row in snapshot.extension_properties}
+    readings |= {f"{row.node_id}/{row.property_id}" for device in snapshot.adopted_devices for row in device.properties}
+
+    assert not [reading for reading in readings if reading.rsplit("/", 1)[-1] in SITE_PROPERTIES]
+    assert "info/name" not in readings
+    for topic in _KEPT_SITE_READINGS:
+        assert (topic in readings) == tree.declares(tree.root_id, topic)
 
 
 @pytest.mark.parametrize("stem", CAPTURES)

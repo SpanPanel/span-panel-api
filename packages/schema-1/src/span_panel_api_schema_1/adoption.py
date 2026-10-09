@@ -25,6 +25,7 @@ from span_panel_api.models import ADOPTION_IDENTITY_NODE, ADOPTION_TOPOLOGY_NODE
 from span_panel_api_schema_1.const import (
     HOMIE_DOMAIN,
     HOMIE_VERSION,
+    SITE_PROPERTIES,
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_EVSE,
@@ -132,7 +133,7 @@ def _adopt(device: DiscoveredDevice, declared: str) -> AdoptedDevice:
 
 
 def _readings(device: DiscoveredDevice, declared_nodes: dict[str, dict[str, object]]) -> tuple[AdoptedProperty, ...]:
-    """Every declared property outside the identity and topology nodes.
+    """Every declared property outside the identity and topology nodes, and no site property.
 
     Those two are excluded by *node*, which is what the eBus vocabulary defines,
     rather than by property name. The catalogs carry no marker for "this string
@@ -146,6 +147,8 @@ def _readings(device: DiscoveredDevice, declared_nodes: dict[str, dict[str, obje
         if node_id in (ADOPTION_IDENTITY_NODE, ADOPTION_TOPOLOGY_NODE):
             continue
         for property_id, definition in properties(node).items():
+            if property_id in SITE_PROPERTIES:
+                continue
             raw = device.get_property(node_id, property_id)
             # The same reading the curated controls get: this one gates a set
             # topic on an uncurated device, so a declaration that has not said

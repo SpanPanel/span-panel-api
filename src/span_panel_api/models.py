@@ -445,6 +445,22 @@ class SpanEvseSnapshot:
     set topic when it is not.
     """
 
+    lock_control: ControlTarget | None = None
+    """Where the charger's connector lock is commanded, and which property reports it. v1.0 only.
+
+    Addresses `switch/lock-state` on the charger's own device, and is present
+    only where that declaration carries `$settable`: absence is refusal, so a
+    lock the charger reports but does not accept writes to has no target. The
+    value written is one of `lock_state_options`. `None` on the flat schema.
+    """
+
+    lock_state_options: tuple[str, ...] | None = None
+    """The values the charger's `switch/lock-state` declares in its `$format`. v1.0 only.
+
+    What a lock command may write: a value outside them is refused rather than
+    published. `None` where the charger declares no lock or no `$format`.
+    """
+
     connected: bool | None = None
     """The enclosure's view of the link to this charger, v1.0 only.
 
@@ -519,6 +535,13 @@ class SpanBatterySnapshot:
     # One is the device speaking about itself, the other the panel speaking about
     # it, and the migration guide warns against conflating them.
     communication_state: str | None = None  # v2: bess status/communication-state
+
+    # Whether the panel's device tree declares a battery, v1.0 only. True from the
+    # moment the battery describes itself, before any of its values arrive, so a
+    # battery whose state of charge is never published is still a battery. None
+    # on the flat schema, which has no battery device to declare and publishes
+    # its battery values whether or not one is installed.
+    present: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1392,7 +1415,7 @@ class SpanPanelSnapshot:
     apart — every limit in this capture is a legal `0.0`.
     """
 
-    lugs_at_service_entrance: bool = True
+    lugs_at_service_entrance: bool | None = True
     """Whether this enclosure's upstream lugs *are* the utility connection point.
 
     `False` means something sits between the utility and the main lugs, so the
@@ -1422,6 +1445,9 @@ class SpanPanelSnapshot:
     firmware predates enclosure chaining and publishes no way to express it, so a
     flat panel's lugs are its service entrance. schema_0 leaves it alone for that
     reason.
+
+    `None` while the lugs declare `connection/fed-by-device-id` and have not
+    published it: the feed may yet name a device, so neither answer is known.
 
     A defaulted snapshot field rather than a `SchemaAdapter` member, for the
     reason `adopted_devices` gives above: the protocol derives its required

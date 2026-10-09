@@ -21,10 +21,11 @@ value belongs in a test.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import time
 from types import MappingProxyType
 from typing import Final
 
@@ -140,10 +141,15 @@ def _parse(path: Path) -> CaptureTree:
     return CaptureTree(devices=MappingProxyType(devices), root_id=roots[0])
 
 
-def capture_adapter(stem: str, *, drop_values_of: str | None = None) -> SchemaOneAdapter:
-    """A fresh adapter that has received the whole capture, the way a broker replays it."""
+def capture_adapter(
+    stem: str, *, drop_values_of: str | None = None, clock: Callable[[], float] = time.monotonic
+) -> SchemaOneAdapter:
+    """A fresh adapter that has received the whole capture, the way a broker replays it.
+
+    `clock` is the adapter's monotonic source, as `replay` takes it.
+    """
     tree = capture_tree(stem)
-    return replay(tree.retained(drop_values_of=drop_values_of), tree.root_id)
+    return replay(tree.retained(drop_values_of=drop_values_of), tree.root_id, clock=clock)
 
 
 def capture_snapshot(stem: str, *, drop_values_of: str | None = None) -> SpanPanelSnapshot:

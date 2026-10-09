@@ -389,6 +389,24 @@ def _percent(value: object) -> int | None:
     return None
 
 
+def lugs_at_service_entrance(upstream_lugs: DiscoveredDevice | None) -> bool | None:
+    """Whether nothing sits between the utility and the upstream lugs, or None if not yet said.
+
+    Read from the lugs' own `connection/fed-by-device-id`, the mechanism
+    `power-flows` 0.3 names when it qualifies the `grid` row of its negation
+    table. A device id there means something feeds the lugs: `False`. No such
+    property declared, or one published empty, is the ordinary case: `True`.
+    Declared and not yet valued, the lugs have not said, and either answer
+    would be a guess: `None`.
+    """
+    if upstream_lugs is None or PROP_FED_BY_DEVICE_ID not in upstream_lugs.get_node_properties(NODE_CONNECTION):
+        return True
+    fed_by = upstream_lugs.get_property(NODE_CONNECTION, PROP_FED_BY_DEVICE_ID)
+    if fed_by is None:
+        return None
+    return not str(fed_by)
+
+
 class PanelFields:
     """Panel-level values gathered from the tree, ready for the snapshot.
 
@@ -439,12 +457,8 @@ class PanelFields:
 
         # Whether the upstream lugs are the utility connection point, which is not
         # a given: a BESS wired ahead of the main lugs, or a panel fed by another
-        # panel, puts a device between the utility and this meter. Read from the
-        # lugs' own `connection/fed-by-device-id`, the mechanism `power-flows` 0.3
-        # names when it qualifies the `grid` row of its negation table. Empty
-        # string is the absence -- `text` defaults to it -- and absence is the
-        # ordinary case.
-        self.lugs_at_service_entrance = not text(upstream_lugs, NODE_CONNECTION, PROP_FED_BY_DEVICE_ID)
+        # panel, puts a device between the utility and this meter.
+        self.lugs_at_service_entrance = lugs_at_service_entrance(upstream_lugs)
 
         # No sign flip: the enclosure frame already reports import-positive, which
         # is what consumption means here.

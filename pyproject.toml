@@ -1,6 +1,6 @@
 [project]
 name = "span-panel-api"
-version = "3.6.2"
+version = "3.7.0b1"
 description = "A client library for SPAN Panel API"
 authors = [
     {name = "SpanPanel"}
@@ -62,11 +62,14 @@ dependencies = [
 # so a 1.1.x adapter is still accepted, but it fills neither `pv_inverters` nor
 # the inverter identity fields 3.6.0 adds. Upgrading through the extra is what
 # brings the adapters that do.
-schema-0 = ["span-panel-api-schema-0>=1.2.0"]
+# Raised to 1.3.0b1 for 3.7.0b1: that adapter reports the unknown values this
+# bootstrap's snapshot fields now accept, and stops synthesising unoccupied positions.
+schema-0 = ["span-panel-api-schema-0>=1.3.0b1"]
 # Raised to 1.2.1 for 3.6.1: that adapter builds the `pv` that `SpanPanelSnapshot.pv` now documents.
 # Raised to 1.2.2 for 3.6.2: the readiness gate every snapshot passes asks that
 # adapter what is still missing, and 1.2.2 restarts its feed grace correctly.
-schema-1 = ["span-panel-api-schema-1>=1.2.2"]
+# Raised to 1.3.0b1 for 3.7.0b1, for the same reason as schema-0's.
+schema-1 = ["span-panel-api-schema-1>=1.3.0b1"]
 
 [project.urls]
 Homepage = "https://github.com/SpanPanel/span-panel-api"
@@ -245,7 +248,11 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 explicit_package_bases = true
-mypy_path = "src"
+# `tests` because the suite imports its support packages top-level
+# (`from reference_payloads.schema_one import ...`), the way pytest's rootdir puts
+# `tests/` on `sys.path`; the support packages the mypy hook checks resolve the same
+# way here.
+mypy_path = "src:tests"
 # Excluded by name for the reason `[tool.ruff]` gives above: the capture script is
 # checked like the library, and the hand-run tools written before that was expected
 # are not.

@@ -278,8 +278,10 @@ class SpanMidSnapshot:
 
     The raw value above is a Homie device id, which means nothing on a dashboard — it is
     not a Home Assistant device id, and an opaque string is worse than none. This is the
-    device's own `$description.name` (`Battery`, `Solar`, `SPAN Drive - Garage`), which
-    is the part a person can read. The literal stays available beside it.
+    device's own `$description.name` (`Battery`, `Solar`, `SPAN Drive - Garage`) where
+    that is not the id itself, else its vendor and model (`Tesla Powerwall 2 AC`), which
+    is the part a person can read; `None` when it publishes nothing that names it. The
+    literal stays available beside it.
     """
 
 

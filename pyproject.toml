@@ -93,7 +93,7 @@ dev = [
     # known. Dependabot raises the bump on its own; the bump PR re-runs
     # `scripts/capture_parent_child_reference.py` and the suite then says whether
     # the wire moved.
-    "ebus-panel-sim==0.8.0",
+    "ebus-panel-sim==0.9.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-cov",

@@ -342,17 +342,19 @@ def test_an_assertion_outside_the_enum_is_not_an_answer() -> None:
     assert resolve_islanding_state(mid, panel) == "OFF_GRID"
 
 
-def test_no_mid_reads_grid_power_and_never_asserts_off_grid() -> None:
-    """Tier 3, and the error worth keeping a test on.
+def test_no_mid_is_on_grid_whatever_grid_power_reads() -> None:
+    """Tier 3. A panel with no MID cannot island, so a panel that is publishing is on-grid.
 
-    An earlier draft reasoned that no MID means no islanding authority means on-grid.
-    A missing MID means *SPAN* is not the authority and says nothing about whether the
-    site is islanded — a generator-fed island is the counterexample. Grid power flowing
-    is positive evidence of being on-grid; its absence is not evidence of the opposite.
+    This read `power-flows/grid` until 2026-10-13 and answered on-grid only above 1 W.
+    A sub-panel whose net draw sits near zero then lost the answer on every sample that
+    read `0.0` and regained it on the next, which an automation saw as the grid coming
+    back (SpanPanel/span-panel-api#215). Grid power is a measurement of how much is
+    flowing, and the amount says nothing about where it comes from.
     """
-    assert resolve_islanding_state(None, _synthetic(PANEL, power_flows__grid="2400.0")) == "ON_GRID"
-    assert resolve_islanding_state(None, _synthetic(PANEL, power_flows__grid="0.0")) is None
-    assert resolve_islanding_state(None, _synthetic(PANEL)) is None
+    for grid_power in ("2400.0", "8.7", "0.0", "-0.4", "-3100.0"):
+        panel = _synthetic(PANEL, power_flows__grid=grid_power)
+        assert resolve_islanding_state(None, panel) == "ON_GRID", grid_power
+    assert resolve_islanding_state(None, _synthetic(PANEL)) == "ON_GRID"
 
 
 def test_run_config_names_the_forming_device_rather_than_guessing_it() -> None:

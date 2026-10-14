@@ -252,8 +252,8 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
         feedthrough_energy_produced_wh=fields.feedthrough_energy_produced_wh,
         # Read, not derived. Flat had to infer both from `dominant-power-source`
         # plus grid power because nothing stated them; v1.0 states them on the MID,
-        # so the multi-signal heuristic is gone and only the no-MID tier remains a
-        # heuristic. The user-visible value set is unchanged.
+        # so the multi-signal heuristic is gone, and a panel with no MID is on-grid
+        # by elimination. The user-visible value set is unchanged.
         dsm_state=resolve_dsm_state(islanding),
         current_run_config=resolve_run_config(roles.mid, islanding, device_types),
         door_state=fields.door_state,

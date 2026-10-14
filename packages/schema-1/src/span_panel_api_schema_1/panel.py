@@ -623,11 +623,6 @@ def build_pcs(panel: DiscoveredDevice) -> SpanPcsSnapshot | None:
     )
 
 
-# Matches `schema_0`'s epsilon so the no-MID heuristic answers identically on the two
-# adapters — the tier exists precisely for panels where nothing authoritative is
-# published, and disagreeing about the threshold would make it schema-dependent.
-_GRID_POWER_EPSILON_W = 1.0
-
 ISLANDING_ON_GRID = "ON_GRID"
 ISLANDING_OFF_GRID = "OFF_GRID"
 
@@ -639,8 +634,8 @@ def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevic
     | --- | --- | --- |
     | 1 | `shed/asserted-islanding-state` is `ON_GRID` or `OFF_GRID` | asserted |
     | 2 | MID `$state` is `ready` and `islanding-state` present | sensed |
-    | 3 | no MID at all | `power-flows/grid` heuristic |
-    | 4 | none of the above | unknown |
+    | 3 | no MID at all | on-grid, by elimination |
+    | 4 | a MID that has not answered | unknown |
 
     **An assertion in force is the effective state, so it outranks the MID.** When the
     panel's link to the battery is not healthy (the battery's `status/communication-state`
@@ -651,12 +646,25 @@ def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevic
     different one. The assertion clears itself back to `NONE` once the battery link
     recovers, so the MID's answer returns without anything here having to expire it.
 
-    **Tier 3 never answers `OFF_GRID`, and never asserts on-grid from a missing MID.** An
-    earlier draft reasoned that no MID means no islanding authority means on-grid. That is
-    wrong: a missing MID means *SPAN* is not the islanding authority, and says nothing
-    about whether the site is islanded — a generator-fed island is the plain
-    counterexample. Grid power flowing is positive evidence of being on-grid; its absence
-    is not evidence of the opposite.
+    **No MID at all means on-grid, and tier 3 never answers `OFF_GRID`.** A commissioned
+    MID is what a SPAN panel islands with, so a panel without one cannot separate from
+    whatever feeds it, and what feeds it is what SPAN treats as the grid. This is the
+    elimination `resolve_dominant_power_source` makes, and the two now agree on every
+    tree. A panel that loses that feed loses power and stops publishing, so the answer
+    is withdrawn with the panel rather than left standing.
+
+    Tier 3 read `power-flows/grid` before, and answered on-grid only above 1 W, on the
+    reasoning that a missing MID says nothing about whether the site is islanded — a
+    generator-fed island being the counterexample. The threshold never defended that
+    case: a generator-fed panel carrying any load reads far above it and was reported
+    on-grid all the same. What it did was withdraw the answer each time the reading
+    touched zero, which a sub-panel with a small net draw does many times a day, and a
+    consumer saw each return as the grid coming back. How much power is flowing says
+    nothing about where it comes from, so the reading no longer takes part.
+
+    `mid is None` means no MID is declared, not that one has yet to be discovered: the
+    adapter builds no snapshot until every device the tree declares has described
+    itself. A MID that exists and has not answered is tier 4, and stays unknown.
     """
     asserted = text(panel, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
     if asserted in (ISLANDING_ON_GRID, ISLANDING_OFF_GRID):
@@ -669,10 +677,7 @@ def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevic
                 return sensed
         return None
 
-    grid_power = number(panel, NODE_POWER_FLOWS, "grid")
-    if grid_power is not None and abs(grid_power) > _GRID_POWER_EPSILON_W:
-        return ISLANDING_ON_GRID
-    return None
+    return ISLANDING_ON_GRID
 
 
 def resolve_dsm_state(islanding: str | None) -> str:
@@ -800,12 +805,11 @@ def resolve_dominant_power_source(
     A site genuinely running off-grid without storage is not a counterexample; it goes
     dark at sunset.
 
-    This deliberately does **not** follow `resolve_islanding_state`, which refuses the
-    same shortcut. The two answer different questions and the counterexample that defeats
-    it there is the one that supports it here: a generator-fed island is islanded — so
-    inferring on-grid from a missing MID would be wrong — while its grid-forming entity
-    really is what SPAN calls the grid. Islanding is a safety fact about separation; this
-    is a class of source.
+    `resolve_islanding_state` rests on the same elimination and answers on-grid for the
+    same trees. It refused the shortcut at first, on the grounds that a generator-fed
+    island is islanded, and read grid power instead — which reported that same island
+    on-grid whenever it carried load. A source with no MID interface is the grid as far
+    as SPAN can tell, and both fields now say so.
 
     It is also no worse than flat, which is the bar. Flat could not see an uninterfaced
     generator either and published `GRID` regardless; a panel upgrading to v1.0 keeps the

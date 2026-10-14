@@ -172,13 +172,6 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
         _DERIVED,
         "devices.build_battery: compared in sign with the BESS meter where the firmware names no release build",
     )
-    add(
-        "panel",
-        "power-flows/grid",
-        ANY_LEAF,
-        _DERIVED,
-        "panel.resolve_islanding_state: grid power decides on-grid only where no MID is published",
-    )
     add("panel", "shed/policy", "panel.shed_policy", _LITERAL, panel_fields)
     for policy_field in ("shed_policy_algorithm", "shed_soc_threshold_shed_percent", "shed_soc_threshold_release_percent"):
         add("panel", "shed/policy", f"panel.{policy_field}", _DERIVED, "panel._shed_policy parses the policy document")

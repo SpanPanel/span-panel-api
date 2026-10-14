@@ -33,6 +33,8 @@ Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the u
 
 - **A circuit whose shed priority is `UNKNOWN` is no longer reported as sheddable.**
 - **The grid-forming device name falls back to vendor and model instead of showing a device id.**
+- **A panel with no MID reports `dsm_state` `DSM_ON_GRID` and `current_run_config` `PANEL_ON_GRID` whenever it is publishing**, where both dropped to `UNKNOWN` each time `power-flows/grid` read within 1 W of zero
+  ([#215](https://github.com/SpanPanel/span-panel-api/issues/215)).
 
 ## [1.2.2]
 

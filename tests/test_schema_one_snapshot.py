@@ -117,6 +117,28 @@ def test_the_grid_answers_are_read_from_the_mid_not_derived(snapshot: SpanPanelS
     assert snapshot.current_run_config == "PANEL_ON_GRID"
 
 
+def test_a_panel_with_no_mid_keeps_its_grid_answers_through_a_zero_grid_reading() -> None:
+    """Both entities hold steady while grid power passes through zero.
+
+    A panel with no MID has no battery either, so the tree here is the reference one
+    without those two devices. The readings are the samples around one drop reported in
+    SpanPanel/span-panel-api#215, where each `0.0` turned both answers unknown for one
+    update.
+    """
+    children = [device for device in _children() if device.device_id not in ("bess", "bess-mid")]
+    assert TreeRoles(children).mid is None
+
+    for grid_power in ("11.2", "0.0", "8.7"):
+        panel = _device(PANEL)
+        panel.update_property("power-flows", "grid", grid_power)
+
+        snapshot = build_snapshot(panel, children)
+
+        assert snapshot.power_flow_grid == float(grid_power)
+        assert snapshot.dsm_state == "DSM_ON_GRID", grid_power
+        assert snapshot.current_run_config == "PANEL_ON_GRID", grid_power
+
+
 def test_an_unsizable_panel_reports_no_size_and_keeps_its_circuits() -> None:
     """A panel whose model we cannot size reports no total rather than a guess,
     and its circuits do not depend on the total."""

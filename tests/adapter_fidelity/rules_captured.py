@@ -51,6 +51,16 @@ _DERIVATIONS: Final = (
         values=("GRID",),
     ),
     Derivation(
+        "panel.dsm_state",
+        "panel.resolve_islanding_state: with no MID, on-grid is the same elimination, since nothing can island the panel",
+        values=("DSM_ON_GRID",),
+    ),
+    Derivation(
+        "panel.current_run_config",
+        "panel.resolve_islanding_state: with no MID, on-grid is the same elimination, since nothing can island the panel",
+        values=("PANEL_ON_GRID",),
+    ),
+    Derivation(
         "circuit.relay_state",
         f"{_STR_SENTINEL}: circuits.build_circuit reads UNKNOWN where the device publishes no switch/relay",
         values=("UNKNOWN",),

@@ -157,9 +157,9 @@ All panel state is represented as immutable, frozen dataclasses:
   grid and feedthrough power and energy, grid/DSM state, run configuration, dominant power source, grid islandability, per-leg voltages, power flows, lugs current and whether the lugs are the service entrance, busbar current, line frequency, the rating of
   the protection ahead of the upstream lugs, the first and last breaker positions, whether any circuit declares what it feeds, shed policy and forecast. It holds `circuits`, `battery`, `pv`, `pv_inverters`, `evse`, `mid`, `pcs`, `adopted_devices` and
   `extension_properties`.
-- **`SpanCircuitSnapshot`**: one circuit. Id, name, relay state and requester, power, energy and their update times, tabs, 240 V, breaker rating, current, priority, user controllability, sheddable / never-backup / always-on flags, device type, relative
-  position, PCS management and priority, the `$target` pending state for relay and priority, nominal voltage, the breaker's protection functions, the role it declares for what it feeds, the other circuits its meter or relay is shared with, and whether it
-  is a meter outside the panel, which has no breaker space, relay or shed priority and reads import-positive.
+- **`SpanCircuitSnapshot`**: one circuit. Id, name, relay state and requester, power, energy and their update times, tabs, 240 V, breaker rating and whether it declares one, current, priority, user controllability, sheddable / never-backup / always-on
+  flags, device type, relative position, PCS management and priority, the `$target` pending state for relay and priority, nominal voltage, the breaker's protection functions, the role it declares for what it feeds, the other circuits its meter or relay is
+  shared with, and whether it is a meter outside the panel, which has no breaker space, relay or shed priority and reads import-positive.
 - **`SpanBatterySnapshot`**: the BESS. Whether the panel declares one, SoE percentage and kWh, its own meter reading, communication state, link health, the circuit that feeds it, vendor / `model` / `part_number` / serial / version, nameplate capacity.
 - **`SpanPVSnapshot`**: one PV inverter. Link health, vendor / `model` / serial / version, nameplate capacity (the array's DC size), feeding circuit, relative position, its wire `device_id` and its `node_id`, which is its key in `pv_inverters`.
   `SpanPanelSnapshot.pv` is the lone inverter, or describes several together.

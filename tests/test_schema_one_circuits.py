@@ -15,13 +15,18 @@ expecting the capture to carry every enum member.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from ebus_sdk.homie import DiscoveredDevice
 
+from conftest import flat_schema
 from reference_payloads.schema_one import device_from_topics, parent_child_tree
+from reference_payloads.synthetic_trees import SyntheticDevice, discovered, hosted_circuit, space_less_meter, without_values
+from span_panel_api_schema_0 import SchemaZeroAdapter
+from span_panel_api_schema_0.const import TYPE_CIRCUIT
 from span_panel_api_schema_1.circuits import build_circuit
 
 _TREE = parent_child_tree()
@@ -114,6 +119,57 @@ def test_breaker_rating_and_current(kitchen: DiscoveredDevice) -> None:
 
     assert circuit.breaker_rating_a == 15.0
     assert circuit.current_a == pytest.approx(1.00833, rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Whether the breaker rating is declared
+# ---------------------------------------------------------------------------
+
+
+def _undeclared_rating(device: SyntheticDevice) -> SyntheticDevice:
+    """The same circuit, its `breaker` node kept but `rating` neither declared nor valued."""
+    breaker = {prop: declaration for prop, declaration in device.nodes["breaker"].items() if prop != "rating"}
+    values = {path: value for path, value in device.values.items() if path != "breaker/rating"}
+    return replace(device, nodes={**device.nodes, "breaker": breaker}, values=values)
+
+
+def test_rating_declared_and_valued() -> None:
+    circuit = build_circuit(discovered(hosted_circuit("c-1", (1,))))
+
+    assert circuit.breaker_rating_a == 20.0
+    assert circuit.breaker_rating_declared is True
+
+
+def test_rating_declared_not_yet_valued() -> None:
+    """Declared before it is valued: the rating is coming, which is not the same as never."""
+    circuit = build_circuit(discovered(without_values(hosted_circuit("c-1", (1,)), "breaker/rating")))
+
+    assert circuit.breaker_rating_a is None
+    assert circuit.breaker_rating_declared is True
+
+
+def test_rating_not_declared() -> None:
+    circuit = build_circuit(discovered(_undeclared_rating(hosted_circuit("c-1", (1,)))))
+
+    assert circuit.breaker_rating_a is None
+    assert circuit.breaker_rating_declared is False
+
+
+def test_no_breaker_node() -> None:
+    circuit = build_circuit(discovered(space_less_meter("meter-a")))
+
+    assert circuit.breaker_rating_a is None
+    assert circuit.breaker_rating_declared is False
+
+
+def test_schema_zero_does_not_say() -> None:
+    serial = "sim-40t-001"
+    circuit_id = "ac3dccda46a94b98878a227df6fed588"
+    adapter = SchemaZeroAdapter(serial_number=serial, schema=flat_schema(40))
+    adapter.handle_message(f"ebus/5/{serial}/$description", json.dumps({"nodes": {circuit_id: {"type": TYPE_CIRCUIT}}}))
+    adapter.handle_message(f"ebus/5/{serial}/$state", "ready")
+
+    assert adapter.build_snapshot().circuits[circuit_id].breaker_rating_declared is None
 
 
 # ---------------------------------------------------------------------------

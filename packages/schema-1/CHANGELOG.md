@@ -9,6 +9,14 @@ number. A release here means this parser changed, never that the panel did.
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
+## [1.5.0]
+
+Requires `span-panel-api` **3.9.0 or newer**, whose circuit snapshot carries the field this parser now fills.
+
+### Added
+
+- **Circuits report whether they declare a breaker rating** (`breaker_rating_declared`).
+
 ## [1.4.0]
 
 Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the unknown values this parser now reports and carry the fields it now fills.

@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.9.0]
+
+### Added
+
+- **`SpanCircuitSnapshot.breaker_rating_declared`** says whether a circuit declares a breaker rating, so a consumer can tell a rating the panel does not publish from one that has not arrived yet; `None` where the adapter does not say.
+
 ## [3.8.0]
 
 Snapshot fields that held a fabricated constant can now be unknown, and with `span-panel-api-schema-0` 1.3.0 and `span-panel-api-schema-1` 1.4.0 or newer the parsers report them as unknown and stop synthesising unoccupied positions.

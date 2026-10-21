@@ -377,6 +377,9 @@ def build_circuit(
         is_240v=None if poles is None else poles >= 2,
         current_a=_number(device, NODE_METER, PROP_CURRENT),
         breaker_rating_a=_number(device, NODE_BREAKER, PROP_RATING),
+        # The declaration, not the value: a rating that has not arrived yet
+        # reads as `None` above whether or not the panel will ever publish one.
+        breaker_rating_declared=PROP_RATING in node_properties(device, NODE_BREAKER),
         # A relay locked closed. A device with no relay is not "on" at all.
         always_on=declares_node(device, NODE_SWITCH) and not relay_controllable,
         relay_requester=_text(device, NODE_SWITCH, PROP_RELAY_REQUESTER, UNKNOWN),

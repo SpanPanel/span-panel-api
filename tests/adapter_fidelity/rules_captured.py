@@ -22,6 +22,7 @@ from .rules import DROPS, MAIN32_RULES, TRANSFORMS
 _SHARED: Final = frozenset(
     {
         "battery.present",
+        "circuit.breaker_rating_declared",
         "circuit.circuit_id",
         "circuit.device_type",
         "circuit.is_never_backup",

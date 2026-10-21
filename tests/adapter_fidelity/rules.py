@@ -501,6 +501,10 @@ _DERIVATIONS: Final = (
         "circuits.declares_spaces: whether the description declares info/spaces, not a value",
     ),
     Derivation(
+        "circuit.breaker_rating_declared",
+        "circuits.build_circuit: whether the description declares breaker/rating, not a value",
+    ),
+    Derivation(
         "panel.publishes_solar_roles",
         "snapshot.build_snapshot: whether any circuit's description declares connection/feeds-role, not a value",
     ),

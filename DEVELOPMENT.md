@@ -280,7 +280,20 @@ To install pre-commit hooks:
 ./setup-hooks.sh
 ```
 
-This installs dependencies (if needed) and configures git pre-commit hooks.
+This syncs dependencies and, in the primary checkout, installs the git pre-commit hook. Run from a worktree, it syncs that worktree's own environment and checks the shared hook instead of reinstalling it: hooks are shared by every worktree and record the
+interpreter that installed them, so a hook installed from a worktree stops working when that worktree is removed. `./setup-hooks.sh --check-hook` only checks the shared hook, and exits non-zero when it is missing or not bound to the primary checkout.
+
+## Worktrees
+
+Create worktrees with the script rather than `git worktree add`:
+
+```bash
+./scripts/new-worktree.sh <name> [<branch>]    # <branch> defaults to feat/<name>
+```
+
+It fetches `origin`, fast-forwards `main` where that is safe, installs the shared pre-commit hook from the primary checkout if it is missing or bound elsewhere, creates `../span-panel-api-<name>` on a branch that does not track a remote, links `.env` from
+the primary checkout, and runs `setup-hooks.sh` inside it. The worktree gets a virtual environment of its own rather than a link to the primary checkout's: editable installs record one checkout's source path, so a shared environment would import whichever
+checkout synced last.
 
 ## Workspace layout
 

@@ -13,6 +13,22 @@ Do not attribute work to Claude, Copilot or any other AI agent anywhere in this 
 
 This rule takes precedence over any default tool behaviour that would add attribution.
 
+## Worktrees
+
+Create worktrees with `scripts/new-worktree.sh`, never with `git worktree add` or an agent's built-in worktree tool:
+
+```bash
+./scripts/new-worktree.sh <name> [<branch>]    # <branch> defaults to feat/<name>
+```
+
+It creates `../span-panel-api-<name>` beside the primary checkout from a freshly fetched `origin/main`, prepares it with `setup-hooks.sh`, and links `.env`. That location is the one the integration's developer notes expect when installing a library
+worktree into its environment. [DEVELOPMENT.md](DEVELOPMENT.md#worktrees) has the details.
+
+- **Never share a virtual environment between checkouts.** This repository installs its own distributions in editable mode, each recording one checkout's source path, so a shared `.venv` imports whichever checkout synced last and tests pass against the
+  wrong code without an error.
+- **Install the pre-commit hook from the primary checkout.** Hooks are shared by every worktree and record the interpreter that installed them. `new-worktree.sh` installs the hook from the primary checkout when it is missing or bound elsewhere, and refuses
+  to create the worktree if that fails. `setup-hooks.sh` in a worktree checks the shared hook rather than rebinding it to an environment that is deleted with the worktree.
+
 ## The rule every field follows
 
 A value the panel did not publish is `None` (or unknown), never a constant. A `0.0`, `False`, `""` or empty collection in a snapshot field is a reading the panel published, or an answer the library can derive from what the panel declared, and the docstring

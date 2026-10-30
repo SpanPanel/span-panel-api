@@ -118,7 +118,14 @@ class SchemaOneAdapter:
         self._controller = Controller(root_device_id=serial_number, mqttc=self._routes)
         self._property_callbacks: list[Callable[[str, str, str, str | None], None]] = []
         self._awaiting: tuple[str, ...] = ()
+        # Readiness as last computed, or None once the tree has changed since.
+        self._ready: bool | None = None
         self._controller.set_on_property_changed_callback(self._on_property_changed)
+        # Every event that can change what `is_ready()` answers; see there.
+        self._controller.set_on_device_discovered_callback(self._tree_changed)
+        self._controller.set_on_device_state_changed_callback(self._tree_changed)
+        self._controller.set_on_device_removed_callback(self._tree_changed)
+        self._controller.set_on_description_received_callback(self._tree_changed)
         # Records the subscriptions the tree walk needs; nothing reaches the
         # wire, because this object has no connection to reach it with.
         self._controller.start_discovery()
@@ -173,7 +180,22 @@ class SchemaOneAdapter:
         panel's positions with none to lay out. Asking only for what the panel
         itself promised keeps a firmware that omits the property connectable —
         it falls back to the drift warning in `panel_size_from_model`.
+
+        **The answer is remembered until the tree changes.** The transport asks
+        before and after every message, and walking the tree each time cost
+        more than routing the message did (#223). Only the Controller's own
+        events can move it: a device's first `$state`, a change of state, a
+        removal, a `$description`, and the root's `info/model` value. Each
+        forgets the answer and the next call works it out again. The events
+        never work it out themselves, because a description is announced before
+        the SDK has reconciled the children it declares.
         """
+        if self._ready is None:
+            self._ready = self._tree_ready()
+        return self._ready
+
+    def _tree_ready(self) -> bool:
+        """What `is_ready()` answers, worked out from the tree as it stands."""
         root = self._controller.get_root(self._serial_number)
         if root is None or root.state != STATE_READY or not root.description:
             return False
@@ -626,5 +648,12 @@ class SchemaOneAdapter:
         protocol has no place for the previous value, and consumers that need
         one keep it themselves.
         """
+        # The one value readiness waits on.
+        if (device_id, node_id, property_id) == (self._serial_number, NODE_INFO, PROP_MODEL):
+            self._ready = None
         for callback in list(self._property_callbacks):
             callback(device_id, node_id, property_id, value)
+
+    def _tree_changed(self, *_event: object) -> None:
+        """Forget the remembered readiness. Accepts any of the Controller's tree events."""
+        self._ready = None

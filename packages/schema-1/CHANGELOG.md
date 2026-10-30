@@ -35,8 +35,7 @@ Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the u
 - **The grid-forming device name falls back to vendor and model instead of showing a device id.**
 - **A panel with no MID reports `dsm_state` `DSM_ON_GRID` and `current_run_config` `PANEL_ON_GRID` whenever it is publishing**, where both dropped to `UNKNOWN` each time `power-flows/grid` read within 1 W of zero
   ([#215](https://github.com/SpanPanel/span-panel-api/issues/215)).
-- **Each MQTT message costs the same few microseconds however many devices the panel declares**, where routing it tested every recorded subscription in turn and every readiness check walked the device tree. On a 30-device tree the work per message falls
-  from 90–250 µs to about 2 µs, measured on a desktop machine ([#223](https://github.com/SpanPanel/span-panel-api/issues/223)).
+- **Each MQTT message costs the same few microseconds however many devices the panel declares**, where routing and readiness checks grew with the tree ([#223](https://github.com/SpanPanel/span-panel-api/issues/223)).
 
 ## [1.2.2]
 

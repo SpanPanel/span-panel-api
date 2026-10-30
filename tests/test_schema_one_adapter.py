@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import copy
 import json
+import random
 
 import pytest
 
+from ebus_sdk import Controller
 from reference_payloads.schema_one import RetainedTopicTree, parent_child_tree
 from span_panel_api.adapters import _derive_required_members
 from span_panel_api.models import V2HomieSchema
@@ -52,14 +54,28 @@ def _feed(
     appears; `test_children_before_the_panel` covers the unfriendly order,
     which a broker is equally entitled to replay.
     """
+    for topic, payload in _retained(device_ids, omit, tree):
+        adapter.handle_message(topic, payload)
+
+
+def _retained(
+    device_ids: list[str] | None = None,
+    omit: tuple[str, ...] = (),
+    tree: RetainedTopicTree = _TREE,
+) -> list[tuple[str, str]]:
+    """The messages `_feed` delivers, in the order it delivers them."""
+    messages: list[tuple[str, str]] = []
     for device_id in device_ids or [PANEL, *[d for d in tree if d != PANEL]]:
         topics = tree[device_id]
         prefix = f"ebus/5/{device_id}"
-        adapter.handle_message(f"{prefix}/$description", topics["$description"])
-        adapter.handle_message(f"{prefix}/$state", topics["$state"])
-        for topic, value in topics.items():
-            if not topic.startswith("$") and topic not in omit:
-                adapter.handle_message(f"{prefix}/{topic}", value)
+        messages.append((f"{prefix}/$description", topics["$description"]))
+        messages.append((f"{prefix}/$state", topics["$state"]))
+        messages.extend(
+            (f"{prefix}/{topic}", value)
+            for topic, value in topics.items()
+            if not topic.startswith("$") and topic not in omit
+        )
+    return messages
 
 
 @pytest.fixture(name="adapter")
@@ -210,6 +226,152 @@ def test_a_panel_that_declares_no_model_still_connects() -> None:
 
     assert adapter.is_ready() is True
     assert adapter.build_snapshot().panel_size == 0
+
+
+# ---------------------------------------------------------------------------
+# Readiness is remembered between messages
+#
+# The transport asks `is_ready()` before and after every message, and walking
+# the tree each time cost more than routing the message did (#223). The answer
+# is kept until the tree changes. Each check below asks after every message,
+# as the transport does, and compares the answer with an adapter that has seen
+# the same messages and is asked for the first time.
+# ---------------------------------------------------------------------------
+
+
+def _readiness_after_each(messages: list[tuple[str, str]], *, from_message: int = 0) -> list[bool]:
+    """Readiness after each message past `from_message`, each checked against a fresh adapter."""
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    answers: list[bool] = []
+    for count, (topic, payload) in enumerate(messages, start=1):
+        adapter.handle_message(topic, payload)
+        remembered = adapter.is_ready()
+        if count <= from_message:
+            continue
+        fresh = SchemaOneAdapter(PANEL, _schema())
+        for earlier in messages[:count]:
+            fresh.handle_message(*earlier)
+        assert remembered is fresh.is_ready(), f"readiness was stale after {topic} = {payload!r}"
+        answers.append(remembered)
+    return answers
+
+
+def _panel_description(**changes: object) -> str:
+    description = json.loads(_TREE[PANEL]["$description"])
+    description.update(changes)
+    return json.dumps(description)
+
+
+def _shuffled(seed: int) -> list[tuple[str, str]]:
+    messages = _retained()
+    random.Random(seed).shuffle(messages)
+    return messages
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(_retained(), id="panel-first"),
+        pytest.param(_retained([*[d for d in _TREE if d != PANEL], PANEL]), id="children-first"),
+        *(pytest.param(_shuffled(seed), id=f"shuffled-{seed}") for seed in (1, 2, 3)),
+    ],
+)
+def test_readiness_follows_every_message_of_a_replay(messages: list[tuple[str, str]]) -> None:
+    """A broker replays its retained store in any order, `$state` before
+    `$description` and children before parents included."""
+    answers = _readiness_after_each(messages)
+
+    assert answers[-1] is True
+
+
+def test_readiness_follows_the_panel_leaving_ready_and_returning() -> None:
+    base = _retained()
+    messages = [*base, (f"ebus/5/{PANEL}/$state", "init"), (f"ebus/5/{PANEL}/$state", "ready")]
+
+    assert _readiness_after_each(messages, from_message=len(base)) == [False, True]
+
+
+def test_readiness_follows_a_child_that_is_removed_and_returns() -> None:
+    """An empty retained `$state` removes a device; the panel still declares it."""
+    base = _retained()
+    prefix = f"ebus/5/{KITCHEN_CIRCUIT}"
+    messages = [
+        *base,
+        (f"{prefix}/$state", ""),
+        (f"{prefix}/$state", "ready"),
+        (f"{prefix}/$description", _TREE[KITCHEN_CIRCUIT]["$description"]),
+    ]
+
+    assert _readiness_after_each(messages, from_message=len(base)) == [False, False, True]
+
+
+def test_readiness_follows_the_panel_withdrawing_a_child_it_was_waiting_on() -> None:
+    """A device commissioned and decommissioned before it ever described itself."""
+    base = _retained()
+    children = json.loads(_TREE[PANEL]["$description"])["children"]
+    messages = [
+        *base,
+        (f"ebus/5/{PANEL}/$description", _panel_description(children=[*children, "circuit-38"])),
+        (f"ebus/5/{PANEL}/$description", _TREE[PANEL]["$description"]),
+    ]
+
+    assert _readiness_after_each(messages, from_message=len(base)) == [False, True]
+
+
+def test_readiness_follows_the_panel_redeclaring_its_model() -> None:
+    """Whether the model is waited for is itself read from the panel's description."""
+    base = _retained(omit=("info/model",))
+    description = json.loads(_TREE[PANEL]["$description"])
+    del description["nodes"]["info"]["properties"]["model"]
+    messages = [
+        *base,
+        (f"ebus/5/{PANEL}/$description", json.dumps(description)),
+        (f"ebus/5/{PANEL}/$description", _TREE[PANEL]["$description"]),
+        (f"ebus/5/{PANEL}/info/model", _TREE[PANEL]["info/model"]),
+    ]
+
+    assert _readiness_after_each(messages, from_message=len(base)) == [True, False, True]
+
+
+def test_readiness_follows_a_childless_panel_whose_state_arrives_last() -> None:
+    """The panel's first `$state` is the only change here, and nothing else
+    re-examines the tree after it."""
+    panel = {topic: value for topic, value in _TREE[PANEL].items() if not topic.startswith("$")}
+    prefix = f"ebus/5/{PANEL}"
+    messages = [
+        (f"{prefix}/$description", _panel_description(children=[])),
+        *((f"{prefix}/{topic}", value) for topic, value in panel.items()),
+        (f"{prefix}/$state", "ready"),
+    ]
+
+    answers = _readiness_after_each(messages)
+
+    assert answers[-1] is True
+    assert not any(answers[:-1])
+
+
+def test_a_reading_or_a_rename_does_not_walk_the_tree(adapter: SchemaOneAdapter, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The per-message cost #223 measured: values change constantly and
+    readiness never depends on them."""
+    assert adapter.is_ready() is True
+    walks = 0
+    is_tree_complete = Controller.is_tree_complete
+
+    def counting(controller: Controller, root_id: str) -> bool:
+        nonlocal walks
+        walks += 1
+        return is_tree_complete(controller, root_id)
+
+    monkeypatch.setattr(Controller, "is_tree_complete", counting)
+    prefix = f"ebus/5/{KITCHEN_CIRCUIT}"
+
+    adapter.handle_message(f"{prefix}/meter/active-power", "-250.0")
+    assert adapter.is_ready() is True
+    adapter.handle_message(f"{prefix}/info/name", "Kitchen island")
+    assert adapter.is_ready() is True
+
+    assert walks == 0
+    assert adapter.build_snapshot().circuits[KITCHEN_CIRCUIT].name == "Kitchen island"
 
 
 def test_snapshot_is_built_from_the_discovered_tree(adapter: SchemaOneAdapter) -> None:

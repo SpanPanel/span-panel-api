@@ -147,6 +147,78 @@ def test_rerecording_a_pattern_replaces_it_and_moves_it_to_most_recent() -> None
     first.assert_not_called()
 
 
+def test_recency_decides_an_overlap_rather_than_specificity() -> None:
+    """The tests above cannot tell the two rules apart.
+
+    In each of them the more recent route is also the more specific one, so a
+    matcher that simply returns the most specific filter passes them. Recorded
+    the other way round, only recency gives the broad route the message.
+    """
+    routes = ControllerRoutes()
+    narrow = MagicMock(name="device")
+    broad = MagicMock(name="wildcard")
+    routes.subscribe("ebus/5/child-a/$state", narrow)
+    routes.subscribe("ebus/5/+/$state", broad)
+
+    routes.dispatch("ebus/5/child-a/$state", "ready")
+
+    broad.assert_called_once()
+    narrow.assert_not_called()
+
+
+def test_unsubscribing_a_route_leaves_its_sibling_routing() -> None:
+    """Routes that share a prefix share it in the matcher too, so removing
+    one must leave the other where it was."""
+    routes = ControllerRoutes()
+    state = MagicMock(name="state")
+    description = MagicMock(name="description")
+    routes.subscribe("ebus/5/child-a/$state", state)
+    routes.subscribe("ebus/5/child-a/$description", description)
+
+    routes.unsubscribe("ebus/5/child-a/$description")
+    routes.dispatch("ebus/5/child-a/$state", "ready")
+    routes.dispatch("ebus/5/child-a/$description", "{}")
+
+    state.assert_called_once_with("ebus/5/child-a/$state", b"ready")
+    description.assert_not_called()
+    assert routes.held == 1
+
+
+def test_unsubscribing_a_route_leaves_a_longer_one_through_it_routing() -> None:
+    """The SDK's own shape: a device's `+/+/$target` extends its `+/+`."""
+    routes = ControllerRoutes()
+    values = MagicMock(name="values")
+    targets = MagicMock(name="targets")
+    routes.subscribe("ebus/5/child-a/+/+", values)
+    routes.subscribe("ebus/5/child-a/+/+/$target", targets)
+
+    routes.unsubscribe("ebus/5/child-a/+/+")
+    routes.dispatch("ebus/5/child-a/switch/relay/$target", "OPEN")
+    routes.dispatch("ebus/5/child-a/meter/active-power", "1.0")
+
+    targets.assert_called_once_with("ebus/5/child-a/switch/relay/$target", b"OPEN")
+    values.assert_not_called()
+    assert routes.held == 1
+
+
+def test_a_route_recorded_again_after_it_was_dropped_routes_again() -> None:
+    """A device the SDK drops and later re-adopts: what arrived in between is
+    held, released to the returning route, and later messages reach it."""
+    routes = ControllerRoutes()
+    callback = MagicMock()
+    routes.subscribe("ebus/5/child-a/+/+", callback)
+    routes.unsubscribe("ebus/5/child-a/+/+")
+    routes.dispatch("ebus/5/child-a/meter/active-power", "1.0")
+
+    routes.subscribe("ebus/5/child-a/+/+", callback)
+    routes.dispatch("ebus/5/child-a/meter/active-power", "2.0")
+
+    assert [call.args for call in callback.call_args_list] == [
+        ("ebus/5/child-a/meter/active-power", b"1.0"),
+        ("ebus/5/child-a/meter/active-power", b"2.0"),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Arrival order
 #

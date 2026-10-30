@@ -255,6 +255,12 @@ explicit_package_bases = true
 # `tests/` on `sys.path`; the support packages the mypy hook checks resolve the same
 # way here.
 mypy_path = "src:tests"
+# paho ships `py.typed` but leaves its topic matcher unannotated, so every call
+# into it would be an untyped call. The schema-1 route table resolves what the
+# matcher yields through a typed dict at once, which keeps its `Any` from going
+# further; `warn_return_any` does not police that for you (a union or a
+# `yield from` passes it), so keep it to that shape.
+untyped_calls_exclude = ["paho.mqtt.matcher"]
 # Excluded by name for the reason `[tool.ruff]` gives above: the capture script is
 # checked like the library, and the hand-run tools written before that was expected
 # are not.

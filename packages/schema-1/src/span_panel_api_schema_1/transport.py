@@ -38,10 +38,11 @@ zero circuits.
 
 from __future__ import annotations
 
+import itertools
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
-from paho.mqtt.client import topic_matches_sub
+from paho.mqtt.matcher import MQTTMatcher
 
 from span_panel_api.models import ControlTarget
 from span_panel_api_schema_1.const import HOMIE_DOMAIN, HOMIE_VERSION
@@ -80,6 +81,13 @@ def control_target(device_id: str, node: str, prop: str) -> ControlTarget:
 MAX_HELD_MESSAGES = 4096
 
 
+class _Route(NamedTuple):
+    """A recorded callback, and when it was recorded, which decides an overlap."""
+
+    recorded: int
+    callback: Callable[[str, bytes], None]
+
+
 class ControllerRoutes:
     """Record `Controller`'s subscriptions and route messages back to them.
 
@@ -88,8 +96,11 @@ class ControllerRoutes:
     """
 
     def __init__(self) -> None:
-        # Insertion-ordered; dispatch walks it in reverse — see dispatch().
-        self._routes: dict[str, Callable[[str, bytes], None]] = {}
+        self._routes: dict[str, _Route] = {}
+        # The same patterns, indexed for matching: each maps to itself, and
+        # dispatch resolves the patterns that match through `_routes`.
+        self._matcher = MQTTMatcher()
+        self._recordings = itertools.count()
         # Last payload per topic that matched no route yet, keyed by topic so a
         # newer value supersedes an older one — the same last-value-wins rule
         # the broker applies to the retained message this stands in for.
@@ -132,27 +143,35 @@ class ControllerRoutes:
         the adapter's behalf, not of a route recorded in a dict.
         """
         # Pop before insert: assigning an existing key updates the value but
-        # keeps the key's original position, which would leave a re-registered
-        # pattern behind whatever was added after it in dispatch's match order.
+        # keeps the key's original position, and `routes` lists most recent last.
         self._routes.pop(sub, None)
-        self._routes[sub] = param
+        self._routes[sub] = _Route(next(self._recordings), param)
+        self._matcher[sub] = sub
         self._release(sub, param)
 
     def unsubscribe(self, sub: str) -> None:
         """Forget the callback for `sub`.
 
         The broad wire subscription stays. Messages for a device the SDK has
-        dropped simply stop matching a route, and dispatch discards them.
+        dropped simply stop matching a route, and dispatch holds them.
         """
-        self._routes.pop(sub, None)
+        # Guarded because the matcher raises for a pattern it never held, and
+        # forgetting one that was never recorded is harmless.
+        if self._routes.pop(sub, None) is not None:
+            del self._matcher[sub]
 
     # -- our side ----------------------------------------------------------
 
     def dispatch(self, topic: str, payload: str) -> None:
         """Deliver one message to the callback of the route that matches.
 
-        Walked most-recent-first, which is defensive rather than currently
-        required. Tree-rooted discovery subscribes four **device-scoped**
+        Matched through a prefix tree of the recorded patterns, so the cost
+        follows the topic's depth rather than the number of routes. Every
+        message takes this path, and a linear scan grew with each device the
+        panel declares, at four routes per device (#223).
+
+        The most recently recorded match wins, which is defensive rather than
+        currently required. Tree-rooted discovery subscribes four **device-scoped**
         patterns per device — `$state`, `$description`, `+/+`, `+/+/$target`
         (`Controller._subscribe_device_topics`) — which cannot overlap each
         other or another device's, so today exactly one route matches any topic.
@@ -172,11 +191,15 @@ class ControllerRoutes:
 
         The SDK hands callbacks `bytes`; the transport hands us `str`.
         """
-        for sub in reversed(self._routes):
-            if topic_matches_sub(sub, topic):
-                self._routes[sub](topic, payload.encode())
-                return
-        self._hold(topic, payload)
+        # The matcher is untyped and yields what it was given, the pattern
+        # string; `_routes` turns each back into a typed route. The list is
+        # complete before any callback runs, so a callback that subscribes
+        # changes a matcher nothing is still walking.
+        matched = [self._routes[sub] for sub in self._matcher.iter_match(topic)]
+        if not matched:
+            self._hold(topic, payload)
+            return
+        max(matched, key=lambda route: route.recorded).callback(topic, payload.encode())
 
     def _hold(self, topic: str, payload: str) -> None:
         """Keep a message for a route that has not been registered yet."""
@@ -201,8 +224,13 @@ class ControllerRoutes:
         in turn, so a whole tree unfolds from one root subscription. The
         candidate list is therefore taken up front and each entry re-checked,
         since a nested release may have claimed it already.
+
+        The pattern is indexed once and matched against every held topic,
+        rather than indexed afresh for each of them.
         """
-        for topic in [held for held in self._held if topic_matches_sub(sub, held)]:
+        pattern = MQTTMatcher()
+        pattern[sub] = sub
+        for topic in [held for held in self._held if next(pattern.iter_match(held), None) is not None]:
             payload = self._held.pop(topic, None)
             if payload is not None:
                 callback(topic, payload.encode())

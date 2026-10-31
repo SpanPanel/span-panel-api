@@ -109,7 +109,8 @@ def placeholder_ids(root: DiscoveredDevice, descendants: Sequence[DiscoveredDevi
     from ``info/direction``; a lugs device whose direction is absent, not one of
     the two, or already taken is numbered ``masked-lugs-<n>``. Any other
     described device is numbered per short type in natural id order, and a device
-    that has not described itself is ``masked-undescribed-<n>``.
+    that has not described itself, or whose description is not a JSON object,
+    is ``masked-undescribed-<n>``.
     """
     ids: dict[str, str] = {root.device_id: _PANEL}
     counters: dict[str, int] = {}
@@ -119,13 +120,13 @@ def placeholder_ids(root: DiscoveredDevice, descendants: Sequence[DiscoveredDevi
         return f"{_PREFIX}{name}-{counters[name]}"
 
     ordered = sorted(descendants, key=lambda device: _order(device.device_id))
-    circuits = [device for device in ordered if device.description is not None and device_type(device) == _TYPE_CIRCUIT]
+    circuits = [device for device in ordered if _is_described(device) and device_type(device) == _TYPE_CIRCUIT]
     for device in sorted(circuits, key=_circuit_order):
         ids[device.device_id] = numbered(_CIRCUIT)
 
     taken: set[str] = set()
     for device in ordered:
-        if device.description is None or device_type(device) != _TYPE_LUGS:
+        if not _is_described(device) or device_type(device) != _TYPE_LUGS:
             continue
         direction = _DIRECTIONS.get(_text(device, "info", "direction"))
         if direction is None or direction in taken:
@@ -137,8 +138,19 @@ def placeholder_ids(root: DiscoveredDevice, descendants: Sequence[DiscoveredDevi
     for device in ordered:
         if device.device_id in ids:
             continue
-        ids[device.device_id] = numbered(_UNDESCRIBED if device.description is None else _short_type(device))
+        ids[device.device_id] = numbered(_short_type(device) if _is_described(device) else _UNDESCRIBED)
     return ids
+
+
+def _is_described(device: DiscoveredDevice) -> bool:
+    """Whether the device has described itself with a ``$description`` that is a JSON object.
+
+    The SDK stores whatever JSON the topic carried. A description that parsed
+    to a list or a string declares nothing, so the device is treated as one
+    that has not described itself, by the placeholders and the document alike.
+    """
+    description: object = device.description
+    return isinstance(description, dict)
 
 
 def _short_type(device: DiscoveredDevice) -> str:
@@ -170,8 +182,9 @@ def export_masked_tree(
     ``numeric_properties``, the rest into ``properties``), every value its
     description does not declare in ``undeclared_properties``, its ``$target``
     values, and its ``$state`` when one arrived. A device its parent declared
-    but that has not described itself goes under ``undescribed_devices`` with
-    its values unsplit, since nothing says what they are.
+    but that has not described itself, or whose description is not a JSON
+    object, goes under ``undescribed_devices`` with its values unsplit, since
+    nothing says what they are.
 
     The masks apply to a value by its ``node/property`` name wherever it is
     published, declared or not, and to targets as to values. A valued-empty
@@ -194,7 +207,7 @@ def export_masked_tree(
         values = masker.values(device.device_id, _flattened(device.properties))
         targets = masker.values(device.device_id, _flattened(device.property_targets))
         description: object = device.description
-        if isinstance(description, dict):
+        if isinstance(description, dict):  # `_is_described`, inline so the description narrows
             devices[placeholder] = _described(device, masker.description(device.device_id, description), values, targets)
         else:
             undescribed[placeholder] = _undescribed(device, values, targets)

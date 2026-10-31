@@ -751,3 +751,48 @@ def test_partial_tree_exports(case: Case) -> None:
         _assert_masked(topic, value, entry["values"][topic], owner=withheld, root_id=case.root_id, ids=ids, missing=missing)
     assert entry["targets"] == {}
     assert "state" not in entry
+
+
+def test_an_undescribed_device_is_masked_by_the_same_rules() -> None:
+    topics = _copy(parent_child_tree())
+    topics["pv"][_SERIAL] = "SEEDSN00001"
+    topics["pv"]["status/postal-code"] = "98000"
+    topics["pv"][_FEEDS] = "evse"
+    topics["pv"][f"{_FED_BY}/$target"] = "absent-device-1"
+    adapter = replay(topics, _REFERENCE_ROOT, withhold_description_of="pv")
+    ids = _ids_of(adapter, _REFERENCE_ROOT)
+    entry = _export(adapter, _REFERENCE_ROOT, tree_complete=False)["undescribed_devices"][ids["pv"]]
+    assert {topic: entry["values"][topic] for topic in (_SERIAL, "status/postal-code", _FEEDS)} == {
+        _SERIAL: ids["pv"].upper(),
+        "status/postal-code": "00000",
+        _FEEDS: ids["evse"],
+    }
+    assert entry["targets"] == {_FED_BY: "masked-missing-1"}
+
+
+@pytest.mark.parametrize("payload", ["[1, 2]", '"a string"'], ids=["list", "string"])
+def test_a_description_that_is_not_an_object_is_undescribed(payload: str) -> None:
+    """Valid JSON that is not an object describes nothing: the device is undescribed, its values masked.
+
+    Built from the devices directly rather than replayed: the eBus SDK (0.22.0)
+    raises on such a description itself, in `children_ids`, so no adapter can be
+    replayed into this state; the exporter is still total over it.
+    """
+    topics = _copy(parent_child_tree())
+    topics["pv"]["$description"] = payload
+    topics["pv"][_SERIAL] = "SEEDSN00001"
+    devices = devices_from_tree(topics)
+    root = next(device for device in devices if device.device_id == _REFERENCE_ROOT)
+    children = [device for device in devices if device is not root]
+    ids = placeholder_ids(root, children)
+    export = export_masked_tree(root, children, producer=_PRODUCER, tree_complete=False)
+    assert ids["pv"] == "masked-undescribed-1"
+    assert len(set(ids.values())) == len(ids)
+    assert ids["pv"] not in export["devices"]
+    entry = export["undescribed_devices"][ids["pv"]]
+    assert entry["values"][_SERIAL] == "MASKED-UNDESCRIBED-1"
+    assert entry["values"].keys() == _published(topics["pv"]).keys()
+    assert entry["state"] == "ready"
+    children_named = export["devices"]["masked-panel"]["description"]["children"]
+    assert isinstance(children_named, list)
+    assert ids["pv"] in children_named

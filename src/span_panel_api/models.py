@@ -1526,13 +1526,15 @@ class MaskedTreeMetadata(TypedDict):
 class MaskedTreeDevice(TypedDict):
     """One described device in a `MaskedTree`, as a consumer forwards it in diagnostics.
 
-    `properties` holds every declared property that has a value, keyed
-    `"<node>/<property>"` with the wire string unsplit. A declared property with
-    no value has no key: never `None`, never `""`, because the panel published
-    nothing and a placeholder would read as a reading. `numeric_properties`
-    holds the declared range and unit text for the numeric ones, `targets` the
-    set topics, and `undeclared_properties` values the panel published that its
-    own description does not declare.
+    Values are keyed `"<node>/<property>"` and kept as the wire strings the
+    panel published, masked where they identify the device or the site.
+    `numeric_properties` holds the values of declared `integer` and `float`
+    properties, `properties` the values of every other declared property,
+    `undeclared_properties` values the panel published that its own description
+    does not declare, and `targets` its `$target` values. A declared property
+    with no value has no key: never `None`, and never a `""` the panel did not
+    send, because a placeholder would read as a reading. A `""` the panel did
+    publish is kept as `""`.
     """
 
     description: dict[str, object]

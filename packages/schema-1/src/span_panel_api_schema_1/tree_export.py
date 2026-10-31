@@ -22,10 +22,10 @@ one that names no device in the tree becomes ``masked-missing-<n>`` and stays
 visibly dangling.
 
 Last, every string the panel published that the rules keep is swept for the
-tree's original device ids and serial numbers: a property the library has never
-seen, a device named by an id, an identifier inside a ``json`` value. The sweep
-reads only what came off the wire, never the placeholders and masks the rules
-wrote, so it cannot rewrite them.
+tree's original device ids and serial numbers, the utility meter's among them:
+a property the library has never seen, a device named by an id, an identifier
+inside a ``json`` value. The sweep reads only what came off the wire, never the
+placeholders and masks the rules wrote, so it cannot rewrite them.
 """
 
 from __future__ import annotations
@@ -74,11 +74,12 @@ _SCHEMA: Final = "tree-v1"
 _NUMERIC_DATATYPES: Final = frozenset({"integer", "float"})
 
 _SERIAL_NUMBER: Final = "serial-number"
+_METER_SERIAL_NUMBER: Final = "utility-meter-serial-number"
 _NAME: Final = "info/name"
 _MASKED_PANEL_NAME: Final = "Masked Panel"
 _SITE_MASKS: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "utility-meter-serial-number": "MASKED-METER",
+        _METER_SERIAL_NUMBER: "MASKED-METER",
         "wifi-ssid": "masked-ssid",
         "postal-code": "00000",
         "address-lines": "Masked Address",
@@ -265,19 +266,24 @@ def _identifiers(ids: Mapping[str, str], in_order: Sequence[DiscoveredDevice]) -
     whose serial is its id the text is read as the id; then serials, so a serial
     that is also another device's id is read as that id. Within each, devices
     come in placeholder order, so a serial two devices publish (a MID and its
-    BESS) is the first owner's wherever it is found.
+    BESS) is the first owner's wherever it is found. The utility meter's serial
+    comes last and is replaced by its own mask, ``MASKED-METER``: it is a serial
+    number, not free text, though it names the premises rather than a device.
     """
     identifiers = [(device.device_id, ids[device.device_id]) for device in in_order]
     for device in in_order:
-        identifiers.extend((serial, ids[device.device_id].upper()) for serial in _serials(device))
+        identifiers.extend((serial, ids[device.device_id].upper()) for serial in _serials(device, _SERIAL_NUMBER))
+    meter_mask = _SITE_MASKS[_METER_SERIAL_NUMBER]
+    for device in in_order:
+        identifiers.extend((serial, meter_mask) for serial in _serials(device, _METER_SERIAL_NUMBER))
     return identifiers
 
 
-def _serials(device: DiscoveredDevice) -> list[str]:
-    """The serial numbers a device publishes, on any node, as values or targets, without surrounding space."""
+def _serials(device: DiscoveredDevice, property_id: str) -> list[str]:
+    """The values a device publishes for ``property_id``, on any node, as values or targets, without surrounding space."""
     serials: list[str] = []
     for published in (_flattened(device.properties), _flattened(device.property_targets)):
-        serials.extend(published[topic].strip() for topic in sorted(published) if topic.partition("/")[2] == _SERIAL_NUMBER)
+        serials.extend(published[topic].strip() for topic in sorted(published) if topic.partition("/")[2] == property_id)
     return [serial for serial in serials if serial]
 
 
@@ -285,9 +291,10 @@ class _Sweep:
     """Replaces every original device id and serial number found in text the panel published.
 
     The matching rules keep it from rewriting unrelated text. Only identifiers
-    are swept: a site value is free text or a short code, so a region of ``OK``
+    are swept, device ids and serial numbers, the utility meter's included: any
+    other site value is free text or a short code, so a region of ``OK``
     swept as a whole would rewrite every status of ``OK``, and the property
-    rules mask site values alone. An identifier matches case-insensitively and
+    rules mask those alone. An identifier matches case-insensitively and
     only where no ASCII letter or digit adjoins it, so ``circuit-1`` is not found
     inside ``circuit-12``; a ``-`` is not part of a word, because device ids are
     serials and suffixes joined by ``-``, and a serial embedded in an id the tree

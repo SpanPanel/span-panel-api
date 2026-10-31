@@ -1166,3 +1166,26 @@ def test_a_tree_of_short_identifiers_exports() -> None:
     export, ids = _exported(planted, root)
     panel_values = export["devices"]["masked-panel"]["undeclared_properties"]
     assert panel_values == {_NOTE: ids["g1"], "vendor/text": "g1 and g2 stay"}
+
+
+_METER_SERIAL = "info/utility-meter-serial-number"
+_SEEDED_METER_SERIAL = _SEEDED_SITE[_METER_SERIAL][0]
+
+
+def test_the_meter_serial_is_swept_as_an_identifier() -> None:
+    """A utility meter serial is a serial number, not free text: found anywhere else, it is `MASKED-METER` (§4.3)."""
+    assert any(_SEEDED_METER_SERIAL in reidentify(case.topics, case.root_id, seed=_SEED).planted for case in CASES)
+    topics, root = _reidentified_reference()
+    description = _description_of(topics[root])
+    _declare(description, _METER_SERIAL, "string")
+    _declare(description, "vendor/meter", "json")
+    topics[root]["$description"] = json.dumps(description)
+    topics[root][_METER_SERIAL] = _SEEDED_METER_SERIAL
+    topics[root][_NOTE] = f"meter {_SEEDED_METER_SERIAL}"
+    topics[root]["vendor/meter"] = json.dumps({"meter": _SEEDED_METER_SERIAL.lower()})
+    export, _ = _exported(topics, root)
+    panel = export["devices"]["masked-panel"]
+    assert panel["properties"][_METER_SERIAL] == "MASKED-METER"
+    assert panel["undeclared_properties"][_NOTE] == "meter MASKED-METER"
+    assert json.loads(panel["properties"]["vendor/meter"]) == {"meter": "MASKED-METER"}
+    assert _SEEDED_METER_SERIAL.casefold() not in json.dumps(export).casefold()

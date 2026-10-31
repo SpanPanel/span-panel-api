@@ -24,7 +24,7 @@ from span_panel_api_schema_1 import SchemaOneAdapter
 from span_panel_api_schema_1.tree_export import export_masked_tree, natural_key, placeholder_ids
 
 from reference_payloads.captures import CAPTURES, capture_path, capture_tree, capture_tree_from_document
-from reference_payloads.reidentify import rename_devices
+from reference_payloads.reidentify import reidentify, rename_devices
 from reference_payloads.schema_one import RetainedTopicTree, devices_from_tree, parent_child_tree, replay
 from reference_payloads.synthetic_trees import SyntheticDevice, panel, tree
 
@@ -341,6 +341,14 @@ _SEEDED_BY_PROPERTY: Mapping[str, tuple[str, str]] = {
 """A seeded value and datatype for every property id masked on any node."""
 
 
+def _label(name: object, ids: Mapping[str, str]) -> object:
+    """A description `name` as exported: one that is a device id is that device's placeholder, any other as published.
+
+    The captures name many devices by their id, and the sweep finds the id.
+    """
+    return ids.get(name, name) if isinstance(name, str) else name
+
+
 def _assert_masked(
     topic: str,
     published: str,
@@ -459,6 +467,8 @@ def test_descriptions_are_published_with_their_references_mapped(case: Case) -> 
             expected["children"] = [ids[str(child)] for child in children]
         if device_id == case.root_id and "name" in expected:
             expected["name"] = _MASKED_PANEL
+        elif "name" in expected:
+            expected["name"] = _label(expected["name"], ids)
         assert export["devices"][ids[device_id]]["description"] == expected, device_id
 
 
@@ -700,13 +710,13 @@ def test_kept_values_are_published(case: Case) -> None:
     }
     label = export["devices"][ids[labelled]]
     assert _valued(label)[_NAME] == _SEEDED_LABEL
-    assert label["description"]["name"] == _description_of(topics[labelled])["name"]
+    assert label["description"]["name"] == _label(_description_of(topics[labelled])["name"], ids)
     circuits = _declaring(topics, _NAME, _TYPE_CIRCUIT)
     assert circuits
     for circuit in circuits:
         entry = export["devices"][ids[circuit]]
         assert _valued(entry)[_NAME] == topics[circuit][_NAME]
-        assert entry["description"]["name"] == _description_of(topics[circuit])["name"]
+        assert entry["description"]["name"] == _label(_description_of(topics[circuit])["name"], ids)
 
 
 def _identity_free(snapshot: SpanPanelSnapshot) -> dict[str, object]:
@@ -865,3 +875,294 @@ def test_a_device_typed_undescribed_is_not_an_undescribed_device() -> None:
     assert len(set(ids.values())) == len(ids)
     assert set(export["devices"]) == {"masked-panel", ids["u-1"]}
     assert set(export["undescribed_devices"]) == {ids["g-1"]}
+
+
+# The sweep (§4.3). The captures are masked upstream, so every leak test plants
+# its own identifiers first: `reidentify` gives each device id, serial and site
+# value a new, seeded one, and the export must carry none of them.
+
+_SEED = 337
+_SITE_PROPERTIES = frozenset(_MASKS_BY_PROPERTY)
+
+
+def _identifying(topics: RetainedTopicTree, root_id: str) -> set[str]:
+    """Every valued serial and masked site value the tree publishes, and the panel's two names."""
+    found = {
+        value
+        for device_topics in topics.values()
+        for topic, value in _published(device_topics).items()
+        if value and _property_id(topic) in {_SERIAL_ID, *_SITE_PROPERTIES}
+    }
+    panel_topics = topics[root_id]
+    names = (panel_topics.get(_NAME, ""), str(_description_of(panel_topics).get("name", "")))
+    return found | {name for name in names if name}
+
+
+@every_tree
+def test_reidentification_plants_every_identifier(case: Case) -> None:
+    """A leak test is only as good as what it plants: every id, serial and site value is new, and planted."""
+    reidentified = reidentify(case.topics, case.root_id, seed=_SEED)
+    topics = reidentified.tree
+    assert reidentified.root_id in topics
+    assert set(topics).isdisjoint(case.topics)
+    published = _identifying(topics, reidentified.root_id)
+    assert published.isdisjoint(_identifying(case.topics, case.root_id))
+    assert reidentified.planted == set(topics) | published
+    assert len({value.casefold() for value in reidentified.planted}) == len(reidentified.planted)
+    assert reidentify(case.topics, case.root_id, seed=_SEED) == reidentified
+    original = replay(case.topics, case.root_id).build_snapshot()
+    assert _identity_free(replay(topics, reidentified.root_id).build_snapshot()) == _identity_free(original)
+
+
+@every_tree
+def test_no_planted_identifier_survives(case: Case) -> None:
+    reidentified = reidentify(case.topics, case.root_id, seed=_SEED)
+    export, _ = _exported(reidentified.tree, reidentified.root_id)
+    text = json.dumps(export).casefold()
+    assert [value for value in sorted(reidentified.planted) if value.casefold() in text] == []
+
+
+_TYPE_BESS = "energy.ebus.device.bess"
+_TYPE_EVSE = "energy.ebus.device.evse"
+_NOTE = "vendor/note"
+
+
+def _first_of(topics: RetainedTopicTree, device_type: str) -> str:
+    return next(device_id for device_id in sorted(topics, key=natural_key) if _type_of(topics[device_id]) == device_type)
+
+
+def _reidentified_reference() -> tuple[dict[str, dict[str, str]], str]:
+    """The reference tree re-identified, as a copy to plant in, and its new root id."""
+    reidentified = reidentify(parent_child_tree(), _REFERENCE_ROOT, seed=_SEED)
+    return _copy(reidentified.tree), reidentified.root_id
+
+
+def _rename(topics: dict[str, dict[str, str]], device_id: str, name: str) -> None:
+    """Set a device's `$description` `name`."""
+    description = _description_of(topics[device_id])
+    description["name"] = name
+    topics[device_id]["$description"] = json.dumps(description)
+
+
+def test_the_sweep_catches_what_no_rule_names() -> None:
+    topics, root = _reidentified_reference()
+    assert topics[root][_SERIAL] == root, "the panel's serial is its id"
+    bess, evse = _first_of(topics, _TYPE_BESS), _first_of(topics, _TYPE_EVSE)
+    circuit, named = _declaring(topics, _FEEDS, _TYPE_CIRCUIT)[:2]
+    ghost = f"{root}-ghost"
+    assert ghost not in topics
+    topics[root][_NOTE] = topics[bess][_SERIAL]
+    topics[root]["vendor/peer"] = evse
+    topics[root]["vendor/ghost"] = ghost
+    topics[circuit][_FEEDS] = ghost
+    _rename(topics, named, circuit)
+    export, ids = _exported(topics, root)
+    panel_values = export["devices"]["masked-panel"]["undeclared_properties"]
+    assert panel_values[_NOTE] == ids[bess].upper()
+    assert panel_values["vendor/peer"] == ids[evse]
+    assert export["devices"][ids[named]]["description"]["name"] == ids[circuit]
+    assert panel_values["vendor/ghost"] == "masked-panel-ghost"
+    dangling = _valued(export["devices"][ids[circuit]])[_FEEDS]
+    assert _MISSING.fullmatch(dangling)
+    assert root.casefold() not in json.dumps(export).casefold()
+
+
+def test_the_sweep_reaches_inside_json() -> None:
+    """A `json` value is a wire string: the sweep reads it as text, so an identifier inside it is masked."""
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL]
+    description = _description_of(topics[root])
+    _declare(description, "vendor/state", "json")
+    topics[root]["$description"] = json.dumps(description)
+    topics[root]["vendor/state"] = json.dumps({"owner": serial, "peers": [serial.upper(), "kept"]})
+    export, ids = _exported(topics, root)
+    exported = export["devices"]["masked-panel"]["properties"]["vendor/state"]
+    assert json.loads(exported) == {"owner": ids[bess].upper(), "peers": [ids[bess].upper(), "kept"]}
+
+
+def test_a_shared_serial_masks_consistently() -> None:
+    """One serial on two devices: each device's own serial is its own mask; anywhere else, the first owner's."""
+    topics, root = _reidentified_reference()
+    bess, mid = _first_of(topics, _TYPE_BESS), _first_of(topics, _TYPE_MID)
+    assert sorted((bess, mid)) == [mid, bess], "the seed must order the ids against their placeholders"
+    shared = topics[bess][_SERIAL]
+    topics[mid][_SERIAL] = shared
+    for device_id in (root, mid, bess):
+        topics[device_id][_NOTE] = shared
+    labelled = _first_of(topics, "energy.ebus.device.pv")
+    _rename(topics, labelled, f"gateway {shared}")
+    export, ids = _exported(topics, root)
+    first = min((bess, mid), key=lambda device_id: natural_key(ids[device_id]))
+    assert first == bess
+    assert _valued(export["devices"][ids[bess]])[_SERIAL] == ids[bess].upper()
+    assert _valued(export["devices"][ids[mid]])[_SERIAL] == ids[mid].upper()
+    for device_id in (root, mid, bess):
+        assert _valued(export["devices"][ids[device_id]])[_NOTE] == ids[first].upper(), device_id
+    assert export["devices"][ids[labelled]]["description"]["name"] == f"gateway {ids[first].upper()}"
+
+
+def test_longest_identifier_wins() -> None:
+    """An id that embeds the panel serial maps to its own placeholder, not the panel's with a suffix.
+
+    Longest first, not priority first: the PV's placeholder sorts after the
+    panel's, so the panel's id is the one tried first without the length order.
+    """
+    topics, root = _reidentified_reference()
+    upstream, pv = f"{root}-lugs-up", _first_of(topics, "energy.ebus.device.pv")
+    assert upstream in topics
+    assert pv.startswith(f"{root}-")
+    topics[root][_NOTE] = f"fed from {upstream}; {pv.upper()} reports"
+    export, ids = _exported(topics, root)
+    assert (ids[upstream], ids[pv]) == ("masked-lugs-upstream", "masked-pv-1")
+    assert natural_key(ids[pv]) > natural_key("masked-panel")
+    assert (
+        export["devices"]["masked-panel"]["undeclared_properties"][_NOTE]
+        == "fed from masked-lugs-upstream; masked-pv-1 reports"
+    )
+
+
+def test_the_sweep_leaves_unrelated_text() -> None:
+    """Site values are not swept, and an id matches only where no letter or digit adjoins it."""
+    case = next(case for case in CASES if {"circuit-1", "circuit-12"} <= set(case.topics))
+    topics = _copy(case.topics)
+    statuses = [
+        (device_id, topic)
+        for device_id, device_topics in topics.items()
+        for topic, value in _published(device_topics).items()
+        if value == "OK"
+    ]
+    assert any(topic == "connection/feeds-device-status" for _, topic in statuses)
+    unrelated = "spare circuit-120, subcircuit-12, circuit-1a"
+    assert not {"circuit-120", "circuit-1a"} & set(topics)
+    topics[case.root_id]["info/region"] = "OK"
+    topics[case.root_id][_NOTE] = "circuit-12"
+    topics[case.root_id]["vendor/spare"] = unrelated
+    export, ids = _exported(topics, case.root_id)
+    for device_id, topic in statuses:
+        assert _valued(export["devices"][ids[device_id]])[topic] == "OK", (device_id, topic)
+    panel_values = _valued(export["devices"]["masked-panel"])
+    assert panel_values["info/region"] == "Masked Region"
+    assert panel_values[_NOTE] == ids["circuit-12"]
+    assert ids["circuit-12"] != ids["circuit-1"]
+    assert panel_values["vendor/spare"] == unrelated
+
+
+def test_a_short_identifier_is_matched_only_whole() -> None:
+    """`bess` and `pv` are shorter than six characters: a whole value is swept, a word inside one or a key is not."""
+    topics = _copy(parent_child_tree())
+    assert {"bess", "pv"} <= set(topics)
+    topics[_REFERENCE_ROOT]["vendor/peer"] = "bess"
+    topics[_REFERENCE_ROOT]["vendor/peer-shouted"] = "BESS"
+    _rename(topics, "bess", "Example BESS")
+    export, ids = _exported(topics, _REFERENCE_ROOT)
+    panel = export["devices"]["masked-panel"]
+    assert panel["undeclared_properties"]["vendor/peer"] == ids["bess"]
+    assert panel["undeclared_properties"]["vendor/peer-shouted"] == ids["bess"]
+    assert export["devices"][ids["bess"]]["description"]["name"] == "Example BESS"
+    declaring_pv = [ids[device_id] for device_id in _declaring(topics, "power-flows/pv")]
+    assert declaring_pv
+    for placeholder in declaring_pv:
+        flows = _object(_object(export["devices"][placeholder]["description"]["nodes"])["power-flows"])
+        assert "pv" in _object(flows["properties"])
+        assert "power-flows/pv" in _valued(export["devices"][placeholder])
+
+
+@every_tree
+def test_the_sweep_leaves_exporter_output_alone(case: Case) -> None:
+    """Placeholders and masks are the exporter's own text, never swept.
+
+    The captures' ids (`circuit-3`, `lugs-upstream`) lie inside their own
+    placeholders at a `-` boundary, so a sweep over the finished document would
+    rewrite `masked-circuit-3` into `masked-masked-circuit-<n>`.
+    """
+    topics, _ = _seeded(case)
+    circuit = _declaring(topics, _SPACES, _TYPE_CIRCUIT)[0]
+    topics[circuit][_FEEDS] = "absent-device-1"
+    export, ids = _exported(topics, case.root_id)
+    assert set(export["devices"]) == set(ids.values())
+    for device_id, device_topics in topics.items():
+        entry = export["devices"][ids[device_id]]
+        published = _description_of(device_topics)
+        for key in ("parent", "root"):
+            if key in published:
+                assert entry["description"][key] == ids[str(published[key])], (device_id, key)
+        children = published.get("children")
+        if isinstance(children, list):
+            assert entry["description"]["children"] == [ids[str(child)] for child in children], device_id
+        assert _valued(entry)[_SERIAL] == ids[device_id].upper(), device_id
+    panel = export["devices"]["masked-panel"]
+    assert {topic: _valued(panel)[topic] for topic in _SITE_MASKS} == _SITE_MASKS
+    assert (_valued(panel)[_NAME], panel["description"]["name"]) == (_MASKED_PANEL, _MASKED_PANEL)
+    assert _valued(export["devices"][ids[circuit]])[_FEEDS] == "masked-missing-1"
+
+
+def test_an_id_spelt_like_exporter_output_does_not_rewrite_it() -> None:
+    """Device ids that spell another device's placeholder, a mask and a dangling placeholder.
+
+    The sweep replaces each where the panel published it, and leaves alone the
+    same text where the exporter wrote it.
+    """
+    spelt = ["masked-generator-1", "masked-missing-1", "masked-ssid"]
+    topics = _copy(_generators(["g-1", *spelt]))
+    topics["panel-a"]["status/wifi-ssid"] = "seeded-network"
+    topics["panel-a"][_NOTE] = "masked-generator-1"
+    topics["g-1"][_FEEDS] = "absent-device-1"
+    export, ids = _exported(topics, "panel-a")
+    assert [ids[device_id] for device_id in ["g-1", *spelt]] == [f"masked-generator-{n}" for n in range(1, 5)]
+    assert set(export["devices"]) == {"masked-panel", *(f"masked-generator-{n}" for n in range(1, 5))}
+    panel_values = _valued(export["devices"]["masked-panel"])
+    assert panel_values["status/wifi-ssid"] == "masked-ssid"
+    assert panel_values[_NOTE] == ids["masked-generator-1"]
+    assert _valued(export["devices"][ids["g-1"]])[_FEEDS] == "masked-missing-1"
+    assert export["devices"]["masked-panel"]["description"]["children"] == [ids[device_id] for device_id in ["g-1", *spelt]]
+
+
+def test_a_serial_published_as_a_target_is_swept_too() -> None:
+    """A serial a device publishes only as a `$target`, beside a different value, is still one of its identifiers."""
+    topics = _copy(parent_child_tree())
+    target_serial = "TGTARGET00001"
+    assert topics["bess"][_SERIAL] != target_serial
+    topics["bess"][f"{_SERIAL}/$target"] = target_serial
+    topics[_REFERENCE_ROOT][_NOTE] = target_serial
+    export, ids = _exported(topics, _REFERENCE_ROOT)
+    assert export["devices"][ids["bess"]]["targets"][_SERIAL] == ids["bess"].upper()
+    assert export["devices"]["masked-panel"]["undeclared_properties"][_NOTE] == ids["bess"].upper()
+
+
+def test_a_key_naming_a_device_is_swept_alike_where_declared_and_valued() -> None:
+    """A property id that embeds a serial is swept in the description and the value's key, so the value stays declared."""
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    topic = f"vendor/battery-{topics[bess][_SERIAL]}"
+    description = _description_of(topics[root])
+    _declare(description, topic, "string")
+    topics[root]["$description"] = json.dumps(description)
+    topics[root][topic] = "seeded-reading"
+    export, ids = _exported(topics, root)
+    swept = f"vendor/battery-{ids[bess].upper()}"
+    panel = export["devices"]["masked-panel"]
+    assert panel["properties"][swept] == "seeded-reading"
+    assert swept not in panel["undeclared_properties"]
+    assert swept in _declared(panel["description"])
+
+
+def test_a_state_is_swept() -> None:
+    topics, root = _reidentified_reference()
+    pv, evse = _first_of(topics, "energy.ebus.device.pv"), _first_of(topics, _TYPE_EVSE)
+    topics[pv]["$state"] = evse
+    export, ids = _exported(topics, root)
+    assert export["devices"][ids[pv]].get("state") == ids[evse]
+
+
+def test_a_tree_of_short_identifiers_exports() -> None:
+    """With no identifier long enough to match inside text, the sweep matches whole values only, and nothing else."""
+    short = {"panel-a": "p", "g-1": "g1", "g-2": "g2"}
+    topics, root = rename_devices(_generators(["g-1", "g-2"]), "panel-a", short.__getitem__)
+    planted = _copy(topics)
+    planted[root][_SERIAL] = root
+    planted[root][_NOTE] = "G1"
+    planted[root]["vendor/text"] = "g1 and g2 stay"
+    export, ids = _exported(planted, root)
+    panel_values = export["devices"]["masked-panel"]["undeclared_properties"]
+    assert panel_values == {_NOTE: ids["g1"], "vendor/text": "g1 and g2 stay"}

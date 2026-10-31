@@ -20,12 +20,17 @@ site's name, is masked too. Every value that names a
 device is passed through the same placeholders, so a reference still resolves;
 one that names no device in the tree becomes ``masked-missing-<n>`` and stays
 visibly dangling.
+
+Last, every string the panel published that the rules keep is swept for the
+tree's original device ids and serial numbers: a property the library has never
+seen, a device named by an id, an identifier inside a ``json`` value. The sweep
+reads only what came off the wire, never the placeholders and masks the rules
+wrote, so it cannot rewrite them.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-import copy
+from collections.abc import Iterable, Mapping, Sequence
 import re
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -101,6 +106,10 @@ _CHILDREN: Final = "children"
 _DESCRIPTION_NAME: Final = "name"
 
 _DIGIT_RUNS = re.compile(r"([0-9]+)")
+_MIN_EMBEDDED: Final = 6
+"""An identifier shorter than this is swept only where it is a whole value, never inside one."""
+_BOUNDARY_BEFORE: Final = "(?<![A-Za-z0-9])"
+_BOUNDARY_AFTER: Final = "(?![A-Za-z0-9])"
 
 type NaturalKey = tuple[tuple[int, str | int], ...]
 type Order = tuple[NaturalKey, str]
@@ -214,7 +223,10 @@ def export_masked_tree(
     The masks apply to a value by its property id on any node, wherever it is
     published, declared or not, and to targets as to values. A valued-empty
     ``""`` stays empty under every rule: it carries no identity, and replacing
-    it would turn an empty reading into a value.
+    it would turn an empty reading into a value. Everything else the panel
+    published is swept (``_Sweep``): the values and targets no rule replaces,
+    their ``node/property`` keys, ``$state``, and every key and string of a
+    description but the references and the panel's name the rules map.
 
     Devices are written in placeholder order and each device's values in key
     order, so the same tree always gives the same document. A dangling id is
@@ -224,18 +236,20 @@ def export_masked_tree(
     is copied before anything in it is replaced.
     """
     ids = placeholder_ids(root, descendants)
-    masker = _Masker(ids, root.device_id)
+    in_order = sorted([root, *descendants], key=lambda device: _order(ids[device.device_id]))
+    masker = _Masker(ids, root.device_id, _Sweep(_identifiers(ids, in_order)))
     devices: dict[str, MaskedTreeDevice] = {}
     undescribed: dict[str, UndescribedDevice] = {}
-    for device in sorted([root, *descendants], key=lambda device: _order(ids[device.device_id])):
+    for device in in_order:
         placeholder = ids[device.device_id]
         values = masker.values(device.device_id, _flattened(device.properties))
         targets = masker.values(device.device_id, _flattened(device.property_targets))
+        state = None if device.state is None else masker.published(str(device.state))
         description: object = device.description
         if isinstance(description, dict):  # `_is_described`, inline so the description narrows
-            devices[placeholder] = _described(device, masker.description(device.device_id, description), values, targets)
+            devices[placeholder] = _described(masker.description(device.device_id, description), values, targets, state)
         else:
-            undescribed[placeholder] = _undescribed(device, values, targets)
+            undescribed[placeholder] = _undescribed(values, targets, state)
     return {
         "metadata": {"schema": _SCHEMA, "masked": True, "producer": producer, "tree_complete": tree_complete},
         "devices": devices,
@@ -243,12 +257,118 @@ def export_masked_tree(
     }
 
 
-class _Masker:
-    """The masking rules, with the one piece of state they share: dangling ids met so far."""
+def _identifiers(ids: Mapping[str, str], in_order: Sequence[DiscoveredDevice]) -> list[tuple[str, str]]:
+    """Every original device id and serial number, with what the sweep replaces it by, highest priority first.
 
-    def __init__(self, ids: Mapping[str, str], panel_id: str) -> None:
+    An id is replaced by its device's placeholder and a serial by its device's
+    masked serial, the placeholder in upper case. Ids come first, so on a panel
+    whose serial is its id the text is read as the id; then serials, so a serial
+    that is also another device's id is read as that id. Within each, devices
+    come in placeholder order, so a serial two devices publish (a MID and its
+    BESS) is the first owner's wherever it is found.
+    """
+    identifiers = [(device.device_id, ids[device.device_id]) for device in in_order]
+    for device in in_order:
+        identifiers.extend((serial, ids[device.device_id].upper()) for serial in _serials(device))
+    return identifiers
+
+
+def _serials(device: DiscoveredDevice) -> list[str]:
+    """The serial numbers a device publishes, on any node, as values or targets, without surrounding space."""
+    serials: list[str] = []
+    for published in (_flattened(device.properties), _flattened(device.property_targets)):
+        serials.extend(published[topic].strip() for topic in sorted(published) if topic.partition("/")[2] == _SERIAL_NUMBER)
+    return [serial for serial in serials if serial]
+
+
+class _Sweep:
+    """Replaces every original device id and serial number found in text the panel published.
+
+    The matching rules keep it from rewriting unrelated text. Only identifiers
+    are swept: a site value is free text or a short code, so a region of ``OK``
+    swept as a whole would rewrite every status of ``OK``, and the property
+    rules mask site values alone. An identifier matches case-insensitively and
+    only where no ASCII letter or digit adjoins it, so ``circuit-1`` is not found
+    inside ``circuit-12``; a ``-`` is not part of a word, because device ids are
+    serials and suffixes joined by ``-``, and a serial embedded in an id the tree
+    does not hold must still be found. Identifiers are tried longest first, so
+    ``<serial>-lugs-up`` maps to the lugs' placeholder rather than the panel's
+    with a suffix. One shorter than six characters is matched only as a whole
+    value, never inside a longer string or a key, where ``pv`` is also a
+    property id.
+
+    Where identifiers that differ only in case match, the one spelt as found
+    wins, then the one of higher priority (``_identifiers``).
+    """
+
+    def __init__(self, identifiers: Sequence[tuple[str, str]]) -> None:
+        self._replacements: dict[str, str] = {}
+        for identifier, replacement in identifiers:
+            if identifier:
+                self._replacements.setdefault(identifier, replacement)
+        embedded = sorted((ident for ident in self._replacements if len(ident) >= _MIN_EMBEDDED), key=len, reverse=True)
+        whole = [ident for ident in self._replacements if len(ident) < _MIN_EMBEDDED]
+        self._embedded = _alternation([f"{_BOUNDARY_BEFORE}{re.escape(ident)}{_BOUNDARY_AFTER}" for ident in embedded])
+        self._whole = _alternation([re.escape(ident) for ident in whole])
+
+    def value(self, text: str) -> str:
+        """A published string with every identifier in it replaced."""
+        if self._whole is not None and self._whole.fullmatch(text):
+            return self._replacement(text)
+        return self.key(text)
+
+    def key(self, text: str) -> str:
+        """A key with every identifier of six characters or more in it replaced."""
+        if self._embedded is None:
+            return text
+        return self._embedded.sub(lambda match: self._replacement(match.group()), text)
+
+    def topic(self, topic: str) -> str:
+        """A ``node/property`` key, swept as its node and property ids are in the description that declares them."""
+        node_id, separator, property_id = topic.partition("/")
+        return f"{self.key(node_id)}{separator}{self.key(property_id)}"
+
+    def json(self, value: object) -> object:
+        """A copy of parsed JSON with every key and string swept."""
+        if isinstance(value, str):
+            return self.value(value)
+        if isinstance(value, dict):
+            return _first_per_key((self.key(str(key)), self.json(item)) for key, item in value.items())
+        if isinstance(value, list):
+            return [self.json(item) for item in value]
+        return value
+
+    def _replacement(self, found: str) -> str:
+        exact = self._replacements.get(found)
+        if exact is not None:
+            return exact
+        return next(
+            replacement
+            for identifier, replacement in self._replacements.items()
+            if re.fullmatch(re.escape(identifier), found, re.IGNORECASE)
+        )
+
+
+def _alternation(patterns: Sequence[str]) -> re.Pattern[str] | None:
+    """One case-insensitive pattern trying each in turn; None for none, which would match everywhere."""
+    return re.compile("|".join(patterns), re.IGNORECASE) if patterns else None
+
+
+def _first_per_key[T](pairs: Iterable[tuple[str, T]]) -> dict[str, T]:
+    """Pairs as a map; where sweeping made two keys one, the first in order is kept."""
+    merged: dict[str, T] = {}
+    for key, item in pairs:
+        merged.setdefault(key, item)
+    return merged
+
+
+class _Masker:
+    """The masking rules and the sweep, with the one piece of state they share: dangling ids met so far."""
+
+    def __init__(self, ids: Mapping[str, str], panel_id: str, sweep: _Sweep) -> None:
         self._ids = ids
         self._panel_id = panel_id
+        self._sweep = sweep
         self._missing: dict[str, str] = {}
 
     def reference(self, device_id: str) -> str:
@@ -260,9 +380,20 @@ class _Masker:
             self._missing[device_id] = f"{_PREFIX}{_MISSING}-{len(self._missing) + 1}"
         return self._missing[device_id]
 
+    def published(self, text: str) -> str:
+        """A string the panel published and no rule replaces, swept."""
+        return self._sweep.value(text)
+
     def values(self, owner: str, values: Mapping[str, str]) -> dict[str, str]:
-        """One device's ``node/property`` values with every rule applied, in key order."""
-        return {topic: self.value(owner, topic, values[topic]) for topic in sorted(values)}
+        """One device's ``node/property`` values with every rule applied, keys swept, in key order.
+
+        The rules read each value under its published key, in that key's order,
+        so dangling ids are numbered the same whatever the sweep makes of a key.
+        """
+        masked = _first_per_key(
+            (self._sweep.topic(topic), self.value(owner, topic, values[topic])) for topic in sorted(values)
+        )
+        return {topic: masked[topic] for topic in sorted(masked)}
 
     def value(self, owner: str, topic: str, value: str) -> str:
         if value == "":
@@ -280,33 +411,42 @@ class _Masker:
         return _SITE_MASKS.get(property_id)
 
     def _referenced(self, topic: str, value: str) -> str:
-        """The value with every device id it names mapped; a value that names none, as published."""
+        """The value with every device id it names mapped; a value that names none, swept."""
         if topic in _ID_PROPERTIES:
             return self.reference(value)
         if topic == _GRID_FORMING_ENTITY:
             # The grid itself, read as the adapter reads it, is not an id.
-            return value if value.strip().upper() == _GRID else self.reference(value)
+            return self.published(value) if value.strip().upper() == _GRID else self.reference(value)
         if topic.partition("/")[2] == _ID_LIST_PROPERTY:
             return ",".join(self.reference(part.strip()) for part in value.split(",") if part.strip())
-        return value
+        return self.published(value)
 
     def description(self, owner: str, description: Mapping[object, object]) -> dict[str, object]:
-        """A copy of a ``$description`` with its device references mapped and the panel's name masked."""
-        masked: dict[str, object] = {str(key): copy.deepcopy(value) for key, value in description.items()}
+        """A copy of a ``$description`` with its device references mapped, the panel's name masked, the rest swept.
+
+        The references and the name are decided from the description as
+        published, before the sweep, and are not swept themselves.
+        """
+        replaced: dict[str, object] = {}
         for key in _REFERENCE_KEYS:
-            reference = masked.get(key)
+            reference = description.get(key)
             if isinstance(reference, str):
-                masked[key] = self.reference(reference)
-        children = masked.get(_CHILDREN)
+                replaced[key] = self.reference(reference)
+        children = description.get(_CHILDREN)
         if isinstance(children, list):
-            masked[_CHILDREN] = [self.reference(child) if isinstance(child, str) else child for child in children]
-        if owner == self._panel_id and _DESCRIPTION_NAME in masked:
-            masked[_DESCRIPTION_NAME] = _MASKED_PANEL_NAME
-        return masked
+            replaced[_CHILDREN] = [
+                self.reference(child) if isinstance(child, str) else self._sweep.json(child) for child in children
+            ]
+        if owner == self._panel_id and _DESCRIPTION_NAME in description:
+            replaced[_DESCRIPTION_NAME] = _MASKED_PANEL_NAME
+        return _first_per_key(
+            (name, replaced[name]) if name in replaced else (self._sweep.key(name), self._sweep.json(value))
+            for name, value in ((str(key), value) for key, value in description.items())
+        )
 
 
 def _described(
-    device: DiscoveredDevice, description: dict[str, object], values: dict[str, str], targets: dict[str, str]
+    description: dict[str, object], values: dict[str, str], targets: dict[str, str], state: str | None
 ) -> MaskedTreeDevice:
     numeric = {
         f"{node_id}/{property_id}": _is_numeric(definition)
@@ -327,8 +467,8 @@ def _described(
             entry["numeric_properties"][topic] = value
         else:
             entry["properties"][topic] = value
-    if device.state is not None:
-        entry["state"] = str(device.state)
+    if state is not None:
+        entry["state"] = state
     return entry
 
 
@@ -338,10 +478,10 @@ def _is_numeric(definition: Mapping[str, object]) -> bool:
     return isinstance(datatype, str) and datatype in _NUMERIC_DATATYPES
 
 
-def _undescribed(device: DiscoveredDevice, values: dict[str, str], targets: dict[str, str]) -> UndescribedDevice:
+def _undescribed(values: dict[str, str], targets: dict[str, str], state: str | None) -> UndescribedDevice:
     entry: UndescribedDevice = {"values": values, "targets": targets}
-    if device.state is not None:
-        entry["state"] = str(device.state)
+    if state is not None:
+        entry["state"] = state
     return entry
 
 

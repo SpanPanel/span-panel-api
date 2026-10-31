@@ -116,9 +116,12 @@ _BOUNDARY_BEFORE: Final = r'(?:(?<![A-Za-z0-9])|(?<=\\[bfnrt"\\/])|(?<=\\u[0-9A-
 A ``json`` value is swept as the wire text the panel published, never parsed and
 re-serialised, so an identifier after an escape is adjoined by the escape's own
 letter or hex digit. Reading an escaped backslash followed by a letter as an
-escape errs toward masking.
+escape errs toward masking. The other half of the rule, that a match never
+starts on an escape's own letter, needs the backslashes counted, which a
+lookbehind cannot do: ``_Sweep.key`` checks it.
 """
 _BOUNDARY_AFTER: Final = "(?![A-Za-z0-9])"
+_DIGIT: Final = re.compile(r"[0-9]")
 
 type NaturalKey = tuple[tuple[int, str | int], ...]
 type Order = tuple[NaturalKey, str]
@@ -277,9 +280,10 @@ def _identifiers(
 
     An id is replaced by its device's placeholder and a serial by its device's
     masked serial, the placeholder in upper case. Ids come first, so on a panel
-    whose serial is its id the text is read as the id; then the dangling ids,
-    each with the ``masked-missing-<n>`` its reference was given, so an id reads
-    the same at a reference and anywhere else, even one spelt like a serial;
+    whose serial is its id the text is read as the id; then the dangling ids
+    that read as ids (``_is_id_like``), each with the ``masked-missing-<n>`` its
+    reference was given, so such an id reads the same at a reference and
+    anywhere else, even one spelt like a serial;
     then serials, so a serial that is also an id is read as that id. Within
     each, devices come in placeholder order, so a serial two devices publish (a
     MID and its BESS) is the first owner's wherever it is found. The utility
@@ -288,13 +292,24 @@ def _identifiers(
     premises rather than a device.
     """
     identifiers = [(device.device_id, ids[device.device_id]) for device in in_order]
-    identifiers.extend(dangling)
+    identifiers.extend((device_id, missing) for device_id, missing in dangling if _is_id_like(device_id))
     for device in in_order:
         identifiers.extend((serial, ids[device.device_id].upper()) for serial in _serials(device, _SERIAL_NUMBER))
     meter_mask = _SITE_MASKS[_METER_SERIAL_NUMBER]
     for device in in_order:
         identifiers.extend((serial, meter_mask) for serial in _serials(device, _METER_SERIAL_NUMBER))
     return identifiers
+
+
+def _is_id_like(value: str) -> bool:
+    """Whether a dangling reference reads as an id rather than a word: six characters or more, with a digit.
+
+    A reference names no device for one of two reasons: the device is absent,
+    or the panel published a word there (``UNKNOWN``, ``NONE``, ``BACKUP``).
+    Such a word is mapped where it is published like any dangling id, but it is
+    also a reading and an enum member, so it is not swept anywhere else.
+    """
+    return len(value) >= _MIN_EMBEDDED and _DIGIT.search(value) is not None
 
 
 def _serials(device: DiscoveredDevice, property_id: str) -> list[str]:
@@ -309,14 +324,19 @@ class _Sweep:
     """Replaces every original device id, dangling id and serial number found in text the panel published.
 
     The matching rules keep it from rewriting unrelated text. Only identifiers
-    are swept, device ids and serial numbers, the utility meter's included: any
-    other site value is free text or a short code, so a region of ``OK``
-    swept as a whole would rewrite every status of ``OK``, and the property
-    rules mask those alone. An identifier matches case-insensitively and
-    only where no ASCII letter or digit adjoins it, so ``circuit-1`` is not found
-    inside ``circuit-12``; a ``-`` is not part of a word, because device ids are
-    serials and suffixes joined by ``-``, and a serial embedded in an id the tree
-    does not hold must still be found. Identifiers are tried longest first, so
+    are swept: device ids, dangling references that read as ids, and serial
+    numbers, the utility meter's included. Any other site value is free text or
+    a short code, so a region of ``OK`` swept as a whole would rewrite every
+    status of ``OK``, and the property rules mask those alone.
+
+    An identifier matches case-insensitively and only where no ASCII letter or
+    digit adjoins it, except the letter or hex digit that ends a JSON escape
+    before it (``\\n``, ``\\u00b0``); a match never starts on an escape's own
+    letter. So ``circuit-1`` is not found inside ``circuit-12``, and an
+    identifier inside a ``json`` value is found after an escape without
+    splitting one. A ``-`` is not part of a word, because device ids are serials
+    and suffixes joined by ``-``, and a serial embedded in an id the tree does
+    not hold must still be found. Identifiers are tried longest first, so
     ``<serial>-lugs-up`` maps to the lugs' placeholder rather than the panel's
     with a suffix. One shorter than six characters is matched only as a whole
     value, never inside a longer string or a key, where ``pv`` is also a
@@ -343,10 +363,25 @@ class _Sweep:
         return self.key(text)
 
     def key(self, text: str) -> str:
-        """A key with every identifier of six characters or more in it replaced."""
+        """A key with every identifier of six characters or more in it replaced.
+
+        A match that would start on the letter of a JSON escape (right after an
+        unescaped backslash) is passed over and the search resumes one character
+        on, so ``\\nt-1234-abcde`` keeps its newline and stays valid JSON while
+        an identifier starting later in the same span is still found.
+        """
         if self._embedded is None:
             return text
-        return self._embedded.sub(lambda match: self._replacement(match.group()), text)
+        pieces: list[str] = []
+        copied = start = 0
+        while (match := self._embedded.search(text, start)) is not None:
+            if _after_unescaped_backslash(text, match.start()):
+                start = match.start() + 1
+                continue
+            pieces.extend((text[copied : match.start()], self._replacement(match.group())))
+            copied = start = match.end()
+        pieces.append(text[copied:])
+        return "".join(pieces)
 
     def topic(self, topic: str) -> str:
         """A ``node/property`` key, swept as its node and property ids are in the description that declares them."""
@@ -372,6 +407,12 @@ class _Sweep:
             for identifier, replacement in self._replacements.items()
             if re.fullmatch(re.escape(identifier), found, re.IGNORECASE)
         )
+
+
+def _after_unescaped_backslash(text: str, index: int) -> bool:
+    """Whether ``text[index]`` follows a backslash that starts an escape: one preceded by an even number of backslashes."""
+    backslashes = len(text[:index]) - len(text[:index].rstrip("\\"))
+    return backslashes % 2 == 1
 
 
 def _alternation(identifiers: Sequence[str], *, before: str = "", after: str = "") -> re.Pattern[str] | None:

@@ -1227,6 +1227,7 @@ def test_a_dangling_id_reads_the_same_everywhere() -> None:
     referring, named = _declaring(topics, _FEEDS, _TYPE_CIRCUIT)[:2]
     ghost, absent_child = f"{root}-ghost", f"{root}-absent-child"
     assert not {ghost, absent_child} & set(topics)
+    assert all(len(dangling) >= 6 and re.search(r"[0-9]", dangling) for dangling in (ghost, absent_child))
     topics[referring][_FEEDS] = ghost
     panel_description = _description_of(topics[root])
     children = panel_description["children"]
@@ -1270,3 +1271,49 @@ def test_an_undescribed_device_is_swept_in_free_text() -> None:
     expected = f"{ids[undescribed]} reports {ids[undescribed].upper()}"
     assert export["devices"]["masked-panel"]["undeclared_properties"][_NOTE] == expected
     assert [value for value in (undescribed, serial) if value.casefold() in json.dumps(export).casefold()] == []
+
+
+@pytest.mark.parametrize("word", ["UNKNOWN", "NONE", "BACKUP"])
+def test_a_word_at_a_reference_site_is_not_swept_elsewhere(word: str) -> None:
+    """A dangling reference that is a word rather than an id reads `masked-missing-<n>` there, and nowhere else.
+
+    Only a dangling value of six characters or more with a digit in it is swept
+    beyond its reference: `UNKNOWN` is also a reading and an enum member, and
+    `NONE` every relay requester's reading.
+    """
+    topics = _copy(parent_child_tree())
+    mid = _declaring(topics, _GRID_FORMING, _TYPE_MID)[0]
+    topics[_REFERENCE_ROOT]["vendor/status"] = word
+    as_grid = _copy(topics)
+    as_grid[mid][_GRID_FORMING] = "GRID"
+    topics[mid][_GRID_FORMING] = word
+    export, ids = _exported(topics, _REFERENCE_ROOT)
+    baseline, _ = _exported(as_grid, _REFERENCE_ROOT)
+    assert _MISSING.fullmatch(_valued(export["devices"][ids[mid]])[_GRID_FORMING])
+    export["devices"][ids[mid]]["properties"].pop(_GRID_FORMING)
+    baseline["devices"][ids[mid]]["properties"].pop(_GRID_FORMING)
+    assert word in json.dumps(export)
+    assert export == baseline
+
+
+def test_an_identifier_never_starts_inside_a_json_escape() -> None:
+    """A match may start after a complete escape, never on an escape's own letter, which would split the escape."""
+    topics, root = _reidentified_reference()
+    assert root.startswith("n")
+    cases = {
+        "split": "\n" + root[1:],
+        "escaped-backslash-then-split": "\\\n" + root[1:],
+        "after-escaped-backslash": "\\" + root,
+        "after-newline": "\n" + root,
+    }
+    description = _description_of(topics[root])
+    for name, text in cases.items():
+        _declare(description, f"vendor/{name}", "json")
+        topics[root][f"vendor/{name}"] = json.dumps({"n": text})
+    topics[root]["$description"] = json.dumps(description)
+    export, _ = _exported(topics, root)
+    exported = export["devices"]["masked-panel"]["properties"]
+    for name in ("split", "escaped-backslash-then-split"):
+        assert exported[f"vendor/{name}"] == topics[root][f"vendor/{name}"], name
+    for name, text in cases.items():
+        assert json.loads(exported[f"vendor/{name}"]) == {"n": text.replace(root, "masked-panel")}, name

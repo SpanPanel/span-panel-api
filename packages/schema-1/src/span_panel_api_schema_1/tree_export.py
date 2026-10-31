@@ -25,8 +25,10 @@ Last, every string the panel published that the rules keep is swept for the
 tree's original device ids and serial numbers, the utility meter's among them,
 and for every dangling id, which reads as its own ``masked-missing-<n>``
 wherever it appears: a property the library has never seen, a device named by
-an id, an identifier inside a ``json`` value. The sweep reads only what came off the wire, never the
-placeholders and masks the rules wrote, so it cannot rewrite them.
+an id, an identifier inside a ``json`` value, as a string literal or a number,
+however deeply the JSON is nested in strings. The sweep reads only what came
+off the wire, never the placeholders and masks the rules wrote, so it cannot
+rewrite them.
 """
 
 from __future__ import annotations
@@ -114,10 +116,18 @@ _MIN_EMBEDDED: Final = 6
 _BOUNDARY_BEFORE: Final = "(?<![A-Za-z0-9])"
 _BOUNDARY_AFTER: Final = "(?![A-Za-z0-9])"
 _JSON_STRING: Final = re.compile(r'("(?:[^"\\]|\\.)*")(\s*:)?')
-"""A JSON string literal in raw JSON text, and the colon after it when it is an object key.
+"""A JSON string literal in any text, and the colon after it when it is an object key.
 
-Run over text that parsed as JSON, it finds every string literal: outside the
-literals, valid JSON holds no quote.
+Over text that parses as JSON it finds every string literal, since valid JSON
+holds no quote outside them. Over any other text it finds what reads as one,
+and the text between the finds is swept as plain text.
+"""
+_JSON_NUMBER: Final = re.compile(r"(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)")
+"""A JSON number token, captured so ``split`` returns the tokens at the odd indices.
+
+Between the string literals of text that parses as a JSON object or array there
+are only numbers, ``true``, ``false``, ``null``, punctuation and whitespace, so
+an identifier found there lies in a number.
 """
 _DIGIT: Final = re.compile(r"[0-9]")
 
@@ -327,22 +337,28 @@ class _Sweep:
     a short code, so a region of ``OK`` swept as a whole would rewrite every
     status of ``OK``, and the property rules mask those alone.
 
-    In plain text an identifier matches case-insensitively and only where no
-    ASCII letter or digit adjoins it, so ``circuit-1`` is not found inside
-    ``circuit-12``; any other character, a ``-`` or a backslash among them, is a
-    boundary. A ``-`` must be one, because device ids are serials and suffixes
-    joined by ``-``, and a serial embedded in an id the tree does not hold must
-    still be found. Identifiers are tried longest first, so ``<serial>-lugs-up``
-    maps to the lugs' placeholder rather than the panel's with a suffix. One
-    shorter than six characters is matched only as a whole value, never inside a
-    longer string or a key, where ``pv`` is also a property id.
+    An identifier matches case-insensitively and only where no ASCII letter or
+    digit adjoins it, so ``circuit-1`` is not found inside ``circuit-12``; any
+    other character, a ``-`` or a backslash among them, is a boundary. A ``-``
+    must be one, because device ids are serials and suffixes joined by ``-``,
+    and a serial embedded in an id the tree does not hold must still be found.
+    Identifiers are tried longest first, so ``<serial>-lugs-up`` maps to the
+    lugs' placeholder rather than the panel's with a suffix. One shorter than
+    six characters is matched only as a whole string, never inside a longer
+    string or in a key, where ``pv`` is also a property id.
 
-    A published value that parses as a JSON object or array is swept literal by
-    literal (``value``), since in its raw text an escape's own letter would
-    adjoin an identifier, or spell part of one (``\\u006e``). Each string literal
-    is decoded and swept as plain text, an object key as a key, and only a
-    literal that changed is written again; every other byte stays as published,
-    so the value still parses.
+    Every string is swept the same way (``value``), whatever it was declared
+    as. Each JSON string literal in it is decoded, since in the raw text an
+    escape's own letter would adjoin an identifier or spell part of one
+    (``\\u006e``), and its content is swept as a string of its own by this same
+    rule, so JSON carried inside a string is reached however deep; a literal
+    followed by ``:`` is an object key and is swept as a key. Only a literal
+    that changed is written again, escaped where UTF-8 cannot carry a character
+    of it. The text between the literals, and a literal that does not decode,
+    is swept as plain text. A number equal to an identifier is replaced there
+    like any other text, and where the whole text parses as a JSON object or
+    array the number token is written as a JSON string, so the value still
+    parses. Every other byte stays as published.
 
     Where identifiers that differ only in case match, the one spelt as found
     wins, then the one of higher priority (``_identifiers``).
@@ -359,25 +375,12 @@ class _Sweep:
         self._whole = _alternation(whole)
 
     def value(self, text: str) -> str:
-        """A published value with every identifier in it replaced.
-
-        A JSON object or array is swept literal by literal, any other value as plain text.
-        """
-        if _is_json_container(text):
-            return _JSON_STRING.sub(self._literal, text)
-        return self.plain(text)
-
-    def plain(self, text: str) -> str:
-        """A string with every identifier in it replaced, a short one only where it is the whole string."""
-        if self._whole is not None and self._whole.fullmatch(text):
-            return self._replacement(text)
-        return self.key(text)
+        """A published string with every identifier in it replaced, a short one only where it is the whole string."""
+        return self._swept(text, whole=True)
 
     def key(self, text: str) -> str:
         """A key with every identifier of six characters or more in it replaced."""
-        if self._embedded is None:
-            return text
-        return self._embedded.sub(lambda match: self._replacement(match.group()), text)
+        return self._swept(text, whole=False)
 
     def topic(self, topic: str) -> str:
         """A ``node/property`` key, swept as its node and property ids are in the description that declares them."""
@@ -385,25 +388,70 @@ class _Sweep:
         return f"{self.key(node_id)}{separator}{self.key(property_id)}"
 
     def parsed(self, value: object) -> object:
-        """A copy of parsed JSON (a description) with every key and string swept as plain text."""
+        """A copy of parsed JSON (a description) with every key swept as a key and every string as a string."""
         if isinstance(value, str):
-            return self.plain(value)
+            return self.value(value)
         if isinstance(value, dict):
             return _first_per_key((self.key(str(key)), self.parsed(item)) for key, item in value.items())
         if isinstance(value, list):
             return [self.parsed(item) for item in value]
         return value
 
+    def _swept(self, text: str, *, whole: bool) -> str:
+        """The text with its string literals swept each as a string and the text between them as plain text.
+
+        ``whole`` allows a short identifier to match the entire text. The plain
+        text is swept again with its numbers written as strings when an
+        identifier was found in it and the text parses as a JSON object or
+        array: a number is then in a value position, and a bare word there
+        would stop the value parsing.
+        """
+        if whole and self._whole is not None and self._whole.fullmatch(text):
+            return self._replacement(text)
+        literals = list(_JSON_STRING.finditer(text))
+        spans: list[str] = []
+        position = 0
+        for match in literals:
+            spans.append(text[position : match.start()])
+            position = match.end()
+        spans.append(text[position:])
+        swept = [self._plain(span) for span in spans]
+        if swept != spans and _is_json_container(text):
+            swept = [self._numbers_quoted(span) for span in spans]
+        pieces = [piece for span, match in zip(swept[:-1], literals, strict=True) for piece in (span, self._literal(match))]
+        return "".join([*pieces, swept[-1]])
+
+    def _plain(self, text: str) -> str:
+        """Plain text with every identifier of six characters or more in it replaced."""
+        if self._embedded is None:
+            return text
+        return self._embedded.sub(lambda match: self._replacement(match.group()), text)
+
+    def _numbers_quoted(self, span: str) -> str:
+        """Plain text from a JSON object or array, swept, with a number that held an identifier written as a JSON string."""
+        parts = _JSON_NUMBER.split(span)
+        for index, part in enumerate(parts):
+            swept = self._plain(part)
+            parts[index] = json.dumps(swept) if index % 2 and swept != part else swept
+        return "".join(parts)
+
     def _literal(self, match: re.Match[str]) -> str:
-        """One string literal of a JSON value, decoded and swept, and written again only if it changed."""
+        """One string literal, its content swept as a string (as a key before a colon), written again only if it changed.
+
+        A literal that does not decode (an escape JSON does not define, a raw
+        control character) is swept as the plain text it is.
+        """
         literal, colon = match.group(1), match.group(2)
-        decoded: object = json.loads(literal)
+        try:
+            decoded: object = json.loads(literal)
+        except ValueError:
+            return self._plain(match.group())
         if not isinstance(decoded, str):
             return match.group()
-        swept = self.plain(decoded) if colon is None else self.key(decoded)
+        swept = self._swept(decoded, whole=colon is None)
         if swept == decoded:
             return match.group()
-        return json.dumps(swept, ensure_ascii=False) + (colon or "")
+        return _dumped(swept) + (colon or "")
 
     def _replacement(self, found: str) -> str:
         exact = self._replacements.get(found)
@@ -419,10 +467,12 @@ class _Sweep:
 def _is_json_container(text: str) -> bool:
     """Whether a published value parses as a JSON object or array, whatever its declared datatype.
 
-    JSON text that opens with ``{`` or ``[`` is an object or array if it parses
-    at all, so a scalar (``"bess"``, ``12``) never gets past the first check. A
-    value that does not parse is plain text, and so is nesting too deep to
-    parse, so the export stays total.
+    It decides only whether a swept number is written as a JSON string
+    (``_Sweep``). JSON text that opens with ``{`` or ``[`` is an object or array
+    if it parses at all, so a scalar (``"bess"``, ``12``) never gets past the
+    first check: a bare number equal to an identifier is a whole value and is
+    replaced as text. Nesting too deep to parse is read as not parsing, so the
+    export stays total.
     """
     if not text.lstrip().startswith(("{", "[")):
         return False
@@ -431,6 +481,20 @@ def _is_json_container(text: str) -> bool:
     except ValueError, RecursionError:
         return False
     return True
+
+
+def _dumped(text: str) -> str:
+    """A string as a JSON literal, its characters written as they are, or escaped where UTF-8 cannot carry one.
+
+    A lone surrogate, which the escape ``\\ud800`` decodes to, has no UTF-8
+    encoding and would stop the export being written; it goes back as an escape.
+    """
+    literal = json.dumps(text, ensure_ascii=False)
+    try:
+        literal.encode("utf-8")
+    except UnicodeEncodeError:
+        return json.dumps(text)
+    return literal
 
 
 def _alternation(identifiers: Sequence[str], *, before: str = "", after: str = "") -> re.Pattern[str] | None:

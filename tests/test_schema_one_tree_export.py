@@ -1357,12 +1357,13 @@ def test_an_identifier_spelt_with_an_escape_is_swept() -> None:
     assert exported == '{"n": "masked-panel", "kept": "\\u00b0"}'
 
 
-def test_a_value_that_is_not_a_json_object_or_array_is_plain_text() -> None:
-    """Only a value that parses as a JSON object or array is swept literal by literal; anything else is plain text.
+def test_every_string_literal_is_swept_whatever_surrounds_it() -> None:
+    """A JSON string literal is a whole string value wherever it stands, and an object key is a key.
 
-    On the reference tree `bess` is a short id: a whole literal in a JSON array
-    or object value is swept, while in text that only looks like JSON, in a JSON
-    string scalar, or as an object key it is not a whole value and is kept.
+    On the reference tree `bess` is a short id: a literal equal to it is swept
+    in an object, an array, a JSON string scalar and text that only looks like
+    JSON (a trailing comma), while a key literal (`"bess":`) is kept. The text
+    around the literals stays byte for byte.
     """
     topics = _copy(parent_child_tree())
     serial = topics["bess"][_SERIAL]
@@ -1371,6 +1372,7 @@ def test_a_value_that_is_not_a_json_object_or_array_is_plain_text() -> None:
         "vendor/array": '["BESS", "kept"]',
         "vendor/broken": '{"peer": "bess", "serial": "' + serial + '",}',
         "vendor/scalar": '"bess"',
+        "vendor/prose": 'the "bess" unit, and bess',
     }
     topics[_REFERENCE_ROOT].update(planted)
     export, ids = _exported(topics, _REFERENCE_ROOT)
@@ -1378,9 +1380,111 @@ def test_a_value_that_is_not_a_json_object_or_array_is_plain_text() -> None:
     assert values == {
         "vendor/object": '{"peer": "' + ids["bess"] + '", "bess": 1}',
         "vendor/array": '["' + ids["bess"] + '", "kept"]',
-        "vendor/broken": '{"peer": "bess", "serial": "' + ids["bess"].upper() + '",}',
-        "vendor/scalar": '"bess"',
+        "vendor/broken": '{"peer": "' + ids["bess"] + '", "serial": "' + ids["bess"].upper() + '",}',
+        "vendor/scalar": '"' + ids["bess"] + '"',
+        "vendor/prose": 'the "' + ids["bess"] + '" unit, and bess',
     }
+
+
+def test_a_number_equal_to_an_identifier_is_swept_and_the_value_still_parses() -> None:
+    """An identifier published as a JSON number is swept; in an object or array it becomes a string literal.
+
+    The number token is swept as text (`-` is a boundary, so the sign stays)
+    and written as a JSON string, so the value parses as it did. A bare value
+    that is only the number is a whole value and is replaced as plain text, as
+    every other whole value is, and so is a number in text that does not parse
+    (a trailing comma), which nothing could parse before.
+    """
+    topics, root = _reidentified_reference()
+    meter = "45123987"
+    description = _description_of(topics[root])
+    _declare(description, _METER_SERIAL, "string")
+    topics[root]["$description"] = json.dumps(description)
+    topics[root][_METER_SERIAL] = meter
+    planted = {
+        "vendor/object": '{"meter": ' + meter + "}",
+        "vendor/array": "[" + meter + ", 1]",
+        "vendor/negative": '{"m": -' + meter + "}",
+        "vendor/bare": meter,
+        "vendor/broken": "[" + meter + ", 1,]",
+    }
+    topics[root].update(planted)
+    export, _ = _exported(topics, root)
+    values = export["devices"]["masked-panel"]["undeclared_properties"]
+    assert values == {
+        "vendor/object": '{"meter": "MASKED-METER"}',
+        "vendor/array": '["MASKED-METER", 1]',
+        "vendor/negative": '{"m": "-MASKED-METER"}',
+        "vendor/bare": "MASKED-METER",
+        "vendor/broken": "[MASKED-METER, 1,]",
+    }
+    for topic in ("vendor/object", "vendor/array", "vendor/negative"):
+        assert isinstance(json.loads(values[topic]), (dict, list)), topic
+    assert meter not in json.dumps(export)
+
+
+def test_an_identifier_after_an_escape_is_swept_in_any_text() -> None:
+    """A string literal is decoded and swept wherever it stands: a JSON string scalar, or text that does not parse.
+
+    A literal that does not decode (an escape JSON does not define, a raw tab)
+    is swept as the plain text it is.
+    """
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    escaped = json.dumps("\n" + serial)
+    assert escaped == '"\\n' + serial + '"'
+    planted = {
+        "vendor/scalar": escaped,
+        "vendor/trailing-comma": '{"n": ' + escaped + ",}",
+        "vendor/leading-nbsp": ' {"n": ' + escaped + "}",
+        "vendor/undefined-escape": '{"n": "\\q ' + serial + '"}',
+        "vendor/raw-tab": '{"n": "\t' + serial + '"}',
+    }
+    for topic, text in planted.items():
+        if topic != "vendor/scalar":
+            with pytest.raises(ValueError):
+                json.loads(text)
+    topics[root].update(planted)
+    export, ids = _exported(topics, root)
+    values = export["devices"]["masked-panel"]["undeclared_properties"]
+    assert values == {topic: text.replace(serial, ids[bess].upper()) for topic, text in planted.items()}
+    assert serial not in json.dumps(export)
+
+
+def test_json_inside_a_string_is_swept() -> None:
+    """A literal whose content is itself JSON is swept as JSON, in a `json` value and in a `$description` string."""
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    inner = json.dumps({"a": "\n" + serial})
+    published = json.dumps({"inner": inner})
+    assert published == '{"inner": "{\\"a\\": \\"\\\\n' + serial + '\\"}"}'
+    description = _description_of(topics[root])
+    _declare(description, "vendor/nested", "json")
+    description["vendor-nested"] = published
+    topics[root]["$description"] = json.dumps(description)
+    topics[root]["vendor/nested"] = published
+    export, ids = _exported(topics, root)
+    panel = export["devices"]["masked-panel"]
+    expected = json.dumps({"inner": json.dumps({"a": "\n" + ids[bess].upper()})})
+    assert panel["properties"]["vendor/nested"] == expected
+    assert panel["description"]["vendor-nested"] == expected
+    assert serial not in json.dumps(export)
+
+
+def test_a_changed_literal_with_a_lone_surrogate_stays_encodable() -> None:
+    """A swept literal holding a lone-surrogate escape is written escaped, so the export still encodes as UTF-8."""
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    topics[root]["vendor/surrogate"] = '{"k": "\\ud800 ' + serial + '"}'
+    export, ids = _exported(topics, root)
+    exported = export["devices"]["masked-panel"]["undeclared_properties"]["vendor/surrogate"]
+    assert exported == '{"k": "\\ud800 ' + ids[bess].upper() + '"}'
+    assert exported.encode("utf-8")
+    assert json.loads(exported) == {"k": "\ud800 " + ids[bess].upper()}
+    assert json.dumps(export).encode("utf-8")
 
 
 def _json_containers(values: Mapping[str, str]) -> dict[str, str]:

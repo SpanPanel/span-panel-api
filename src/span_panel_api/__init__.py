@@ -53,6 +53,9 @@ from .models import (
     FeedsRole,
     FieldMetadata,
     HomieSchemaTypes,
+    MaskedTree,
+    MaskedTreeDevice,
+    MaskedTreeMetadata,
     PassphraseRotation,
     ProtectionFunction,
     SpanBatterySnapshot,
@@ -62,6 +65,7 @@ from .models import (
     SpanPanelSnapshot,
     SpanPcsSnapshot,
     SpanPVSnapshot,
+    UndescribedDevice,
     V2AuthResponse,
     V2HomieSchema,
     V2StatusInfo,
@@ -95,6 +99,7 @@ from .protocol import (
     PanelControlProtocol,
     SpanPanelClientProtocol,
     StreamingCapableProtocol,
+    TreeExportingAdapter,
 )
 
 __version__ = _pkg_version("span-panel-api")
@@ -147,6 +152,15 @@ __all__ = [  # noqa: RUF022
     "ControlTarget",
     "ExtensionProperty",
     "ExtensionSubject",
+    # Added 2026-10-31: the masked device tree a consumer forwards in diagnostics,
+    # and the optional protocol an adapter offers it through. Deliberately not a
+    # SchemaAdapter member: the protocol derives its required set from itself, so a
+    # member there would invalidate every built adapter wheel.
+    "MaskedTree",
+    "MaskedTreeDevice",
+    "MaskedTreeMetadata",
+    "UndescribedDevice",
+    "TreeExportingAdapter",
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",

@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 import re
-from typing import Final, Literal
+from typing import Final, Literal, NotRequired, TypedDict
 
 # Homie schema type: {type_name: {property_name: {attribute: value}}}
 # Values are heterogeneous JSON (str, int, bool, nested dicts).
@@ -1506,3 +1506,63 @@ class SpanPanelSnapshot:
     the feeding device is another panel with its own tree, not a child of this
     one.
     """
+
+
+class MaskedTreeMetadata(TypedDict):
+    """What produced a `MaskedTree` and whether it can be trusted to be whole.
+
+    `masked` is always `True`: the tree never carries a serial, a credential or
+    an address, and the marker lets whoever reads a forwarded diagnostic see that
+    without inspecting the values. `tree_complete` is `False` when the panel had
+    not finished publishing its tree, so what follows is a partial reading.
+    """
+
+    schema: Literal["tree-v1"]
+    masked: Literal[True]
+    producer: str
+    tree_complete: bool
+
+
+class MaskedTreeDevice(TypedDict):
+    """One described device in a `MaskedTree`, as a consumer forwards it in diagnostics.
+
+    `properties` holds every declared property that has a value, keyed
+    `"<node>/<property>"` with the wire string unsplit. A declared property with
+    no value has no key: never `None`, never `""`, because the panel published
+    nothing and a placeholder would read as a reading. `numeric_properties`
+    holds the declared range and unit text for the numeric ones, `targets` the
+    set topics, and `undeclared_properties` values the panel published that its
+    own description does not declare.
+    """
+
+    description: dict[str, object]
+    properties: dict[str, str]
+    numeric_properties: dict[str, str]
+    targets: dict[str, str]
+    undeclared_properties: dict[str, str]
+    state: NotRequired[str]
+
+
+class UndescribedDevice(TypedDict):
+    """A device the panel published values for but never described.
+
+    With no `$description` there is nothing to say which node a property belongs
+    to, so `values` keeps each as `"<node>/<property>"` -> wire string, unsplit.
+    """
+
+    values: dict[str, str]
+    targets: dict[str, str]
+    state: NotRequired[str]
+
+
+class MaskedTree(TypedDict):
+    """The masked device tree a consumer forwards in diagnostics.
+
+    Produced by an adapter that offers `TreeExportingAdapter`. Described devices
+    and undescribed ones are kept apart so a reader never mistakes one for the
+    other.
+    """
+
+    metadata: MaskedTreeMetadata
+    devices: dict[str, MaskedTreeDevice]
+    undescribed_devices: dict[str, UndescribedDevice]

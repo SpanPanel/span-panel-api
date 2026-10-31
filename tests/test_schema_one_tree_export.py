@@ -949,11 +949,11 @@ def test_the_sweep_catches_what_no_rule_names() -> None:
     assert topics[root][_SERIAL] == root, "the panel's serial is its id"
     bess, evse = _first_of(topics, _TYPE_BESS), _first_of(topics, _TYPE_EVSE)
     circuit, named = _declaring(topics, _FEEDS, _TYPE_CIRCUIT)[:2]
-    ghost = f"{root}-ghost"
-    assert ghost not in topics
+    ghost, phantom = f"{root}-ghost", f"{root}-phantom"
+    assert not {ghost, phantom} & set(topics)
     topics[root][_NOTE] = topics[bess][_SERIAL]
     topics[root]["vendor/peer"] = evse
-    topics[root]["vendor/ghost"] = ghost
+    topics[root]["vendor/ghost"] = phantom
     topics[circuit][_FEEDS] = ghost
     _rename(topics, named, circuit)
     export, ids = _exported(topics, root)
@@ -961,7 +961,7 @@ def test_the_sweep_catches_what_no_rule_names() -> None:
     assert panel_values[_NOTE] == ids[bess].upper()
     assert panel_values["vendor/peer"] == ids[evse]
     assert export["devices"][ids[named]]["description"]["name"] == ids[circuit]
-    assert panel_values["vendor/ghost"] == "masked-panel-ghost"
+    assert panel_values["vendor/ghost"] == "masked-panel-phantom"
     dangling = _valued(export["devices"][ids[circuit]])[_FEEDS]
     assert _MISSING.fullmatch(dangling)
     assert root.casefold() not in json.dumps(export).casefold()
@@ -1162,10 +1162,10 @@ def test_a_tree_of_short_identifiers_exports() -> None:
     planted = _copy(topics)
     planted[root][_SERIAL] = root
     planted[root][_NOTE] = "G1"
-    planted[root]["vendor/text"] = "g1 and g2 stay"
+    planted[root]["vendor/text"] = "g1 -- g2 stay"
     export, ids = _exported(planted, root)
     panel_values = export["devices"]["masked-panel"]["undeclared_properties"]
-    assert panel_values == {_NOTE: ids["g1"], "vendor/text": "g1 and g2 stay"}
+    assert panel_values == {_NOTE: ids["g1"], "vendor/text": "g1 -- g2 stay"}
 
 
 _METER_SERIAL = "info/utility-meter-serial-number"
@@ -1189,3 +1189,84 @@ def test_the_meter_serial_is_swept_as_an_identifier() -> None:
     assert panel["undeclared_properties"][_NOTE] == "meter MASKED-METER"
     assert json.loads(panel["properties"]["vendor/meter"]) == {"meter": "MASKED-METER"}
     assert _SEEDED_METER_SERIAL.casefold() not in json.dumps(export).casefold()
+
+
+def test_an_identifier_after_a_json_escape_is_swept() -> None:
+    """In a `json` wire string an escape's own letter or hex digit adjoins what follows it, and is still a boundary.
+
+    The value is swept as published text, never parsed and re-serialised, so
+    every byte but the identifiers stays as the panel wrote it.
+    """
+    topics, root = _reidentified_reference()
+    bess, evse = _first_of(topics, _TYPE_BESS), _first_of(topics, _TYPE_EVSE)
+    serial = topics[bess][_SERIAL].upper()
+    lines = {
+        escape: f"{before}{evse}|{before}{serial}"
+        for escape, before in (("newline", "one\n"), ("tab", "a\t"), ("quote", 'say "'), ("unicode", "°"))
+    }
+    published = json.dumps(lines)
+    assert all(escape in published for escape in ("\\n", "\\t", '\\"', "\\u00b0"))
+    description = _description_of(topics[root])
+    _declare(description, "vendor/log", "json")
+    topics[root]["$description"] = json.dumps(description)
+    topics[root]["vendor/log"] = published
+    export, ids = _exported(topics, root)
+    exported = export["devices"]["masked-panel"]["properties"]["vendor/log"]
+    assert exported == published.replace(evse, ids[evse]).replace(serial, ids[bess].upper())
+    assert evse not in exported
+    assert serial not in exported
+
+
+def test_a_dangling_id_reads_the_same_everywhere() -> None:
+    """An id the panel publishes for a device it does not hold is one `masked-missing-<n>`, at a reference and in free text.
+
+    Built from the devices directly: replayed, a child the panel declares
+    becomes an undescribed device rather than a dangling one.
+    """
+    topics, root = _reidentified_reference()
+    referring, named = _declaring(topics, _FEEDS, _TYPE_CIRCUIT)[:2]
+    ghost, absent_child = f"{root}-ghost", f"{root}-absent-child"
+    assert not {ghost, absent_child} & set(topics)
+    topics[referring][_FEEDS] = ghost
+    panel_description = _description_of(topics[root])
+    children = panel_description["children"]
+    assert isinstance(children, list)
+    panel_description["children"] = [*children, absent_child]
+    topics[root]["$description"] = json.dumps(panel_description)
+    topics[root][_NOTE] = f"waiting for {ghost} and {absent_child}"
+    _rename(topics, named, ghost)
+    devices = devices_from_tree(topics)
+    panel_device = next(device for device in devices if device.device_id == root)
+    others = [device for device in devices if device is not panel_device]
+    ids = placeholder_ids(panel_device, others)
+    export = export_masked_tree(panel_device, others, producer=_PRODUCER, tree_complete=True)
+    missing = _valued(export["devices"][ids[referring]])[_FEEDS]
+    panel_children = export["devices"]["masked-panel"]["description"]["children"]
+    assert isinstance(panel_children, list)
+    missing_child = panel_children[-1]
+    assert isinstance(missing_child, str)
+    assert _MISSING.fullmatch(missing) and _MISSING.fullmatch(missing_child) and missing != missing_child
+    assert export["devices"]["masked-panel"]["undeclared_properties"][_NOTE] == f"waiting for {missing} and {missing_child}"
+    assert export["devices"][ids[named]]["description"]["name"] == missing
+    assert ghost not in json.dumps(export)
+    assert absent_child not in json.dumps(export)
+
+
+def test_an_undescribed_device_is_swept_in_free_text() -> None:
+    """A device that has not described itself still has an id and a serial, and both are found wherever they appear."""
+    partial = _copy(parent_child_tree())
+    del partial["evse"]["$description"]
+    reidentified = reidentify(partial, _REFERENCE_ROOT, seed=_SEED)
+    topics, root = _copy(reidentified.tree), reidentified.root_id
+    undescribed = next(device_id for device_id, device_topics in topics.items() if "$description" not in device_topics)
+    serial = topics[undescribed][_SERIAL]
+    assert serial in reidentified.planted
+    topics[root][_NOTE] = f"{undescribed} reports {serial}"
+    adapter = replay(topics, root, withhold_description_of=undescribed)
+    ids = _ids_of(adapter, root)
+    export = _export(adapter, root, tree_complete=False)
+    assert ids[undescribed] == "masked-undescribed-1"
+    assert ids[undescribed] in export["undescribed_devices"]
+    expected = f"{ids[undescribed]} reports {ids[undescribed].upper()}"
+    assert export["devices"]["masked-panel"]["undeclared_properties"][_NOTE] == expected
+    assert [value for value in (undescribed, serial) if value.casefold() in json.dumps(export).casefold()] == []

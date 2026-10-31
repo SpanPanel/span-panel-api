@@ -34,6 +34,7 @@ _TYPE_LUGS: Final = "energy.ebus.device.lugs"
 _LUGS_SUFFIXES: Final[Mapping[str, str]] = {"UPSTREAM": "lugs-up", "DOWNSTREAM": "lugs-dn"}
 _DIRECTION: Final = "info/direction"
 _SERIAL: Final = "info/serial-number"
+_DESCRIPTION: Final = "$description"
 _NAME: Final = "info/name"
 _ALNUM: Final = string.ascii_lowercase + string.digits
 _SEEDED_SITE: Final[Mapping[str, str]] = {
@@ -72,7 +73,7 @@ def rename_devices(tree: RetainedTopicTree, root_id: str, new_id: Callable[[str]
 
 
 def _value(topic: str, value: str, names: Mapping[str, str]) -> str:
-    if topic == "$description":
+    if topic == _DESCRIPTION:
         return _description(value, names)
     if topic in _ID_PROPERTIES:
         return names.get(value, value)
@@ -109,7 +110,9 @@ def reidentify(tree: RetainedTopicTree, root_id: str, seed: int) -> Reidentified
     device's id (as the captures' are) follows the id.
 
     Every reference moves with its device (`rename_devices`); a valued-empty
-    `""` stays empty. `planted` holds every new id, serial and site value, and
+    `""` stays empty. A device with no `$description` (one that has not
+    described itself) has no type to read, so it takes the `<root>-<10 alnum>`
+    shape, and stays without one. `planted` holds every new id, serial and site value, and
     the same seed always gives the same tree.
     """
     rng = random.Random(seed)
@@ -131,7 +134,7 @@ def reidentify(tree: RetainedTopicTree, root_id: str, seed: int) -> Reidentified
         if device_id == root_id:
             continue
         topics = tree[device_id]
-        device_type = _description_object(topics["$description"]).get("type")
+        device_type = _description_object(topics[_DESCRIPTION]).get("type") if _DESCRIPTION in topics else None
         suffix = _LUGS_SUFFIXES.get(topics.get(_DIRECTION, "")) if device_type == _TYPE_LUGS else None
         if device_type == _TYPE_CIRCUIT:
             names[device_id] = fresh(lambda: f"{rng.getrandbits(128):032x}")
@@ -164,14 +167,15 @@ def reidentify(tree: RetainedTopicTree, root_id: str, seed: int) -> Reidentified
             else:
                 continue
             planted.add(values[topic])
-        description = _description_object(topics["$description"])
-        name = description.get("name")
-        if device_id == new_root and isinstance(name, str) and name:
-            description["name"] = _SEEDED_SITE_NAME
-            planted.add(_SEEDED_SITE_NAME)
-        elif isinstance(name, str) and name in names:
-            description["name"] = names[name]
-        values["$description"] = json.dumps(description)
+        if _DESCRIPTION in topics:
+            description = _description_object(topics[_DESCRIPTION])
+            name = description.get("name")
+            if device_id == new_root and isinstance(name, str) and name:
+                description["name"] = _SEEDED_SITE_NAME
+                planted.add(_SEEDED_SITE_NAME)
+            elif isinstance(name, str) and name in names:
+                description["name"] = names[name]
+            values[_DESCRIPTION] = json.dumps(description)
         seeded[device_id] = values
     return Reidentified(seeded, new_root, frozenset(planted))
 

@@ -22,9 +22,10 @@ one that names no device in the tree becomes ``masked-missing-<n>`` and stays
 visibly dangling.
 
 Last, every string the panel published that the rules keep is swept for the
-tree's original device ids and serial numbers, the utility meter's among them:
-a property the library has never seen, a device named by an id, an identifier
-inside a ``json`` value. The sweep reads only what came off the wire, never the
+tree's original device ids and serial numbers, the utility meter's among them,
+and for every dangling id, which reads as its own ``masked-missing-<n>``
+wherever it appears: a property the library has never seen, a device named by
+an id, an identifier inside a ``json`` value. The sweep reads only what came off the wire, never the
 placeholders and masks the rules wrote, so it cannot rewrite them.
 """
 
@@ -109,7 +110,14 @@ _DESCRIPTION_NAME: Final = "name"
 _DIGIT_RUNS = re.compile(r"([0-9]+)")
 _MIN_EMBEDDED: Final = 6
 """An identifier shorter than this is swept only where it is a whole value, never inside one."""
-_BOUNDARY_BEFORE: Final = "(?<![A-Za-z0-9])"
+_BOUNDARY_BEFORE: Final = r'(?:(?<![A-Za-z0-9])|(?<=\\[bfnrt"\\/])|(?<=\\u[0-9A-Fa-f]{4}))'
+"""Not after an ASCII letter or digit, unless that character ends a JSON escape (``\\n``, ``\\u00b0``).
+
+A ``json`` value is swept as the wire text the panel published, never parsed and
+re-serialised, so an identifier after an escape is adjoined by the escape's own
+letter or hex digit. Reading an escaped backslash followed by a letter as an
+escape errs toward masking.
+"""
 _BOUNDARY_AFTER: Final = "(?![A-Za-z0-9])"
 
 type NaturalKey = tuple[tuple[int, str | int], ...]
@@ -233,12 +241,16 @@ def export_masked_tree(
     order, so the same tree always gives the same document. A dangling id is
     numbered ``masked-missing-<n>`` in the order it is first met: devices in
     placeholder order, and within one its values, then its targets, then its
-    description's references. The SDK's objects are only read; a description
-    is copied before anything in it is replaced.
+    description's references; the sweep replaces the same id with the same
+    placeholder wherever else the panel published it. The SDK's objects are
+    only read; a description is copied before anything in it is replaced.
     """
     ids = placeholder_ids(root, descendants)
     in_order = sorted([root, *descendants], key=lambda device: _order(ids[device.device_id]))
-    masker = _Masker(ids, root.device_id, _Sweep(_identifiers(ids, in_order)))
+    references = _References(ids)
+    for device in in_order:
+        references.register(device)
+    masker = _Masker(references, root.device_id, _Sweep(_identifiers(ids, in_order, references.dangling())))
     devices: dict[str, MaskedTreeDevice] = {}
     undescribed: dict[str, UndescribedDevice] = {}
     for device in in_order:
@@ -258,19 +270,25 @@ def export_masked_tree(
     }
 
 
-def _identifiers(ids: Mapping[str, str], in_order: Sequence[DiscoveredDevice]) -> list[tuple[str, str]]:
-    """Every original device id and serial number, with what the sweep replaces it by, highest priority first.
+def _identifiers(
+    ids: Mapping[str, str], in_order: Sequence[DiscoveredDevice], dangling: Sequence[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Every original device id, dangling id and serial number, with what the sweep replaces it by, highest priority first.
 
     An id is replaced by its device's placeholder and a serial by its device's
     masked serial, the placeholder in upper case. Ids come first, so on a panel
-    whose serial is its id the text is read as the id; then serials, so a serial
-    that is also another device's id is read as that id. Within each, devices
-    come in placeholder order, so a serial two devices publish (a MID and its
-    BESS) is the first owner's wherever it is found. The utility meter's serial
-    comes last and is replaced by its own mask, ``MASKED-METER``: it is a serial
-    number, not free text, though it names the premises rather than a device.
+    whose serial is its id the text is read as the id; then the dangling ids,
+    each with the ``masked-missing-<n>`` its reference was given, so an id reads
+    the same at a reference and anywhere else, even one spelt like a serial;
+    then serials, so a serial that is also an id is read as that id. Within
+    each, devices come in placeholder order, so a serial two devices publish (a
+    MID and its BESS) is the first owner's wherever it is found. The utility
+    meter's serial comes last and is replaced by its own mask,
+    ``MASKED-METER``: it is a serial number, not free text, though it names the
+    premises rather than a device.
     """
     identifiers = [(device.device_id, ids[device.device_id]) for device in in_order]
+    identifiers.extend(dangling)
     for device in in_order:
         identifiers.extend((serial, ids[device.device_id].upper()) for serial in _serials(device, _SERIAL_NUMBER))
     meter_mask = _SITE_MASKS[_METER_SERIAL_NUMBER]
@@ -288,7 +306,7 @@ def _serials(device: DiscoveredDevice, property_id: str) -> list[str]:
 
 
 class _Sweep:
-    """Replaces every original device id and serial number found in text the panel published.
+    """Replaces every original device id, dangling id and serial number found in text the panel published.
 
     The matching rules keep it from rewriting unrelated text. Only identifiers
     are swept, device ids and serial numbers, the utility meter's included: any
@@ -315,8 +333,8 @@ class _Sweep:
                 self._replacements.setdefault(identifier, replacement)
         embedded = sorted((ident for ident in self._replacements if len(ident) >= _MIN_EMBEDDED), key=len, reverse=True)
         whole = [ident for ident in self._replacements if len(ident) < _MIN_EMBEDDED]
-        self._embedded = _alternation([f"{_BOUNDARY_BEFORE}{re.escape(ident)}{_BOUNDARY_AFTER}" for ident in embedded])
-        self._whole = _alternation([re.escape(ident) for ident in whole])
+        self._embedded = _alternation(embedded, before=_BOUNDARY_BEFORE, after=_BOUNDARY_AFTER)
+        self._whole = _alternation(whole)
 
     def value(self, text: str) -> str:
         """A published string with every identifier in it replaced."""
@@ -356,9 +374,18 @@ class _Sweep:
         )
 
 
-def _alternation(patterns: Sequence[str]) -> re.Pattern[str] | None:
-    """One case-insensitive pattern trying each in turn; None for none, which would match everywhere."""
-    return re.compile("|".join(patterns), re.IGNORECASE) if patterns else None
+def _alternation(identifiers: Sequence[str], *, before: str = "", after: str = "") -> re.Pattern[str] | None:
+    """One case-insensitive pattern trying each identifier in turn between two boundaries; None for none.
+
+    No identifiers gives None, never an empty pattern, which would match at
+    every position. The boundaries are shared, outside the alternation: an
+    identifier that fails the boundary after it still backtracks into the next,
+    so the matches are those of a boundary around each, and the boundary before
+    is tested once per position rather than once per identifier.
+    """
+    if not identifiers:
+        return None
+    return re.compile(f"{before}(?:{'|'.join(re.escape(ident) for ident in identifiers)}){after}", re.IGNORECASE)
 
 
 def _first_per_key[T](pairs: Iterable[tuple[str, T]]) -> dict[str, T]:
@@ -369,16 +396,44 @@ def _first_per_key[T](pairs: Iterable[tuple[str, T]]) -> dict[str, T]:
     return merged
 
 
-class _Masker:
-    """The masking rules and the sweep, with the one piece of state they share: dangling ids met so far."""
+def _named_ids(topic: str, value: str) -> list[str] | None:
+    """The ids a value names where its property carries device ids; None where it names none.
 
-    def __init__(self, ids: Mapping[str, str], panel_id: str, sweep: _Sweep) -> None:
+    ``connection/feeds-device-id`` and ``fed-by-device-id`` name one,
+    ``*/shared-with-device-ids`` a comma-separated list with each element
+    trimmed, and the MID's ``grid/grid-forming-entity`` one unless it is the grid
+    itself, read as the adapter reads it.
+    """
+    if topic in _ID_PROPERTIES:
+        return [value]
+    if topic == _GRID_FORMING_ENTITY:
+        return None if value.strip().upper() == _GRID else [value]
+    if topic.partition("/")[2] == _ID_LIST_PROPERTY:
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return None
+
+
+def _description_ids(description: Mapping[object, object]) -> list[str]:
+    """The ids a description names: its ``parent``, its ``root``, then each of its ``children``."""
+    named = [reference for key in _REFERENCE_KEYS if isinstance(reference := description.get(key), str)]
+    children = description.get(_CHILDREN)
+    if isinstance(children, list):
+        named.extend(child for child in children if isinstance(child, str))
+    return named
+
+
+class _References:
+    """Device ids mapped to placeholders, and each dangling id to its own ``masked-missing-<n>``."""
+
+    def __init__(self, ids: Mapping[str, str]) -> None:
         self._ids = ids
-        self._panel_id = panel_id
-        self._sweep = sweep
         self._missing: dict[str, str] = {}
 
-    def reference(self, device_id: str) -> str:
+    def placeholder(self, device_id: str) -> str:
+        """The placeholder of a device in the tree."""
+        return self._ids[device_id]
+
+    def map(self, device_id: str) -> str:
         """The placeholder of the device an id names, or the dangling id's own ``masked-missing-<n>``."""
         placeholder = self._ids.get(device_id)
         if placeholder is not None:
@@ -386,6 +441,37 @@ class _Masker:
         if device_id not in self._missing:
             self._missing[device_id] = f"{_PREFIX}{_MISSING}-{len(self._missing) + 1}"
         return self._missing[device_id]
+
+    def register(self, device: DiscoveredDevice) -> None:
+        """Number every dangling id a device names, in the order the masking meets them.
+
+        Its values, then its targets, each in key order, then its description's
+        references; a valued-empty ``""`` names nothing. Registering every
+        device in placeholder order before any is masked numbers each dangling
+        id as the masking would, so the sweep can replace it everywhere else.
+        """
+        for published in (_flattened(device.properties), _flattened(device.property_targets)):
+            for topic in sorted(published):
+                named = _named_ids(topic, published[topic]) if published[topic] else None
+                for device_id in named or ():
+                    self.map(device_id)
+        description: object = device.description
+        if isinstance(description, dict):
+            for device_id in _description_ids(description):
+                self.map(device_id)
+
+    def dangling(self) -> list[tuple[str, str]]:
+        """Each dangling id met so far, with its ``masked-missing-<n>``, in the order met."""
+        return list(self._missing.items())
+
+
+class _Masker:
+    """The masking rules and the sweep, sharing one map of references."""
+
+    def __init__(self, references: _References, panel_id: str, sweep: _Sweep) -> None:
+        self._references = references
+        self._panel_id = panel_id
+        self._sweep = sweep
 
     def published(self, text: str) -> str:
         """A string the panel published and no rule replaces, swept."""
@@ -414,19 +500,15 @@ class _Masker:
             return _MASKED_PANEL_NAME
         property_id = topic.partition("/")[2]
         if property_id == _SERIAL_NUMBER:
-            return self._ids[owner].upper()
+            return self._references.placeholder(owner).upper()
         return _SITE_MASKS.get(property_id)
 
     def _referenced(self, topic: str, value: str) -> str:
         """The value with every device id it names mapped; a value that names none, swept."""
-        if topic in _ID_PROPERTIES:
-            return self.reference(value)
-        if topic == _GRID_FORMING_ENTITY:
-            # The grid itself, read as the adapter reads it, is not an id.
-            return self.published(value) if value.strip().upper() == _GRID else self.reference(value)
-        if topic.partition("/")[2] == _ID_LIST_PROPERTY:
-            return ",".join(self.reference(part.strip()) for part in value.split(",") if part.strip())
-        return self.published(value)
+        named = _named_ids(topic, value)
+        if named is None:
+            return self.published(value)
+        return ",".join(self._references.map(device_id) for device_id in named)
 
     def description(self, owner: str, description: Mapping[object, object]) -> dict[str, object]:
         """A copy of a ``$description`` with its device references mapped, the panel's name masked, the rest swept.
@@ -438,11 +520,11 @@ class _Masker:
         for key in _REFERENCE_KEYS:
             reference = description.get(key)
             if isinstance(reference, str):
-                replaced[key] = self.reference(reference)
+                replaced[key] = self._references.map(reference)
         children = description.get(_CHILDREN)
         if isinstance(children, list):
             replaced[_CHILDREN] = [
-                self.reference(child) if isinstance(child, str) else self._sweep.json(child) for child in children
+                self._references.map(child) if isinstance(child, str) else self._sweep.json(child) for child in children
             ]
         if owner == self._panel_id and _DESCRIPTION_NAME in description:
             replaced[_DESCRIPTION_NAME] = _MASKED_PANEL_NAME

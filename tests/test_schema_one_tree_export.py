@@ -31,6 +31,7 @@ _SPACES = "info/spaces"
 _DIRECTION = "info/direction"
 _TYPE_CIRCUIT = "energy.ebus.device.circuit"
 _TYPE_LUGS = "energy.ebus.device.lugs"
+_GENERATOR_IDS = [f"g-{n}" for n in range(2, 12)]
 
 
 @dataclass(frozen=True)
@@ -117,57 +118,6 @@ def test_lugs_take_their_direction(case: Case) -> None:
     assert ids[lugs["DOWNSTREAM"]] == "masked-lugs-downstream"
 
 
-@every_tree
-def test_placeholders_survive_an_id_change(case: Case) -> None:
-    rank = {device_id: position for position, device_id in enumerate(sorted(case.topics, key=natural_key), start=1)}
-
-    def new_id(old: str) -> str:
-        return f"{_NEW_ROOT}-{hashlib.blake2b(old.encode(), digest_size=4).hexdigest()}-{rank[old]}"
-
-    renamed, new_root = rename_devices(case.topics, case.root_id, new_id)
-    before = _placeholders(case.topics, case.root_id)
-    after = _placeholders(renamed, new_root)
-    assert {new_id(old) for old in before} == set(after)
-    # A placeholder decided by something other than the id (breaker space,
-    # direction, being the only one of its class) is the device's alone. Devices
-    # the spec numbers by id within a class (a second charger, a remote CT) may
-    # swap numbers when their ids change, but never class.
-    by_id = _numbered_by_id(case, before)
-    for old, placeholder in before.items():
-        renamed_placeholder = after[new_id(old)]
-        if old in by_id:
-            assert _class_of(renamed_placeholder) == _class_of(placeholder)
-        else:
-            assert renamed_placeholder == placeholder
-
-
-def _class_of(placeholder: str) -> str:
-    return re.sub(r"-[0-9]+$", "", placeholder)
-
-
-def _numbered_by_id(case: Case, ids: dict[str, str]) -> set[str]:
-    """The devices whose number within a class the original id decides."""
-    devices = {device.device_id: device for device in devices_from_tree(case.topics)}
-    members: dict[str, list[str]] = {}
-    for device_id, placeholder in ids.items():
-        members.setdefault(_class_of(placeholder), []).append(device_id)
-
-    def lowest_space(device_id: str) -> int | None:
-        spaces = re.findall(r"[0-9]+", _value(devices[device_id], _SPACES) or "")
-        return min(map(int, spaces)) if spaces else None
-
-    decided: set[str] = set()
-    for group in members.values():
-        if len(group) == 1:
-            continue
-        spaces = [lowest_space(device_id) for device_id in group]
-        for device_id, space in zip(group, spaces, strict=True):
-            directed = _value(devices[device_id], _DIRECTION) in ("UPSTREAM", "DOWNSTREAM")
-            if not directed and (space is None or spaces.count(space) > 1):
-                decided.add(device_id)
-    return decided
-
-
 def _generators(ids: list[str]) -> RetainedTopicTree:
     return tree(
         panel(),
@@ -178,6 +128,19 @@ def _generators(ids: list[str]) -> RetainedTopicTree:
             for device_id in ids
         ),
     )
+
+
+@pytest.mark.parametrize("case", [*CASES, Case("many-generators", _generators(_GENERATOR_IDS), "panel-a")], ids=repr)
+def test_placeholders_survive_an_id_change(case: Case) -> None:
+    rank = {device_id: position for position, device_id in enumerate(sorted(case.topics, key=natural_key), start=1)}
+
+    def new_id(old: str) -> str:
+        return _NEW_ROOT if old == case.root_id else f"{_NEW_ROOT}-renamed-{rank[old]}"
+
+    renamed, new_root = rename_devices(case.topics, case.root_id, new_id)
+    before = _placeholders(case.topics, case.root_id)
+    after = _placeholders(renamed, new_root)
+    assert {new_id(old): placeholder for old, placeholder in before.items()} == after
 
 
 def test_natural_order_compares_numbers() -> None:

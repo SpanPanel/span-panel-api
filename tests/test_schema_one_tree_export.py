@@ -15,6 +15,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import time
 
 from ebus_sdk.homie import DiscoveredDevice
 import pytest
@@ -1426,8 +1427,8 @@ def test_a_number_equal_to_an_identifier_is_swept_and_the_value_still_parses() -
 def test_an_identifier_after_an_escape_is_swept_in_any_text() -> None:
     """A string literal is decoded and swept wherever it stands: a JSON string scalar, or text that does not parse.
 
-    A literal that does not decode (an escape JSON does not define, a raw tab)
-    is swept as the plain text it is.
+    A literal JSON would refuse (an escape it does not define, a raw tab) is
+    decoded leniently and, once changed, written again with standard escapes.
     """
     topics, root = _reidentified_reference()
     bess = _first_of(topics, _TYPE_BESS)
@@ -1448,7 +1449,13 @@ def test_an_identifier_after_an_escape_is_swept_in_any_text() -> None:
     topics[root].update(planted)
     export, ids = _exported(topics, root)
     values = export["devices"]["masked-panel"]["undeclared_properties"]
-    assert values == {topic: text.replace(serial, ids[bess].upper()) for topic, text in planted.items()}
+    mask = ids[bess].upper()
+    expected = {topic: text.replace(serial, mask) for topic, text in planted.items()}
+    expected["vendor/undefined-escape"] = '{"n": "\\\\q ' + mask + '"}'
+    expected["vendor/raw-tab"] = '{"n": "\\t' + mask + '"}'
+    assert values == expected
+    assert json.loads(values["vendor/undefined-escape"]) == {"n": "\\q " + mask}
+    assert json.loads(values["vendor/raw-tab"]) == {"n": "\t" + mask}
     assert serial not in json.dumps(export)
 
 
@@ -1485,6 +1492,162 @@ def test_a_changed_literal_with_a_lone_surrogate_stays_encodable() -> None:
     assert exported.encode("utf-8")
     assert json.loads(exported) == {"k": "\ud800 " + ids[bess].upper()}
     assert json.dumps(export).encode("utf-8")
+
+
+def test_a_flawed_literal_is_decoded_leniently() -> None:
+    """A literal with an undefined escape or a raw control character is still decoded, so a valid escape beside the flaw hides nothing.
+
+    Swept plain, `\\n` before the serial would glue its `n` to it. A flawed
+    literal that holds no identifier keeps its bytes.
+    """
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    planted = {
+        "vendor/undefined-escape": '{"n": "\\q \\n' + serial + '"}',
+        "vendor/raw-tab-before": '{"n": "\t\\n' + serial + '"}',
+        "vendor/raw-tab-after": '{"n": "\\n' + serial + '\t"}',
+        "vendor/flawed-neighbour": '{"n": "\\n' + serial + '", "bad": "\\q"}',
+    }
+    for text in planted.values():
+        with pytest.raises(ValueError):
+            json.loads(text)
+    topics[root].update(planted)
+    export, ids = _exported(topics, root)
+    values = export["devices"]["masked-panel"]["undeclared_properties"]
+    mask = ids[bess].upper()
+    assert values == {
+        "vendor/undefined-escape": '{"n": "\\\\q \\n' + mask + '"}',
+        "vendor/raw-tab-before": '{"n": "\\t\\n' + mask + '"}',
+        "vendor/raw-tab-after": '{"n": "\\n' + mask + '\\t"}',
+        "vendor/flawed-neighbour": '{"n": "\\n' + mask + '", "bad": "\\q"}',
+    }
+    for topic in ("vendor/undefined-escape", "vendor/raw-tab-before", "vendor/raw-tab-after"):
+        assert isinstance(json.loads(values[topic]), dict), topic
+    assert serial not in json.dumps(export)
+
+
+def _wrapped(innermost: Mapping[str, str], wraps: int) -> str:
+    """`innermost` as a JSON object text carried inside a string `wraps` times, each level JSON in a string."""
+    level: dict[str, str] = dict(innermost)
+    for _ in range(wraps):
+        level = {"inner": json.dumps(level)}
+    return json.dumps(level)
+
+
+def test_a_literal_at_the_nesting_bound_is_masked_whole_or_kept() -> None:
+    """A literal decoded four levels down is replaced whole where it may hide an identifier and kept otherwise.
+
+    The wire string is depth 0, a literal decoded from it depth 1: two wraps
+    put the innermost object's strings at depth 3, three wraps at depth 4.
+    """
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    planted = {
+        "vendor/depth-3": _wrapped({"serial": serial}, 2),
+        "vendor/depth-4": _wrapped({"serial": serial}, 3),
+        "vendor/depth-4-plain": _wrapped({"note": "kept"}, 3),
+    }
+    topics[root].update(planted)
+    export, ids = _exported(topics, root)
+    values = export["devices"]["masked-panel"]["undeclared_properties"]
+    mask = ids[bess].upper()
+    assert values == {
+        "vendor/depth-3": _wrapped({"serial": mask}, 2),
+        "vendor/depth-4": _wrapped({"serial": "masked-nested-value"}, 3),
+        "vendor/depth-4-plain": planted["vendor/depth-4-plain"],
+    }
+    assert serial not in json.dumps(export)
+
+
+def test_a_short_identifier_filling_a_literal_at_the_bound_is_masked_whole() -> None:
+    """At the bound a short identifier counts where it would anywhere, as the whole of a value literal."""
+    topics = _copy(parent_child_tree())
+    assert "bess" in topics
+    topics[_REFERENCE_ROOT]["vendor/depth-3"] = _wrapped({"peer": "bess"}, 2)
+    topics[_REFERENCE_ROOT]["vendor/depth-4"] = _wrapped({"peer": "bess"}, 3)
+    export, ids = _exported(topics, _REFERENCE_ROOT)
+    values = export["devices"]["masked-panel"]["undeclared_properties"]
+    assert values["vendor/depth-3"] == _wrapped({"peer": ids["bess"]}, 2)
+    assert values["vendor/depth-4"] == _wrapped({"peer": "masked-nested-value"}, 3)
+
+
+def _enclosed(innermost: str, depth: int) -> str:
+    """`innermost` as a JSON string literal nested `depth` deep, each level spelt with `\\u` escapes so the text stays small."""
+    text = innermost
+    for _ in range(depth):
+        text = '"' + text.replace("\\", "\\u005c").replace('"', "\\u0022") + '"'
+    return text
+
+
+def _unwrapped(text: str, depth: int) -> object:
+    """`text` decoded as a JSON string literal `depth` times."""
+    decoded: object = text
+    for _ in range(depth):
+        assert isinstance(decoded, str)
+        decoded = json.loads(decoded)
+    return decoded
+
+
+def test_deep_nesting_exports_in_bounded_size_and_time() -> None:
+    """A serial nested 24 literals deep is masked, and the export grows by at most a constant factor.
+
+    Every level written again doubles the escapes inside it, so an unbounded
+    sweep would write megabytes for this three-kilobyte value. At depth four of
+    this spelling the serial is glued to a digit of `\\u0022`, so only the
+    quote in the content tells the bound to mask the literal.
+    """
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    deep = _enclosed(serial, 24)
+    assert len(deep) < 4_000
+    topics[root]["vendor/deep"] = deep
+    start = time.perf_counter()
+    export, _ = _exported(topics, root)
+    elapsed = time.perf_counter() - start
+    exported = export["devices"]["masked-panel"]["undeclared_properties"]["vendor/deep"]
+    assert len(exported) <= 4 * len(deep)
+    assert elapsed < 1.0
+    assert serial not in json.dumps(export)
+    assert _unwrapped(exported, 4) == "masked-nested-value"
+
+
+def test_deeply_nested_strings_do_not_exhaust_the_stack() -> None:
+    """A string nested five hundred literals deep exports without a `RecursionError`."""
+    topics, root = _reidentified_reference()
+    deep = _enclosed("x", 500)
+    assert len(deep) < 2_000_000
+    topics[root]["vendor/deep"] = deep
+    export, _ = _exported(topics, root)
+    exported = export["devices"]["masked-panel"]["undeclared_properties"]["vendor/deep"]
+    assert _unwrapped(exported, 4) == "masked-nested-value"
+
+
+def test_an_unclosed_quote_is_scanned_in_linear_time() -> None:
+    """Text of quotes that never close is swept in linear time, and an identifier after them is still found.
+
+    A backslash before a newline must not end the scan of a literal either:
+    every escaped quote behind it would then open a scan of its own.
+    """
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    unclosed = '"\\' * 32_000
+    assert len(unclosed) == 64_000
+    newline = '"' + '\\"' * 16_000 + "\\\n"
+    topics[root]["vendor/unclosed"] = unclosed
+    topics[root]["vendor/unclosed-then-serial"] = unclosed + " " + serial
+    topics[root]["vendor/unclosed-newline"] = newline + serial
+    start = time.perf_counter()
+    export, ids = _exported(topics, root)
+    elapsed = time.perf_counter() - start
+    values = export["devices"]["masked-panel"]["undeclared_properties"]
+    assert values["vendor/unclosed"] == unclosed
+    assert values["vendor/unclosed-then-serial"] == unclosed + " " + ids[bess].upper()
+    assert values["vendor/unclosed-newline"] == newline + ids[bess].upper()
+    assert elapsed < 1.0
 
 
 def _json_containers(values: Mapping[str, str]) -> dict[str, str]:

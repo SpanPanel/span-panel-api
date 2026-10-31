@@ -7,9 +7,14 @@ can decide between them because the panels we can reach carry no SPAN Drive.
 
 So the parser is written against the *rule* rather than against either name, and
 these tests hold it to that: every read expectation is computed from the captured
-tree, the catalogued spelling is driven through a rewritten description and has to
-behave identically, and every write assertion names the exact topic and payload
-the transport puts on the wire.
+tree or from a value republished on it, the catalogued spelling is driven through a
+rewritten description and has to behave identically, and every write assertion
+names the exact topic and payload the transport puts on the wire.
+
+The capture sets no user limit. From firmware r202639 a charger publishes
+`config/user-max-charge-current` only once a user sets one, and `ebus-panel-sim`
+0.9.0 publishes that behaviour, so a test about a valued limit publishes one
+(`_user_limit`) the way a charger would after a user set it.
 """
 
 from __future__ import annotations
@@ -69,6 +74,15 @@ def _published(device_id: str, topic: str) -> str:
     return value
 
 
+def _user_limit(device_id: str) -> int:
+    """A limit a user would set on this charger: inside its ceiling, and not equal to it.
+
+    Below the ceiling so it cannot be mistaken for the ceiling standing in for an
+    absent limit, which is what the effective limit reports when none is set.
+    """
+    return int(_published(device_id, CEILING_TOPIC)) - 8
+
+
 def _tree(**overrides: Mapping[str, str | None]) -> dict[str, dict[str, str]]:
     """The capture with topics rewritten per device, or removed where `None`.
 
@@ -94,15 +108,18 @@ def _snapshot_evse(tree: dict[str, dict[str, str]], device_id: str) -> object:
     return build_evse(_evse_device(tree, device_id), {}, node_id=device_id, feed_statuses={})
 
 
-def _renamed_to_catalog(device_id: str) -> dict[str, dict[str, str]]:
-    """The capture with one charger publishing the catalogued spelling instead.
+def _renamed_to_catalog(device_id: str, base: dict[str, dict[str, str]] | None = None) -> dict[str, dict[str, str]]:
+    """The capture (or `base`, a tree built from it) with one charger publishing the catalogued spelling instead.
 
     Both halves move — the `$description` node and the value topics — because a
     charger that renamed one and not the other would be publishing to a property
     it never declared, which is a different (and illegal) situation from the one
-    under test.
+    under test. The limit's value topic moves only where the charger publishes
+    one: unset, it is unpublished under either spelling. The ceiling is always
+    published, so its absence is a fixture fault and fails here.
     """
-    topics = dict(_TREE[device_id])
+    source = _TREE if base is None else base
+    topics = dict(source[device_id])
     description = json.loads(topics["$description"])
     config = description["nodes"].pop("config")
     properties = config["properties"]
@@ -116,8 +133,9 @@ def _renamed_to_catalog(device_id: str) -> dict[str, dict[str, str]]:
     }
     topics["$description"] = json.dumps(description)
     topics[CATALOG_CEILING_TOPIC] = topics.pop(CEILING_TOPIC)
-    topics[CATALOG_LIMIT_TOPIC] = topics.pop(LIMIT_TOPIC)
-    tree = {other: dict(values) for other, values in _TREE.items()}
+    if LIMIT_TOPIC in topics:
+        topics[CATALOG_LIMIT_TOPIC] = topics.pop(LIMIT_TOPIC)
+    tree = {other: dict(values) for other, values in source.items()}
     tree[device_id] = topics
     return tree
 
@@ -178,21 +196,48 @@ def _key(adapter: SchemaOneAdapter, device_id: str) -> str:
 
 
 def test_both_halves_come_off_the_wire() -> None:
-    evse = _snapshot_evse(_TREE, EVSE)
+    """A charger with a limit set publishes both halves, and each is read off its own topic."""
+    limit = _user_limit(EVSE)
 
-    assert evse.charge_current_limit_a == int(_published(EVSE, LIMIT_TOPIC))
+    evse = _snapshot_evse(_tree(**{EVSE: {LIMIT_TOPIC: str(limit)}}), EVSE)
+
+    assert evse.charge_current_limit_a == limit
     assert evse.charge_current_ceiling_a == int(_published(EVSE, CEILING_TOPIC))
+
+
+def test_the_capture_sets_no_user_limit_on_either_charger() -> None:
+    """The capture's own state, read the way the broker replays it.
+
+    Each charger declares the limit, settable, and publishes no value for it, so
+    each reads no limit, its own ceiling as the limit in force, and still a
+    control. Asserted per charger, because the capture is the producer's account
+    of r202639 and a parser that defaulted the absent limit to anything would
+    report it here.
+    """
+    adapter = _adapter()
+    snapshot = adapter.build_snapshot()
+
+    for device_id in (EVSE, EVSE_2):
+        declared = json.loads(_TREE[device_id]["$description"])["nodes"]["config"]["properties"]
+        assert declared["user-max-charge-current"]["settable"] is True
+        assert LIMIT_TOPIC not in _TREE[device_id]
+
+        evse = snapshot.evse[_key(adapter, device_id)]
+
+        assert evse.charge_current_limit_a is None
+        assert evse.effective_charge_current_limit_a == int(_published(device_id, CEILING_TOPIC))
+        assert evse.charge_current_limit_settable is True
 
 
 def test_each_charger_reads_its_own_limit() -> None:
     """Two chargers, two different values, and neither may answer for the other.
 
-    The capture publishes 32 on both, so an assertion against it as-published
-    would pass for a parser that read one charger and reported it twice. The
-    values are made to differ first, which is the only shape of this test that
-    proves anything.
+    The capture sets no limit on either and publishes the same ceiling on both,
+    so limits derived from it as-is would pass for a parser that read one
+    charger and reported it twice. The values are set and made to differ first,
+    which is the only shape of this test that proves anything.
     """
-    first, second = int(_published(EVSE, LIMIT_TOPIC)) - 8, int(_published(EVSE_2, LIMIT_TOPIC)) - 16
+    first, second = _user_limit(EVSE), _user_limit(EVSE_2) - 8
     assert first != second
 
     tree = _tree(**{EVSE: {LIMIT_TOPIC: str(first)}, EVSE_2: {LIMIT_TOPIC: str(second)}})
@@ -213,9 +258,15 @@ def test_each_charger_reads_its_own_ceiling() -> None:
 
 
 def test_republishing_moves_the_reading() -> None:
-    raised = int(_published(EVSE, LIMIT_TOPIC)) - 12
+    """A limit the user changes moves the reading on the same device, rather than holding the first one seen."""
+    first = _user_limit(EVSE)
+    moved = first - 4
+    device = _evse_device(_tree(**{EVSE: {LIMIT_TOPIC: str(first)}}), EVSE)
+    assert build_evse(device, {}, node_id=EVSE, feed_statuses={}).charge_current_limit_a == first
 
-    assert _snapshot_evse(_tree(**{EVSE: {LIMIT_TOPIC: str(raised)}}), EVSE).charge_current_limit_a == raised
+    device.update_property("config", "user-max-charge-current", str(moved))
+
+    assert build_evse(device, {}, node_id=EVSE, feed_statuses={}).charge_current_limit_a == moved
 
 
 def test_an_unpublished_value_is_none_rather_than_zero() -> None:
@@ -288,14 +339,32 @@ def test_the_ceiling_is_never_reported_settable() -> None:
 def test_a_pending_write_shows_as_a_target() -> None:
     """The Homie `$target` echo, the same pending-command signal the priority
     select already reads through `circuit.priority_target`."""
-    device = _evse_device(_TREE, EVSE)
-    pending = int(_published(EVSE, LIMIT_TOPIC)) - 8
+    current = _user_limit(EVSE)
+    device = _evse_device(_tree(**{EVSE: {LIMIT_TOPIC: str(current)}}), EVSE)
+    pending = current - 8
     device.update_property_target("config", "user-max-charge-current", str(pending))
 
     evse = build_evse(device, {}, node_id=EVSE, feed_statuses={})
 
     assert evse.charge_current_limit_target_a == pending
-    assert evse.charge_current_limit_a == int(_published(EVSE, LIMIT_TOPIC))
+    assert evse.charge_current_limit_a == current
+
+
+def test_a_first_limit_still_pending_shows_as_a_target_and_no_reading() -> None:
+    """The capture's own state with a user's first write in flight.
+
+    The target shows at once; the limit stays unread until the charger
+    publishes one, and the ceiling stays the limit in force meanwhile.
+    """
+    device = _evse_device(_TREE, EVSE)
+    pending = _user_limit(EVSE)
+    device.update_property_target("config", "user-max-charge-current", str(pending))
+
+    evse = build_evse(device, {}, node_id=EVSE, feed_statuses={})
+
+    assert evse.charge_current_limit_target_a == pending
+    assert evse.charge_current_limit_a is None
+    assert evse.effective_charge_current_limit_a == int(_published(EVSE, CEILING_TOPIC))
 
 
 def test_no_pending_write_is_no_target() -> None:
@@ -325,13 +394,17 @@ def test_the_catalogued_spelling_reads_identically() -> None:
     The claim this whole design rests on: nothing outside `charge_limit.py`
     names a node, so a charger publishing the specified spelling produces the
     same snapshot as one publishing SPAN's. Asserted field by field against the
-    unrenamed capture rather than against literals, so the two paths are held to
-    each other and not merely to the same numbers.
+    unrenamed tree rather than against literals, so the two paths are held to
+    each other and not merely to the same numbers: once with a limit set, and
+    once as captured, with none.
     """
-    published = _snapshot_evse(_TREE, EVSE)
-    catalogued = _snapshot_evse(_renamed_to_catalog(EVSE), EVSE)
+    limit = _user_limit(EVSE)
+    valued = _tree(**{EVSE: {LIMIT_TOPIC: str(limit)}})
+    catalogued = _snapshot_evse(_renamed_to_catalog(EVSE, valued), EVSE)
 
-    assert catalogued == published
+    assert catalogued == _snapshot_evse(valued, EVSE)
+    assert catalogued.charge_current_limit_a == limit
+    assert _snapshot_evse(_renamed_to_catalog(EVSE), EVSE) == _snapshot_evse(_TREE, EVSE)
 
 
 def test_the_catalogued_spelling_is_written_to_its_own_topic() -> None:
@@ -348,13 +421,14 @@ def test_the_catalogued_spelling_wins_where_both_are_declared() -> None:
     retiring the old, and a reader that took whichever it saw first would flip
     between them on the strength of dict ordering.
     """
-    tree = _renamed_to_catalog(EVSE)
+    limit = str(_user_limit(EVSE))
+    tree = _renamed_to_catalog(EVSE, _tree(**{EVSE: {LIMIT_TOPIC: limit}}))
     stale = json.loads(_TREE[EVSE]["$description"])["nodes"]["config"]
     description = json.loads(tree[EVSE]["$description"])
     description["nodes"]["config"] = stale
     tree[EVSE]["$description"] = json.dumps(description)
     tree[EVSE][CEILING_TOPIC] = _published(EVSE, CEILING_TOPIC)
-    tree[EVSE][LIMIT_TOPIC] = _published(EVSE, LIMIT_TOPIC)
+    tree[EVSE][LIMIT_TOPIC] = limit
 
     surface = resolve_charge_limit(_evse_device(tree, EVSE))
 

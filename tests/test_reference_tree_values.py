@@ -29,14 +29,22 @@ The reduction loses nothing here, and that is measured rather than assumed:
 reduced the same way, panelbench's baseline is exactly the declared-but-unvalued
 set of its own committed wire capture (`tests/conformance/fixtures/golden_wire.json`).
 
-Refresh the vendored copy with:
+The vendored copy is panelbench's baseline at commit `7ddd953`:
 
-    cp ../panelbench/tests/fidelity/fixtures/unvalued_by_both_baseline.json \
-       tests/fixtures/panelbench_unvalued_by_both.json
+    git -C ../panelbench show 7ddd953:tests/fidelity/fixtures/unvalued_by_both_baseline.json \
+       > tests/fixtures/panelbench_unvalued_by_both.json
 
 It is vendored verbatim rather than pre-reduced so that refreshing it is a copy
 whose correctness a reader can check with `diff`, and so the reduction stays
 here where it is explained.
+
+**Why that commit and not panelbench's current baseline.** After it
+(`a89f104`, `e551701`) panelbench keys each line by role rather than by
+`type::name`, and measures upstream's example panel rather than its own, which
+names no battery, MID or inverter identity and no network. That file reduces to
+something this comparison cannot read, and disagrees with this capture for
+reasons that are not drift, so it cannot be copied verbatim until this
+comparison is reworked.
 
 **A failure here does not say which side moved, and both have.** Refreshing the
 vendored baseline is the fix when panelbench has already re-captured, which was

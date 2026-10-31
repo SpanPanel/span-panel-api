@@ -17,14 +17,18 @@ from pathlib import Path
 import re
 import time
 
+from ebus_panel_sim.capture import definition_from_tree, tree_from_snapshot
 from ebus_sdk.homie import DiscoveredDevice
 import pytest
 
 from span_panel_api.models import MaskedTree, MaskedTreeDevice, SpanPanelSnapshot
+from span_panel_api.protocol import TreeExportingAdapter
+from span_panel_api_schema_0 import SchemaZeroAdapter
 from span_panel_api_schema_1 import SchemaOneAdapter
 from span_panel_api_schema_1.tree_export import export_masked_tree, natural_key, placeholder_ids
 
-from reference_payloads.captures import CAPTURES, capture_path, capture_tree, capture_tree_from_document
+from conftest import flat_schema, parent_child_schema
+from reference_payloads.captures import CAPTURES, capture_adapter, capture_path, capture_tree, capture_tree_from_document
 from reference_payloads.reidentify import reidentify, rename_devices
 from reference_payloads.schema_one import RetainedTopicTree, devices_from_tree, parent_child_tree, replay
 from reference_payloads.synthetic_trees import SyntheticDevice, panel, tree
@@ -1686,3 +1690,32 @@ def test_every_json_value_still_parses(case: Case) -> None:
         "backslash": f"C:\\{ids[other]}",
         ids[other]: ["\u00b0masked-panel", "\\"],
     }
+
+
+def test_the_adapter_offers_the_export() -> None:
+    assert isinstance(capture_adapter(CAPTURES[0]), TreeExportingAdapter)
+    assert not isinstance(SchemaZeroAdapter("sim-40t-001", flat_schema(40)), TreeExportingAdapter)
+
+
+def test_the_adapter_exports_before_the_tree_is_ready() -> None:
+    adapter = replay(parent_child_tree(), _REFERENCE_ROOT, withhold_description_of="pv")
+    assert adapter.is_ready() is False
+    export = adapter.export_masked_tree()
+    assert export is not None
+    assert export["metadata"]["tree_complete"] is False
+
+
+def test_no_export_before_the_root_describes_itself() -> None:
+    assert SchemaOneAdapter(_REFERENCE_ROOT, parent_child_schema()).export_masked_tree() is None
+
+
+@every_tree
+def test_upstream_reads_the_export(case: Case) -> None:
+    export = replay(case.topics, case.root_id).export_masked_tree()
+    assert export is not None
+    tree = tree_from_snapshot(export)
+    assert tree.keys() == export["devices"].keys()
+    for device_id, device in export["devices"].items():
+        values = {**device["properties"], **device["numeric_properties"]}
+        assert tree[device_id].properties == values
+    definition_from_tree(tree)

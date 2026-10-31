@@ -36,8 +36,16 @@ from ..exceptions import (
     SpanPanelTLSVerificationError,
     SpanPanelValidationError,
 )
-from ..models import AdoptedProperty, ControlTarget, FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot, V2HomieSchema
-from ..protocol import PanelCapability, SchemaAdapter
+from ..models import (
+    AdoptedProperty,
+    ControlTarget,
+    FieldMetadata,
+    HomieSchemaTypes,
+    MaskedTree,
+    SpanPanelSnapshot,
+    V2HomieSchema,
+)
+from ..protocol import PanelCapability, SchemaAdapter, TreeExportingAdapter
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S
 from .control import ControlCommand, ControlDeadlines, ControlInterceptor, PublishOutcome, PublishState
@@ -419,6 +427,18 @@ class SpanMqttClient:
         if adapter is None or not adapter.is_ready():
             return None
         return adapter.build_field_metadata()
+
+    def masked_tree(self) -> MaskedTree | None:
+        """The panel's device tree with serials, device ids and site details masked.
+
+        Computed from the adapter's current view at call time. None on a flat
+        panel, whose adapter does not export a tree, and before the root device
+        has described itself.
+        """
+        adapter = self._adapter
+        if isinstance(adapter, TreeExportingAdapter):
+            return adapter.export_masked_tree()
+        return None
 
     async def connect(self) -> None:
         """Connect to MQTT broker and wait for Homie device ready.

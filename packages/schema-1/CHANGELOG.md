@@ -16,6 +16,7 @@ Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the u
 ### Added
 
 - **spanos3/r202639/03 batch 2: reads more of the data this firmware publishes.**
+- **`SchemaOneAdapter` exports the tree it holds, masked**, for `SpanMqttClient.masked_tree()`.
 
 ### Changed
 

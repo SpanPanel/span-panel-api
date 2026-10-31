@@ -32,6 +32,7 @@ placeholders and masks the rules wrote, so it cannot rewrite them.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+import json
 import re
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -110,17 +111,14 @@ _DESCRIPTION_NAME: Final = "name"
 _DIGIT_RUNS = re.compile(r"([0-9]+)")
 _MIN_EMBEDDED: Final = 6
 """An identifier shorter than this is swept only where it is a whole value, never inside one."""
-_BOUNDARY_BEFORE: Final = r'(?:(?<![A-Za-z0-9])|(?<=\\[bfnrt"\\/])|(?<=\\u[0-9A-Fa-f]{4}))'
-"""Not after an ASCII letter or digit, unless that character ends a JSON escape (``\\n``, ``\\u00b0``).
-
-A ``json`` value is swept as the wire text the panel published, never parsed and
-re-serialised, so an identifier after an escape is adjoined by the escape's own
-letter or hex digit. Reading an escaped backslash followed by a letter as an
-escape errs toward masking. The other half of the rule, that a match never
-starts on an escape's own letter, needs the backslashes counted, which a
-lookbehind cannot do: ``_Sweep.key`` checks it.
-"""
+_BOUNDARY_BEFORE: Final = "(?<![A-Za-z0-9])"
 _BOUNDARY_AFTER: Final = "(?![A-Za-z0-9])"
+_JSON_STRING: Final = re.compile(r'("(?:[^"\\]|\\.)*")(\s*:)?')
+"""A JSON string literal in raw JSON text, and the colon after it when it is an object key.
+
+Run over text that parsed as JSON, it finds every string literal: outside the
+literals, valid JSON holds no quote.
+"""
 _DIGIT: Final = re.compile(r"[0-9]")
 
 type NaturalKey = tuple[tuple[int, str | int], ...]
@@ -329,18 +327,22 @@ class _Sweep:
     a short code, so a region of ``OK`` swept as a whole would rewrite every
     status of ``OK``, and the property rules mask those alone.
 
-    An identifier matches case-insensitively and only where no ASCII letter or
-    digit adjoins it, except the letter or hex digit that ends a JSON escape
-    before it (``\\n``, ``\\u00b0``); a match never starts on an escape's own
-    letter. So ``circuit-1`` is not found inside ``circuit-12``, and an
-    identifier inside a ``json`` value is found after an escape without
-    splitting one. A ``-`` is not part of a word, because device ids are serials
-    and suffixes joined by ``-``, and a serial embedded in an id the tree does
-    not hold must still be found. Identifiers are tried longest first, so
-    ``<serial>-lugs-up`` maps to the lugs' placeholder rather than the panel's
-    with a suffix. One shorter than six characters is matched only as a whole
-    value, never inside a longer string or a key, where ``pv`` is also a
-    property id.
+    In plain text an identifier matches case-insensitively and only where no
+    ASCII letter or digit adjoins it, so ``circuit-1`` is not found inside
+    ``circuit-12``; any other character, a ``-`` or a backslash among them, is a
+    boundary. A ``-`` must be one, because device ids are serials and suffixes
+    joined by ``-``, and a serial embedded in an id the tree does not hold must
+    still be found. Identifiers are tried longest first, so ``<serial>-lugs-up``
+    maps to the lugs' placeholder rather than the panel's with a suffix. One
+    shorter than six characters is matched only as a whole value, never inside a
+    longer string or a key, where ``pv`` is also a property id.
+
+    A published value that parses as a JSON object or array is swept literal by
+    literal (``value``), since in its raw text an escape's own letter would
+    adjoin an identifier, or spell part of one (``\\u006e``). Each string literal
+    is decoded and swept as plain text, an object key as a key, and only a
+    literal that changed is written again; every other byte stays as published,
+    so the value still parses.
 
     Where identifiers that differ only in case match, the one spelt as found
     wins, then the one of higher priority (``_identifiers``).
@@ -357,46 +359,51 @@ class _Sweep:
         self._whole = _alternation(whole)
 
     def value(self, text: str) -> str:
-        """A published string with every identifier in it replaced."""
+        """A published value with every identifier in it replaced.
+
+        A JSON object or array is swept literal by literal, any other value as plain text.
+        """
+        if _is_json_container(text):
+            return _JSON_STRING.sub(self._literal, text)
+        return self.plain(text)
+
+    def plain(self, text: str) -> str:
+        """A string with every identifier in it replaced, a short one only where it is the whole string."""
         if self._whole is not None and self._whole.fullmatch(text):
             return self._replacement(text)
         return self.key(text)
 
     def key(self, text: str) -> str:
-        """A key with every identifier of six characters or more in it replaced.
-
-        A match that would start on the letter of a JSON escape (right after an
-        unescaped backslash) is passed over and the search resumes one character
-        on, so ``\\nt-1234-abcde`` keeps its newline and stays valid JSON while
-        an identifier starting later in the same span is still found.
-        """
+        """A key with every identifier of six characters or more in it replaced."""
         if self._embedded is None:
             return text
-        pieces: list[str] = []
-        copied = start = 0
-        while (match := self._embedded.search(text, start)) is not None:
-            if _after_unescaped_backslash(text, match.start()):
-                start = match.start() + 1
-                continue
-            pieces.extend((text[copied : match.start()], self._replacement(match.group())))
-            copied = start = match.end()
-        pieces.append(text[copied:])
-        return "".join(pieces)
+        return self._embedded.sub(lambda match: self._replacement(match.group()), text)
 
     def topic(self, topic: str) -> str:
         """A ``node/property`` key, swept as its node and property ids are in the description that declares them."""
         node_id, separator, property_id = topic.partition("/")
         return f"{self.key(node_id)}{separator}{self.key(property_id)}"
 
-    def json(self, value: object) -> object:
-        """A copy of parsed JSON with every key and string swept."""
+    def parsed(self, value: object) -> object:
+        """A copy of parsed JSON (a description) with every key and string swept as plain text."""
         if isinstance(value, str):
-            return self.value(value)
+            return self.plain(value)
         if isinstance(value, dict):
-            return _first_per_key((self.key(str(key)), self.json(item)) for key, item in value.items())
+            return _first_per_key((self.key(str(key)), self.parsed(item)) for key, item in value.items())
         if isinstance(value, list):
-            return [self.json(item) for item in value]
+            return [self.parsed(item) for item in value]
         return value
+
+    def _literal(self, match: re.Match[str]) -> str:
+        """One string literal of a JSON value, decoded and swept, and written again only if it changed."""
+        literal, colon = match.group(1), match.group(2)
+        decoded: object = json.loads(literal)
+        if not isinstance(decoded, str):
+            return match.group()
+        swept = self.plain(decoded) if colon is None else self.key(decoded)
+        if swept == decoded:
+            return match.group()
+        return json.dumps(swept, ensure_ascii=False) + (colon or "")
 
     def _replacement(self, found: str) -> str:
         exact = self._replacements.get(found)
@@ -409,10 +416,21 @@ class _Sweep:
         )
 
 
-def _after_unescaped_backslash(text: str, index: int) -> bool:
-    """Whether ``text[index]`` follows a backslash that starts an escape: one preceded by an even number of backslashes."""
-    backslashes = len(text[:index]) - len(text[:index].rstrip("\\"))
-    return backslashes % 2 == 1
+def _is_json_container(text: str) -> bool:
+    """Whether a published value parses as a JSON object or array, whatever its declared datatype.
+
+    JSON text that opens with ``{`` or ``[`` is an object or array if it parses
+    at all, so a scalar (``"bess"``, ``12``) never gets past the first check. A
+    value that does not parse is plain text, and so is nesting too deep to
+    parse, so the export stays total.
+    """
+    if not text.lstrip().startswith(("{", "[")):
+        return False
+    try:
+        json.loads(text)
+    except ValueError, RecursionError:
+        return False
+    return True
 
 
 def _alternation(identifiers: Sequence[str], *, before: str = "", after: str = "") -> re.Pattern[str] | None:
@@ -565,12 +583,12 @@ class _Masker:
         children = description.get(_CHILDREN)
         if isinstance(children, list):
             replaced[_CHILDREN] = [
-                self._references.map(child) if isinstance(child, str) else self._sweep.json(child) for child in children
+                self._references.map(child) if isinstance(child, str) else self._sweep.parsed(child) for child in children
             ]
         if owner == self._panel_id and _DESCRIPTION_NAME in description:
             replaced[_DESCRIPTION_NAME] = _MASKED_PANEL_NAME
         return _first_per_key(
-            (name, replaced[name]) if name in replaced else (self._sweep.key(name), self._sweep.json(value))
+            (name, replaced[name]) if name in replaced else (self._sweep.key(name), self._sweep.parsed(value))
             for name, value in ((str(key), value) for key, value in description.items())
         )
 

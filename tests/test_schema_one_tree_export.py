@@ -1192,10 +1192,10 @@ def test_the_meter_serial_is_swept_as_an_identifier() -> None:
 
 
 def test_an_identifier_after_a_json_escape_is_swept() -> None:
-    """In a `json` wire string an escape's own letter or hex digit adjoins what follows it, and is still a boundary.
+    """An identifier after an escape in a `json` value is masked: the value is swept literal by literal, decoded.
 
-    The value is swept as published text, never parsed and re-serialised, so
-    every byte but the identifiers stays as the panel wrote it.
+    Only a literal that changed is written again (`ensure_ascii=False`, so its
+    `\u00b0` becomes `°`); the keys around it stay byte for byte.
     """
     topics, root = _reidentified_reference()
     bess, evse = _first_of(topics, _TYPE_BESS), _first_of(topics, _TYPE_EVSE)
@@ -1212,7 +1212,10 @@ def test_an_identifier_after_a_json_escape_is_swept() -> None:
     topics[root]["vendor/log"] = published
     export, ids = _exported(topics, root)
     exported = export["devices"]["masked-panel"]["properties"]["vendor/log"]
-    assert exported == published.replace(evse, ids[evse]).replace(serial, ids[bess].upper())
+    swept = {escape: line.replace(evse, ids[evse]).replace(serial, ids[bess].upper()) for escape, line in lines.items()}
+    literals = (f"{json.dumps(escape)}: {json.dumps(line, ensure_ascii=False)}" for escape, line in swept.items())
+    assert exported == "{" + ", ".join(literals) + "}"
+    assert json.loads(exported) == swept
     assert evse not in exported
     assert serial not in exported
 
@@ -1317,3 +1320,102 @@ def test_an_identifier_never_starts_inside_a_json_escape() -> None:
         assert exported[f"vendor/{name}"] == topics[root][f"vendor/{name}"], name
     for name, text in cases.items():
         assert json.loads(exported[f"vendor/{name}"]) == {"n": text.replace(root, "masked-panel")}, name
+
+
+def test_an_identifier_after_a_literal_backslash_is_swept() -> None:
+    """A backslash in plain text, or in a decoded description string, is a boundary like any other character."""
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    circuit = _declaring(topics, _FEEDS, _TYPE_CIRCUIT)[0]
+    serial = topics[bess][_SERIAL].upper()
+    topics[root]["vendor/path"] = f"C:\\{serial}"
+    topics[root]["vendor/log"] = f"logs\\{serial}\\x"
+    topics[root]["vendor/circuit"] = f"\\{circuit}"
+    description = _description_of(topics[root])
+    description["vendor-path"] = f"C:\\{serial}"
+    topics[root]["$description"] = json.dumps(description)
+    export, ids = _exported(topics, root)
+    panel = export["devices"]["masked-panel"]
+    mask = ids[bess].upper()
+    assert {topic: panel["undeclared_properties"][topic] for topic in ("vendor/path", "vendor/log", "vendor/circuit")} == {
+        "vendor/path": f"C:\\{mask}",
+        "vendor/log": f"logs\\{mask}\\x",
+        "vendor/circuit": f"\\{ids[circuit]}",
+    }
+    assert panel["description"]["vendor-path"] == f"C:\\{mask}"
+
+
+def test_an_identifier_spelt_with_an_escape_is_swept() -> None:
+    """An identifier written with a `\\u` escape in a `json` value is found once the literal is decoded."""
+    topics, root = _reidentified_reference()
+    assert root.startswith("n")
+    published = '{"n": "\\u006e' + root[1:] + '", "kept": "\\u00b0"}'
+    assert json.loads(published) == {"n": root, "kept": "°"}
+    topics[root]["vendor/raw"] = published
+    export, _ = _exported(topics, root)
+    exported = export["devices"]["masked-panel"]["undeclared_properties"]["vendor/raw"]
+    assert exported == '{"n": "masked-panel", "kept": "\\u00b0"}'
+
+
+def test_a_value_that_is_not_a_json_object_or_array_is_plain_text() -> None:
+    """Only a value that parses as a JSON object or array is swept literal by literal; anything else is plain text.
+
+    On the reference tree `bess` is a short id: a whole literal in a JSON array
+    or object value is swept, while in text that only looks like JSON, in a JSON
+    string scalar, or as an object key it is not a whole value and is kept.
+    """
+    topics = _copy(parent_child_tree())
+    serial = topics["bess"][_SERIAL]
+    planted = {
+        "vendor/object": '{"peer": "bess", "bess": 1}',
+        "vendor/array": '["BESS", "kept"]',
+        "vendor/broken": '{"peer": "bess", "serial": "' + serial + '",}',
+        "vendor/scalar": '"bess"',
+    }
+    topics[_REFERENCE_ROOT].update(planted)
+    export, ids = _exported(topics, _REFERENCE_ROOT)
+    values = export["devices"]["masked-panel"]["undeclared_properties"]
+    assert values == {
+        "vendor/object": '{"peer": "' + ids["bess"] + '", "bess": 1}',
+        "vendor/array": '["' + ids["bess"] + '", "kept"]',
+        "vendor/broken": '{"peer": "bess", "serial": "' + ids["bess"].upper() + '",}',
+        "vendor/scalar": '"bess"',
+    }
+
+
+def _json_containers(values: Mapping[str, str]) -> dict[str, str]:
+    """The values that parse as a JSON object or array."""
+    found: dict[str, str] = {}
+    for topic, value in values.items():
+        try:
+            parsed: object = json.loads(value)
+        except ValueError:
+            continue
+        if isinstance(parsed, (dict, list)):
+            found[topic] = value
+    return found
+
+
+@every_tree
+def test_every_json_value_still_parses(case: Case) -> None:
+    """Every published JSON object or array, captured or planted with escapes and identifiers, still parses exported."""
+    reidentified = reidentify(case.topics, case.root_id, seed=_SEED)
+    topics, root = _copy(reidentified.tree), reidentified.root_id
+    other = next(device_id for device_id in sorted(topics) if device_id != root)
+    topics[root]["vendor/escaped"] = json.dumps(
+        {"split": "\n" + root[1:], "after": f"\n{root}", "backslash": f"C:\\{other}", other: ["\u00b0" + root, "\\"]}
+    )
+    export, ids = _exported(topics, root)
+    published = {ids[device_id]: _json_containers(_published(device_topics)) for device_id, device_topics in topics.items()}
+    assert published["masked-panel"]
+    for placeholder, containers in published.items():
+        values = _valued(export["devices"][placeholder])
+        for topic in containers:
+            exported: object = json.loads(values[topic])
+            assert isinstance(exported, (dict, list)), (placeholder, topic)
+    assert json.loads(_valued(export["devices"]["masked-panel"])["vendor/escaped"]) == {
+        "split": "\n" + root[1:],
+        "after": "\nmasked-panel",
+        "backslash": f"C:\\{ids[other]}",
+        ids[other]: ["\u00b0masked-panel", "\\"],
+    }

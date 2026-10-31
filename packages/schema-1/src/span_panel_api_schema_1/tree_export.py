@@ -14,8 +14,9 @@ they can change, so circuits are numbered by the breaker space they occupy and
 lugs take their direction. Exports taken before and after such a change then
 compare device by device.
 
-Values are masked by their ``node/property`` name: a serial, the site's
-address, location, postal code, network and name. Every value that names a
+Values are masked by their property id on any node: a serial, and the site's
+address, location, postal code and network; the panel's ``info/name``, the
+site's name, is masked too. Every value that names a
 device is passed through the same placeholders, so a reference still resolves;
 one that names no device in the tree becomes ``masked-missing-<n>`` and stays
 visibly dangling.
@@ -46,26 +47,50 @@ _LUGS = "lugs"
 _CIRCUIT = "circuit"
 _DIRECTIONS = {"UPSTREAM": "upstream", "DOWNSTREAM": "downstream"}
 _MISSING = "missing"
+_ESCAPED_TYPE = "type-"
+_RESERVED_SHORT_TYPES: Final = frozenset({_MISSING, _UNDESCRIBED})
+"""Placeholder names that are not a device type; a type spelt like one is numbered as ``type-<word>``.
+
+``masked-missing-<n>`` is a reference to no device in the tree and
+``masked-undescribed-<n>`` a device that has not described itself. A described
+device whose short type is one of those words becomes ``masked-type-missing-1``
+or ``masked-type-undescribed-1``, so it can be read as neither.
+
+That keeps every placeholder distinct by construction. Each numbered one is
+``masked-<name>-<n>`` with one counter per name, and ``<n>``, the digits after
+the last ``-``, cannot contain a ``-``, so two different names or numbers never
+spell the same placeholder. A device whose short type really is
+``type-missing`` shares that name and its counter, and the two differ by
+number. The unnumbered ``masked-panel`` and ``masked-lugs-upstream`` /
+``-downstream`` do not end in digits.
+"""
 
 _SCHEMA: Final = "tree-v1"
 _NUMERIC_DATATYPES: Final = frozenset({"integer", "float"})
 
-_SERIAL_NUMBER: Final = "info/serial-number"
+_SERIAL_NUMBER: Final = "serial-number"
 _NAME: Final = "info/name"
 _MASKED_PANEL_NAME: Final = "Masked Panel"
 _SITE_MASKS: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "info/utility-meter-serial-number": "MASKED-METER",
-        "status/wifi-ssid": "masked-ssid",
-        "status/postal-code": "00000",
-        "info/address-lines": "Masked Address",
-        "info/locality": "Masked City",
-        "info/region": "Masked Region",
-        "info/latitude": "0.0",
-        "info/longitude": "0.0",
+        "utility-meter-serial-number": "MASKED-METER",
+        "wifi-ssid": "masked-ssid",
+        "postal-code": "00000",
+        "address-lines": "Masked Address",
+        "locality": "Masked City",
+        "region": "Masked Region",
+        "latitude": "0.0",
+        "longitude": "0.0",
     }
 )
-"""Site values replaced whole, by name. ``country-code`` and ``time-zone`` are kept."""
+"""Site values replaced whole, by property id on whichever node publishes them.
+
+The panel declares them under ``info`` and ``status``, but nothing in the
+specification ties a site property to a node, which is why ``SITE_PROPERTIES``
+(``const.py``) is read the same way. ``country-code`` and ``time-zone`` are kept.
+The serial number is matched by property id too; the site's name is not, since
+``name`` is every device's label and only the panel's ``info/name`` is masked.
+"""
 
 _ID_PROPERTIES: Final = frozenset({"connection/feeds-device-id", "connection/fed-by-device-id"})
 _GRID_FORMING_ENTITY: Final = "grid/grid-forming-entity"
@@ -154,8 +179,8 @@ def _is_described(device: DiscoveredDevice) -> bool:
 
 
 def _short_type(device: DiscoveredDevice) -> str:
-    declared = device_type(device).removeprefix(_TYPE_PREFIX)
-    return declared or _UNTYPED
+    declared = device_type(device).removeprefix(_TYPE_PREFIX) or _UNTYPED
+    return f"{_ESCAPED_TYPE}{declared}" if declared in _RESERVED_SHORT_TYPES else declared
 
 
 def _text(device: DiscoveredDevice, node: str, prop: str) -> str:
@@ -186,7 +211,7 @@ def export_masked_tree(
     object, goes under ``undescribed_devices`` with its values unsplit, since
     nothing says what they are.
 
-    The masks apply to a value by its ``node/property`` name wherever it is
+    The masks apply to a value by its property id on any node, wherever it is
     published, declared or not, and to targets as to values. A valued-empty
     ``""`` stays empty under every rule: it carries no identity, and replacing
     it would turn an empty reading into a value.
@@ -247,11 +272,12 @@ class _Masker:
 
     def _fixed_mask(self, owner: str, topic: str) -> str | None:
         """The replacement for an identifying or site value, or None where the name carries neither."""
-        if topic == _SERIAL_NUMBER:
-            return self._ids[owner].upper()
         if topic == _NAME and owner == self._panel_id:
             return _MASKED_PANEL_NAME
-        return _SITE_MASKS.get(topic)
+        property_id = topic.partition("/")[2]
+        if property_id == _SERIAL_NUMBER:
+            return self._ids[owner].upper()
+        return _SITE_MASKS.get(property_id)
 
     def _referenced(self, topic: str, value: str) -> str:
         """The value with every device id it names mapped; a value that names none, as published."""

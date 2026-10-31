@@ -327,6 +327,20 @@ def _assert_resolves(topic: str, published: str, exported: str, ids: Mapping[str
             assert missing.setdefault(original, placeholder) == placeholder
 
 
+def _property_id(topic: str) -> str:
+    return topic.partition("/")[2]
+
+
+_SERIAL_ID = _property_id(_SERIAL)
+_MASKS_BY_PROPERTY: Mapping[str, str] = {_property_id(topic): mask for topic, mask in _SITE_MASKS.items()}
+"""The site masks by property id: they apply on whichever node publishes the property."""
+_SEEDED_BY_PROPERTY: Mapping[str, tuple[str, str]] = {
+    **{_property_id(topic): seeded for topic, seeded in _SEEDED_SITE.items() if _property_id(topic) in _MASKS_BY_PROPERTY},
+    _SERIAL_ID: ("SEEDSN00001", "string"),
+}
+"""A seeded value and datatype for every property id masked on any node."""
+
+
 def _assert_masked(
     topic: str,
     published: str,
@@ -340,12 +354,12 @@ def _assert_masked(
     """The exported value is the published one with the design's masks applied, and nothing else changed."""
     if published == "":
         assert exported == ""
-    elif topic == _SERIAL:
-        assert exported == ids[owner].upper()
     elif owner == root_id and topic == _NAME:
         assert exported == _MASKED_PANEL
-    elif topic in _SITE_MASKS:
-        assert exported == _SITE_MASKS[topic]
+    elif _property_id(topic) == _SERIAL_ID:
+        assert exported == ids[owner].upper()
+    elif _property_id(topic) in _MASKS_BY_PROPERTY:
+        assert exported == _MASKS_BY_PROPERTY[_property_id(topic)]
     elif _is_reference(topic):
         _assert_resolves(topic, published, exported, ids, missing)
     else:
@@ -483,7 +497,7 @@ def test_an_empty_value_stays_empty(case: Case) -> None:
     plain = [
         topic
         for topic in sorted(declared)
-        if topic not in _SITE_MASKS and topic not in (_SERIAL, _NAME) and not _is_reference(topic)
+        if _property_id(topic) not in {*_MASKS_BY_PROPERTY, _SERIAL_ID} and topic != _NAME and not _is_reference(topic)
     ]
     text = next(topic for topic in plain if declared[topic] not in _NUMERIC)
     number = next(topic for topic in plain if declared[topic] in _NUMERIC)
@@ -796,3 +810,58 @@ def test_a_description_that_is_not_an_object_is_undescribed(payload: str) -> Non
     children_named = export["devices"]["masked-panel"]["description"]["children"]
     assert isinstance(children_named, list)
     assert ids["pv"] in children_named
+
+
+@pytest.mark.parametrize("node", ["site", "vendor"])
+def test_site_and_serial_values_are_masked_on_any_node(node: str) -> None:
+    """A site or serial property is masked by its id, whichever node declares or publishes it."""
+    topics = _copy(parent_child_tree())
+    circuit = _declaring(topics, _FEEDS, _TYPE_CIRCUIT)[0]
+    description = _description_of(topics[_REFERENCE_ROOT])
+    planted = {f"{node}/{property_id}": value for property_id, (value, _) in _SEEDED_BY_PROPERTY.items()}
+    for topic, value in planted.items():
+        _declare(description, topic, _SEEDED_BY_PROPERTY[_property_id(topic)][1])
+        topics[_REFERENCE_ROOT][topic] = value
+    topics[_REFERENCE_ROOT]["$description"] = json.dumps(description)
+    kept = {f"{node}/name": "Seeded Site Label", f"{node}/country-code": "QZ", f"{node}/time-zone": "Etc/GMT+9"}
+    topics[_REFERENCE_ROOT].update(kept)
+    topics[circuit][f"{node}/serial-number"] = "SEEDSN00002"
+    export, ids = _exported(topics, _REFERENCE_ROOT)
+    panel_values = _valued(export["devices"]["masked-panel"])
+    assert {topic: panel_values[topic] for topic in planted} == {
+        f"{node}/{property_id}": _MASKS_BY_PROPERTY.get(property_id, "MASKED-PANEL") for property_id in _SEEDED_BY_PROPERTY
+    }
+    assert {topic: panel_values[topic] for topic in kept} == kept
+    assert _valued(export["devices"][ids[circuit]])[f"{node}/serial-number"] == ids[circuit].upper()
+
+
+def _typed(device_id: str, short_type: str) -> SyntheticDevice:
+    return SyntheticDevice(
+        device_id=device_id, device_type=f"energy.ebus.device.{short_type}", name=device_id, nodes={}, values={}
+    )
+
+
+def test_a_device_typed_missing_is_not_a_dangling_reference() -> None:
+    topics = _copy(tree(panel(), _typed("m-1", "missing"), _typed("t-1", "type-missing"), _typed("g-1", "generator")))
+    topics["g-1"][_FEEDS] = "absent-device-1"
+    topics["g-1"][_FED_BY] = "m-1"
+    export, ids = _exported(topics, "panel-a")
+    dangling = _valued(export["devices"][ids["g-1"]])[_FEEDS]
+    assert dangling == "masked-missing-1"
+    assert dangling not in ids.values()
+    assert _valued(export["devices"][ids["g-1"]])[_FED_BY] == ids["m-1"]
+    assert not ids["m-1"].startswith("masked-missing-")
+    assert ids["m-1"] == "masked-type-missing-1"
+    assert len(set(ids.values())) == len(ids)
+
+
+def test_a_device_typed_undescribed_is_not_an_undescribed_device() -> None:
+    topics = tree(panel(), _typed("u-1", "undescribed"), _typed("g-1", "generator"))
+    adapter = replay(topics, "panel-a", withhold_description_of="g-1")
+    ids = _ids_of(adapter, "panel-a")
+    export = _export(adapter, "panel-a", tree_complete=False)
+    assert ids["g-1"] == "masked-undescribed-1"
+    assert not ids["u-1"].startswith("masked-undescribed-")
+    assert len(set(ids.values())) == len(ids)
+    assert set(export["devices"]) == {"masked-panel", ids["u-1"]}
+    assert set(export["undescribed_devices"]) == {ids["g-1"]}

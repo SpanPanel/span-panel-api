@@ -166,3 +166,23 @@ def test_lugs_without_a_usable_direction_are_numbered() -> None:
     ids = _placeholders(topics, _REFERENCE_ROOT)
     assert ids["lugs-downstream"] == "masked-lugs-upstream"
     assert ids["lugs-upstream"] == "masked-lugs-1"
+
+
+def test_a_second_lugs_claiming_a_taken_direction_is_numbered() -> None:
+    topics = {device_id: dict(values) for device_id, values in parent_child_tree().items()}
+    topics["lugs-downstream"]["info/direction"] = "UPSTREAM"
+    ids = _placeholders(topics, _REFERENCE_ROOT)
+    assert ids["lugs-downstream"] == "masked-lugs-upstream"
+    assert ids["lugs-upstream"] == "masked-lugs-1"
+    assert len(set(ids.values())) == len(ids)
+
+
+def test_ids_tied_in_natural_order_are_named_the_same_in_any_input_order() -> None:
+    tied = ["g-1", "g-01", "G-1", "g-2"]
+    assert len({natural_key(device_id) for device_id in tied[:3]}) == 1
+    devices = devices_from_tree(_generators(tied))
+    root, children = devices[0], devices[1:]
+    forward = placeholder_ids(root, children)
+    assert placeholder_ids(root, list(reversed(children))) == forward
+    assert placeholder_ids(root, children[1:] + children[:1]) == forward
+    assert len(set(forward.values())) == len(forward)

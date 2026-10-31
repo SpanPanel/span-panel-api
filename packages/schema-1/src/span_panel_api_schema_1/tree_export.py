@@ -33,6 +33,7 @@ _DIRECTIONS = {"UPSTREAM": "upstream", "DOWNSTREAM": "downstream"}
 _DIGIT_RUNS = re.compile(r"([0-9]+)")
 
 type NaturalKey = tuple[tuple[int, str | int], ...]
+type Order = tuple[NaturalKey, str]
 
 
 def natural_key(text: str) -> NaturalKey:
@@ -42,6 +43,16 @@ def natural_key(text: str) -> NaturalKey:
         for part in _DIGIT_RUNS.split(text)
         if part
     )
+
+
+def _order(device_id: str) -> Order:
+    """Total order on ids: natural order, with the raw id breaking a tie.
+
+    Distinct ids can share a natural key (`g-01` and `g-1`, or ids differing only
+    in case); without the tie-breaker their order is the input order, and the
+    same tree would not always give the same document.
+    """
+    return (natural_key(device_id), device_id)
 
 
 def placeholder_ids(root: DiscoveredDevice, descendants: Sequence[DiscoveredDevice]) -> dict[str, str]:
@@ -62,7 +73,7 @@ def placeholder_ids(root: DiscoveredDevice, descendants: Sequence[DiscoveredDevi
         counters[name] = counters.get(name, 0) + 1
         return f"{_PREFIX}{name}-{counters[name]}"
 
-    ordered = sorted(descendants, key=lambda device: natural_key(device.device_id))
+    ordered = sorted(descendants, key=lambda device: _order(device.device_id))
     circuits = [device for device in ordered if device.description is not None and device_type(device) == _TYPE_CIRCUIT]
     for device in sorted(circuits, key=_circuit_order):
         ids[device.device_id] = numbered(_CIRCUIT)
@@ -95,9 +106,9 @@ def _text(device: DiscoveredDevice, node: str, prop: str) -> str:
     return "" if value is None else str(value).strip()
 
 
-def _circuit_order(device: DiscoveredDevice) -> tuple[int, int, NaturalKey]:
+def _circuit_order(device: DiscoveredDevice) -> tuple[int, int, Order]:
     """Hosted circuits by lowest breaker space first, the rest after, ties by natural id."""
     spaces = [int(part) for part in re.findall(r"[0-9]+", _text(device, "info", "spaces"))]
     if not spaces:
-        return (1, 0, natural_key(device.device_id))
-    return (0, min(spaces), natural_key(device.device_id))
+        return (1, 0, _order(device.device_id))
+    return (0, min(spaces), _order(device.device_id))

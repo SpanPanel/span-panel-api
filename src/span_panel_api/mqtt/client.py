@@ -1099,10 +1099,16 @@ class SpanMqttClient:
         self._unregister_property_observer = adapter.register_property_callback(self._on_property_value)
 
     def _on_property_value(self, device_id: str, node_id: str, property_id: str, value: str | None) -> None:
-        """Record one property's value and resolve any write waiting for it."""
-        if value is None:
-            return
+        """Record one property's value and resolve any write waiting for it.
+
+        `None` is a property with no value, such as one the panel cleared. Its
+        last value is forgotten, so a write of that value is not taken for a
+        no-op, and no write is confirmed by it.
+        """
         key = (device_id, node_id, property_id)
+        if value is None:
+            self._observed_values.pop(key, None)
+            return
         self._observed_values[key] = value
         for verification in list(self._verifications):
             if verification.key == key and verification.expected == value and not verification.observed.done():

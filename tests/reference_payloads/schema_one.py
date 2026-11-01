@@ -28,6 +28,7 @@ import json
 from pathlib import Path
 import time
 
+from ebus_sdk import decode_empty_string, encode_empty_string
 from ebus_sdk.homie import DiscoveredDevice
 
 from span_panel_api.models import V2HomieSchema
@@ -38,7 +39,24 @@ type RetainedTopicTree = Mapping[str, Mapping[str, str]]
 
 `$description` is a JSON *string*, not a nested object — it is stored on the
 wire exactly as the panel publishes it, and `update_description` parses it.
+
+A value is the payload as retained, with one reading added: `""` is an empty
+value. A broker never retains a zero-length payload, because publishing one
+deletes the retained message, so a tree can only hold `""` where an empty value
+was written in its decoded form, as the masked export writes it. It is replayed
+as Homie 5 spells an empty value on the wire, a single `0x00`, and read as
+`""`, exactly as `"\x00"` is.
 """
+
+
+def retained_payload(value: str) -> str:
+    """The payload a tree's value is replayed as: `""` as `0x00`, anything else as itself.
+
+    The one rule every replay of a tree applies (see `RetainedTopicTree`), shared
+    so that a replay sending `""` raw, which is a clear, cannot be written again.
+    """
+    return encode_empty_string(value)
+
 
 _PARENT_CHILD_TREE = files("span_panel_api_schema_1") / "reference" / "parent_child_tree.json"
 _OTHER_MODEL_TREE = Path(__file__).parent.parent / "fixtures" / "other_model_tree.json"
@@ -90,7 +108,7 @@ def device_from_topics(device_id: str, topics: Mapping[str, str]) -> DiscoveredD
             continue
         node, _, prop = topic.partition("/")
         if prop:
-            device.update_property(node, prop, value)
+            device.update_property(node, prop, decode_empty_string(value))
     return device
 
 
@@ -129,6 +147,9 @@ def replay(
     `withhold_description_of` leaves out one device's `$description` and `$state`
     but still delivers its values: the device its parent declared as a child and
     that has not yet described itself, with whatever it has already published.
+
+    An empty value goes out as `0x00` (see `RetainedTopicTree`): sent as `""`,
+    it would be a clear, which no retained tree holds.
     """
     root = tree[root_id]
     adapter = SchemaOneAdapter(
@@ -149,5 +170,5 @@ def replay(
             adapter.handle_message(f"{prefix}/$state", topics.get("$state", _DEFAULT_STATE))
         for topic, value in topics.items():
             if not topic.startswith("$"):
-                adapter.handle_message(f"{prefix}/{topic}", value)
+                adapter.handle_message(f"{prefix}/{topic}", retained_payload(value))
     return adapter

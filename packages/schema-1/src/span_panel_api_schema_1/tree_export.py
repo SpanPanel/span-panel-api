@@ -3,9 +3,9 @@
 ``export_masked_tree`` writes the tree in the ``tree-v1`` form of the reference
 captures, so an attached export replays through the same loader, adapter and
 fidelity harness they do. Every retained value is carried as the wire string
-the panel published; a declared property that was never valued has no key, so
-the three states of a property (valued, valued empty, never valued) stay
-apart.
+the panel published; a declared property that was never valued, or whose
+value the panel has since cleared, has no key, so the three states of a
+property (valued, valued empty, unvalued) stay apart.
 
 A masked export replaces every device id with a placeholder that starts
 ``masked-``, so it can never equal a real id. The placeholder follows the

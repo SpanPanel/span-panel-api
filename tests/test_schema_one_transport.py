@@ -303,3 +303,33 @@ def test_held_messages_stop_accumulating_at_the_ceiling() -> None:
     callback = MagicMock()
     routes.subscribe("ebus/5/device-0/+/+", callback)
     callback.assert_called_once_with("ebus/5/device-0/meter/active-power", b"2.0")
+
+
+def test_a_clear_takes_back_the_held_value_and_is_not_held_itself() -> None:
+    """A zero-length payload deletes the retained message, so the broker would replay nothing.
+
+    Releasing the older value would bring back a reading the panel withdrew,
+    and holding the clear would hand the SDK an empty payload it stores as an
+    empty value.
+    """
+    routes = ControllerRoutes()
+    callback = MagicMock()
+
+    routes.dispatch("ebus/5/child-a/meter/active-power", "-3500.0")
+    routes.dispatch("ebus/5/child-a/meter/active-power", "")
+    routes.dispatch("ebus/5/child-a/meter/current", "")
+
+    assert routes.held == 0
+    routes.subscribe("ebus/5/child-a/+/+", callback)
+    callback.assert_not_called()
+
+
+def test_a_routed_clear_is_still_delivered() -> None:
+    """Only the hold changes. A `$state` clear is the SDK's device removal, and it must arrive."""
+    routes = ControllerRoutes()
+    callback = MagicMock()
+    routes.subscribe("ebus/5/child-a/$state", callback)
+
+    routes.dispatch("ebus/5/child-a/$state", "")
+
+    callback.assert_called_once_with("ebus/5/child-a/$state", b"")

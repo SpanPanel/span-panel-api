@@ -22,6 +22,7 @@ from span_panel_api_schema_1 import adapter as adapter_module
 from span_panel_api_schema_1.const import TYPE_CIRCUIT, TYPE_PV
 from span_panel_api_schema_1.snapshot import build_snapshot
 
+from . import harness
 from .harness import FidelityReport, RowKey, run_cell
 from .rules import MAIN32_RULES
 
@@ -192,3 +193,49 @@ def test_a_deferred_row_is_reported_apart_from_the_silent_drops(small_capture: P
     report = run_cell(small_capture, replace(MAIN32_RULES, deferred={key: "planted for this test"}))
     assert report.silently_dropped == ()
     assert report.deferred == (key,)
+
+
+_FED_BY = "connection/fed-by-device-id"
+
+
+@pytest.fixture
+def valued_empty_capture(small_capture: Path) -> Path:
+    """The small capture with the upstream lugs publishing an empty `fed-by-device-id`.
+
+    In a `tree-v1` document an empty value is written decoded, as `""`, the way
+    the masked export writes one: a retained store never holds a zero-length
+    payload, so `""` there cannot be a clear.
+    """
+    tree = _mapping(json.loads(small_capture.read_text(encoding="utf-8")))
+    devices = _mapping(tree["devices"])
+    upstream = next(
+        device_id
+        for device_id, entry in devices.items()
+        if _mapping(_mapping(entry)["properties"]).get("info/direction") == "UPSTREAM"
+    )
+    record = _mapping(devices[upstream])
+    record["properties"] = {**_mapping(record["properties"]), _FED_BY: ""}
+    devices[upstream] = record
+    path = small_capture.with_name("valued-empty-tree-v1.json")
+    path.write_text(json.dumps({**tree, "devices": devices}), encoding="utf-8")
+    return path
+
+
+def test_an_empty_value_is_measured_as_published(valued_empty_capture: Path) -> None:
+    """Published empty, nothing feeds the lugs: they are the service entrance, not unknown.
+
+    Replayed as a zero-length payload, the value would be a clear and read as unpublished.
+    """
+    leaves = harness._flatten(harness._replay(harness._load(valued_empty_capture)))
+
+    assert leaves["panel.lugs_at_service_entrance"] is True
+
+
+def test_republishing_an_empty_value_restores_the_session(valued_empty_capture: Path) -> None:
+    """Each perturbed property is set back to its captured value; an empty one must go back as a value.
+
+    `run_cell` raises when the session does not end equal to the baseline.
+    """
+    report = run_cell(valued_empty_capture, MAIN32_RULES)
+
+    assert report.declared_property_instances > 0

@@ -240,3 +240,14 @@ def test_a_value_cleared_before_its_device_is_routed_never_arrives() -> None:
 
     assert adapter.build_snapshot().lugs_at_service_entrance is None
     assert _exported_lugs(adapter).get(FED_BY) is None
+
+
+def test_a_value_published_after_a_clear_before_its_device_is_routed_is_the_one_read() -> None:
+    """A clear then a value, both ahead of the route: the broker retains the value, so it is held and delivered."""
+    without = {device: dict(topics) for device, topics in _TREE.items()}
+    del without[LUGS][FED_BY]
+
+    adapter = _adapter(before=[(FED_BY_TOPIC, CLEARED), (FED_BY_TOPIC, "bess")], tree=without)
+
+    assert adapter.build_snapshot().lugs_at_service_entrance is False
+    assert _exported_lugs(adapter)[FED_BY].startswith("masked-")

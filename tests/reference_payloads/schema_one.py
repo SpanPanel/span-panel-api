@@ -48,6 +48,16 @@ as Homie 5 spells an empty value on the wire, a single `0x00`, and read as
 `""`, exactly as `"\x00"` is.
 """
 
+
+def retained_payload(value: str) -> str:
+    """The payload a tree's value is replayed as: `""` as `0x00`, anything else as itself.
+
+    The one rule every replay of a tree applies (see `RetainedTopicTree`), shared
+    so that a replay sending `""` raw, which is a clear, cannot be written again.
+    """
+    return encode_empty_string(value)
+
+
 _PARENT_CHILD_TREE = files("span_panel_api_schema_1") / "reference" / "parent_child_tree.json"
 _OTHER_MODEL_TREE = Path(__file__).parent.parent / "fixtures" / "other_model_tree.json"
 
@@ -160,5 +170,5 @@ def replay(
             adapter.handle_message(f"{prefix}/$state", topics.get("$state", _DEFAULT_STATE))
         for topic, value in topics.items():
             if not topic.startswith("$"):
-                adapter.handle_message(f"{prefix}/{topic}", encode_empty_string(value))
+                adapter.handle_message(f"{prefix}/{topic}", retained_payload(value))
     return adapter

@@ -333,3 +333,15 @@ def test_a_routed_clear_is_still_delivered() -> None:
     routes.dispatch("ebus/5/child-a/$state", "")
 
     callback.assert_called_once_with("ebus/5/child-a/$state", b"")
+
+
+def test_a_value_after_a_clear_is_held_and_delivered() -> None:
+    """Last message wins: a value published after the clear is what the broker retains."""
+    routes = ControllerRoutes()
+    callback = MagicMock()
+
+    routes.dispatch("ebus/5/child-a/meter/active-power", "")
+    routes.dispatch("ebus/5/child-a/meter/active-power", "-3400.0")
+    routes.subscribe("ebus/5/child-a/+/+", callback)
+
+    callback.assert_called_once_with("ebus/5/child-a/meter/active-power", b"-3400.0")

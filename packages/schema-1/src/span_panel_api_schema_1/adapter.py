@@ -216,7 +216,10 @@ class SchemaOneAdapter:
         stored value goes, exactly as an unpublished one is absent, and
         property observers hear `None`. A clear of `$state` (the SDK's device
         removal) or `$description` still goes to the SDK, as does anything
-        else.
+        else. A `$description` cleared on its own makes the SDK log
+        `descriptionParseError` at ERROR and keep the stale description; that
+        is normally silent only because Homie clears `$state` first, after
+        which the SDK no longer holds the device and ignores the rest.
         """
         if not payload and self._clear(topic):
             return

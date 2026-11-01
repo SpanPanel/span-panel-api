@@ -46,6 +46,8 @@ _SEEDED_SITE: Final[Mapping[str, str]] = {
     "latitude": "47.6",
     "longitude": "-122.3",
     "utility-meter-serial-number": "SEEDED-METER-77",
+    "time-zone": "Etc/GMT+9",
+    "country-code": "QZ",
 }
 """The planted value of each masked site property, by property id on whichever node publishes it."""
 _SEEDED_SITE_NAME: Final = "Seeded Residence"
@@ -105,7 +107,8 @@ def reidentify(tree: RetainedTopicTree, root_id: str, seed: int) -> Reidentified
     becomes a distinct vendor-style serial, except a serial that is a device's
     id, as the panel's is: it becomes that device's new id, so the new root id
     is also the panel serial embedded in its children's ids. Every masked site
-    property takes its value in `_SEEDED_SITE`, and the panel's `info/name` and
+    property takes its value in `_SEEDED_SITE`, and one a device declares but leaves
+    unvalued or valued `""` is planted too (a capture may only declare it), and the panel's `info/name` and
     `$description` `name` the site's name. A description `name` that is a
     device's id (as the captures' are) follows the id.
 
@@ -169,6 +172,10 @@ def reidentify(tree: RetainedTopicTree, root_id: str, seed: int) -> Reidentified
             planted.add(values[topic])
         if _DESCRIPTION in topics:
             description = _description_object(topics[_DESCRIPTION])
+            for topic in _declared_site_topics(description):
+                if not values.get(topic):
+                    values[topic] = _SEEDED_SITE[topic.partition("/")[2]]
+                    planted.add(values[topic])
             name = description.get("name")
             if device_id == new_root and isinstance(name, str) and name:
                 description["name"] = _SEEDED_SITE_NAME
@@ -178,6 +185,19 @@ def reidentify(tree: RetainedTopicTree, root_id: str, seed: int) -> Reidentified
             values[_DESCRIPTION] = json.dumps(description)
         seeded[device_id] = values
     return Reidentified(seeded, new_root, frozenset(planted))
+
+
+def _declared_site_topics(description: Mapping[str, object]) -> list[str]:
+    """The `<node>/<property>` topics a description declares for a masked site property."""
+    declared = description.get("nodes")
+    if not isinstance(declared, dict):
+        return []
+    found: list[str] = []
+    for node_id, node in declared.items():
+        node_properties = node.get("properties") if isinstance(node, dict) else None
+        if isinstance(node_properties, dict):
+            found.extend(f"{node_id}/{property_id}" for property_id in node_properties if property_id in _SEEDED_SITE)
+    return found
 
 
 def _description_object(text: str) -> dict[str, object]:

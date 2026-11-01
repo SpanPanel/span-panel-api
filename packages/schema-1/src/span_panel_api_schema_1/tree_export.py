@@ -27,9 +27,10 @@ and for every dangling id, which reads as its own ``masked-missing-<n>``
 wherever it appears: a property the library has never seen, a device named by
 an id, an identifier inside a ``json`` value, as a string literal or a number,
 through JSON nested in strings a few levels deep; a string nested deeper than
-real values go is masked whole where it may hide one. The sweep reads only what
-came off the wire, never the placeholders and masks the rules wrote, so it
-cannot rewrite them.
+real values go, or a description nested deeper than real descriptions go, is
+masked whole where it may hide one. The sweep reads only what came off the
+wire, never the placeholders and masks the rules wrote, so it cannot rewrite
+them.
 """
 
 from __future__ import annotations
@@ -116,7 +117,14 @@ _MIN_EMBEDDED: Final = 6
 """An identifier shorter than this is swept only where it is a whole value, never inside one."""
 _BOUNDARY_BEFORE: Final = "(?<![A-Za-z0-9])"
 _BOUNDARY_AFTER: Final = "(?![A-Za-z0-9])"
-_JSON_STRING: Final = re.compile(r'("(?:[^"\\]|\\.)*")(\s*:)?|"(?:[^"\\]|\\.)*\\?\Z', re.DOTALL)
+_DIGITS_BOUNDARY_BEFORE: Final = f"{_BOUNDARY_BEFORE}(?<![0-9]\\.)"
+_DIGITS_BOUNDARY_AFTER: Final = f"{_BOUNDARY_AFTER}(?!\\.[0-9])"
+"""The boundaries of an identifier made only of digits, which a decimal point joining it to another digit also fails.
+
+A meter serial of ``123456`` lies inside the reading ``0.123456`` and the
+fraction ``123456.5`` and is not found there; after ``meter 123456.`` it is.
+"""
+_JSON_STRING: Final = re.compile(r'("(?:[^"\\]|\\.)*")(\s*:)?|"(?:[^"\\]|\\.)*(\\?)\Z', re.DOTALL)
 """A JSON string literal in any text, and the colon after it when it is an object key.
 
 Over text that parses as JSON it finds every string literal, since valid JSON
@@ -124,14 +132,23 @@ holds no quote outside them. Over any other text it finds what reads as one,
 and the text between the finds is swept as plain text. The second alternative
 matches a quote that never closes, with the rest of the text, so group 1 is
 None there: a later quote cannot open a literal that closes under the same
-pairing, and that rest is plain text. The scan is linear in the text: from a
-quote the body consumes to the closing quote or the end, each at most twice.
+pairing. Its content is the text after the quote less group 3, a lone
+backslash at the end, which the body cannot hold. The scan is linear in the
+text: from a quote the body consumes to the closing quote or the end, each at
+most twice.
 """
 _JSON_ESCAPE: Final = re.compile(r'\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4})|(\\)')
 """An escape JSON defines, or (group 1) a backslash that starts none and is read as a literal backslash."""
 _NESTING_BOUND: Final = 4
-"""How deep the sweep decodes JSON nested in strings: real values nest JSON in a string at most once or twice."""
+"""How deep the sweep decodes JSON nested in strings, and how deep it reads a description's containers.
+
+Real values nest JSON in a string at most once or twice. A description's
+top-level values are depth 0 and real descriptions reach depth 3, a property's
+definition under ``nodes/<node>/properties``, whose fields are scalars.
+"""
 _NESTED_VALUE_MASK: Final = f"{_PREFIX}nested-value"
+_NOT_SERIALISABLE: Final = (TypeError, ValueError, RecursionError)
+"""What ``json.dumps`` raises for a value it cannot write: an object JSON has no form for, a cycle, or nesting too deep."""
 _JSON_NUMBER: Final = re.compile(r"(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)")
 """A JSON number token, captured so ``split`` returns the tokens at the odd indices.
 
@@ -255,8 +272,8 @@ def export_masked_tree(
     ``""`` stays empty under every rule: it carries no identity, and replacing
     it would turn an empty reading into a value. Everything else the panel
     published is swept (``_Sweep``): the values and targets no rule replaces,
-    their ``node/property`` keys, ``$state``, and every key and string of a
-    description but the references and the panel's name the rules map.
+    their ``node/property`` keys, ``$state``, and every key, string and number
+    of a description but the references and the panel's name the rules map.
 
     Devices are written in placeholder order and each device's values in key
     order, so the same tree always gives the same document. A dangling id is
@@ -352,26 +369,32 @@ class _Sweep:
     other character, a ``-`` or a backslash among them, is a boundary. A ``-``
     must be one, because device ids are serials and suffixes joined by ``-``,
     and a serial embedded in an id the tree does not hold must still be found.
-    Identifiers are tried longest first, so ``<serial>-lugs-up`` maps to the
-    lugs' placeholder rather than the panel's with a suffix. One shorter than
-    six characters is matched only as a whole string, never inside a longer
-    string or in a key, where ``pv`` is also a property id.
+    For an identifier made only of digits a decimal point that joins it to
+    another digit is no boundary either, so a meter serial is not found inside
+    a decimal reading. Identifiers are tried longest first, so
+    ``<serial>-lugs-up`` maps to the lugs' placeholder rather than the panel's
+    with a suffix. One shorter than six characters is matched only as a whole
+    string, never inside a longer string or in a key, where ``pv`` is also a
+    property id.
 
     Every string is swept the same way (``value``), whatever it was declared
     as. Each JSON string literal in it is decoded, since in the raw text an
     escape's own letter would adjoin an identifier or spell part of one
     (``\\u006e``), and its content is swept as a string of its own by this same
     rule, so JSON carried inside a string is reached; a literal followed by
-    ``:`` is an object key and is swept as a key. The literal is decoded
-    leniently, a raw control character allowed and a backslash that starts no
-    JSON escape read as a backslash, so that a valid escape beside such a flaw
-    cannot hide an identifier. Only a literal that changed is written again,
-    with standard escapes, and escaped where UTF-8 cannot carry a character of
-    it. The text between the literals, and a literal that still does not
-    decode, is swept as plain text. A number equal to an identifier is replaced
-    there like any other text, and where the whole text parses as a JSON object
-    or array the number token is written as a JSON string, so the value still
-    parses. Every other byte stays as published.
+    ``:`` is an object key and is swept as a key. A quote that never closes
+    opens a literal all the same, whose content is the rest of the text less a
+    lone backslash at the end; it is written again without a closing quote.
+    The literal is decoded leniently, a raw control character allowed and a
+    backslash that starts no JSON escape read as a backslash, so that a valid
+    escape beside such a flaw cannot hide an identifier. Only a literal that
+    changed is written again, with standard escapes, and escaped where UTF-8
+    cannot carry a character of it. The text between the literals, and a
+    literal that still does not decode, is swept as plain text. A number equal
+    to an identifier is replaced there like any other text, and where the whole
+    text parses as a JSON object or array the number token is written as a
+    JSON string, so the value still parses. Every other byte stays as
+    published.
 
     The decoding stops at ``_NESTING_BOUND``: every level written again doubles
     the escapes of the levels inside it and costs a stack frame, so unbounded
@@ -379,7 +402,10 @@ class _Sweep:
     at the bound is not swept inside; it is replaced whole by
     ``masked-nested-value`` if its content holds an identifier under the plain
     rule, or a quote, which may open a literal the sweep will not read, and is
-    kept as published otherwise.
+    kept as published otherwise. A description's containers (``parsed``) are
+    read to the same bound: a container at it is replaced whole by the same
+    rule over its JSON text, so a description nested deeper than any real one
+    costs bounded work and no stack.
 
     Where identifiers that differ only in case match, the one spelt as found
     wins, then the one of higher priority (``_identifiers``).
@@ -392,8 +418,11 @@ class _Sweep:
                 self._replacements.setdefault(identifier, replacement)
         embedded = sorted((ident for ident in self._replacements if len(ident) >= _MIN_EMBEDDED), key=len, reverse=True)
         whole = [ident for ident in self._replacements if len(ident) < _MIN_EMBEDDED]
-        self._embedded = _alternation(embedded, before=_BOUNDARY_BEFORE, after=_BOUNDARY_AFTER)
-        self._whole = _alternation(whole)
+        self._embedded = _alternation(
+            ([ident for ident in embedded if not _is_digits(ident)], _BOUNDARY_BEFORE, _BOUNDARY_AFTER),
+            ([ident for ident in embedded if _is_digits(ident)], _DIGITS_BOUNDARY_BEFORE, _DIGITS_BOUNDARY_AFTER),
+        )
+        self._whole = _alternation((whole, "", ""))
 
     def value(self, text: str) -> str:
         """A published string with every identifier in it replaced, a short one only where it is the whole string."""
@@ -408,15 +437,53 @@ class _Sweep:
         node_id, separator, property_id = topic.partition("/")
         return f"{self.key(node_id)}{separator}{self.key(property_id)}"
 
-    def parsed(self, value: object) -> object:
-        """A copy of parsed JSON (a description) with every key swept as a key and every string as a string."""
+    def parsed(self, value: object, depth: int = 0) -> object:
+        """A copy of parsed JSON (a description): each key swept as a key, each string as a string, each number as its text.
+
+        ``depth`` is how many containers enclose the value below the
+        description's own keys. A container at ``_NESTING_BOUND`` is not swept
+        inside: it is replaced whole by ``masked-nested-value`` where its JSON
+        text may hide an identifier and copied as published otherwise.
+        """
         if isinstance(value, str):
             return self.value(value)
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            return self._number(value)
+        if isinstance(value, dict | list) and depth >= _NESTING_BOUND:
+            return self._bounded(value)
         if isinstance(value, dict):
-            return _first_per_key((self.key(str(key)), self.parsed(item)) for key, item in value.items())
+            return _first_per_key((self.key(str(key)), self.parsed(item, depth + 1)) for key, item in value.items())
         if isinstance(value, list):
-            return [self.parsed(item) for item in value]
+            return [self.parsed(item, depth + 1) for item in value]
         return value
+
+    def _number(self, value: int | float) -> object:
+        """A number whose text holds an identifier, as that text swept; any other number is itself.
+
+        A serial published as a JSON number in a description (``45123987``) is
+        the text of one published in a ``json`` value and reads the same mask,
+        as a string; a sign stays, inside the string.
+        """
+        text = str(value)
+        swept = self._swept_flat(text, whole=True)
+        return value if swept == text else swept
+
+    def _bounded(self, value: dict[object, object] | list[object]) -> object:
+        """A container at the nesting bound: ``masked-nested-value`` where its JSON text may hide an identifier, else a copy.
+
+        The text is not swept inside; ``_hides_an_identifier`` decides, so a
+        container holding any string is masked, since the text puts quotes
+        around it. One too deep to serialise is taken to hide an identifier.
+        The copy keeps the document from sharing an object with the SDK's tree.
+        """
+        try:
+            text = json.dumps(value)
+        except _NOT_SERIALISABLE:
+            return _NESTED_VALUE_MASK
+        if self._hides_an_identifier(text, whole=False):
+            return _NESTED_VALUE_MASK
+        copied: object = json.loads(text)
+        return copied
 
     def _swept(self, text: str, *, whole: bool, depth: int = 0) -> str:
         """The text with its string literals swept each as a string and the text between them as plain text.
@@ -426,27 +493,31 @@ class _Sweep:
         The plain text is swept again with its numbers written as strings when
         an identifier was found in it and the text parses as a JSON object or
         array: a number is then in a value position, and a bare word there
-        would stop the value parsing.
+        would stop the value parsing. A quote that never closes ends the plain
+        text; it and the rest are one unclosed literal.
         """
         if whole and self._whole is not None and self._whole.fullmatch(text):
             return self._replacement(text)
         literals: list[re.Match[str]] = []
         spans: list[str] = []
         position = 0
+        unclosed: re.Match[str] | None = None
         for match in _JSON_STRING.finditer(text):
             if match.group(1) is None:
+                unclosed = match
                 break
             literals.append(match)
             spans.append(text[position : match.start()])
             position = match.end()
-        spans.append(text[position:])
+        spans.append(text[position : len(text) if unclosed is None else unclosed.start()])
         swept = [self._plain(span) for span in spans]
         if swept != spans and _is_json_container(text):
             swept = [self._numbers_quoted(span) for span in spans]
         pieces = [
             piece for span, match in zip(swept[:-1], literals, strict=True) for piece in (span, self._literal(match, depth))
         ]
-        return "".join([*pieces, swept[-1]])
+        tail = "" if unclosed is None else self._unclosed(unclosed, depth)
+        return "".join([*pieces, swept[-1], tail])
 
     def _plain(self, text: str) -> str:
         """Plain text with every identifier of six characters or more in it replaced."""
@@ -465,28 +536,51 @@ class _Sweep:
     def _literal(self, match: re.Match[str], depth: int) -> str:
         """One string literal, its content swept as a string (as a key before a colon), written again only if it changed.
 
-        The content is decoded leniently (``_JSON_ESCAPE``, ``strict=False``);
-        a literal that still does not decode is swept as the plain text it is.
-        Content decoded at ``_NESTING_BOUND`` is not swept inside: the literal
-        is replaced whole if the content holds an identifier or a quote, and
-        kept otherwise.
+        A literal that does not decode is swept as the plain text it is.
         """
         literal, colon = match.group(1), match.group(2)
+        swept = self._literal_swept(literal, whole=colon is None, depth=depth)
+        return self._plain(match.group()) if swept is None else swept + (colon or "")
+
+    def _unclosed(self, match: re.Match[str], depth: int) -> str:
+        """A quote that never closes, with the rest of the text: swept as a literal, written again without a closing quote.
+
+        The content is the text after the quote less a lone backslash at the
+        end (``_JSON_STRING`` group 3), which stays as it was; swept as plain
+        text, an escape's letter in it would adjoin an identifier. Content
+        that does not decode is swept as plain text, and content that did not
+        change keeps its bytes.
+        """
+        text, trailing = match.group(), match.group(3)
+        swept = self._literal_swept(f'"{text[1 : len(text) - len(trailing)]}"', whole=True, depth=depth)
+        return self._plain(text) if swept is None else f'"{swept[1:-1]}{trailing}'
+
+    def _literal_swept(self, literal: str, *, whole: bool, depth: int) -> str | None:
+        """A string literal with its content swept as a string: itself where nothing changed, None where it does not decode.
+
+        The content is decoded leniently (``_JSON_ESCAPE``, ``strict=False``).
+        Content decoded at ``_NESTING_BOUND`` is not swept inside: the literal
+        becomes ``masked-nested-value`` where the content may hide an
+        identifier, and is kept otherwise.
+        """
         try:
             decoded: object = json.loads(_JSON_ESCAPE.sub(_defined_escape, literal), strict=False)
         except ValueError:
-            return self._plain(match.group())
+            return None
         if not isinstance(decoded, str):
-            return match.group()
-        whole = colon is None
+            return literal
         if depth + 1 >= _NESTING_BOUND:
-            if '"' in decoded or self._swept_flat(decoded, whole=whole) != decoded:
-                return _dumped(_NESTED_VALUE_MASK) + (colon or "")
-            return match.group()
+            return _dumped(_NESTED_VALUE_MASK) if self._hides_an_identifier(decoded, whole=whole) else literal
         swept = self._swept(decoded, whole=whole, depth=depth + 1)
-        if swept == decoded:
-            return match.group()
-        return _dumped(swept) + (colon or "")
+        return literal if swept == decoded else _dumped(swept)
+
+    def _hides_an_identifier(self, text: str, *, whole: bool) -> bool:
+        """Whether text the sweep will not read inside may hold an identifier.
+
+        It holds one under the plain rule (``_swept_flat``), or a quote, which
+        may open a literal the sweep will not read.
+        """
+        return '"' in text or self._swept_flat(text, whole=whole) != text
 
     def _swept_flat(self, text: str, *, whole: bool) -> str:
         """The text swept by the plain rule alone, a short identifier only as the whole of it; no literal is read."""
@@ -543,18 +637,32 @@ def _dumped(text: str) -> str:
     return literal
 
 
-def _alternation(identifiers: Sequence[str], *, before: str = "", after: str = "") -> re.Pattern[str] | None:
-    """One case-insensitive pattern trying each identifier in turn between two boundaries; None for none.
+def _is_digits(identifier: str) -> bool:
+    """Whether an identifier is made only of ASCII digits, so a decimal point may join it to a number."""
+    return identifier.isascii() and identifier.isdigit()
+
+
+def _alternation(*groups: tuple[Sequence[str], str, str]) -> re.Pattern[str] | None:
+    """One case-insensitive pattern trying each group's identifiers in turn between its two boundaries; None for none.
 
     No identifiers gives None, never an empty pattern, which would match at
-    every position. The boundaries are shared, outside the alternation: an
-    identifier that fails the boundary after it still backtracks into the next,
-    so the matches are those of a boundary around each, and the boundary before
-    is tested once per position rather than once per identifier.
+    every position. Each group's boundaries are shared, outside its
+    alternation: an identifier that fails the boundary after it still
+    backtracks into the next, so the matches are those of a boundary around
+    each, and the boundary before is tested once per position rather than once
+    per identifier. The groups are tried in order at each position, which
+    costs no longer match: identifiers from two groups can both match at one
+    position only where one is a prefix of the other, so a group whose
+    identifiers may be prefixes of another's comes after it.
     """
-    if not identifiers:
+    sources = [
+        f"{before}(?:{'|'.join(re.escape(ident) for ident in identifiers)}){after}"
+        for identifiers, before, after in groups
+        if identifiers
+    ]
+    if not sources:
         return None
-    return re.compile(f"{before}(?:{'|'.join(re.escape(ident) for ident in identifiers)}){after}", re.IGNORECASE)
+    return re.compile("|".join(sources), re.IGNORECASE)
 
 
 def _first_per_key[T](pairs: Iterable[tuple[str, T]]) -> dict[str, T]:

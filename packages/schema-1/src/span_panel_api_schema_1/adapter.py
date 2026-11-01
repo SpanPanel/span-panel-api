@@ -17,7 +17,7 @@ tree, and the SDK repopulates — so there is no resync hook to wire or forget.
 
 from __future__ import annotations
 
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 import logging
 import time
 from typing import TYPE_CHECKING, Final
@@ -62,6 +62,21 @@ if TYPE_CHECKING:
     from span_panel_api.models import FieldMetadata, MaskedTree, SpanPanelSnapshot, V2HomieSchema
 
 _LOGGER = logging.getLogger(__name__)
+
+_DISTRIBUTION: Final = "span-panel-api-schema-1"
+
+
+def _producer() -> str:
+    """The distribution and version that wrote an export, or ``unknown`` where this code runs without its dist-info.
+
+    A checkout put on ``sys.path`` has no installed metadata, and an export must
+    not fail for the lack of a version string.
+    """
+    try:
+        return f"{_DISTRIBUTION} {version(_DISTRIBUTION)}"
+    except PackageNotFoundError:
+        return f"{_DISTRIBUTION} unknown"
+
 
 FEED_GRACE_S: Final = 2.0
 """How long an inverter's feed or a DER's model may stay unvalued once every name has arrived.
@@ -600,7 +615,7 @@ class SchemaOneAdapter:
         return export_masked_tree(
             root,
             self._children(),
-            producer=f"span-panel-api-schema-1 {version('span-panel-api-schema-1')}",
+            producer=_producer(),
             tree_complete=self._controller.is_tree_complete(self._serial_number),
         )
 

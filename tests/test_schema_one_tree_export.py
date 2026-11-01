@@ -12,6 +12,7 @@ from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
+from importlib.metadata import PackageNotFoundError, version
 import json
 from pathlib import Path
 import re
@@ -24,7 +25,7 @@ import pytest
 from span_panel_api.models import MaskedTree, MaskedTreeDevice, SpanPanelSnapshot
 from span_panel_api.protocol import TreeExportingAdapter
 from span_panel_api_schema_0 import SchemaZeroAdapter
-from span_panel_api_schema_1 import SchemaOneAdapter
+from span_panel_api_schema_1 import SchemaOneAdapter, adapter as schema_one_adapter
 from span_panel_api_schema_1.tree_export import export_masked_tree, natural_key, placeholder_ids
 
 from conftest import flat_schema, parent_child_schema
@@ -1633,7 +1634,11 @@ def test_an_unclosed_quote_is_scanned_in_linear_time() -> None:
     """Text of quotes that never close is swept in linear time, and an identifier after them is still found.
 
     A backslash before a newline must not end the scan of a literal either:
-    every escaped quote behind it would then open a scan of its own.
+    every escaped quote behind it would then open a scan of its own. The
+    unclosed literal's content is decoded and swept as a literal's is, so where
+    it changed it is written again with standard escapes: the stray backslash
+    before the serial is doubled by each level that writes it, and the raw
+    newline becomes `\\n`. Where nothing changed the bytes stay.
     """
     topics, root = _reidentified_reference()
     bess = _first_of(topics, _TYPE_BESS)
@@ -1648,10 +1653,237 @@ def test_an_unclosed_quote_is_scanned_in_linear_time() -> None:
     export, ids = _exported(topics, root)
     elapsed = time.perf_counter() - start
     values = export["devices"]["masked-panel"]["undeclared_properties"]
+    mask = ids[bess].upper()
+    # The content decodes to 31,999 quotes, a backslash, a space and the serial: 15,999 empty literals, then a
+    # quote that opens an unclosed literal of its own, whose content `\ <serial>` is swept and written again.
+    inner = '"' + json.dumps("\\ " + mask)[1:-1]
     assert values["vendor/unclosed"] == unclosed
-    assert values["vendor/unclosed-then-serial"] == unclosed + " " + ids[bess].upper()
-    assert values["vendor/unclosed-newline"] == newline + ids[bess].upper()
+    assert values["vendor/unclosed-then-serial"] == '"' + json.dumps('"' * 31_998 + inner)[1:-1]
+    assert values["vendor/unclosed-newline"] == '"' + json.dumps('"' * 16_000 + "\\\n" + mask)[1:-1]
+    assert serial not in json.dumps(export)
     assert elapsed < 1.0
+
+
+def test_an_identifier_after_an_escape_in_an_unclosed_literal_is_swept() -> None:
+    """A quote that never closes still opens a literal: its content is decoded and swept, and written again without a closing quote.
+
+    Swept as plain text, the `n` of `\\n` would adjoin the root id and hide it.
+    The content is the text after the quote less a lone backslash at the end,
+    which stays as it was; an unclosed literal holding no identifier keeps its
+    bytes, its `\\u00b0` not written as `°`.
+    """
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    planted = {
+        "vendor/newline": '{"n": "abc\\n' + root,
+        "vendor/tab": '{"n": "abc\\t' + root,
+        "vendor/trailing-backslash": '{"n": "\\n' + serial + "\\",
+        "vendor/kept": '{"n": "abc\\n kept',
+        "vendor/kept-backslash": '{"n": "abc\\n kept\\',
+        "vendor/kept-escape": '{"n": "\\u00b0 kept',
+    }
+    topics[root].update(planted)
+    export, ids = _exported(topics, root)
+    values = export["devices"]["masked-panel"]["undeclared_properties"]
+    assert values == {
+        "vendor/newline": '{"n": "abc\\nmasked-panel',
+        "vendor/tab": '{"n": "abc\\tmasked-panel',
+        "vendor/trailing-backslash": '{"n": "\\n' + ids[bess].upper() + "\\",
+        "vendor/kept": planted["vendor/kept"],
+        "vendor/kept-backslash": planted["vendor/kept-backslash"],
+        "vendor/kept-escape": planted["vendor/kept-escape"],
+    }
+    assert root not in json.dumps(export)
+    assert serial not in json.dumps(export)
+
+
+def _unclosed_enclosed(innermost: str, depth: int) -> str:
+    """`innermost` behind `depth` quotes that never close, each level's content spelt with `\\u` escapes so the text stays small."""
+    text = innermost
+    for _ in range(depth):
+        text = '"' + text.replace("\\", "\\u005c").replace('"', "\\u0022")
+    return text
+
+
+def test_deeply_nested_unclosed_literals_export_in_bounded_size_and_time() -> None:
+    """A serial behind five hundred unclosed quotes exports without exhausting the stack, and in bounded size.
+
+    Each unclosed literal's content is swept one level deeper, so the chain
+    stops at the bound: the content there holds a quote and is masked whole,
+    and the three levels outside it are written again around that.
+    """
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    deep = _unclosed_enclosed(serial, 500)
+    assert len(deep) < 2_000_000
+    topics[root]["vendor/deep"] = deep
+    start = time.perf_counter()
+    export, _ = _exported(topics, root)
+    elapsed = time.perf_counter() - start
+    expected = '"masked-nested-value'
+    for _ in range(3):
+        expected = '"' + json.dumps(expected)[1:-1]
+    assert export["devices"]["masked-panel"]["undeclared_properties"]["vendor/deep"] == expected
+    assert elapsed < 1.0
+    assert serial not in json.dumps(export)
+
+
+def _nested(innermost: object, depth: int) -> object:
+    """`innermost` under `depth` objects, each the one key `a`; the outermost is a description value at depth 0."""
+    value = innermost
+    for _ in range(depth):
+        value = {"a": value}
+    return value
+
+
+def test_a_description_container_at_the_nesting_bound_is_masked_whole_or_kept() -> None:
+    """A description's containers are swept four deep; one at the bound is replaced whole where it may hide an identifier and copied otherwise.
+
+    A description's top-level values are depth 0 and real descriptions reach
+    depth 3 (`nodes/<node>/properties/<property>`), so no real description is
+    touched. At the bound a container holding any string is masked whole, since
+    its JSON text puts quotes around the string, and so is one of numbers among
+    which a serial lies; one of other numbers is copied, not shared with the
+    SDK's tree.
+    """
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    meter = "45123987"
+    numbers = [1, 2.5, True, None]
+    description = _description_of(topics[root])
+    _declare(description, _METER_SERIAL, "string")
+    description["vendor-depth-3"] = _nested({"serial": serial}, 3)
+    description["vendor-depth-4"] = _nested({"serial": serial}, 4)
+    description["vendor-depth-4-text"] = _nested({"note": "kept"}, 4)
+    description["vendor-depth-4-meter"] = _nested([int(meter), 1], 4)
+    description["vendor-depth-4-numbers"] = _nested(numbers, 4)
+    topics[root]["$description"] = json.dumps(description)
+    topics[root][_METER_SERIAL] = meter
+    adapter = replay(topics, root)
+    export = _export(adapter, root)
+    ids = _ids_of(adapter, root)
+    exported = export["devices"]["masked-panel"]["description"]
+    mask = ids[bess].upper()
+    assert exported["vendor-depth-3"] == _nested({"serial": mask}, 3)
+    assert exported["vendor-depth-4"] == _nested("masked-nested-value", 4)
+    assert exported["vendor-depth-4-text"] == _nested("masked-nested-value", 4)
+    assert exported["vendor-depth-4-meter"] == _nested("masked-nested-value", 4)
+    assert exported["vendor-depth-4-numbers"] == _nested(numbers, 4)
+    assert meter not in json.dumps(export)
+    sdk_root = adapter._controller.get_root(root)
+    assert sdk_root is not None and sdk_root.description is not None
+    kept: object = sdk_root.description["vendor-depth-4-numbers"]
+    copied: object = exported["vendor-depth-4-numbers"]
+    for _ in range(4):
+        assert isinstance(kept, dict) and isinstance(copied, dict)
+        kept, copied = kept["a"], copied["a"]
+    assert copied == kept
+    assert copied is not kept
+    assert serial not in json.dumps(export)
+
+
+def test_a_deeply_nested_description_exports_within_the_bound() -> None:
+    """A description nested four hundred containers deep exports without exhausting the stack, and a serial at its bottom is gone."""
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
+    deep_list: object = serial
+    for _ in range(400):
+        deep_list = [deep_list]
+    description = _description_of(topics[root])
+    description["vendor-deep"] = _nested(serial, 400)
+    description["vendor-deep-list"] = deep_list
+    topics[root]["$description"] = json.dumps(description)
+    export, _ = _exported(topics, root)
+    exported = export["devices"]["masked-panel"]["description"]
+    assert exported["vendor-deep"] == _nested("masked-nested-value", 4)
+    assert exported["vendor-deep-list"] == [[[["masked-nested-value"]]]]
+    assert serial not in json.dumps(export)
+
+
+def test_a_number_in_a_description_equal_to_an_identifier_is_masked() -> None:
+    """A serial published as a JSON number in a description is the text of one in a `json` value, and reads the same mask, as a string.
+
+    The sign is a published byte outside the identifier and stays, inside the
+    string, as it does in a `json` value. Any other number is itself.
+    """
+    topics, root = _reidentified_reference()
+    meter = "45123987"
+    description = _description_of(topics[root])
+    _declare(description, _METER_SERIAL, "string")
+    description["vendor-meter"] = {"meter": int(meter), "negative": -int(meter), "count": 1, "reading": 0.5}
+    topics[root]["$description"] = json.dumps(description)
+    topics[root][_METER_SERIAL] = meter
+    export, _ = _exported(topics, root)
+    assert export["devices"]["masked-panel"]["description"]["vendor-meter"] == {
+        "meter": "MASKED-METER",
+        "negative": "-MASKED-METER",
+        "count": 1,
+        "reading": 0.5,
+    }
+    assert meter not in json.dumps(export)
+
+
+def test_a_boolean_in_a_description_is_never_an_identifier() -> None:
+    """A boolean is not a number: on a tree whose device id is `true`, a description's `true` stays a boolean."""
+    topics, root = rename_devices(_generators(["g-1"]), "panel-a", {"panel-a": "panel-a", "g-1": "true"}.__getitem__)
+    planted = _copy(topics)
+    description = _description_of(planted[root])
+    description["vendor-flags"] = {"on": True, "off": False}
+    planted[root]["$description"] = json.dumps(description)
+    planted[root][_NOTE] = "TRUE"
+    export, ids = _exported(planted, root)
+    panel = export["devices"]["masked-panel"]
+    assert panel["undeclared_properties"][_NOTE] == ids["true"]
+    assert panel["description"]["vendor-flags"] == {"on": True, "off": False}
+
+
+def test_an_all_digit_identifier_is_not_found_inside_a_decimal() -> None:
+    """An identifier made only of digits is not found where a decimal point joins it to another digit; anywhere else it is.
+
+    A meter serial of `123456` lies inside the reading `0.123456`, the version
+    `1.123456` and the fraction `123456.5`; after `meter 123456.` it is the
+    serial. A dangling id that starts with the serial is still the longer
+    match, whatever boundaries each is tried with.
+    """
+    topics, root = _reidentified_reference()
+    meter = "123456"
+    ghost = f"{meter}-ghost"
+    circuit = _declaring(topics, _FEEDS, _TYPE_CIRCUIT)[0]
+    description = _description_of(topics[root])
+    _declare(description, _METER_SERIAL, "string")
+    description["vendor-reading"] = 0.123456
+    topics[root]["$description"] = json.dumps(description)
+    topics[root][_METER_SERIAL] = meter
+    topics[circuit][_FEEDS] = ghost
+    planted = {
+        "vendor/reading": "0.123456",
+        "vendor/version": "1.123456",
+        "vendor/fraction": "123456.5",
+        "vendor/sentence": "meter 123456.",
+        "vendor/object": '{"v": 0.123456, "m": 123456}',
+        "vendor/bare": meter,
+        "vendor/ghost": ghost,
+    }
+    topics[root].update(planted)
+    export, ids = _exported(topics, root)
+    panel = export["devices"]["masked-panel"]
+    dangling = _valued(export["devices"][ids[circuit]])[_FEEDS]
+    assert _MISSING.fullmatch(dangling)
+    assert panel["properties"][_METER_SERIAL] == "MASKED-METER"
+    assert panel["undeclared_properties"] == {
+        "vendor/reading": "0.123456",
+        "vendor/version": "1.123456",
+        "vendor/fraction": "123456.5",
+        "vendor/sentence": "meter MASKED-METER.",
+        "vendor/object": '{"v": 0.123456, "m": "MASKED-METER"}',
+        "vendor/bare": "MASKED-METER",
+        "vendor/ghost": dangling,
+    }
+    assert panel["description"]["vendor-reading"] == 0.123456
 
 
 def _json_containers(values: Mapping[str, str]) -> dict[str, str]:
@@ -1707,6 +1939,30 @@ def test_the_adapter_exports_before_the_tree_is_ready() -> None:
 
 def test_no_export_before_the_root_describes_itself() -> None:
     assert SchemaOneAdapter(_REFERENCE_ROOT, parent_child_schema()).export_masked_tree() is None
+
+
+def test_the_adapter_names_its_distribution_and_a_complete_tree() -> None:
+    """An export from a replayed capture names the installed distribution and version, and says the tree is whole."""
+    export = capture_adapter(CAPTURES[0]).export_masked_tree()
+    assert export is not None
+    assert export["metadata"] == {
+        "schema": "tree-v1",
+        "masked": True,
+        "producer": f"span-panel-api-schema-1 {version('span-panel-api-schema-1')}",
+        "tree_complete": True,
+    }
+
+
+def test_the_producer_is_unknown_where_the_distribution_is_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without its dist-info (a checkout on `sys.path`) the adapter still exports, naming its version `unknown`."""
+
+    def absent(distribution: str) -> str:
+        raise PackageNotFoundError(distribution)
+
+    monkeypatch.setattr(schema_one_adapter, "version", absent)
+    export = capture_adapter(CAPTURES[0]).export_masked_tree()
+    assert export is not None
+    assert export["metadata"]["producer"] == "span-panel-api-schema-1 unknown"
 
 
 @every_tree

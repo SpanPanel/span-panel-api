@@ -1305,6 +1305,40 @@ def test_a_word_at_a_reference_site_is_not_swept_elsewhere(word: str) -> None:
     assert export == baseline
 
 
+@pytest.mark.parametrize("placeholder", ["0", "N/A", "unknown"])
+def test_a_placeholder_serial_is_masked_at_its_property_only(placeholder: str) -> None:
+    """A serial that does not read as an id is masked where it is published and swept nowhere else.
+
+    A panel that has no serial for a device publishes a placeholder there. Only
+    a serial of six characters or more with a digit in it joins the sweep, so
+    `0`, `N/A` and `unknown` are masked at their own `serial-number` and
+    `utility-meter-serial-number` properties and leave every equal value, and
+    a description's equal number, as published. A real serial is still swept
+    everywhere.
+    """
+    topics, root = _reidentified_reference()
+    bess, evse = _first_of(topics, _TYPE_BESS), _first_of(topics, _TYPE_EVSE)
+    evse_serial = topics[evse][_SERIAL]
+    topics[bess][_SERIAL] = placeholder
+    description = _description_of(topics[root])
+    _declare(description, _METER_SERIAL, "string")
+    description["vendor-zero"] = 0
+    description["vendor-status"] = placeholder
+    topics[root]["$description"] = json.dumps(description)
+    topics[root][_METER_SERIAL] = placeholder
+    topics[root]["vendor/status"] = placeholder
+    topics[root]["vendor/text"] = f"status {placeholder} for {evse_serial}"
+    export, ids = _exported(topics, root)
+    panel = export["devices"]["masked-panel"]
+    assert _valued(export["devices"][ids[bess]])[_SERIAL] == ids[bess].upper()
+    assert panel["properties"][_METER_SERIAL] == "MASKED-METER"
+    assert panel["undeclared_properties"]["vendor/status"] == placeholder
+    assert panel["undeclared_properties"]["vendor/text"] == f"status {placeholder} for {ids[evse].upper()}"
+    assert panel["description"]["vendor-zero"] == 0
+    assert panel["description"]["vendor-status"] == placeholder
+    assert evse_serial.casefold() not in json.dumps(export).casefold()
+
+
 def test_an_identifier_never_starts_inside_a_json_escape() -> None:
     """A match may start after a complete escape, never on an escape's own letter, which would split the escape."""
     topics, root = _reidentified_reference()
@@ -1349,6 +1383,70 @@ def test_an_identifier_after_a_literal_backslash_is_swept() -> None:
         "vendor/circuit": f"\\{ids[circuit]}",
     }
     assert panel["description"]["vendor-path"] == f"C:\\{mask}"
+
+
+def test_an_identifier_after_an_escape_in_plain_text_is_swept() -> None:
+    """In text outside any JSON literal, a JSON-style escape before an identifier is a boundary, as a backslash alone already is.
+
+    Written as `\\n`, the escape's letter would otherwise adjoin the identifier
+    and hide it. The rule only adds matches: a backslash before an identifier
+    is still a boundary, an all-digit identifier keeps its decimal rule after
+    an escape, and text holding no identifier keeps its bytes.
+    """
+    topics, root = _reidentified_reference()
+    bess, lugs = _first_of(topics, _TYPE_BESS), _first_of(topics, _TYPE_LUGS)
+    serial = topics[bess][_SERIAL].upper()
+    meter = "45123987"
+    assert root.startswith("n") and lugs.startswith(root)
+    description = _description_of(topics[root])
+    _declare(description, _METER_SERIAL, "string")
+    topics[root]["$description"] = json.dumps(description)
+    topics[root][_METER_SERIAL] = meter
+    kept = 'log:\\n kept \\u00b0 \\t "quoted" \\q done'
+    planted = {
+        "vendor/log": "log:\\n" + serial,
+        "vendor/after-literal": 'a"b" \\n' + serial,
+        "vendor/unicode": "\\u00b0" + serial,
+        "vendor/tab-root": "\\t" + root,
+        "vendor/newline-root": "\\n" + root,
+        "vendor/newline-lugs": "\\n" + lugs,
+        "vendor/path": "C:\\" + serial,
+        "vendor/newline-meter": "\\n" + meter,
+        "vendor/newline-reading": "\\n0." + meter,
+        "vendor/newline-fraction": "\\n" + meter + ".5",
+        "vendor/kept": kept,
+    }
+    topics[root].update(planted)
+    export, ids = _exported(topics, root)
+    values = export["devices"]["masked-panel"]["undeclared_properties"]
+    mask = ids[bess].upper()
+    assert values == {
+        "vendor/log": "log:\\n" + mask,
+        "vendor/after-literal": 'a"b" \\n' + mask,
+        "vendor/unicode": "\\u00b0" + mask,
+        "vendor/tab-root": "\\tmasked-panel",
+        "vendor/newline-root": "\\nmasked-panel",
+        "vendor/newline-lugs": "\\n" + ids[lugs],
+        "vendor/path": "C:\\" + mask,
+        "vendor/newline-meter": "\\nMASKED-METER",
+        "vendor/newline-reading": "\\n0." + meter,
+        "vendor/newline-fraction": "\\n" + meter + ".5",
+        "vendor/kept": kept,
+    }
+    assert serial not in json.dumps(export)
+    assert root not in json.dumps(export)
+
+
+def test_a_short_identifier_after_an_escape_in_plain_text_is_not_swept() -> None:
+    """An escape is a boundary, not a whole value: a short id after one is still matched only as the entire string."""
+    topics = _copy(parent_child_tree())
+    assert "bess" in topics
+    topics[_REFERENCE_ROOT]["vendor/short"] = "\\nbess"
+    topics[_REFERENCE_ROOT]["vendor/whole"] = "bess"
+    export, ids = _exported(topics, _REFERENCE_ROOT)
+    values = export["devices"]["masked-panel"]["undeclared_properties"]
+    assert values["vendor/short"] == "\\nbess"
+    assert values["vendor/whole"] == ids["bess"]
 
 
 def test_an_identifier_spelt_with_an_escape_is_swept() -> None:
@@ -1738,28 +1836,53 @@ def _nested(innermost: object, depth: int) -> object:
     return value
 
 
+def _listed(innermost: object, depth: int) -> object:
+    """`innermost` under `depth` one-element lists; the outermost is a description value at depth 0."""
+    value = innermost
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+_DESCRIPTION_BOUND = 32
+"""How deep a description's containers are swept inside; restated from the design, so a changed bound fails here."""
+
+
+def _unwrapped_objects(kept: object, copied: object, depth: int) -> tuple[object, object]:
+    """Both values walked `depth` levels down through the one key `a`."""
+    for _ in range(depth):
+        assert isinstance(kept, dict) and isinstance(copied, dict)
+        kept, copied = kept["a"], copied["a"]
+    return kept, copied
+
+
 def test_a_description_container_at_the_nesting_bound_is_masked_whole_or_kept() -> None:
-    """A description's containers are swept four deep; one at the bound is replaced whole where it may hide an identifier and copied otherwise.
+    """A description's containers are swept thirty-two deep; one at the bound is masked whole where a leaf in it would change and copied otherwise.
 
     A description's top-level values are depth 0 and real descriptions reach
     depth 3 (`nodes/<node>/properties/<property>`), so no real description is
-    touched. At the bound a container holding any string is masked whole, since
-    its JSON text puts quotes around the string, and so is one of numbers among
-    which a serial lies; one of other numbers is copied, not shared with the
-    SDK's tree.
+    near the bound. At the bound the decision is made on the parsed leaves, not
+    on serialised text: a container is masked whole where a key, a string or a
+    number in it would be swept, whatever lies below it, and one whose leaves
+    would all stay, strings among them, is copied, not shared with the SDK's
+    tree.
     """
     topics, root = _reidentified_reference()
     bess = _first_of(topics, _TYPE_BESS)
     serial = topics[bess][_SERIAL].upper()
     meter = "45123987"
     numbers = [1, 2.5, True, None]
+    text = {"note": "kept", "list": ["a", 1]}
     description = _description_of(topics[root])
     _declare(description, _METER_SERIAL, "string")
-    description["vendor-depth-3"] = _nested({"serial": serial}, 3)
-    description["vendor-depth-4"] = _nested({"serial": serial}, 4)
-    description["vendor-depth-4-text"] = _nested({"note": "kept"}, 4)
-    description["vendor-depth-4-meter"] = _nested([int(meter), 1], 4)
-    description["vendor-depth-4-numbers"] = _nested(numbers, 4)
+    bound = _DESCRIPTION_BOUND
+    description["vendor-below"] = _nested({"serial": serial}, bound - 1)
+    description["vendor-at"] = _nested({"serial": serial}, bound)
+    description["vendor-beyond"] = _nested({"serial": serial}, bound + 1)
+    description["vendor-at-key"] = _nested({serial: 1}, bound)
+    description["vendor-at-text"] = _nested(text, bound)
+    description["vendor-at-meter"] = _nested([int(meter), 1], bound)
+    description["vendor-at-numbers"] = _nested(numbers, bound)
     topics[root]["$description"] = json.dumps(description)
     topics[root][_METER_SERIAL] = meter
     adapter = replay(topics, root)
@@ -1767,40 +1890,89 @@ def test_a_description_container_at_the_nesting_bound_is_masked_whole_or_kept() 
     ids = _ids_of(adapter, root)
     exported = export["devices"]["masked-panel"]["description"]
     mask = ids[bess].upper()
-    assert exported["vendor-depth-3"] == _nested({"serial": mask}, 3)
-    assert exported["vendor-depth-4"] == _nested("masked-nested-value", 4)
-    assert exported["vendor-depth-4-text"] == _nested("masked-nested-value", 4)
-    assert exported["vendor-depth-4-meter"] == _nested("masked-nested-value", 4)
-    assert exported["vendor-depth-4-numbers"] == _nested(numbers, 4)
+    assert exported["vendor-below"] == _nested({"serial": mask}, bound - 1)
+    assert exported["vendor-at"] == _nested("masked-nested-value", bound)
+    assert exported["vendor-beyond"] == _nested("masked-nested-value", bound)
+    assert exported["vendor-at-key"] == _nested("masked-nested-value", bound)
+    assert exported["vendor-at-text"] == _nested(text, bound)
+    assert exported["vendor-at-meter"] == _nested("masked-nested-value", bound)
+    assert exported["vendor-at-numbers"] == _nested(numbers, bound)
     assert meter not in json.dumps(export)
+    assert serial not in json.dumps(export)
     sdk_root = adapter._controller.get_root(root)
     assert sdk_root is not None and sdk_root.description is not None
-    kept: object = sdk_root.description["vendor-depth-4-numbers"]
-    copied: object = exported["vendor-depth-4-numbers"]
-    for _ in range(4):
-        assert isinstance(kept, dict) and isinstance(copied, dict)
-        kept, copied = kept["a"], copied["a"]
-    assert copied == kept
-    assert copied is not kept
-    assert serial not in json.dumps(export)
+    for name in ("vendor-at-text", "vendor-at-numbers"):
+        kept, copied = _unwrapped_objects(sdk_root.description[name], exported[name], bound)
+        assert copied == kept, name
+        assert copied is not kept, name
+        if isinstance(kept, dict) and isinstance(copied, dict):
+            assert copied["list"] is not kept["list"], name
 
 
-def test_a_deeply_nested_description_exports_within_the_bound() -> None:
-    """A description nested four hundred containers deep exports without exhausting the stack, and a serial at its bottom is gone."""
+def test_a_description_container_below_the_bound_is_swept_inside() -> None:
+    """A description container five or six deep is read like a shallower one: swept inside, and kept as published where nothing in it is an identifier.
+
+    Real descriptions reach depth 3; a vendor's property definition that
+    nests an object a level or two deeper must not be masked whole for it.
+    """
     topics, root = _reidentified_reference()
     bess = _first_of(topics, _TYPE_BESS)
     serial = topics[bess][_SERIAL].upper()
-    deep_list: object = serial
-    for _ in range(400):
-        deep_list = [deep_list]
+    plain = {"note": "kept", "range": [0, 100], "unit": "W", "flags": {"on": True, "off": None}}
+    description = _description_of(topics[root])
+    description["vendor-depth-5"] = _nested(plain, 5)
+    description["vendor-depth-6"] = _nested(plain, 6)
+    description["vendor-depth-6-serial"] = _nested({"serial": serial, "note": "kept"}, 6)
+    topics[root]["$description"] = json.dumps(description)
+    export, ids = _exported(topics, root)
+    exported = export["devices"]["masked-panel"]["description"]
+    assert exported["vendor-depth-5"] == _nested(plain, 5)
+    assert exported["vendor-depth-6"] == _nested(plain, 6)
+    assert exported["vendor-depth-6-serial"] == _nested({"serial": ids[bess].upper(), "note": "kept"}, 6)
+    assert serial not in json.dumps(export)
+
+
+def test_a_short_numeric_identifier_in_a_description_list_is_masked_above_and_at_the_bound() -> None:
+    """A short all-digit id published as a number in a list is masked just above the bound and at it alike.
+
+    Above the bound each number is held to the whole-value rule; at the bound
+    the same rule decides for the list, so the id cannot be kept there while
+    it is masked one level up.
+    """
+    short = "12345"
+    topics, root = rename_devices(_generators(["g-1"]), "panel-a", {"panel-a": "panel-a", "g-1": short}.__getitem__)
+    planted = _copy(topics)
+    description = _description_of(planted[root])
+    bound = _DESCRIPTION_BOUND
+    description["vendor-above"] = _nested([int(short), 1], bound - 1)
+    description["vendor-at"] = _nested([int(short), 1], bound)
+    description["vendor-at-text"] = _nested([short], bound)
+    description["vendor-at-other"] = _nested([int(short) + 1, 1], bound)
+    planted[root]["$description"] = json.dumps(description)
+    export, ids = _exported(planted, root)
+    exported = export["devices"]["masked-panel"]["description"]
+    assert exported["vendor-above"] == _nested([ids[short], 1], bound - 1)
+    assert exported["vendor-at"] == _nested("masked-nested-value", bound)
+    assert exported["vendor-at-text"] == _nested("masked-nested-value", bound)
+    assert exported["vendor-at-other"] == _nested([int(short) + 1, 1], bound)
+    assert short not in json.dumps(export)
+
+
+def test_a_deeply_nested_description_exports_within_the_bound() -> None:
+    """A description nested four hundred containers deep exports without exhausting the stack: a serial at its bottom is gone, and one without is kept whole."""
+    topics, root = _reidentified_reference()
+    bess = _first_of(topics, _TYPE_BESS)
+    serial = topics[bess][_SERIAL].upper()
     description = _description_of(topics[root])
     description["vendor-deep"] = _nested(serial, 400)
-    description["vendor-deep-list"] = deep_list
+    description["vendor-deep-list"] = _listed(serial, 400)
+    description["vendor-deep-plain"] = _nested(["kept", 1, None], 400)
     topics[root]["$description"] = json.dumps(description)
     export, _ = _exported(topics, root)
     exported = export["devices"]["masked-panel"]["description"]
-    assert exported["vendor-deep"] == _nested("masked-nested-value", 4)
-    assert exported["vendor-deep-list"] == [[[["masked-nested-value"]]]]
+    assert exported["vendor-deep"] == _nested("masked-nested-value", _DESCRIPTION_BOUND)
+    assert exported["vendor-deep-list"] == _listed("masked-nested-value", _DESCRIPTION_BOUND)
+    assert exported["vendor-deep-plain"] == _nested(["kept", 1, None], 400)
     assert serial not in json.dumps(export)
 
 
@@ -1828,17 +2000,19 @@ def test_a_number_in_a_description_equal_to_an_identifier_is_masked() -> None:
 
 
 def test_a_boolean_in_a_description_is_never_an_identifier() -> None:
-    """A boolean is not a number: on a tree whose device id is `true`, a description's `true` stays a boolean."""
+    """A boolean is not a number: on a tree whose device id is `true`, a description's `true` stays a boolean, at the bound too."""
     topics, root = rename_devices(_generators(["g-1"]), "panel-a", {"panel-a": "panel-a", "g-1": "true"}.__getitem__)
     planted = _copy(topics)
     description = _description_of(planted[root])
     description["vendor-flags"] = {"on": True, "off": False}
+    description["vendor-flags-at-bound"] = _nested({"on": True, "off": False}, _DESCRIPTION_BOUND)
     planted[root]["$description"] = json.dumps(description)
     planted[root][_NOTE] = "TRUE"
     export, ids = _exported(planted, root)
     panel = export["devices"]["masked-panel"]
     assert panel["undeclared_properties"][_NOTE] == ids["true"]
     assert panel["description"]["vendor-flags"] == {"on": True, "off": False}
+    assert panel["description"]["vendor-flags-at-bound"] == _nested({"on": True, "off": False}, _DESCRIPTION_BOUND)
 
 
 def test_an_all_digit_identifier_is_not_found_inside_a_decimal() -> None:

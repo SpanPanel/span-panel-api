@@ -172,8 +172,10 @@ and a maintainer can replay it through the same loader, adapter and fidelity har
 `span_panel_api_schema_1.tree_export`, which masks by rule, so a consumer forwards the result whole and decides nothing about what is sensitive.
 
 The masks match the site properties (`utility-meter-serial-number`, `wifi-ssid`, `postal-code`, `address-lines`, `locality`, `region`, `latitude`, `longitude`) and `serial-number` by property id on any node, and the panel's `info/name` and its
-`$description` `name`; `name` on any other node or device is kept. Device ids become placeholders that start `masked-`, and a final sweep replaces any device id or serial still present in any wire string, decoding JSON string literals to do so. The module
-and `_Sweep` docstrings in `tree_export.py` hold the rules; change them there.
+`$description` `name`; `name` on any other node or device is kept. Device ids become placeholders that start `masked-`, and a final sweep replaces any device id, and any serial that reads as an identifier (six characters or more with a digit; a placeholder
+such as `0` or `N/A` is masked at its own property only), still present in any wire string. It decodes JSON string literals to do so, to a bound of four nested levels, and in the plain text between them a JSON-style escape written out (`\n`, `\u00b0`) is a
+boundary before an identifier, as a backslash alone is. A `$description` is read as parsed to a looser bound of thirty-two containers, after which a subtree is masked whole only if something in it would be swept. The module and `_Sweep` docstrings in
+`tree_export.py` hold the rules; change them there.
 
 It is optional, like the discovery rows: `TreeExportingAdapter` is a separate `runtime_checkable` protocol, not a `SchemaAdapter` member, so no `ADAPTER_CONTRACT` bump and no adapter distribution is rejected. `SpanMqttClient.masked_tree()` returns `None`
 for an adapter that does not offer it, which includes the flat adapter, and before the root device has described itself.

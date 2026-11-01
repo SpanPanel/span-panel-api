@@ -17,6 +17,7 @@ tree, and the SDK repopulates — so there is no resync hook to wire or forget.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
 import logging
 import time
 from typing import TYPE_CHECKING, Final
@@ -51,15 +52,31 @@ from span_panel_api_schema_1.field_metadata import build_field_metadata
 from span_panel_api_schema_1.panel import integer, positions_outside_model, text
 from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot, harmonised_evse_keys
 from span_panel_api_schema_1.transport import ControllerRoutes, control_target
+from span_panel_api_schema_1.tree_export import export_masked_tree
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ebus_sdk.homie import DiscoveredDevice
 
-    from span_panel_api.models import FieldMetadata, SpanPanelSnapshot, V2HomieSchema
+    from span_panel_api.models import FieldMetadata, MaskedTree, SpanPanelSnapshot, V2HomieSchema
 
 _LOGGER = logging.getLogger(__name__)
+
+_DISTRIBUTION: Final = "span-panel-api-schema-1"
+
+
+def _producer() -> str:
+    """The distribution and version that wrote an export, or ``unknown`` where this code runs without its dist-info.
+
+    A checkout put on ``sys.path`` has no installed metadata, and an export must
+    not fail for the lack of a version string.
+    """
+    try:
+        return f"{_DISTRIBUTION} {version(_DISTRIBUTION)}"
+    except PackageNotFoundError:
+        return f"{_DISTRIBUTION} unknown"
+
 
 FEED_GRACE_S: Final = 2.0
 """How long an inverter's feed or a DER's model may stay unvalued once every name has arrived.
@@ -584,6 +601,23 @@ class SchemaOneAdapter:
                 return None
             return device, surface, surface.limit
         return None
+
+    def export_masked_tree(self) -> MaskedTree | None:
+        """The device tree the adapter holds, masked, or None before the root has described itself.
+
+        Computed at call time and not gated on `is_ready()`: a tree that has not
+        finished arriving is exactly when a diagnostic is wanted, and
+        `metadata["tree_complete"]` says whether this one is whole.
+        """
+        root = self._controller.get_root(self._serial_number)
+        if root is None or root.description is None:
+            return None
+        return export_masked_tree(
+            root,
+            self._children(),
+            producer=_producer(),
+            tree_complete=self._controller.is_tree_complete(self._serial_number),
+        )
 
     def _require_root(self) -> DiscoveredDevice:
         """The root, or a clear error if discovery has not finished.

@@ -144,6 +144,9 @@ because a transport could reasonably offer one and not the other.
 One further protocol, `SchemaAdapter`, is the bootstrap-to-parser contract rather than a consumer-facing one; it is what an adapter distribution implements and what discovery checks. Integration code programs against the protocols above, not against
 transport-specific classes.
 
+`TreeExportingAdapter` sits beside `SchemaAdapter` as an optional protocol, not one every adapter must implement: an adapter that offers `export_masked_tree()` lets `SpanMqttClient.masked_tree()` return the panel's device tree with serials, device ids and
+site details masked, and `None` otherwise.
+
 ### Snapshots
 
 All panel state is represented as immutable, frozen dataclasses:

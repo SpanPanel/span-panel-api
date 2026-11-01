@@ -36,12 +36,13 @@ From r202639 the BESS meter is published discharge-positive, the negation of
 The frame is chosen from the enclosure's release build number
 (``firmware.release_build``), never from the respin suffix after it. Where the
 version does not parse, the two wire properties decide instead: one nonzero sign
-on both is the old frame, opposite signs the new one. Where either is zero or
+on both is the old frame, opposite signs the new one. The reference capture
+(``ebus-panel-sim`` 0.9.0) publishes no SPAN version string and is read this way:
+it carries r202639's frame, told by its opposite signs. Where either is zero or
 absent the old frame is assumed, because that is what every earlier release of
-this package applied and what the reference capture (``ebus-panel-sim`` 0.8.0,
-which publishes no SPAN version string) carries. A battery at rest reads zero in
-both frames, so the assumption only decides a nonzero BESS meter beside a missing
-or zero flow figure.
+this package applied. A battery at rest reads zero in both frames, so the
+assumption only decides a nonzero BESS meter beside a missing or zero flow
+figure.
 
 On either firmware ``panel.power_flow_battery`` (passed through untouched, and
 charge-positive) and ``battery.power_w`` end up as each other's mirror, so a

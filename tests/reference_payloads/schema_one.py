@@ -104,7 +104,13 @@ def devices_from_tree(tree: RetainedTopicTree) -> list[DiscoveredDevice]:
     return [device_from_topics(device_id, topics) for device_id, topics in tree.items()]
 
 
-def replay(tree: RetainedTopicTree, root_id: str, *, clock: Callable[[], float] = time.monotonic) -> SchemaOneAdapter:
+def replay(
+    tree: RetainedTopicTree,
+    root_id: str,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    withhold_description_of: str | None = None,
+) -> SchemaOneAdapter:
     """Feed a whole tree to a fresh adapter the way the broker replays it.
 
     Every message goes through `handle_message`, so the tree takes the SDK's real
@@ -119,6 +125,10 @@ def replay(tree: RetainedTopicTree, root_id: str, *, clock: Callable[[], float] 
 
     `clock` is the adapter's monotonic source, for a test that steps through a
     grace the adapter waits out.
+
+    `withhold_description_of` leaves out one device's `$description` and `$state`
+    but still delivers its values: the device its parent declared as a child and
+    that has not yet described itself, with whatever it has already published.
     """
     root = tree[root_id]
     adapter = SchemaOneAdapter(
@@ -134,8 +144,9 @@ def replay(tree: RetainedTopicTree, root_id: str, *, clock: Callable[[], float] 
     for device_id in [root_id, *(other for other in tree if other != root_id)]:
         topics = tree[device_id]
         prefix = f"{_DOMAIN}/{_HOMIE_VERSION}/{device_id}"
-        adapter.handle_message(f"{prefix}/$description", topics["$description"])
-        adapter.handle_message(f"{prefix}/$state", topics.get("$state", _DEFAULT_STATE))
+        if device_id != withhold_description_of:
+            adapter.handle_message(f"{prefix}/$description", topics["$description"])
+            adapter.handle_message(f"{prefix}/$state", topics.get("$state", _DEFAULT_STATE))
         for topic, value in topics.items():
             if not topic.startswith("$"):
                 adapter.handle_message(f"{prefix}/{topic}", value)

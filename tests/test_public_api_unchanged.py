@@ -59,6 +59,15 @@ EXPECTED_PUBLIC_API = {
     "ControlTarget",
     "ExtensionProperty",
     "ExtensionSubject",
+    # Added 2026-10-31: the masked device tree a consumer forwards in diagnostics,
+    # and the optional protocol an adapter offers it through. Deliberately not a
+    # SchemaAdapter member: the protocol derives its required set from itself, so a
+    # member there would invalidate every built adapter wheel.
+    "MaskedTree",
+    "MaskedTreeDevice",
+    "MaskedTreeMetadata",
+    "UndescribedDevice",
+    "TreeExportingAdapter",
     "AdoptedControlProtocol",
     # Added 2026-10-09: a charger's connector lock. A protocol of its own, so
     # `EvseControlProtocol` and its implementers are unchanged.

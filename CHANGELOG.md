@@ -14,6 +14,8 @@ Snapshot fields that held a fabricated constant can now be unknown, and with `sp
 ### Added
 
 - **spanos3/r202639/03 batch 2: reads more of the data this firmware publishes.**
+- **`SpanMqttClient.masked_tree()` returns the panel's device tree with serial numbers, device ids and site details replaced**, in the `tree-v1` form of the reference captures, for a consumer's diagnostics; `None` on a panel without the parent/child data
+  model.
 - **`V2StatusInfo.hardware_version` reports the hardware version string from `GET /api/v2/status`.**
 
 ### Changed

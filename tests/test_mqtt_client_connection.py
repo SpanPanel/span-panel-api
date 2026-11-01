@@ -556,3 +556,36 @@ def test_field_metadata_is_live_after_ready() -> None:
 
     adapter.discovered = True
     assert client.field_metadata == {"circuit.instant_power_w": FieldMetadata(unit="W", datatype="float")}
+
+
+def test_masked_tree_is_none_without_an_adapter() -> None:
+    client = SpanMqttClient.__new__(SpanMqttClient)
+    client._adapter = None
+    assert client.masked_tree() is None
+
+
+def test_masked_tree_is_none_when_the_adapter_does_not_export() -> None:
+    class FlatAdapter:
+        schema_major = "0"
+
+    client = SpanMqttClient.__new__(SpanMqttClient)
+    client._adapter = FlatAdapter()
+    assert client.masked_tree() is None
+
+
+def test_masked_tree_is_the_adapters_export() -> None:
+    from span_panel_api.models import MaskedTree
+
+    export = MaskedTree(
+        metadata={"schema": "tree-v1", "masked": True, "producer": "double 1", "tree_complete": True},
+        devices={},
+        undescribed_devices={},
+    )
+
+    class ExportingAdapter:
+        def export_masked_tree(self) -> MaskedTree | None:
+            return export
+
+    client = SpanMqttClient.__new__(SpanMqttClient)
+    client._adapter = ExportingAdapter()
+    assert client.masked_tree() is export

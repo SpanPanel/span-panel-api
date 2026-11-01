@@ -165,6 +165,19 @@ report, and a smaller report looks exactly like a panel with nothing new on it.
 a snapshot field, and every reported property moves none. `_CONSUMED_OFF_SNAPSHOT` holds the three declarations consumed by a route no snapshot field can show (tier-1 dispatch, the shadowed islanding tier, the unreached feedthrough branch); each names the
 code that reads it, and each fails the day its property does move a field.
 
+### A masked tree for diagnostics
+
+Discovery rows never carry a value, so they can be forwarded as they stand. `MaskedTree` is the opposite trade: it carries the whole tree, every declared property with the value the panel published, so a consumer can attach a panel's real shape to a report
+and a maintainer can replay it through the same loader, adapter and fidelity harness the vendored captures use. It can carry values because it is safe by construction: `SchemaOneAdapter.export_masked_tree` runs the tree through
+`span_panel_api_schema_1.tree_export`, which masks by rule, so a consumer forwards the result whole and decides nothing about what is sensitive.
+
+The masks match the site properties (`utility-meter-serial-number`, `wifi-ssid`, `postal-code`, `address-lines`, `locality`, `region`, `latitude`, `longitude`) and `serial-number` by property id on any node, and the panel's `info/name` and its
+`$description` `name`; `name` on any other node or device is kept. Device ids become placeholders that start `masked-`, and a final sweep replaces any device id or serial still present in any wire string, decoding JSON string literals to do so. The module
+and `_Sweep` docstrings in `tree_export.py` hold the rules; change them there.
+
+It is optional, like the discovery rows: `TreeExportingAdapter` is a separate `runtime_checkable` protocol, not a `SchemaAdapter` member, so no `ADAPTER_CONTRACT` bump and no adapter distribution is rejected. `SpanMqttClient.masked_tree()` returns `None`
+for an adapter that does not offer it, which includes the flat adapter, and before the root device has described itself.
+
 ## Devices this library models nothing for
 
 `TreeRoles` sorts a v1.0 tree into the roles a snapshot needs. Anything matching none of them used to fall off the end silently — a panel publishing a device type nobody modelled produced no field, no metadata row and no sign it was there. The eBus schema
@@ -197,6 +210,7 @@ The two answer opposite questions and are separate types so that conflating them
 | Type                 | Question                                     | Destination                       | Carries a value |
 | -------------------- | -------------------------------------------- | --------------------------------- | --------------- |
 | `DiscoveredMetadata` | "we model this device and read nothing here" | consumer diagnostics, which leave | **no**          |
+| `MaskedTree`         | "the whole tree, safe to forward"            | consumer diagnostics, which leave | **yes, masked** |
 | `AdoptedProperty`    | "nothing here models this device at all"     | an entity on the same machine     | **yes**         |
 
 `AdoptedProperty` also carries the declared `format` and `settable` flag, which together are the value domain a consumer needs to build a control rather than a reading.

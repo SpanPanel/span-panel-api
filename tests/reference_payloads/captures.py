@@ -130,14 +130,18 @@ def capture_tree(stem: str) -> CaptureTree:
 
 def _parse(path: Path) -> CaptureTree:
     raw: object = json.loads(path.read_text(encoding="utf-8"))
-    document = _json_object(raw, path.name)
+    return capture_tree_from_document(_json_object(raw, path.name), path.name)
+
+
+def capture_tree_from_document(document: Mapping[str, object], where: str) -> CaptureTree:
+    """Parse a `tree-v1` document already read from JSON; `where` names it in errors."""
     devices = {
-        device_id: _device(device_id, body, f"{path.name}: {device_id}")
-        for device_id, body in _json_object(document["devices"], f"{path.name}: devices").items()
+        device_id: _device(device_id, body, f"{where}: {device_id}")
+        for device_id, body in _json_object(document["devices"], f"{where}: devices").items()
     }
     roots = [device_id for device_id, device in devices.items() if device.device_type == _TYPE_PANEL]
     if len(roots) != 1:
-        raise ValueError(f"{path.name} holds {len(roots)} panels, not one")
+        raise ValueError(f"{where} holds {len(roots)} panels, not one")
     return CaptureTree(devices=MappingProxyType(devices), root_id=roots[0])
 
 

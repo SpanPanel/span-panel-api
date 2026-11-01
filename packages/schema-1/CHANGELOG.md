@@ -16,10 +16,12 @@ Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the u
 ### Added
 
 - **spanos3/r202639/03 batch 2: reads more of the data this firmware publishes.**
+- **`SchemaOneAdapter` exports the tree it holds, masked**, for `SpanMqttClient.masked_tree()`.
 
 ### Changed
 
-- The shipped reference tree is recaptured with every circuit inside the panel's breaker positions.
+- The shipped reference tree is recaptured with `ebus-panel-sim` 0.9.0: it keeps every circuit inside the panel's breaker positions, publishes firmware r202639's discharge-positive battery meter, and leaves a charger's user charge-current limit unpublished
+  until one is set.
 - **`proximity_proven` is `None`**, where it was a hard-coded `True`, because the tree publishes no proximity property.
 - **`uptime_s` is `None`**, where it was always `0`, because no device publishes an uptime and this parser keeps no readiness clock to measure one.
 

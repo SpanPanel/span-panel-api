@@ -42,16 +42,14 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from span_panel_api.models import MaskedTree, MaskedTreeDevice, UndescribedDevice
-from span_panel_api_schema_1.description import device_type, nodes, properties
+from span_panel_api_schema_1.const import DEVICE_TYPE_PREFIX, TYPE_CIRCUIT, TYPE_LUGS
+from span_panel_api_schema_1.description import declares_class, device_type, nodes, properties
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
 
 _PREFIX = "masked-"
 _PANEL = f"{_PREFIX}panel"
-_TYPE_PREFIX = "energy.ebus.device."
-_TYPE_CIRCUIT = f"{_TYPE_PREFIX}circuit"
-_TYPE_LUGS = f"{_TYPE_PREFIX}lugs"
 _UNDESCRIBED = "undescribed"
 _UNTYPED = "untyped"
 _LUGS = "lugs"
@@ -186,7 +184,9 @@ def placeholder_ids(root: DiscoveredDevice, descendants: Sequence[DiscoveredDevi
 
     The root is ``masked-panel``. Circuits are numbered by their lowest breaker
     space, then by natural id order for those that share a space or declare
-    none (the remote CT). Lugs take ``masked-lugs-upstream`` / ``-downstream``
+    none (the remote CT). Circuits and lugs are recognised by class, so a
+    subtyped one (`declares_class`) is placed exactly as its class is. Lugs
+    take ``masked-lugs-upstream`` / ``-downstream``
     from ``info/direction``; a lugs device whose direction is absent, not one of
     the two, or already taken is numbered ``masked-lugs-<n>``. Any other
     described device is numbered per short type in natural id order, and a device
@@ -201,13 +201,13 @@ def placeholder_ids(root: DiscoveredDevice, descendants: Sequence[DiscoveredDevi
         return f"{_PREFIX}{name}-{counters[name]}"
 
     ordered = sorted(descendants, key=lambda device: _order(device.device_id))
-    circuits = [device for device in ordered if _is_described(device) and device_type(device) == _TYPE_CIRCUIT]
+    circuits = [device for device in ordered if _is_described(device) and declares_class(device_type(device), TYPE_CIRCUIT)]
     for device in sorted(circuits, key=_circuit_order):
         ids[device.device_id] = numbered(_CIRCUIT)
 
     taken: set[str] = set()
     for device in ordered:
-        if not _is_described(device) or device_type(device) != _TYPE_LUGS:
+        if not _is_described(device) or not declares_class(device_type(device), TYPE_LUGS):
             continue
         direction = _DIRECTIONS.get(_text(device, "info", "direction"))
         if direction is None or direction in taken:
@@ -235,7 +235,7 @@ def _is_described(device: DiscoveredDevice) -> bool:
 
 
 def _short_type(device: DiscoveredDevice) -> str:
-    declared = device_type(device).removeprefix(_TYPE_PREFIX) or _UNTYPED
+    declared = device_type(device).removeprefix(DEVICE_TYPE_PREFIX) or _UNTYPED
     return f"{_ESCAPED_TYPE}{declared}" if declared in _RESERVED_SHORT_TYPES else declared
 
 

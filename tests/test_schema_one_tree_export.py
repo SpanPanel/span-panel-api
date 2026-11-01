@@ -193,6 +193,40 @@ def test_a_second_lugs_claiming_a_taken_direction_is_numbered() -> None:
     assert len(set(ids.values())) == len(ids)
 
 
+def _retyped_placeholders(declared: str, replacement: str) -> dict[str, str]:
+    """The reference tree's placeholders with every device declaring exactly `declared` declaring `replacement`."""
+    topics = {device_id: dict(values) for device_id, values in parent_child_tree().items()}
+    for values in topics.values():
+        description = json.loads(values["$description"])
+        if description.get("type") == declared:
+            description["type"] = replacement
+            values["$description"] = json.dumps(description)
+    return _placeholders(topics, _REFERENCE_ROOT)
+
+
+@pytest.mark.parametrize("declared", [_TYPE_CIRCUIT, _TYPE_LUGS])
+def test_a_subtyped_circuit_or_lugs_is_placed_as_its_class(declared: str) -> None:
+    """A `circuit.<x>` is numbered by breaker space and a `lugs.<x>` takes its direction (#228)."""
+    assert _retyped_placeholders(declared, f"{declared}.hybrid") == _placeholders(parent_child_tree(), _REFERENCE_ROOT)
+
+
+@pytest.mark.parametrize("declared", [_TYPE_CIRCUIT, _TYPE_LUGS])
+def test_a_look_alike_of_a_circuit_or_lugs_is_numbered_by_its_own_type(declared: str) -> None:
+    """`circuitfoo` and `lugsfoo` are other classes: numbered per short type, like any other device."""
+    base_short = declared.removeprefix("energy.ebus.device.")
+    retyped = sorted(
+        device_id
+        for device_id, placeholder in _placeholders(parent_child_tree(), _REFERENCE_ROOT).items()
+        if placeholder.startswith(f"masked-{base_short}-")
+    )
+    assert retyped, f"precondition: the reference tree carries a {declared} device"
+
+    ids = _retyped_placeholders(declared, f"{declared}foo")
+    assert sorted(ids[device_id] for device_id in retyped) == sorted(
+        f"masked-{base_short}foo-{n}" for n in range(1, len(retyped) + 1)
+    )
+
+
 def test_ids_tied_in_natural_order_are_named_the_same_in_any_input_order() -> None:
     tied = ["g-1", "g-01", "G-1", "g-2"]
     assert len({natural_key(device_id) for device_id in tied[:3]}) == 1

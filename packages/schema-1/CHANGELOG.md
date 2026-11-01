@@ -39,8 +39,9 @@ Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the u
   ([#215](https://github.com/SpanPanel/span-panel-api/issues/215)).
 - **Each MQTT message costs the same few microseconds however many devices the panel declares**, where routing it tested every recorded subscription in turn and every readiness check walked the device tree. On a 30-device tree the work per message falls
   from 90–250 µs to about 2 µs, measured on a desktop machine ([#223](https://github.com/SpanPanel/span-panel-api/issues/223)).
-- **A device whose type is a subtype of a class this adapter reads (`energy.ebus.device.bess.<x>` and the like) is read as that class**, where it was dropped from the snapshot, adoption and discovery alike. A type that only looks like a class
-  (`energy.ebus.device.lugsfoo`, `…evsefoo`) is no longer read as that class, and is adopted as an unmodelled device instead ([#228](https://github.com/SpanPanel/span-panel-api/issues/228)).
+- **A BESS, PV, EVSE, MID, circuit or inverter device whose type is a subtype of its class (`energy.ebus.device.bess.<x>` and the like) is read as that class**, where it was dropped from the snapshot, adoption and discovery alike, and `find_node_by_type`
+  and `has_circuit` accept a subtype of the class asked for. A type that only looks like a class (`energy.ebus.device.lugsfoo`, `…evsefoo`) is no longer also read as that class, and appears only as an adopted, unmodelled device
+  ([#228](https://github.com/SpanPanel/span-panel-api/issues/228)).
 
 ## [1.2.2]
 

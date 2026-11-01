@@ -81,6 +81,38 @@ mappings.
 """
 
 
+IntegerBounds = tuple[int | None, int | None]
+"""A declared integer range, `(minimum, maximum)`; None on a side the format leaves open."""
+
+
+def declared_integer_bounds(datatype: str, declared: object) -> IntegerBounds | None:
+    """The range an `integer` property's `$format` declares, or None.
+
+    Homie 5 spells it `<min>:<max>` and allows either side to be empty. Anything
+    else is not interpreted: a format that is not a string, a datatype that is
+    not `integer`, a missing colon, extra segments, or a bound that is not a
+    plain integer all yield None, which bounds nothing. Guessing a range from a
+    format we cannot read would refuse a write the panel might accept, and the
+    commissioned ceiling still applies either way.
+    """
+    if datatype != "integer" or not isinstance(declared, str):
+        return None
+    parts = declared.split(":")
+    if len(parts) != 2:
+        return None
+    bounds: list[int | None] = []
+    for part in parts:
+        text = part.strip()
+        if not text:
+            bounds.append(None)
+            continue
+        try:
+            bounds.append(int(text))
+        except ValueError:
+            return None
+    return bounds[0], bounds[1]
+
+
 @dataclass(frozen=True, slots=True)
 class ChargeLimitProperty:
     """One declared property of the resolved surface.
@@ -95,6 +127,8 @@ class ChargeLimitProperty:
     unit: str | None
     datatype: str
     settable: bool
+    bounds: IntegerBounds | None = None
+    """The `<min>:<max>` range the declaration's `$format` states, or None where it states none we can read."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,9 +178,11 @@ def resolve_charge_limit(device: DiscoveredDevice | None) -> ChargeLimitSurface 
 def _property(property_id: str, definition: dict[str, object] | None) -> ChargeLimitProperty | None:
     if definition is None:
         return None
+    datatype = str(definition.get("datatype") or "string")
     return ChargeLimitProperty(
         property_id=property_id,
         unit=optional_str(definition.get("unit")),
-        datatype=str(definition.get("datatype") or "string"),
+        datatype=datatype,
         settable=declared_settable(definition),
+        bounds=declared_integer_bounds(datatype, definition.get("format")),
     )

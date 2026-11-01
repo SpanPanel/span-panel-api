@@ -499,7 +499,88 @@ def test_a_value_at_or_below_the_ceiling_is_published_as_it_is() -> None:
 
     assert adapter.evse_charge_limit_payload(key, ceiling) == str(ceiling)
     assert adapter.evse_charge_limit_payload(key, ceiling - 16) == str(ceiling - 16)
+    assert adapter.evse_charge_limit_payload(key, _declared_minimum(EVSE)) == str(_declared_minimum(EVSE))
+
+
+def _declared_minimum(device_id: str) -> int:
+    """The lower bound the capture's limit declares in `$format` (`<min>:<max>`)."""
+    declared = json.loads(_TREE[device_id]["$description"])["nodes"]["config"]["properties"]
+    return int(declared["user-max-charge-current"]["format"].split(":")[0])
+
+
+def _with_limit_format(fmt: str | None, device_id: str = EVSE) -> dict[str, dict[str, str]]:
+    """The capture with the limit's declared `$format` replaced, or removed where `None`."""
+    topics = dict(_TREE[device_id])
+    description = json.loads(topics["$description"])
+    declaration = description["nodes"]["config"]["properties"]["user-max-charge-current"]
+    if fmt is None:
+        declaration.pop("format")
+    else:
+        declaration["format"] = fmt
+    topics["$description"] = json.dumps(description)
+    tree = {other: dict(values) for other, values in _TREE.items()}
+    tree[device_id] = topics
+    return tree
+
+
+def test_below_the_declared_minimum_is_refused() -> None:
+    """The panel declares the range it accepts (`6:<maximum>`); a value under it
+    is not a smaller limit but one the charger does not take."""
+    adapter = _adapter()
+    key = _key(adapter, EVSE)
+    minimum = _declared_minimum(EVSE)
+
+    assert adapter.evse_charge_limit_payload(key, minimum - 1) is None
+    assert adapter.evse_charge_limit_payload(key, 0) is None
+
+
+def test_the_declared_minimum_itself_is_accepted() -> None:
+    adapter = _adapter()
+    key = _key(adapter, EVSE)
+    minimum = _declared_minimum(EVSE)
+
+    assert adapter.evse_charge_limit_payload(key, minimum) == str(minimum)
+
+
+def test_a_declared_maximum_tighter_than_the_ceiling_is_enforced() -> None:
+    ceiling = int(_published(EVSE, CEILING_TOPIC))
+    adapter = _adapter(_with_limit_format(f"6:{ceiling - 8}"))
+    key = _key(adapter, EVSE)
+
+    assert adapter.evse_charge_limit_payload(key, ceiling - 8) == str(ceiling - 8)
+    assert adapter.evse_charge_limit_payload(key, ceiling - 7) is None
+
+
+def test_a_range_with_an_open_side_enforces_only_the_other() -> None:
+    low_open = _adapter(_with_limit_format(":20"))
+    assert low_open.evse_charge_limit_payload(_key(low_open, EVSE), 0) == "0"
+    assert low_open.evse_charge_limit_payload(_key(low_open, EVSE), 21) is None
+
+    high_open = _adapter(_with_limit_format("6:"))
+    ceiling = int(_published(EVSE, CEILING_TOPIC))
+    assert high_open.evse_charge_limit_payload(_key(high_open, EVSE), 5) is None
+    assert high_open.evse_charge_limit_payload(_key(high_open, EVSE), ceiling) == str(ceiling)
+    assert high_open.evse_charge_limit_payload(_key(high_open, EVSE), ceiling + 1) is None
+
+
+def test_no_declared_format_keeps_the_ceiling_as_the_only_bound() -> None:
+    adapter = _adapter(_with_limit_format(None))
+    key = _key(adapter, EVSE)
+    ceiling = int(_published(EVSE, CEILING_TOPIC))
+
     assert adapter.evse_charge_limit_payload(key, 0) == "0"
+    assert adapter.evse_charge_limit_payload(key, ceiling) == str(ceiling)
+    assert adapter.evse_charge_limit_payload(key, ceiling + 1) is None
+
+
+@pytest.mark.parametrize("fmt", ["garbage", "6", "a:b", "6:32:1", "6.5:32", "UNLOCKED,LOCKED"])
+def test_an_uninterpretable_format_keeps_the_ceiling_as_the_only_bound(fmt: str) -> None:
+    adapter = _adapter(_with_limit_format(fmt))
+    key = _key(adapter, EVSE)
+    ceiling = int(_published(EVSE, CEILING_TOPIC))
+
+    assert adapter.evse_charge_limit_payload(key, 0) == "0"
+    assert adapter.evse_charge_limit_payload(key, ceiling + 1) is None
 
 
 def test_above_the_ceiling_is_refused_rather_than_clamped() -> None:
@@ -535,6 +616,9 @@ def test_a_charger_with_no_ceiling_is_not_second_guessed() -> None:
     topics = dict(_TREE[EVSE])
     description = json.loads(topics["$description"])
     description["nodes"]["config"]["properties"].pop("max-charge-current")
+    # The limit's declared range would bound 1000 A too; this test is about the
+    # ceiling being the only thing that does, so the range is not declared.
+    description["nodes"]["config"]["properties"]["user-max-charge-current"].pop("format")
     topics["$description"] = json.dumps(description)
     topics.pop(CEILING_TOPIC)
     tree = {other: dict(values) for other, values in _TREE.items()}

@@ -551,6 +551,14 @@ class SchemaOneAdapter:
         charge-only EVSE cannot be told to export by lowering a ceiling, so a
         negative value is not a smaller limit but a malformed one.
 
+        **Refuses outside the range the limit declares.** Firmware r202639
+        publishes `<min>:<commissioned maximum>` as the limit's `$format`
+        (`6:32`), so a value under the minimum is refused here instead of being
+        published for the panel to reject or misapply. A declared maximum
+        tighter than the ceiling applies too. A format that is absent, or that
+        cannot be read as an integer range, bounds nothing extra and the
+        ceiling rule above still holds.
+
         A charger that declares no ceiling is not second-guessed — the catalog
         makes `installer-max` a SHOULD, and the value that bounds the write is
         the one the panel published, not one this library invents.
@@ -558,11 +566,15 @@ class SchemaOneAdapter:
         writable = self._writable_charge_limit(node_id)
         if writable is None or amps < 0:
             return None
-        device, surface, _limit = writable
+        device, surface, limit = writable
         ceiling = surface.ceiling
         commissioned = None if ceiling is None else integer(device, surface.node, ceiling.property_id)
         if commissioned is not None and amps > commissioned:
             return None
+        if limit.bounds is not None:
+            minimum, maximum = limit.bounds
+            if (minimum is not None and amps < minimum) or (maximum is not None and amps > maximum):
+                return None
         return str(amps)
 
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:

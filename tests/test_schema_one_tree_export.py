@@ -1958,22 +1958,40 @@ def test_a_short_numeric_identifier_in_a_description_list_is_masked_above_and_at
     assert short not in json.dumps(export)
 
 
+_DESCRIPTION_COPY_LIMIT = 64
+"""How deep a kept description subtree may reach before it is masked whole; restated from the design."""
+
+
 def test_a_deeply_nested_description_exports_within_the_bound() -> None:
-    """A description nested four hundred containers deep exports without exhausting the stack: a serial at its bottom is gone, and one without is kept whole."""
+    """A description nested four hundred containers deep exports without exhausting the stack, and the export still serialises indented.
+
+    A serial at the bottom is gone. A subtree holding no identifier is copied
+    as published while it stays within sixty-four levels, and masked whole
+    beyond them: a consumer writes the export with `json.dumps(indent=2)`,
+    which a deeper document would make raise.
+    """
     topics, root = _reidentified_reference()
     bess = _first_of(topics, _TYPE_BESS)
     serial = topics[bess][_SERIAL].upper()
+    plain = ["kept", 1, None]
     description = _description_of(topics[root])
     description["vendor-deep"] = _nested(serial, 400)
     description["vendor-deep-list"] = _listed(serial, 400)
-    description["vendor-deep-plain"] = _nested(["kept", 1, None], 400)
+    description["vendor-deep-plain"] = _nested(plain, 400)
+    description["vendor-plain-50"] = _nested(plain, 50)
+    description["vendor-plain-at-limit"] = _nested(plain, _DESCRIPTION_COPY_LIMIT)
+    description["vendor-plain-past-limit"] = _nested(plain, _DESCRIPTION_COPY_LIMIT + 1)
     topics[root]["$description"] = json.dumps(description)
     export, _ = _exported(topics, root)
     exported = export["devices"]["masked-panel"]["description"]
     assert exported["vendor-deep"] == _nested("masked-nested-value", _DESCRIPTION_BOUND)
     assert exported["vendor-deep-list"] == _listed("masked-nested-value", _DESCRIPTION_BOUND)
-    assert exported["vendor-deep-plain"] == _nested(["kept", 1, None], 400)
+    assert exported["vendor-deep-plain"] == _nested("masked-nested-value", _DESCRIPTION_BOUND)
+    assert exported["vendor-plain-50"] == _nested(plain, 50)
+    assert exported["vendor-plain-at-limit"] == _nested(plain, _DESCRIPTION_COPY_LIMIT)
+    assert exported["vendor-plain-past-limit"] == _nested("masked-nested-value", _DESCRIPTION_BOUND)
     assert serial not in json.dumps(export)
+    assert json.dumps(export, indent=2)
 
 
 def test_a_number_in_a_description_equal_to_an_identifier_is_masked() -> None:

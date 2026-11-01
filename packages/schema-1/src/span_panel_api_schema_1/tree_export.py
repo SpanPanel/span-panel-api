@@ -166,6 +166,8 @@ alone: ``parsed`` costs about three frames per level, and thirty-two levels
 stay far inside the default limit.
 """
 _NESTED_VALUE_MASK: Final = f"{_PREFIX}nested-value"
+_DESCRIPTION_COPY_LIMIT: Final = 64
+"""How deep a kept description subtree may reach: a consumer writes the export indented, which a deep one makes raise."""
 _JSON_NUMBER: Final = re.compile(r"(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)")
 """A JSON number token, captured so ``split`` returns the tokens at the odd indices.
 
@@ -380,7 +382,7 @@ def _serials(device: DiscoveredDevice, property_id: str) -> list[str]:
 
 
 class _Sweep:
-    """Replaces every original device id, dangling id and serial number found in text the panel published.
+    """Replaces every device id, and every id-like dangling id and serial number, found in text the panel published.
 
     The matching rules keep it from rewriting unrelated text. Only identifiers
     are swept: device ids, dangling references that read as ids, and serial
@@ -479,7 +481,7 @@ class _Sweep:
         if isinstance(value, int | float) and not isinstance(value, bool):
             return self._number(value)
         if isinstance(value, dict | list) and depth >= _DESCRIPTION_NESTING_BOUND:
-            return self._bounded(value)
+            return self._bounded(value, depth)
         if isinstance(value, dict):
             return _first_per_key((self.key(str(key)), self.parsed(item, depth + 1)) for key, item in value.items())
         if isinstance(value, list):
@@ -497,30 +499,33 @@ class _Sweep:
         swept = self._swept_flat(text, whole=True)
         return value if swept == text else swept
 
-    def _bounded(self, value: dict[object, object] | list[object]) -> object:
-        """A container at the description bound: a copy, or ``masked-nested-value`` where anything in it would change.
+    def _bounded(self, value: dict[object, object] | list[object], depth: int) -> object:
+        """A container at the description bound: a copy, or ``masked-nested-value`` if it would change or reaches too deep.
 
         The subtree is walked with a stack of its own, not the interpreter's,
         so a description nested to any depth costs no stack frames. Each key
         is held to the key rule and each string and number leaf to the rule
         ``parsed`` applies above the bound; a boolean or null is never an
         identifier. If any of them would change, the container is masked
-        whole, because nothing below the bound is swept in place; otherwise
-        the copy keeps the document from sharing an object with the SDK's
-        tree.
+        whole, because nothing below the bound is swept in place, and so is
+        one whose containers reach past ``_DESCRIPTION_COPY_LIMIT`` from the
+        description's root, which the export must not carry; otherwise the
+        copy keeps the document from sharing an object with the SDK's tree.
         """
         copied: dict[object, object] | list[object] = {} if isinstance(value, dict) else []
-        pending = [(value, copied)]
+        pending = [(value, copied, depth)]
         while pending:
-            source, target = pending.pop()
+            source, target, at = pending.pop()
             pairs: Iterable[tuple[object, object]] = source.items() if isinstance(source, dict) else enumerate(source)
             for key, item in pairs:
                 if isinstance(key, str) and self.key(key) != key:
                     return _NESTED_VALUE_MASK
                 leaf: object = item
                 if isinstance(item, dict | list):
+                    if at + 1 > _DESCRIPTION_COPY_LIMIT:
+                        return _NESTED_VALUE_MASK
                     child: dict[object, object] | list[object] = {} if isinstance(item, dict) else []
-                    pending.append((item, child))
+                    pending.append((item, child, at + 1))
                     leaf = child
                 elif self._leaf_changes(item):
                     return _NESTED_VALUE_MASK

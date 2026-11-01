@@ -712,7 +712,13 @@ def test_metadata_carries_the_declared_unit_and_datatype() -> None:
 
 
 def test_metadata_follows_the_catalogued_spelling_too() -> None:
-    metadata = _metadata(_renamed_to_catalog(EVSE))
+    # Only the renamed charger is described. With the second charger present it
+    # would answer for the first, and the metadata would resolve with the
+    # catalogued spelling unrecognised.
+    tree = _renamed_to_catalog(EVSE)
+    tree.pop(EVSE_2)
+
+    metadata = _metadata(tree)
 
     assert metadata["evse.charge_current_limit_a"].unit == "A"
     assert metadata["evse.charge_current_ceiling_a"].datatype == "integer"

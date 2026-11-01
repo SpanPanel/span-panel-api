@@ -94,6 +94,7 @@ from span_panel_api_schema_1.const import (
     TYPE_PV,
     UNKNOWN,
 )
+from span_panel_api_schema_1.description import declares_class
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -705,7 +706,7 @@ def resolve_run_config(
     | condition | result |
     | --- | --- |
     | `grid-forming-entity == "GRID"` | `PANEL_ON_GRID` |
-    | resolves to a device of class `bess` | `PANEL_BACKUP` |
+    | resolves to a device of class `bess`, or a subtype of it | `PANEL_BACKUP` |
     | resolves to any other device | `PANEL_OFF_GRID` |
     | absent, empty, or unresolvable | falls through below |
 
@@ -723,10 +724,8 @@ def resolve_run_config(
         if forming.upper() == "GRID":
             return "PANEL_ON_GRID"
         resolved = device_types.get(forming)
-        if resolved == TYPE_BESS:
-            return "PANEL_BACKUP"
         if resolved is not None:
-            return "PANEL_OFF_GRID"
+            return "PANEL_BACKUP" if declares_class(resolved, TYPE_BESS) else "PANEL_OFF_GRID"
 
     if islanding == ISLANDING_ON_GRID:
         return "PANEL_ON_GRID"
@@ -757,10 +756,11 @@ def resolve_grid_islandable(inverters: Sequence[DiscoveredDevice]) -> bool | Non
 
 
 # Flat's `dominant-power-source` enum, keyed by the device class v1.0 names instead.
+# A class covers its subtypes (`declares_class`), so this is searched rather than indexed.
 # `GENERATOR` has no row because the device-type registry has no generator: flat's value
 # came from the panel computing a source class, v1.0 names an actual device, and there is
 # no generator device to name yet. One row when there is.
-_POWER_SOURCE_BY_TYPE: dict[str, str] = {
+_POWER_SOURCE_BY_CLASS: dict[str, str] = {
     TYPE_BESS: "BATTERY",
     TYPE_PV: "PV",
 }
@@ -826,7 +826,8 @@ def resolve_dominant_power_source(
         return None
     if forming.upper() == "GRID":
         return "GRID"
-    return _POWER_SOURCE_BY_TYPE.get(device_types.get(forming, ""), UNKNOWN)
+    resolved = device_types.get(forming, "")
+    return next((source for known, source in _POWER_SOURCE_BY_CLASS.items() if declares_class(resolved, known)), UNKNOWN)
 
 
 def device_display_name(device: DiscoveredDevice) -> str | None:

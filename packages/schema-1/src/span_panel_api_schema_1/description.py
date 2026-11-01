@@ -36,6 +36,21 @@ def device_type(device: DiscoveredDevice) -> str:
     return str(declared) if declared else ""
 
 
+def declares_class(declared: str, known: str) -> bool:
+    """Whether a declared device type is the class `known` or a subtype of it.
+
+    eBus device types are hierarchical and a subtype carries its parent's
+    class, so a device typed ``…device.bess.hybrid`` is a ``…device.bess``.
+    The boundary is the dot: ``…device.lugsfoo`` merely begins with
+    ``…device.lugs`` and names a different class.
+
+    The one answer to the question for every reader of a type -- the snapshot
+    roles, adoption, field metadata and discovery -- so that no two of them can
+    disagree about which class a device belongs to.
+    """
+    return declared == known or declared.startswith(f"{known}.")
+
+
 def nodes(description: dict[str, object]) -> dict[str, dict[str, object]]:
     """The capability nodes a description declares, by node id."""
     declared = description.get("nodes")

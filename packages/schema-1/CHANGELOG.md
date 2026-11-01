@@ -20,15 +20,13 @@ Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the u
 
 ### Changed
 
-- The shipped reference tree is recaptured with `ebus-panel-sim` 0.9.0: it keeps every circuit inside the panel's breaker positions, publishes firmware r202639's discharge-positive battery meter, and leaves a charger's user charge-current limit unpublished
-  until one is set.
+- The shipped reference tree is recaptured with `ebus-panel-sim` 0.9.0: every circuit inside the panel's breaker positions, firmware r202639's discharge-positive battery meter, and no user charge limit until one is set.
 - **`proximity_proven` is `None`**, where it was a hard-coded `True`, because the tree publishes no proximity property.
 - **`uptime_s` is `None`**, where it was always `0`, because no device publishes an uptime and this parser keeps no readiness clock to measure one.
 
 ### Removed
 
 - **BREAKING FOR CONSUMERS: `snapshot.build_snapshot()` no longer takes the `ready_since` argument**, which no caller in this repository passed, so a call that passes it by keyword or position now raises `TypeError`.
-
 - **BREAKING: snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data**, and `panel.build_unmapped_tabs` and `const.UNMAPPED_TAB_PREFIX` are gone with them.
 
 ### Fixed

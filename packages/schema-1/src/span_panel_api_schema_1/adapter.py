@@ -560,8 +560,10 @@ class SchemaOneAdapter:
         ceiling rule above still holds.
 
         A charger that declares no ceiling is not second-guessed — the catalog
-        makes `installer-max` a SHOULD, and the value that bounds the write is
-        the one the panel published, not one this library invents.
+        makes `installer-max` a SHOULD, and the values that bound the write are
+        the ones the panel published, not ones this library invents. With no
+        ceiling, a maximum declared in the limit's `$format` still bounds the
+        write; with neither, nothing does.
         """
         writable = self._writable_charge_limit(node_id)
         if writable is None or amps < 0:

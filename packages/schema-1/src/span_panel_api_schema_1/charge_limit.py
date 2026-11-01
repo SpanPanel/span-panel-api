@@ -39,6 +39,7 @@ Homie 5's default rather than a rule this module chose, and it is the same one
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import TYPE_CHECKING
 
 from span_panel_api_schema_1.description import declared_settable, nodes, optional_str, properties
@@ -81,6 +82,8 @@ mappings.
 """
 
 
+_PLAIN_INTEGER = re.compile(r"-?[0-9]+", re.ASCII)
+
 IntegerBounds = tuple[int | None, int | None]
 """A declared integer range, `(minimum, maximum)`; None on a side the format leaves open."""
 
@@ -91,26 +94,28 @@ def declared_integer_bounds(datatype: str, declared: object) -> IntegerBounds | 
     Homie 5 spells it `<min>:<max>` and allows either side to be empty. Anything
     else is not interpreted: a format that is not a string, a datatype that is
     not `integer`, a missing colon, extra segments, or a bound that is not a
-    plain integer all yield None, which bounds nothing. Guessing a range from a
-    format we cannot read would refuse a write the panel might accept, and the
-    commissioned ceiling still applies either way.
+    plain integer (an optional minus sign and ASCII digits, so `1_0`, `+6` and
+    non-ASCII digits are refused) or a minimum above the maximum all yield None,
+    which bounds nothing. Guessing a range from a format we cannot read would
+    refuse a write the panel might accept, and the commissioned ceiling still
+    applies either way.
+
+    A property declared `float` is not bounded by its range: only `integer`
+    ranges are read.
     """
     if datatype != "integer" or not isinstance(declared, str):
         return None
     parts = declared.split(":")
     if len(parts) != 2:
         return None
-    bounds: list[int | None] = []
-    for part in parts:
-        text = part.strip()
-        if not text:
-            bounds.append(None)
-            continue
-        try:
-            bounds.append(int(text))
-        except ValueError:
-            return None
-    return bounds[0], bounds[1]
+    low, high = parts[0].strip(), parts[1].strip()
+    if any(text and _PLAIN_INTEGER.fullmatch(text) is None for text in (low, high)):
+        return None
+    minimum = int(low) if low else None
+    maximum = int(high) if high else None
+    if minimum is not None and maximum is not None and minimum > maximum:
+        return None
+    return minimum, maximum
 
 
 @dataclass(frozen=True, slots=True)

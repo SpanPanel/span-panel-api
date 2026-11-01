@@ -573,7 +573,9 @@ def test_no_declared_format_keeps_the_ceiling_as_the_only_bound() -> None:
     assert adapter.evse_charge_limit_payload(key, ceiling + 1) is None
 
 
-@pytest.mark.parametrize("fmt", ["garbage", "6", "a:b", "6:32:1", "6.5:32", "UNLOCKED,LOCKED"])
+@pytest.mark.parametrize(
+    "fmt", ["garbage", "6", "a:b", "6:32:1", "6.5:32", "UNLOCKED,LOCKED", "1_0:32", "+6:32", "6:+32", "\u0666:32", "32:6"]
+)
 def test_an_uninterpretable_format_keeps_the_ceiling_as_the_only_bound(fmt: str) -> None:
     adapter = _adapter(_with_limit_format(fmt))
     key = _key(adapter, EVSE)
@@ -616,8 +618,8 @@ def test_a_charger_with_no_ceiling_is_not_second_guessed() -> None:
     topics = dict(_TREE[EVSE])
     description = json.loads(topics["$description"])
     description["nodes"]["config"]["properties"].pop("max-charge-current")
-    # The limit's declared range would bound 1000 A too; this test is about the
-    # ceiling being the only thing that does, so the range is not declared.
+    # A declared range would bound 1000 A too; this test is about a charger that
+    # declares neither a ceiling nor a range, which nothing bounds.
     description["nodes"]["config"]["properties"]["user-max-charge-current"].pop("format")
     topics["$description"] = json.dumps(description)
     topics.pop(CEILING_TOPIC)
@@ -629,6 +631,28 @@ def test_a_charger_with_no_ceiling_is_not_second_guessed() -> None:
 
     assert adapter.evse_charge_limit_payload(key, 1000) == "1000"
     assert adapter.set_evse_charge_limit_target(key).topic == f"ebus/5/{EVSE}/config/user-max-charge-current/set"
+
+
+def test_a_declared_maximum_bounds_a_charger_that_publishes_no_ceiling() -> None:
+    """With no ceiling the declared `$format` maximum is still a published bound."""
+    topics = dict(_TREE[EVSE])
+    description = json.loads(topics["$description"])
+    description["nodes"]["config"]["properties"].pop("max-charge-current")
+    topics["$description"] = json.dumps(description)
+    topics.pop(CEILING_TOPIC)
+    tree = {other: dict(values) for other, values in _TREE.items()}
+    tree[EVSE] = topics
+
+    adapter = _adapter(tree)
+    key = _key(adapter, EVSE)
+    maximum = int(
+        json.loads(topics["$description"])["nodes"]["config"]["properties"]["user-max-charge-current"]["format"].split(":")[
+            1
+        ]
+    )
+
+    assert adapter.evse_charge_limit_payload(key, maximum) == str(maximum)
+    assert adapter.evse_charge_limit_payload(key, maximum + 1) is None
 
 
 # ---------------------------------------------------------------------------

@@ -1434,6 +1434,23 @@ class TestHomieEVSEMetadata:
         assert evse.serial_number == "SN12345"
         assert evse.software_version == "2.1.0"
 
+    def test_evse_reports_no_charge_limit_range(self):
+        """Flat EVSE types declare no charge-current limit, so no range: None, never a guessed one."""
+        circuit_uuid = "aabbccdd-1122-3344-5566-778899001122"
+        acc, consumer = _build_ready_consumer(
+            {
+                "core": {"type": TYPE_CORE},
+                circuit_uuid: {"type": TYPE_CIRCUIT},
+                "evse-0": {"type": TYPE_EVSE},
+            }
+        )
+        acc.handle_message(f"{PREFIX}/evse-0/feed", circuit_uuid)
+        acc.handle_message(f"{PREFIX}/evse-0/advertised-current", "32.0")
+
+        evse = consumer.build_snapshot().evse["evse-0"]
+        assert evse.charge_current_limit_minimum_a is None
+        assert evse.charge_current_limit_maximum_a is None
+
     def test_evse_multiple_devices(self):
         """Two EVSE nodes produce two snapshot entries."""
         circ_a = "aaaaaaaa-1111-2222-3333-444444444444"

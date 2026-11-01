@@ -465,6 +465,36 @@ class SpanEvseSnapshot:
     set topic when it is not.
     """
 
+    charge_current_limit_minimum_a: int | None = None
+    """The lowest charge-current limit the charger declares a user may set, in amps. v1.0 only.
+
+    The minimum of the `<min>:<max>` range the limit's declaration states in
+    `$format`, from the same resolution as `charge_current_limit_a`; firmware
+    r202639 declares `6:<commissioned maximum>`. A write below it is refused
+    rather than published, so a control offers nothing under it.
+
+    A declaration, not a reading: it is reported as soon as the charger
+    describes itself, and whether or not the limit is settable, which
+    `charge_current_limit_settable` answers. `None` where the charger declares
+    no limit, no `$format`, or the format leaves this side open, and where the
+    format cannot be read as an integer range (not `integer`, not `<min>:<max>`,
+    a bound that is not a plain integer, or a minimum above the maximum). `None`
+    on the flat schema, which declares no range.
+    """
+
+    charge_current_limit_maximum_a: int | None = None
+    """The highest charge-current limit the charger declares a user may set, in amps. v1.0 only.
+
+    The maximum of the same declared range, `None` on the same terms. A write
+    above it is refused rather than published.
+
+    **Not `charge_current_ceiling_a`.** That is the commissioned ceiling, a
+    published value; this is the declared range, part of the limit's
+    description. Every r202639 capture declares a maximum equal to the ceiling
+    it publishes, but they are separate facts, and a write must satisfy both: a
+    control's upper bound is the lower of the two where both are present.
+    """
+
     lock_control: ControlTarget | None = None
     """Where the charger's connector lock is commanded, and which property reports it. v1.0 only.
 

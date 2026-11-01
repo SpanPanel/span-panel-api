@@ -16,6 +16,7 @@ Snapshot fields that held a fabricated constant can now be unknown, and with `sp
 - **spanos3/r202639/03 batch 2: reads more of the data this firmware publishes.**
 - **`SpanMqttClient.masked_tree()` returns the panel's device tree with identifiers and site details masked**, for a consumer's diagnostics; `None` on a flat panel.
 - **`V2StatusInfo.hardware_version` reports the hardware version string from `GET /api/v2/status`.**
+- **`SpanEvseSnapshot.charge_current_limit_minimum_a` and `charge_current_limit_maximum_a` report the range a SPAN Drive declares for its charge-current limit**, `None` where undeclared.
 
 ### Changed
 

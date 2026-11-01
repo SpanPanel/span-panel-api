@@ -54,7 +54,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from span_panel_api.models import SpanBatterySnapshot, SpanEvseSnapshot, SpanMidSnapshot, SpanPVSnapshot
-from span_panel_api_schema_1.charge_limit import ChargeLimitProperty, ChargeLimitSurface, resolve_charge_limit
+from span_panel_api_schema_1.charge_limit import ChargeLimitProperty, ChargeLimitSurface, IntegerBounds, resolve_charge_limit
 from span_panel_api_schema_1.const import (
     NODE_CONNECTION,
     NODE_GRID,
@@ -369,9 +369,12 @@ def build_evse(
     The charge-current pair is read through `resolve_charge_limit` rather than
     from named constants, because which node and properties carry it is a
     question only this charger's `$description` can answer. See
-    `span_panel_api_schema_1.charge_limit`.
+    `span_panel_api_schema_1.charge_limit`. The limit's declared range comes from
+    the same resolution, so the range a control offers and the range
+    `SchemaOneAdapter.evse_charge_limit_payload` enforces cannot disagree.
     """
     limit = resolve_charge_limit(evse)
+    minimum, maximum = _limit_bounds(limit)
     return SpanEvseSnapshot(
         node_id=node_id,
         feed_circuit_id=feeds.get(evse.device_id, ""),
@@ -394,7 +397,21 @@ def build_evse(
         charge_current_ceiling_a=_limit_value(evse, limit, limit.ceiling) if limit else None,
         charge_current_limit_target_a=_limit_target(evse, limit),
         charge_current_limit_settable=limit is not None and limit.limit is not None and limit.limit.settable,
+        charge_current_limit_minimum_a=minimum,
+        charge_current_limit_maximum_a=maximum,
     )
+
+
+def _limit_bounds(surface: ChargeLimitSurface | None) -> IntegerBounds:
+    """The range the resolved limit declares, `None` on a side it leaves open or cannot be read.
+
+    `ChargeLimitProperty.bounds` is already None for a format
+    `declared_integer_bounds` will not interpret, so a declaration that bounds
+    nothing on the write path reports no range here either.
+    """
+    if surface is None or surface.limit is None or surface.limit.bounds is None:
+        return None, None
+    return surface.limit.bounds
 
 
 def _limit_value(evse: DiscoveredDevice, surface: ChargeLimitSurface, declaration: ChargeLimitProperty | None) -> int | None:

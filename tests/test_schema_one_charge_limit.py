@@ -29,6 +29,7 @@ from conftest import FAST_CONTROL_DEADLINES, acking_bridge
 
 from ebus_sdk.homie import DiscoveredDevice
 
+from reference_payloads.captures import CAPTURES, capture_snapshot, capture_tree
 from reference_payloads.schema_one import device_from_topics, parent_child_tree
 from span_panel_api.exceptions import SpanPanelServerError
 from span_panel_api.models import V2HomieSchema
@@ -42,6 +43,7 @@ _TREE = parent_child_tree()
 PANEL = "example-40t-001"
 EVSE = "evse"
 EVSE_2 = "evse-2"
+_EVSE_TYPE = "energy.ebus.device.evse"
 
 CEILING_TOPIC = "config/max-charge-current"
 LIMIT_TOPIC = "config/user-max-charge-current"
@@ -508,9 +510,12 @@ def _declared_minimum(device_id: str) -> int:
     return int(declared["user-max-charge-current"]["format"].split(":")[0])
 
 
-def _with_limit_format(fmt: str | None, device_id: str = EVSE) -> dict[str, dict[str, str]]:
-    """The capture with the limit's declared `$format` replaced, or removed where `None`."""
-    topics = dict(_TREE[device_id])
+def _with_limit_format(
+    fmt: str | None, device_id: str = EVSE, base: dict[str, dict[str, str]] | None = None
+) -> dict[str, dict[str, str]]:
+    """The capture (or `base`, a tree built from it) with the limit's declared `$format` replaced, or removed where `None`."""
+    source = _TREE if base is None else base
+    topics = dict(source[device_id])
     description = json.loads(topics["$description"])
     declaration = description["nodes"]["config"]["properties"]["user-max-charge-current"]
     if fmt is None:
@@ -518,7 +523,7 @@ def _with_limit_format(fmt: str | None, device_id: str = EVSE) -> dict[str, dict
     else:
         declaration["format"] = fmt
     topics["$description"] = json.dumps(description)
-    tree = {other: dict(values) for other, values in _TREE.items()}
+    tree = {other: dict(values) for other, values in source.items()}
     tree[device_id] = topics
     return tree
 
@@ -653,6 +658,144 @@ def test_a_declared_maximum_bounds_a_charger_that_publishes_no_ceiling() -> None
 
     assert adapter.evse_charge_limit_payload(key, maximum) == str(maximum)
     assert adapter.evse_charge_limit_payload(key, maximum + 1) is None
+
+
+# ---------------------------------------------------------------------------
+# The declared range — what a control may offer, reported before any write
+# ---------------------------------------------------------------------------
+
+
+def _range(evse: object) -> tuple[int | None, int | None]:
+    return evse.charge_current_limit_minimum_a, evse.charge_current_limit_maximum_a
+
+
+def _declared_range(device_id: str) -> tuple[int, int]:
+    """The `<min>:<max>` the capture's limit declares, read from its `$description`."""
+    declared = json.loads(_TREE[device_id]["$description"])["nodes"]["config"]["properties"]
+    low, high = declared["user-max-charge-current"]["format"].split(":")
+    return int(low), int(high)
+
+
+def test_each_charger_reports_the_range_its_limit_declares() -> None:
+    """The capture's own declarations, read the way the broker replays them.
+
+    Each charger declares `6:32`; a control bounded by anything else offers a
+    value the write path then refuses.
+    """
+    adapter = _adapter()
+    snapshot = adapter.build_snapshot()
+
+    for device_id in (EVSE, EVSE_2):
+        assert _declared_range(device_id) == (6, 32)
+        assert _range(snapshot.evse[_key(adapter, device_id)]) == _declared_range(device_id)
+
+
+def test_the_range_is_not_the_ceiling() -> None:
+    """The declared maximum and the commissioned ceiling are separate readings.
+
+    The ceiling is lowered below the declared maximum so a mapper that reported
+    the ceiling as the range, or the range as the ceiling, would show here.
+    """
+    lowered = _declared_range(EVSE)[1] - 8
+    evse = _snapshot_evse(_tree(**{EVSE: {CEILING_TOPIC: str(lowered)}}), EVSE)
+
+    assert evse.charge_current_ceiling_a == lowered
+    assert _range(evse) == _declared_range(EVSE)
+
+
+def test_each_charger_reports_its_own_range() -> None:
+    """Both chargers declare the same range in the capture, so they are made to differ first."""
+    tree = _with_limit_format("8:16", EVSE_2, base=_with_limit_format("6:24", EVSE))
+    adapter = _adapter(tree)
+    snapshot = adapter.build_snapshot()
+
+    assert _range(snapshot.evse[_key(adapter, EVSE)]) == (6, 24)
+    assert _range(snapshot.evse[_key(adapter, EVSE_2)]) == (8, 16)
+
+
+def test_no_declared_format_reports_no_range() -> None:
+    assert _range(_snapshot_evse(_with_limit_format(None), EVSE)) == (None, None)
+
+
+@pytest.mark.parametrize(
+    "fmt", ["garbage", "6", "a:b", "6:32:1", "6.5:32", "UNLOCKED,LOCKED", "1_0:32", "+6:32", "6:+32", "٦:32", "32:6"]
+)
+def test_an_uninterpretable_or_inverted_format_reports_no_range(fmt: str) -> None:
+    """The same formats the write path refuses to read bound nothing here either."""
+    assert _range(_snapshot_evse(_with_limit_format(fmt), EVSE)) == (None, None)
+
+
+def test_an_open_side_is_none_on_that_side_only() -> None:
+    assert _range(_snapshot_evse(_with_limit_format(":20"), EVSE)) == (None, 20)
+    assert _range(_snapshot_evse(_with_limit_format("6:"), EVSE)) == (6, None)
+
+
+def test_a_float_limit_reports_no_range() -> None:
+    """Only an `integer` declaration's range is read, as on the write path."""
+    topics = dict(_TREE[EVSE])
+    description = json.loads(topics["$description"])
+    description["nodes"]["config"]["properties"]["user-max-charge-current"]["datatype"] = "float"
+    topics["$description"] = json.dumps(description)
+    tree = {other: dict(values) for other, values in _TREE.items()}
+    tree[EVSE] = topics
+
+    assert _range(_snapshot_evse(tree, EVSE)) == (None, None)
+
+
+def test_a_charger_with_no_charge_limit_node_reports_no_range() -> None:
+    assert _range(_snapshot_evse(_without_node(EVSE), EVSE)) == (None, None)
+
+
+def test_the_range_is_reported_whether_or_not_the_limit_is_settable() -> None:
+    """A declaration, reported as declared; `charge_current_limit_settable` is the separate answer to whether to offer it.
+
+    The same rule `lock_state_options` follows for a lock the charger does not
+    accept writes to.
+    """
+    evse = _snapshot_evse(_without_settable(EVSE), EVSE)
+
+    assert evse.charge_current_limit_settable is False
+    assert _range(evse) == _declared_range(EVSE)
+
+
+def test_the_catalogued_spelling_reports_the_same_range() -> None:
+    catalogued = _snapshot_evse(_renamed_to_catalog(EVSE), EVSE)
+
+    assert _range(catalogued) == _declared_range(EVSE)
+
+
+def test_the_range_does_not_wait_for_a_value() -> None:
+    """The range is in the declaration, so it is reported before the charger publishes either half."""
+    evse = _snapshot_evse(_tree(**{EVSE: {LIMIT_TOPIC: None, CEILING_TOPIC: None}}), EVSE)
+
+    assert evse.charge_current_ceiling_a is None
+    assert _range(evse) == _declared_range(EVSE)
+
+
+def _captured_ranges(stem: str) -> list[tuple[int, int]]:
+    """The `<min>:<max>` each charger in a reference capture declares for its limit."""
+    tree = capture_tree(stem)
+    declared = []
+    for device_id in tree.devices:
+        if tree.device_type(device_id) != _EVSE_TYPE:
+            continue
+        properties = json.loads(tree.devices[device_id].description)["nodes"]["config"]["properties"]
+        low, high = properties["user-max-charge-current"]["format"].split(":")
+        declared.append((int(low), int(high)))
+    return sorted(declared)
+
+
+@pytest.mark.parametrize("stem", CAPTURES)
+def test_each_captured_charger_reports_the_range_it_declares(stem: str) -> None:
+    """Every reference capture, against its own declarations rather than the reference tree's."""
+    snapshot = capture_snapshot(stem)
+
+    assert sorted(_range(charger) for charger in snapshot.evse.values()) == _captured_ranges(stem)
+
+
+def test_the_captures_hold_a_declared_range() -> None:
+    """Without one, the test above compares two empty lists and proves nothing."""
+    assert any(_captured_ranges(stem) for stem in CAPTURES)
 
 
 # ---------------------------------------------------------------------------

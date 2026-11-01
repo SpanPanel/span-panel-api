@@ -46,6 +46,8 @@ _SEEDED_SITE: Final[Mapping[str, str]] = {
     "latitude": "47.6",
     "longitude": "-122.3",
     "utility-meter-serial-number": "SEEDED-METER-77",
+    "time-zone": "Etc/GMT+9",
+    "country-code": "QZ",
 }
 """The planted value of each masked site property, by property id on whichever node publishes it."""
 _SEEDED_SITE_NAME: Final = "Seeded Residence"

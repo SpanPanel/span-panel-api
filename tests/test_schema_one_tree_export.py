@@ -253,6 +253,8 @@ _SITE_MASKS: Mapping[str, str] = {
     "info/region": "Masked Region",
     "info/latitude": "0.0",
     "info/longitude": "0.0",
+    "status/time-zone": "UTC",
+    "info/country-code": "ZZ",
 }
 _FEEDS = "connection/feeds-device-id"
 _FED_BY = "connection/fed-by-device-id"
@@ -274,7 +276,6 @@ _SEEDED_SITE: Mapping[str, tuple[str, str]] = {
     "info/country-code": ("QZ", "string"),
     "status/time-zone": ("Etc/GMT+9", "string"),
 }
-_KEPT_SITE = ("info/country-code", "status/time-zone")
 _SEEDED_LABEL = "Seeded Lugs Label"
 
 
@@ -745,9 +746,6 @@ def test_kept_values_are_published(case: Case) -> None:
     topics, labelled = _seeded(case)
     export, ids = _exported(topics, case.root_id)
     panel_values = _valued(export["devices"]["masked-panel"])
-    assert {topic: panel_values[topic] for topic in _KEPT_SITE} == {
-        topic: topics[case.root_id][topic] for topic in _KEPT_SITE
-    }
     label = export["devices"][ids[labelled]]
     assert _valued(label)[_NAME] == _SEEDED_LABEL
     assert label["description"]["name"] == _label(_description_of(topics[labelled])["name"], ids)
@@ -873,7 +871,7 @@ def test_site_and_serial_values_are_masked_on_any_node(node: str) -> None:
         _declare(description, topic, _SEEDED_BY_PROPERTY[_property_id(topic)][1])
         topics[_REFERENCE_ROOT][topic] = value
     topics[_REFERENCE_ROOT]["$description"] = json.dumps(description)
-    kept = {f"{node}/name": "Seeded Site Label", f"{node}/country-code": "QZ", f"{node}/time-zone": "Etc/GMT+9"}
+    kept = {f"{node}/name": "Seeded Site Label"}
     topics[_REFERENCE_ROOT].update(kept)
     topics[circuit][f"{node}/serial-number"] = "SEEDSN00002"
     export, ids = _exported(topics, _REFERENCE_ROOT)

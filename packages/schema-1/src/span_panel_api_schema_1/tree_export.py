@@ -93,13 +93,16 @@ _SITE_MASKS: Final[Mapping[str, str]] = MappingProxyType(
         "region": "Masked Region",
         "latitude": "0.0",
         "longitude": "0.0",
+        "time-zone": "UTC",
+        "country-code": "ZZ",
     }
 )
 """Site values replaced whole, by property id on whichever node publishes them.
 
 The panel declares them under ``info`` and ``status``, but nothing in the
 specification ties a site property to a node, which is why ``SITE_PROPERTIES``
-(``const.py``) is read the same way. ``country-code`` and ``time-zone`` are kept.
+(``const.py``) is read the same way. ``time-zone`` and ``country-code`` are masked
+to ``UTC`` and ``ZZ``, valid values a consumer that parses the export still reads.
 The serial number is matched by property id too; the site's name is not, since
 ``name`` is every device's label and only the panel's ``info/name`` is masked.
 """

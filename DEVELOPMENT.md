@@ -171,8 +171,9 @@ Discovery rows never carry a value, so they can be forwarded as they stand. `Mas
 and a maintainer can replay it through the same loader, adapter and fidelity harness the vendored captures use. It can carry values because it is safe by construction: `SchemaOneAdapter.export_masked_tree` runs the tree through
 `span_panel_api_schema_1.tree_export`, which masks by rule, so a consumer forwards the result whole and decides nothing about what is sensitive.
 
-The masks match by property id on any node (`serial-number`, `utility-meter-serial-number`, `wifi-ssid`, `postal-code`, `address-lines`, `locality`, `region`, `latitude`, `longitude`, and the panel's `info/name` and `$description` `name`). Device ids
-become placeholders that start `masked-`, and a final sweep replaces any device id or serial still present in any wire string, decoding JSON string literals to do so. The module and `_Sweep` docstrings in `tree_export.py` hold the rules; change them there.
+The masks match the site properties (`utility-meter-serial-number`, `wifi-ssid`, `postal-code`, `address-lines`, `locality`, `region`, `latitude`, `longitude`) and `serial-number` by property id on any node, and the panel's `info/name` and its
+`$description` `name`; `name` on any other node or device is kept. Device ids become placeholders that start `masked-`, and a final sweep replaces any device id or serial still present in any wire string, decoding JSON string literals to do so. The module
+and `_Sweep` docstrings in `tree_export.py` hold the rules; change them there.
 
 It is optional, like the discovery rows: `TreeExportingAdapter` is a separate `runtime_checkable` protocol, not a `SchemaAdapter` member, so no `ADAPTER_CONTRACT` bump and no adapter distribution is rejected. `SpanMqttClient.masked_tree()` returns `None`
 for an adapter that does not offer it, which includes the flat adapter, and before the root device has described itself.

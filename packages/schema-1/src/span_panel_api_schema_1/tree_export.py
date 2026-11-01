@@ -22,15 +22,17 @@ one that names no device in the tree becomes ``masked-missing-<n>`` and stays
 visibly dangling.
 
 Last, every string the panel published that the rules keep is swept for the
-tree's original device ids and serial numbers, the utility meter's among them,
-and for every dangling id, which reads as its own ``masked-missing-<n>``
-wherever it appears: a property the library has never seen, a device named by
-an id, an identifier inside a ``json`` value, as a string literal or a number,
-through JSON nested in strings a few levels deep; a string nested deeper than
-real values go, or a description nested deeper than real descriptions go, is
-masked whole where it may hide one. The sweep reads only what came off the
-wire, never the placeholders and masks the rules wrote, so it cannot rewrite
-them.
+tree's original device ids, for its serial numbers that read as identifiers,
+the utility meter's among them, and for every dangling id that does, which
+reads as its own ``masked-missing-<n>`` wherever it appears: a property the
+library has never seen, a device named by an id, an identifier inside a
+``json`` value, as a string literal or a number, after a backslash or an
+escape written out in plain text, through JSON nested in strings a few levels
+deep; a string nested deeper than real values go is masked whole where it may
+hide one, and a description subtree nested far deeper than real descriptions
+go is masked whole where anything in it would be. The sweep reads only what
+came off the wire, never the placeholders and masks the rules wrote, so it
+cannot rewrite them.
 """
 
 from __future__ import annotations
@@ -113,7 +115,15 @@ _DESCRIPTION_NAME: Final = "name"
 _DIGIT_RUNS = re.compile(r"([0-9]+)")
 _MIN_EMBEDDED: Final = 6
 """An identifier shorter than this is swept only where it is a whole value, never inside one."""
-_BOUNDARY_BEFORE: Final = "(?<![A-Za-z0-9])"
+_BOUNDARY_BEFORE: Final = r"(?:(?<![A-Za-z0-9])|(?<=\\[bfnrt])|(?<=\\u[0-9A-Fa-f]{4}))"
+"""What may come before an identifier in plain text: no letter or digit, or a JSON-style escape written out.
+
+The sweep decodes every string literal it finds, so a raw escape is met only
+in text outside any literal. There ``\\n`` before an identifier would hide it
+behind the escape's own letter; read as a boundary it hides nothing. The rule
+only adds matches, and a match still begins on the identifier's own first
+character, as it does after a lone backslash.
+"""
 _BOUNDARY_AFTER: Final = "(?![A-Za-z0-9])"
 _DIGITS_BOUNDARY_BEFORE: Final = f"{_BOUNDARY_BEFORE}(?<![0-9]\\.)"
 _DIGITS_BOUNDARY_AFTER: Final = f"{_BOUNDARY_AFTER}(?!\\.[0-9])"
@@ -138,15 +148,24 @@ most twice.
 _JSON_ESCAPE: Final = re.compile(r'\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4})|(\\)')
 """An escape JSON defines, or (group 1) a backslash that starts none and is read as a literal backslash."""
 _NESTING_BOUND: Final = 4
-"""How deep the sweep decodes JSON nested in strings, and how deep it reads a description's containers.
+"""How deep the sweep decodes JSON nested in strings.
 
-Real values nest JSON in a string at most once or twice. A description's
-top-level values are depth 0 and real descriptions reach depth 3, a property's
-definition under ``nodes/<node>/properties``, whose fields are scalars.
+Real values nest JSON in a string at most once or twice. Every level written
+again doubles the escapes of the levels inside it, so the bound is tight.
+"""
+_DESCRIPTION_NESTING_BOUND: Final = 32
+"""How deep the sweep reads a description's containers before deciding on a subtree whole.
+
+A description's top-level values are depth 0 and real descriptions reach depth
+3, a property's definition under ``nodes/<node>/properties``, whose fields are
+scalars; a vendor's definition may nest a level or two deeper. Nothing in a
+description is written again, so the bound guards the interpreter's stack
+alone: ``parsed`` costs about three frames per level, and thirty-two levels
+stay far inside the default limit.
 """
 _NESTED_VALUE_MASK: Final = f"{_PREFIX}nested-value"
-_NOT_SERIALISABLE: Final = (TypeError, ValueError, RecursionError)
-"""What ``json.dumps`` raises for a value it cannot write: an object JSON has no form for, a cycle, or nesting too deep."""
+_DESCRIPTION_COPY_LIMIT: Final = 64
+"""How deep a kept description subtree may reach: a consumer writes the export indented, which a deep one makes raise."""
 _JSON_NUMBER: Final = re.compile(r"(-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)")
 """A JSON number token, captured so ``split`` returns the tokens at the odd indices.
 
@@ -311,7 +330,7 @@ def export_masked_tree(
 def _identifiers(
     ids: Mapping[str, str], in_order: Sequence[DiscoveredDevice], dangling: Sequence[tuple[str, str]]
 ) -> list[tuple[str, str]]:
-    """Every original device id, dangling id and serial number, with what the sweep replaces it by, highest priority first.
+    """Every device id, and every id-like dangling id and serial, with what the sweep replaces it by, highest priority first.
 
     An id is replaced by its device's placeholder and a serial by its device's
     masked serial, the placeholder in upper case. Ids come first, so on a panel
@@ -324,25 +343,32 @@ def _identifiers(
     MID and its BESS) is the first owner's wherever it is found. The utility
     meter's serial comes last and is replaced by its own mask,
     ``MASKED-METER``: it is a serial number, not free text, though it names the
-    premises rather than a device.
+    premises rather than a device. A serial that does not read as an id
+    (``0``, ``N/A``, ``unknown``) is a placeholder the panel published for a
+    serial it does not have: its own property is masked by the rule all the
+    same, but it is not swept, since every equal value would go with it.
     """
     identifiers = [(device.device_id, ids[device.device_id]) for device in in_order]
     identifiers.extend((device_id, missing) for device_id, missing in dangling if _is_id_like(device_id))
     for device in in_order:
-        identifiers.extend((serial, ids[device.device_id].upper()) for serial in _serials(device, _SERIAL_NUMBER))
+        identifiers.extend(
+            (serial, ids[device.device_id].upper()) for serial in _serials(device, _SERIAL_NUMBER) if _is_id_like(serial)
+        )
     meter_mask = _SITE_MASKS[_METER_SERIAL_NUMBER]
     for device in in_order:
-        identifiers.extend((serial, meter_mask) for serial in _serials(device, _METER_SERIAL_NUMBER))
+        identifiers.extend((serial, meter_mask) for serial in _serials(device, _METER_SERIAL_NUMBER) if _is_id_like(serial))
     return identifiers
 
 
 def _is_id_like(value: str) -> bool:
-    """Whether a dangling reference reads as an id rather than a word: six characters or more, with a digit.
+    """Whether a dangling reference or a serial reads as an identifier, not a word: six characters or more, with a digit.
 
     A reference names no device for one of two reasons: the device is absent,
     or the panel published a word there (``UNKNOWN``, ``NONE``, ``BACKUP``).
     Such a word is mapped where it is published like any dangling id, but it is
-    also a reading and an enum member, so it is not swept anywhere else.
+    also a reading and an enum member, so it is not swept anywhere else. A
+    serial of ``0`` or ``N/A`` stands in for one the panel does not have, and
+    is likewise masked where it is published and swept nowhere else.
     """
     return len(value) >= _MIN_EMBEDDED and _DIGIT.search(value) is not None
 
@@ -356,7 +382,7 @@ def _serials(device: DiscoveredDevice, property_id: str) -> list[str]:
 
 
 class _Sweep:
-    """Replaces every original device id, dangling id and serial number found in text the panel published.
+    """Replaces every device id, and every id-like dangling id and serial number, found in text the panel published.
 
     The matching rules keep it from rewriting unrelated text. Only identifiers
     are swept: device ids, dangling references that read as ids, and serial
@@ -366,16 +392,19 @@ class _Sweep:
 
     An identifier matches case-insensitively and only where no ASCII letter or
     digit adjoins it, so ``circuit-1`` is not found inside ``circuit-12``; any
-    other character, a ``-`` or a backslash among them, is a boundary. A ``-``
-    must be one, because device ids are serials and suffixes joined by ``-``,
-    and a serial embedded in an id the tree does not hold must still be found.
-    For an identifier made only of digits a decimal point that joins it to
-    another digit is no boundary either, so a meter serial is not found inside
-    a decimal reading. Identifiers are tried longest first, so
+    other character, a ``-`` or a backslash among them, is a boundary, and so
+    is a JSON-style escape written out in plain text (``\\n``, ``\\u00b0``),
+    whose letter or last hex digit would otherwise adjoin the identifier. A
+    ``-`` must be one, because device ids are serials and suffixes joined by
+    ``-``, and a serial embedded in an id the tree does not hold must still be
+    found. For an identifier made only of digits a decimal point that joins it
+    to another digit is no boundary either, so a meter serial is not found
+    inside a decimal reading. Identifiers are tried longest first, so
     ``<serial>-lugs-up`` maps to the lugs' placeholder rather than the panel's
     with a suffix. One shorter than six characters is matched only as a whole
     string, never inside a longer string or in a key, where ``pv`` is also a
-    property id.
+    property id. A serial is swept only where it reads as an identifier
+    (``_is_id_like``); its own property is masked by rule whatever it says.
 
     Every string is swept the same way (``value``), whatever it was declared
     as. Each JSON string literal in it is decoded, since in the raw text an
@@ -403,9 +432,11 @@ class _Sweep:
     ``masked-nested-value`` if its content holds an identifier under the plain
     rule, or a quote, which may open a literal the sweep will not read, and is
     kept as published otherwise. A description's containers (``parsed``) are
-    read to the same bound: a container at it is replaced whole by the same
-    rule over its JSON text, so a description nested deeper than any real one
-    costs bounded work and no stack.
+    already decoded and are written again nowhere, so they are read by
+    recursion to the looser ``_DESCRIPTION_NESTING_BOUND`` and a container at
+    it is walked with an explicit stack instead: it is replaced whole by
+    ``masked-nested-value`` if any key, string or number in it would be swept
+    by the rules above the bound, and copied as published otherwise.
 
     Where identifiers that differ only in case match, the one spelt as found
     wins, then the one of higher priority (``_identifiers``).
@@ -441,16 +472,16 @@ class _Sweep:
         """A copy of parsed JSON (a description): each key swept as a key, each string as a string, each number as its text.
 
         ``depth`` is how many containers enclose the value below the
-        description's own keys. A container at ``_NESTING_BOUND`` is not swept
-        inside: it is replaced whole by ``masked-nested-value`` where its JSON
-        text may hide an identifier and copied as published otherwise.
+        description's own keys. A container at ``_DESCRIPTION_NESTING_BOUND``
+        is not walked by recursion: ``_bounded`` decides for it whole, on the
+        same leaf rules, with a stack of its own.
         """
         if isinstance(value, str):
             return self.value(value)
         if isinstance(value, int | float) and not isinstance(value, bool):
             return self._number(value)
-        if isinstance(value, dict | list) and depth >= _NESTING_BOUND:
-            return self._bounded(value)
+        if isinstance(value, dict | list) and depth >= _DESCRIPTION_NESTING_BOUND:
+            return self._bounded(value, depth)
         if isinstance(value, dict):
             return _first_per_key((self.key(str(key)), self.parsed(item, depth + 1)) for key, item in value.items())
         if isinstance(value, list):
@@ -468,22 +499,49 @@ class _Sweep:
         swept = self._swept_flat(text, whole=True)
         return value if swept == text else swept
 
-    def _bounded(self, value: dict[object, object] | list[object]) -> object:
-        """A container at the nesting bound: ``masked-nested-value`` where its JSON text may hide an identifier, else a copy.
+    def _bounded(self, value: dict[object, object] | list[object], depth: int) -> object:
+        """A container at the description bound: a copy, or ``masked-nested-value`` if it would change or reaches too deep.
 
-        The text is not swept inside; ``_hides_an_identifier`` decides, so a
-        container holding any string is masked, since the text puts quotes
-        around it. One too deep to serialise is taken to hide an identifier.
-        The copy keeps the document from sharing an object with the SDK's tree.
+        The subtree is walked with a stack of its own, not the interpreter's,
+        so a description nested to any depth costs no stack frames. Each key
+        is held to the key rule and each string and number leaf to the rule
+        ``parsed`` applies above the bound; a boolean or null is never an
+        identifier. If any of them would change, the container is masked
+        whole, because nothing below the bound is swept in place, and so is
+        one whose containers reach past ``_DESCRIPTION_COPY_LIMIT`` from the
+        description's root, which the export must not carry; otherwise the
+        copy keeps the document from sharing an object with the SDK's tree.
         """
-        try:
-            text = json.dumps(value)
-        except _NOT_SERIALISABLE:
-            return _NESTED_VALUE_MASK
-        if self._hides_an_identifier(text, whole=False):
-            return _NESTED_VALUE_MASK
-        copied: object = json.loads(text)
+        copied: dict[object, object] | list[object] = {} if isinstance(value, dict) else []
+        pending = [(value, copied, depth)]
+        while pending:
+            source, target, at = pending.pop()
+            pairs: Iterable[tuple[object, object]] = source.items() if isinstance(source, dict) else enumerate(source)
+            for key, item in pairs:
+                if isinstance(key, str) and self.key(key) != key:
+                    return _NESTED_VALUE_MASK
+                leaf: object = item
+                if isinstance(item, dict | list):
+                    if at + 1 > _DESCRIPTION_COPY_LIMIT:
+                        return _NESTED_VALUE_MASK
+                    child: dict[object, object] | list[object] = {} if isinstance(item, dict) else []
+                    pending.append((item, child, at + 1))
+                    leaf = child
+                elif self._leaf_changes(item):
+                    return _NESTED_VALUE_MASK
+                if isinstance(target, dict):
+                    target[key] = leaf
+                else:
+                    target.append(leaf)
         return copied
+
+    def _leaf_changes(self, leaf: object) -> bool:
+        """Whether ``parsed`` would replace a scalar: a string the sweep changes, or a number whose text holds one."""
+        if isinstance(leaf, str):
+            return self.value(leaf) != leaf
+        if isinstance(leaf, int | float) and not isinstance(leaf, bool):
+            return isinstance(self._number(leaf), str)
+        return False
 
     def _swept(self, text: str, *, whole: bool, depth: int = 0) -> str:
         """The text with its string literals swept each as a string and the text between them as plain text.

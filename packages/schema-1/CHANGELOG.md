@@ -41,6 +41,7 @@ Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the u
   from 90–250 µs to about 2 µs, measured on a desktop machine ([#223](https://github.com/SpanPanel/span-panel-api/issues/223)).
 - **A property the panel clears reads as unpublished**, where it read as an empty value until the panel published it again.
 - **A charge-current limit outside the range a SPAN Drive declares is refused** instead of published.
+- **A device typed as a subtype of a class (`energy.ebus.device.bess.<x>`) is read as that class**, where it was dropped from the snapshot, adoption and discovery ([#228](https://github.com/SpanPanel/span-panel-api/issues/228)).
 
 ## [1.2.2]
 

@@ -46,7 +46,7 @@ from span_panel_api_schema_1.const import (
     STATE_READY,
     TYPE_CIRCUIT,
 )
-from span_panel_api_schema_1.description import declared_settable, device_type, node_properties
+from span_panel_api_schema_1.description import declared_settable, declares_class, device_type, node_properties
 from span_panel_api_schema_1.devices import feed_circuit_ids
 from span_panel_api_schema_1.field_metadata import build_field_metadata
 from span_panel_api_schema_1.panel import integer, positions_outside_model, text
@@ -461,13 +461,15 @@ class SchemaOneAdapter:
         return []
 
     def find_node_by_type(self, type_str: str) -> str | None:
-        """Return the id of the first device declaring `type_str`.
+        """Return the id of the first device declaring `type_str` or a subtype of it.
 
         Named for the flat schema's nodes; under parent/child the same question
-        is asked of devices, and the answer is a device id.
+        is asked of devices, and the answer is a device id. A device typed
+        ``…device.bess.hybrid`` is a ``…device.bess`` (`declares_class`), the
+        same device the snapshot reads as the battery.
         """
         for device in self._children():
-            if device_type(device) == type_str:
+            if declares_class(device_type(device), type_str):
                 return device.device_id
         return None
 
@@ -523,7 +525,9 @@ class SchemaOneAdapter:
         is addressable by id — the BESS, the MID, the lugs, a charger — and none
         of them is a circuit, so answering on membership alone would report a
         BESS as a circuit whose relay the panel declares non-commandable. It
-        declares no relay at all.
+        declares no relay at all. The class is the answer rather than the exact
+        type, so a subtyped circuit the snapshot reads into `circuits` is a
+        circuit here too.
 
         A child that has not described itself yet reads as absent, because it
         has declared nothing: type, nodes and properties all arrive together in
@@ -536,7 +540,7 @@ class SchemaOneAdapter:
         would put a second, weaker rule where the authorisation lives.
         """
         device = self._child(circuit_id)
-        return device is not None and device_type(device) == TYPE_CIRCUIT
+        return device is not None and declares_class(device_type(device), TYPE_CIRCUIT)
 
     def set_dominant_power_source_target(self) -> ControlTarget | None:
         """The settable successor: `shed/asserted-islanding-state` on the panel.

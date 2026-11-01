@@ -28,7 +28,7 @@ from span_panel_api_schema_1.const import (
     TYPE_MID,
     TYPE_PV,
 )
-from span_panel_api_schema_1.description import device_type, node_properties
+from span_panel_api_schema_1.description import declares_class, device_type, node_properties
 from span_panel_api_schema_1.devices import (
     build_battery,
     build_evse,
@@ -64,10 +64,13 @@ if TYPE_CHECKING:
 class TreeRoles:
     """The tree sorted into the roles a snapshot needs.
 
-    Matching is prefix-based for lugs, because firmware may declare either the
-    base ``…device.lugs`` type with a ``direction`` property or a subtyped
-    ``…device.lugs.upstream`` — the flat adapter already had to handle both
-    conventions, and there is no reason to assume v1.0 settled it.
+    Each role takes its class and every subtype of it (`declares_class`),
+    because firmware may declare either the base ``…device.lugs`` type with a
+    ``direction`` property or a subtyped ``…device.lugs.upstream`` — the flat
+    adapter already had to handle both conventions for lugs, and the same
+    hierarchy applies to every class here. Matching the others by exact type
+    left a subtype read by no role, while adoption, which honours the
+    hierarchy, declined it as modelled (#228).
     """
 
     def __init__(self, devices: list[DiscoveredDevice]) -> None:
@@ -83,17 +86,17 @@ class TreeRoles:
 
         for device in devices:
             declared = device_type(device)
-            if declared == TYPE_CIRCUIT:
+            if declares_class(declared, TYPE_CIRCUIT):
                 self.circuits.append(device)
-            elif declared.startswith(TYPE_LUGS):
+            elif declares_class(declared, TYPE_LUGS):
                 self.lugs.append(device)
-            elif declared == TYPE_EVSE:
+            elif declares_class(declared, TYPE_EVSE):
                 self.evse.append(device)
-            elif declared == TYPE_BESS and self.bess is None:
+            elif declares_class(declared, TYPE_BESS) and self.bess is None:
                 self.bess = device
-            elif declared == TYPE_PV:
+            elif declares_class(declared, TYPE_PV):
                 self.pvs.append(device)
-            elif declared == TYPE_MID and self.mid is None:
+            elif declares_class(declared, TYPE_MID) and self.mid is None:
                 self.mid = device
 
 
@@ -184,7 +187,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
     # instead of guessed from a power source the way flat had to.
     device_types = {device.device_id: device_type(device) for device in children}
     device_names = {device.device_id: name for device in children if (name := device_display_name(device)) is not None}
-    inverters = [device for device in children if device_type(device) == TYPE_INVERTER]
+    inverters = [device for device in children if declares_class(device_type(device), TYPE_INVERTER)]
     islanding = resolve_islanding_state(roles.mid, panel)
 
     # Vendor extensions on devices this adapter *does* model. The pairing is

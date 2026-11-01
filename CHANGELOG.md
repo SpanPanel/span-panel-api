@@ -39,6 +39,7 @@ Snapshot fields that held a fabricated constant can now be unknown, and with `sp
 
 - **`V2HomieSchema.types_schema_hash` on data model 1.0 is the panel's published `deviceClassesSchemaHash`, or a hash of `deviceClasses` when none is published, where it was one constant for every such panel**; a flat panel's value is unchanged, and a
   value stored from 3.6.x differs once on a data model 1.0 panel.
+- **A property the panel clears reads as unpublished** on a parent/child panel, where it read as an empty value until the panel published it again.
 
 ## [3.6.2]
 

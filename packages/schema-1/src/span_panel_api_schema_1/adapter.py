@@ -20,7 +20,7 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 import logging
 import time
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 from ebus_sdk import Controller
 
@@ -86,6 +86,50 @@ as the rest of the tree's labels. One still missing this long after every name
 and firmware version is taken as absent: a DER may be published with no
 connection record at all, and a declared model may never be valued.
 """
+
+
+class _ValueTopic(NamedTuple):
+    """One device's `node/property`, and whether the topic carries its value or its `$target`."""
+
+    device_id: str
+    node_id: str
+    property_id: str
+    target: bool
+
+
+def _value_topic(topic: str) -> _ValueTopic | None:
+    """The value or `$target` a topic addresses, or None for any other topic.
+
+    The two shapes `Controller` stores a payload under, read as it reads them:
+    `<domain>/5/<device>/<node>/<property>` is a value unless the property id
+    starts with `$`, and `<domain>/5/<device>/<node>/<property>/$target` is a
+    target. `$state`, `$description` and every other shape are not values.
+    """
+    parts = topic.split("/")
+    if parts[:2] != [HOMIE_DOMAIN, HOMIE_VERSION]:
+        return None
+    if len(parts) == 5 and not parts[4].startswith("$"):
+        return _ValueTopic(parts[2], parts[3], parts[4], target=False)
+    if len(parts) == 6 and parts[5] == "$target":
+        return _ValueTopic(parts[2], parts[3], parts[4], target=True)
+    return None
+
+
+def _forget(by_node: object, node_id: str, property_id: str) -> bool:
+    """Remove one value from an SDK `{node: {property: value}}` map; whether there was one.
+
+    A node left with no values is removed with its last one, so the map holds
+    what the broker retains and nothing more.
+    """
+    if not isinstance(by_node, dict):
+        return False
+    by_property: object = by_node.get(node_id)
+    if not isinstance(by_property, dict) or property_id not in by_property:
+        return False
+    del by_property[property_id]
+    if not by_property:
+        del by_node[node_id]
+    return True
 
 
 def _unvalued_feeds_for_unplaced_pvs(roles: TreeRoles) -> list[str]:
@@ -162,7 +206,47 @@ class SchemaOneAdapter:
         return [f"{HOMIE_DOMAIN}/{HOMIE_VERSION}/#"]
 
     def handle_message(self, topic: str, payload: str) -> None:
+        """Route one message to the SDK callback that asked for it, keeping a clear a clear.
+
+        A zero-length payload deletes a retained message, and Homie 5 spells an
+        empty string differently, as one `0x00` byte, so that the two stay
+        apart. The SDK decodes both to `""` and stores it, which would leave a
+        property the panel cleared reading as one it published empty. So a
+        clear of a value or `$target` the tree holds is applied here: the
+        stored value goes, exactly as an unpublished one is absent, and
+        property observers hear `None`. A clear of `$state` (the SDK's device
+        removal) or `$description` still goes to the SDK, as does anything
+        else. A `$description` cleared on its own makes the SDK log
+        `descriptionParseError` at ERROR and keep the stale description; that
+        is normally silent only because Homie clears `$state` first, after
+        which the SDK no longer holds the device and ignores the rest.
+        """
+        if not payload and self._clear(topic):
+            return
         self._routes.dispatch(topic, payload)
+
+    def _clear(self, topic: str) -> bool:
+        """Apply a clear of a value or target; False where the topic addresses none the tree holds.
+
+        Only a device the controller holds is touched, the same test the SDK
+        applies before storing a value. Any other clear goes on to dispatch,
+        where a route the SDK still records for a device it dropped ignores it,
+        and an unrouted one takes back what is held for its topic.
+
+        A clear of a value that was never published changes nothing and is not
+        reported. A cleared value is reported as a change, so it forgets the
+        remembered readiness where a new value would; a cleared target is not,
+        as no target change is.
+        """
+        address = _value_topic(topic)
+        device = None if address is None else self._controller.get_device(address.device_id)
+        if address is None or device is None:
+            return False
+        if address.target:
+            _forget(device.property_targets, address.node_id, address.property_id)
+        elif _forget(device.properties, address.node_id, address.property_id):
+            self._notify(address.device_id, address.node_id, address.property_id, None)
+        return True
 
     def is_ready(self) -> bool:
         """Ready when the whole declared tree has described itself.
@@ -580,7 +664,10 @@ class SchemaOneAdapter:
         return str(amps)
 
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
-        """Subscribe to per-property updates: `(device_id, node_id, property_id, value)`."""
+        """Subscribe to per-property updates: `(device_id, node_id, property_id, value)`.
+
+        `value` is `None` when the panel clears a value it had published.
+        """
         self._property_callbacks.append(callback)
 
         def _unregister() -> None:
@@ -696,6 +783,10 @@ class SchemaOneAdapter:
         protocol has no place for the previous value, and consumers that need
         one keep it themselves.
         """
+        self._notify(device_id, node_id, property_id, value)
+
+    def _notify(self, device_id: str, node_id: str, property_id: str, value: str | None) -> None:
+        """Report one property's new value, `None` once cleared, after forgetting what it invalidates."""
         # The one value readiness waits on.
         if (device_id, node_id, property_id) == (self._serial_number, NODE_INFO, PROP_MODEL):
             self._ready = None

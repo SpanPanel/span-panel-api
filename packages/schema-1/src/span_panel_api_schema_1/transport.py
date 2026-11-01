@@ -33,7 +33,9 @@ moment the matching route is registered. Under a real per-device subscription
 the SDK would have got that value as a retained message at subscribe time, so
 holding it reproduces what it would otherwise have seen rather than inventing
 anything. Dropping it instead is silent and total: an entire panel parses as
-zero circuits.
+zero circuits. By the same rule a clear, which deletes a retained message, is
+not held: it takes back what is held for its topic, because the broker would
+have replayed nothing there.
 """
 
 from __future__ import annotations
@@ -187,7 +189,8 @@ class ControllerRoutes:
         route it belongs to may simply not exist yet — see the module
         docstring. The wire subscription is broader than the SDK's interest by
         construction, so some held messages are never claimed; the ceiling
-        keeps that from growing without bound.
+        keeps that from growing without bound. A clear (a zero-length payload)
+        is never held; see `_hold`.
 
         The SDK hands callbacks `bytes`; the transport hands us `str`.
         """
@@ -202,7 +205,18 @@ class ControllerRoutes:
         max(matched, key=lambda route: route.recorded).callback(topic, payload.encode())
 
     def _hold(self, topic: str, payload: str) -> None:
-        """Keep a message for a route that has not been registered yet."""
+        """Keep a message for a route that has not been registered yet.
+
+        A zero-length payload is not kept. It deletes the topic's retained
+        message, so a subscription made after it would be replayed nothing for
+        the topic: the clear takes back whatever is held for it instead.
+        Releasing the older value would bring back a reading the panel
+        withdrew, and releasing the clear would hand the SDK an empty payload,
+        which it stores as an empty value.
+        """
+        if not payload:
+            self._held.pop(topic, None)
+            return
         if topic not in self._held and len(self._held) >= MAX_HELD_MESSAGES:
             self._discarded += 1
             if self._discarded == 1:

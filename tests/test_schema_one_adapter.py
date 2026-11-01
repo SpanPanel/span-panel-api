@@ -767,6 +767,21 @@ def test_find_node_by_type_answers_with_a_device_id(adapter: SchemaOneAdapter) -
     assert adapter.find_node_by_type("energy.ebus.device.nonexistent") is None
 
 
+@pytest.mark.parametrize(
+    ("declared", "found"), [("energy.ebus.device.bess.hybrid", "bess"), ("energy.ebus.device.bessfoo", None)]
+)
+def test_find_node_by_type_answers_for_a_subtype_and_not_for_a_look_alike(declared: str, found: str | None) -> None:
+    """A device typed `bess.<x>` declares the `bess` class; one typed `bessfoo` does not (#228)."""
+    tree = {device_id: dict(topics) for device_id, topics in _TREE.items()}
+    description = json.loads(tree["bess"]["$description"])
+    description["type"] = declared
+    tree["bess"]["$description"] = json.dumps(description)
+    adapter = SchemaOneAdapter(PANEL, _schema())
+    _feed(adapter, tree=tree)
+
+    assert adapter.find_node_by_type("energy.ebus.device.bess") == found
+
+
 def test_property_callbacks_receive_updates() -> None:
     seen: list[tuple[str, str, str, str | None]] = []
     adapter = SchemaOneAdapter(PANEL, _schema())

@@ -499,3 +499,21 @@ def test_has_circuit_answers_for_the_circuits_and_nothing_else(adapter: SchemaOn
         assert adapter.has_circuit(device_id) is False, device_id
     assert adapter.has_circuit(PANEL) is False
     assert adapter.has_circuit("0" * 32) is False
+
+
+@pytest.mark.parametrize(
+    ("declared", "is_circuit"), [("energy.ebus.device.circuit.hybrid", True), ("energy.ebus.device.circuitfoo", False)]
+)
+def test_has_circuit_answers_for_a_subtype_and_not_for_a_look_alike(declared: str, is_circuit: bool) -> None:
+    """A device typed `circuit.<x>` is a circuit; one typed `circuitfoo` is another class (#228).
+
+    The refusal this names has to agree with the snapshot, which reads a
+    subtyped circuit into `circuits`: a circuit the snapshot shows must not be
+    reported to its caller as no such circuit.
+    """
+    tree = _copy()
+    description = json.loads(tree[CONTROLLABLE_CIRCUIT]["$description"])
+    description["type"] = declared
+    tree[CONTROLLABLE_CIRCUIT]["$description"] = json.dumps(description)
+
+    assert _adapter(tree).has_circuit(CONTROLLABLE_CIRCUIT) is is_circuit

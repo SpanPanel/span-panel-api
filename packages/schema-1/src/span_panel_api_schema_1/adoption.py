@@ -35,7 +35,14 @@ from span_panel_api_schema_1.const import (
     TYPE_PANEL,
     TYPE_PV,
 )
-from span_panel_api_schema_1.description import declared_settable, device_type, nodes, optional_str, properties
+from span_panel_api_schema_1.description import (
+    declared_settable,
+    declares_class,
+    device_type,
+    nodes,
+    optional_str,
+    properties,
+)
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
@@ -72,10 +79,11 @@ def is_modelled(declared: str) -> bool:
     Subtype-aware, because firmware may declare either a base type or a subtype
     of it -- ``…device.lugs`` with a ``direction`` property, or
     ``…device.lugs.upstream``. A subtype of something modelled is modelled: the
-    snapshot builder matches lugs by prefix for exactly this reason, and a
-    subtype arriving must not be adopted behind the builder's back.
+    snapshot builder sorts each class with the same `declares_class`, so the
+    two agree about which devices a class covers, and a subtype the builder
+    reads is never adopted behind its back.
     """
-    return any(declared == known or declared.startswith(f"{known}.") for known in MODELLED_TYPES)
+    return any(declares_class(declared, known) for known in MODELLED_TYPES)
 
 
 def build_adopted_devices(children: list[DiscoveredDevice]) -> tuple[AdoptedDevice, ...]:

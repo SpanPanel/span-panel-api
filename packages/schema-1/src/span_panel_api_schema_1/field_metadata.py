@@ -54,6 +54,7 @@ from span_panel_api_schema_1.const import (
     TYPE_PV,
 )
 from span_panel_api_schema_1.description import (
+    declares_class,
     device_type as declared_type,
     nodes as declared_nodes,
     optional_str,
@@ -221,7 +222,7 @@ def build_field_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMeta
     present_type_nodes: set[tuple[str, str]] = set()
     for device in devices:
         description: dict[str, object] = device.description or {}
-        device_type = str(description.get("type") or "")
+        device_type = declared_type(device)
         if not device_type:
             continue
         for node_id, node in declared_nodes(description).items():
@@ -274,7 +275,7 @@ def _charge_limit_metadata(devices: list[DiscoveredDevice]) -> dict[str, FieldMe
     rather than absent hardware.
     """
     for device in devices:
-        if not declared_type(device).startswith(TYPE_EVSE):
+        if not declares_class(declared_type(device), TYPE_EVSE):
             continue
         surface = resolve_charge_limit(device)
         if surface is None:
@@ -293,16 +294,16 @@ def _charge_limit_entry(declaration: ChargeLimitProperty | None) -> FieldMetadat
 
 
 def _node_declared(present_type_nodes: set[tuple[str, str]], device_type: str, node_id: str) -> bool:
-    """Whether any present device of this type declares this node.
+    """Whether any present device of this type, or a subtype of it, declares this node.
 
-    Mirrors `_lookup`'s subtype rule, and has to: presence and lookup must
-    agree about which devices answer for a row, or a subtyped device that
+    Asks `declares_class`, as `_lookup` does, and has to: presence and lookup
+    must agree about which devices answer for a row, or a subtyped device that
     dropped a property would resolve through one and misclassify through the
     other. Both are now exercised on non-lugs types, lugs having moved to a
     direction-resolved lookup of their own.
     """
     return any(
-        node == node_id and (declared_device_type == device_type or declared_device_type.startswith(f"{device_type}."))
+        node == node_id and declares_class(declared_device_type, device_type)
         for declared_device_type, node in present_type_nodes
     )
 
@@ -376,7 +377,7 @@ def _lugs_metadata(
     and so yields no entry, which is deliberate: the mapper reads its values
     through the same call, so nothing would populate those fields either.
     """
-    lugs = find_lugs([d for d in devices if declared_type(d).startswith(TYPE_LUGS)], upstream=upstream)
+    lugs = find_lugs([d for d in devices if declares_class(declared_type(d), TYPE_LUGS)], upstream=upstream)
     if lugs is None:
         return {}
 
@@ -405,7 +406,8 @@ def _lookup(
     """Find a declaration, allowing a device type to be a subtype of the mapped one.
 
     eBus device types are hierarchical and a subtype carries its parent's
-    properties, so a device typed `X.Y` satisfies a row written for `X`.
+    properties, so a device typed `X.Y` satisfies a row written for `X`
+    (`declares_class`), and one typed `Xfoo` does not.
 
     Lugs were the observed instance — `…device.lugs` versus a subtyped
     `…device.lugs.upstream` — and they no longer come through here, because
@@ -419,7 +421,7 @@ def _lookup(
         return exact
     suffix = f"|{node_id}|{property_id}"
     for key, value in declared.items():
-        if key.endswith(suffix) and key[: -len(suffix)].startswith(device_type):
+        if key.endswith(suffix) and declares_class(key[: -len(suffix)], device_type):
             return value
     return None
 
@@ -570,7 +572,7 @@ def addressed_rows(devices: list[DiscoveredDevice]) -> set[tuple[str, str, str]]
     addressed = set(_ADDRESSED)
     for device in devices:
         evse_type = declared_type(device)
-        if not evse_type.startswith(TYPE_EVSE):
+        if not declares_class(evse_type, TYPE_EVSE):
             continue
         surface = resolve_charge_limit(device)
         if surface is None:
@@ -643,14 +645,14 @@ def _short_type(device_type: str) -> str:
 def is_addressed(addressed: set[tuple[str, str, str]], device_type: str, node_id: str, property_id: str) -> bool:
     """Whether any addressed row covers this declaration, subtypes included.
 
-    Carries `_lookup`'s subtype rule for the same reason it exists there: eBus
-    device types are hierarchical and a subtype carries its parent's properties,
-    so a device typed ``X.Y`` is served by a row written for ``X``. Without it a
+    Asks `declares_class`, as `_lookup` does, for the same reason: eBus device
+    types are hierarchical and a subtype carries its parent's properties, so a
+    device typed ``X.Y`` is served by a row written for ``X``. Without it a
     panel that subtypes its lugs devices would report every mapped lugs property
     as newly discovered — which is the false positive that would teach a
     maintainer to stop reading this.
     """
     return any(
-        node == node_id and prop == property_id and (device_type == mapped_type or device_type.startswith(f"{mapped_type}."))
+        node == node_id and prop == property_id and declares_class(device_type, mapped_type)
         for mapped_type, node, prop in addressed
     )

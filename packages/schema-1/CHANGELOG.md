@@ -40,6 +40,7 @@ Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the u
 - **Each MQTT message costs the same few microseconds however many devices the panel declares**, where routing it tested every recorded subscription in turn and every readiness check walked the device tree. On a 30-device tree the work per message falls
   from 90–250 µs to about 2 µs, measured on a desktop machine ([#223](https://github.com/SpanPanel/span-panel-api/issues/223)).
 - **A property the panel clears reads as unpublished**, where it read as an empty value until the panel published it again.
+- **A charge-current limit outside the range a SPAN Drive declares is refused** instead of published.
 
 ## [1.2.2]
 

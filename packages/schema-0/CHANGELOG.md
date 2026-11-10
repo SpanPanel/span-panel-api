@@ -9,9 +9,9 @@ rather than by this version number. A release here means this parser changed, ne
 
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the last public release, never against the beta before it.
 
-## [Unreleased]
+## [1.3.0]
 
-Requires `span-panel-api` **3.7.0 or newer**, whose snapshot fields accept the unknown values this parser now reports.
+Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the unknown values this parser now reports.
 
 ### Changed
 

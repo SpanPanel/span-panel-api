@@ -9,7 +9,7 @@ here rather than inherited.
 Four of them are exceptions rather than derivations, and say so: the snapshot
 holds `"UNKNOWN"` in a `str` field where the panel publishes nothing for it.
 That is the field's long-standing absence value, not a reading; whether those
-fields become optional is a type question deferred past 3.8.0b1.
+fields become optional is a type question deferred past 3.8.0.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ _NO_RELAY = (
     "circuits.build_circuit: a device that declares no switch node has no relay, "
     "so it is not controllable, not sheddable and not always on"
 )
-_STR_SENTINEL = "pre-existing str sentinel; type question deferred past 3.8.0b1"
+_STR_SENTINEL = "pre-existing str sentinel; type question deferred past 3.8.0"
 
 _DERIVATIONS: Final = (
     *(derivation for derivation in MAIN32_RULES.derivations if derivation.family in _SHARED),

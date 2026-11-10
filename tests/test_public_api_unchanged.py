@@ -59,7 +59,19 @@ EXPECTED_PUBLIC_API = {
     "ControlTarget",
     "ExtensionProperty",
     "ExtensionSubject",
+    # Added 2026-10-31: the masked device tree a consumer forwards in diagnostics,
+    # and the optional protocol an adapter offers it through. Deliberately not a
+    # SchemaAdapter member: the protocol derives its required set from itself, so a
+    # member there would invalidate every built adapter wheel.
+    "MaskedTree",
+    "MaskedTreeDevice",
+    "MaskedTreeMetadata",
+    "UndescribedDevice",
+    "TreeExportingAdapter",
     "AdoptedControlProtocol",
+    # Added 2026-10-09: a charger's connector lock. A protocol of its own, so
+    # `EvseControlProtocol` and its implementers are unchanged.
+    "EvseLockControlProtocol",
     # Added 2026-08-25 (3.1.0): one veto/observe point for every control
     # command, the consumer-side half of its authorisation gate. A protocol of
     # its own so the four control protocols are not broken twice in one release.
@@ -80,6 +92,20 @@ EXPECTED_PUBLIC_API = {
     # `None` on every existing consumer's data and nothing that reads the
     # snapshot today changes.
     "SpanPcsSnapshot",
+    # Added 2026-10-09: the closed set a circuit's `connection/feeds-role`
+    # declares, read into `SpanCircuitSnapshot.feeds_role`. Purely additive --
+    # the field defaults to `None`, and the flat schema declares no roles.
+    "FEEDS_ROLES",
+    "FeedsRole",
+    # Added 2026-10-09: the closed set a circuit's `breaker/protection-functions`
+    # lists, read into `SpanCircuitSnapshot.protection_functions`. Purely
+    # additive -- the field defaults to `None`.
+    "PROTECTION_FUNCTIONS",
+    "ProtectionFunction",
+    # Added 2026-10-09: groups the circuits that share one meter, from
+    # `SpanCircuitSnapshot.meter_shared_with`. Purely additive -- a snapshot in
+    # which no circuit shares a meter has no groups.
+    "shared_meter_groups",
     # Factory
     "create_span_client",
     # Detection
@@ -166,6 +192,10 @@ EXPECTED_PUBLIC_API = {
     # SpanPanelAuthError, so no existing except clause starts telling a user
     # their passphrase is wrong.
     "SpanPanelPassphraseUnavailableError",
+    # Added 2026-10-09: registration refused with HTTP 429. A subclass of
+    # SpanPanelAPIError, which register_v2 already raised for a 429, so every
+    # existing except clause keeps catching it.
+    "SpanPanelRateLimitError",
     "SpanPanelServerError",
     "SpanPanelStaleDataError",
     # Added 2026-08-31 (3.4.0): a bootstrap REST call that failed *verification*

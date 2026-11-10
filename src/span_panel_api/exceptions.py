@@ -68,6 +68,25 @@ class SpanPanelServerError(SpanPanelAPIError):
     """
 
 
+class SpanPanelRateLimitError(SpanPanelAPIError):
+    """The panel is limiting the client's requests and refused this one (HTTP 429).
+
+    Raised by ``register_v2``, which does not retry: the caller decides when to
+    try again. ``retry_after_s`` is the wait the panel asked for, in seconds,
+    from its ``Retry-After`` header: a delta-seconds value as given, an HTTP-date
+    as the seconds until that time. ``None`` when the header is absent or holds
+    neither.
+
+    A `SpanPanelAPIError`, so an existing clause catching that class still
+    catches this, and not a `SpanPanelAuthError`: the credential was never
+    judged.
+    """
+
+    def __init__(self, message: str, status_code: int | None = None, retry_after_s: float | None = None) -> None:
+        super().__init__(message, status_code)
+        self.retry_after_s = retry_after_s
+
+
 class SpanPanelPassphraseUnavailableError(SpanPanelAPIError):
     """The panel cannot read its own passphrase, so it cannot issue broker credentials.
 

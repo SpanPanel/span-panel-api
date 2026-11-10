@@ -307,7 +307,7 @@ def _split_feed_tree(status: str | None) -> tuple[dict[str, dict[str, str]], str
     """
     tree = _mutable_tree()
     solar = _feeding_circuit(tree, PV)
-    split = {**tree[solar], "info/spaces": "9,11"}
+    split = {**tree[solar], "info/spaces": "13,15"}
     if status is None:
         del split[FEEDS_STATUS_TOPIC]
     else:

@@ -13,7 +13,10 @@ Snapshot fields that held a fabricated constant can now be unknown, and with `sp
 
 ### Added
 
+- **spanos3/r202639/03 batch 2: reads more of the data this firmware publishes.**
+- **`SpanMqttClient.masked_tree()` returns the panel's device tree with identifiers and site details masked**, for a consumer's diagnostics; `None` on a flat panel.
 - **`V2StatusInfo.hardware_version` reports the hardware version string from `GET /api/v2/status`.**
+- **`SpanEvseSnapshot.charge_current_limit_minimum_a` and `charge_current_limit_maximum_a` report the range a SPAN Drive declares for its charge-current limit**, `None` where undeclared.
 
 ### Changed
 
@@ -22,7 +25,10 @@ Snapshot fields that held a fabricated constant can now be unknown, and with `sp
 - **BREAKING FOR CONSUMERS: `SpanPanelSnapshot.uptime_s` becomes `int | None`**, and with those parsers it is `None` on a parent/child panel and before a flat panel first reports ready, where it was a constant `0`.
 - **BREAKING FOR CONSUMERS: `SpanCircuitSnapshot.instant_power_update_time_s` and `energy_accum_update_time_s` become `int | None` and default to `None`**, and with those parsers they are `None` until the reading has arrived and always on a parent/child
   panel, where they were `0`.
-- **The `schema-0` and `schema-1` extras require `span-panel-api-schema-0` and `span-panel-api-schema-1` 1.3.0 or newer**, the adapters that report these values as unknown.
+- **BREAKING FOR CONSUMERS: `SpanCircuitSnapshot.is_240v` becomes `bool | None`**, and with `span-panel-api-schema-1` 1.4.0 or newer it is `None` where the pole count is unpublished.
+- **BREAKING FOR CONSUMERS: `SpanPanelSnapshot.lugs_at_service_entrance` becomes `bool | None`**, and with `span-panel-api-schema-1` 1.4.0 or newer it is `None` while the upstream lugs declare their feed but leave it unpublished.
+- **The `schema-0` extra requires `span-panel-api-schema-0` 1.3.0 or newer and the `schema-1` extra requires `span-panel-api-schema-1` 1.4.0 or newer**, the adapters that report these values as unknown; schema-1 1.4.0 also fills the snapshot fields this
+  release adds.
 
 ### Removed
 
@@ -33,6 +39,7 @@ Snapshot fields that held a fabricated constant can now be unknown, and with `sp
 
 - **`V2HomieSchema.types_schema_hash` on data model 1.0 is the panel's published `deviceClassesSchemaHash`, or a hash of `deviceClasses` when none is published, where it was one constant for every such panel**; a flat panel's value is unchanged, and a
   value stored from 3.6.x differs once on a data model 1.0 panel.
+- **A property the panel clears reads as unpublished** on a parent/child panel, where it read as an empty value until the panel published it again.
 
 ## [3.6.2]
 

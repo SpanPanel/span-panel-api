@@ -5,7 +5,7 @@ Every citation names a symbol in ``span_panel_api_schema_1`` (or in
 the edit that moves the code.
 
 The transform table covers every row of the library's own `_PROPERTY_FIELD_MAP`
-and both lugs tables, which `test_every_mapped_field_has_a_documented_transform`
+and the three lugs tables, which `test_every_mapped_field_has_a_documented_transform`
 holds it to: a field the library starts mapping cannot reach a snapshot without a
 transform documented here. The derivations are only the ones these captures
 need, which `test_every_derivation_is_needed` holds them to: a justification no
@@ -17,7 +17,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Final
 
-from .harness import ANY_LEAF, CellRules, Derivation, DropReason, RowKey, Transform, TransformKind
+from span_panel_api.models import FEEDS_ROLES, PROTECTION_FUNCTIONS
+from span_panel_api_schema_1.const import PANEL_POSITIONS_BY_MODEL
+
+from .harness import ANY_LEAF, OUTSIDE_PANEL_ROLE, CellRules, Derivation, DropReason, RowKey, Transform, TransformKind
 
 _IDENTITY: Final = TransformKind.IDENTITY
 _NEGATE: Final = TransformKind.NEGATE
@@ -65,6 +68,32 @@ def _listed_spaces(raw: str, value: object) -> bool:
     return value == tuple(spaces)
 
 
+def _model_or_none(raw: str, value: object) -> bool:
+    """`UNKNOWN` (or nothing) names no model and reads as None; a named model reads as published."""
+    return value == (None if raw.strip().upper() in ("", "UNKNOWN") else raw)
+
+
+def _position(index: int) -> Callable[[str, object], bool]:
+    """The model's first (0) or last (1) position from the table; for a model it lacks, the occupied range decides."""
+
+    def holds(raw: str, value: object) -> bool:
+        known = PANEL_POSITIONS_BY_MODEL.get(raw.strip().upper())
+        if known is None:
+            return value is None or isinstance(value, int)
+        return value == known[index]
+
+    return holds
+
+
+def _feeds_role(raw: str, value: object) -> bool:
+    return value == (raw if raw in FEEDS_ROLES else None)
+
+
+def _protection_functions(raw: str, value: object) -> bool:
+    listed = [part.strip() for part in raw.split(",")]
+    return value == tuple(part for part in listed if part in PROTECTION_FUNCTIONS)
+
+
 def _transforms() -> dict[RowKey, dict[str, Transform]]:
     table: dict[RowKey, dict[str, Transform]] = {}
 
@@ -89,8 +118,24 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
         "devices.build_battery: the release build in the firmware version picks the BESS meter's frame",
     )
     add("panel", "info/vendor-name", "panel.vendor_name", _LITERAL, panel_fields)
-    add("panel", "info/model", "panel.model", _LITERAL, panel_fields)
+    add(
+        "panel",
+        "info/model",
+        "panel.model",
+        _DERIVED,
+        f"{panel_fields}: an UNKNOWN model names no model and reads as None",
+        _model_or_none,
+    )
     add("panel", "info/model", "panel.panel_size", _DERIVED, "panel.panel_size_from_model and const.PANEL_SIZE_BY_MODEL")
+    for index, position in enumerate(("first_position", "last_position")):
+        add(
+            "panel",
+            "info/model",
+            f"panel.{position}",
+            _DERIVED,
+            "panel.panel_positions and const.PANEL_POSITIONS_BY_MODEL; the occupied spaces where the table lacks the model",
+            _position(index),
+        )
     add("panel", "info/hardware-version", "panel.hardware_version", _LITERAL, panel_fields)
     add("panel", "info/serial-number", "panel.serial_number", _LITERAL, panel_fields)
     add("panel", "status/relay", "panel.main_relay_state", _LITERAL, panel_fields)
@@ -110,6 +155,8 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
     add("panel", "meter/voltage-a", "panel.l1_voltage", _IDENTITY, panel_fields)
     add("panel", "meter/voltage-b", "panel.l2_voltage", _IDENTITY, panel_fields)
     add("panel", "breaker/rating", "panel.main_breaker_rating_a", _INT, panel_fields)
+    add("panel", "meter/busbar-current", "panel.busbar_current_a", _IDENTITY, panel_fields)
+    add("panel", "meter/frequency", "panel.frequency_hz", _IDENTITY, panel_fields)
     for flow in ("pv", "battery", "grid", "site"):
         add(
             "panel",
@@ -124,13 +171,6 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
         "battery.power_w",
         _DERIVED,
         "devices.build_battery: compared in sign with the BESS meter where the firmware names no release build",
-    )
-    add(
-        "panel",
-        "power-flows/grid",
-        ANY_LEAF,
-        _DERIVED,
-        "panel.resolve_islanding_state: grid power decides on-grid only where no MID is published",
     )
     add("panel", "shed/policy", "panel.shed_policy", _LITERAL, panel_fields)
     for policy_field in ("shed_policy_algorithm", "shed_soc_threshold_shed_percent", "shed_soc_threshold_release_percent"):
@@ -191,6 +231,39 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
     add("circuit", "breaker/poles", "circuit.is_240v", _DERIVED, f"{circuit}: two poles or more", _two_poles_or_more)
     add("circuit", "info/name", "circuit.name", _LITERAL, circuit)
     add("circuit", "info/spaces", "circuit.tabs", _DERIVED, "circuits._tabs parses the list of spaces", _listed_spaces)
+    for position in ("first_position", "last_position"):
+        add(
+            "circuit",
+            "info/spaces",
+            f"panel.{position}",
+            _DERIVED,
+            "panel.panel_positions: the occupied spaces decide the range where the table lacks the model",
+        )
+    add("circuit", "info/nominal-voltage", "circuit.nominal_voltage_v", _IDENTITY, circuit)
+    add(
+        "circuit",
+        "breaker/protection-functions",
+        "circuit.protection_functions",
+        _DERIVED,
+        "circuits._protection_functions: the listed members of PROTECTION_FUNCTIONS, in published order",
+        _protection_functions,
+    )
+    add(
+        "circuit",
+        "connection/feeds-role",
+        "circuit.feeds_role",
+        _DERIVED,
+        "circuits._feeds_role: a member of FEEDS_ROLES as published, else None",
+        _feeds_role,
+    )
+    for node, shared in (("meter", "circuit.meter_shared_with"), ("switch", "circuit.relay_shared_with")):
+        add(
+            "circuit",
+            f"{node}/shared-with-device-ids",
+            shared,
+            _DERIVED,
+            "circuits._shared_with: the listed ids naming another circuit of the snapshot, in device_id_order",
+        )
     add("circuit", "switch/relay", "circuit.relay_state", _LITERAL, circuit)
     add("circuit", "switch/relay-requester", "circuit.relay_requester", _LITERAL, circuit)
     add("circuit", "switch/relay-controllable", "circuit.is_user_controllable", _BOOL, circuit)
@@ -226,15 +299,42 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
         _DERIVED,
         "snapshot.build_snapshot and devices.feed_circuit_ids: the circuit's label, and the fed DER's feeding circuit, key and position",
     )
-    for der in ("evse", "pv", "pv_inverter"):
+    for der in ("battery", "evse", "pv", "pv_inverter"):
         add(
             "circuit",
             "connection/feeds-device-status",
             f"{der}.connected",
             _DERIVED,
-            "devices.feed_connection_statuses and devices._connected: OK is a working link",
+            "devices.feed_connection_statuses and devices._connected: OK is a working link "
+            "(for a battery, where no device claims it through a fed-by record)",
             _is_ok_link,
         )
+
+    # --- a circuit-typed device with no breaker space -----------------------
+    outside = "circuits.build_circuit: a meter outside the panel reads import-positive, as published"
+    add(OUTSIDE_PANEL_ROLE, "meter/active-power", "circuit.instant_power_w", _IDENTITY, outside)
+    add(
+        OUTSIDE_PANEL_ROLE,
+        "meter/imported-energy",
+        "circuit.consumed_energy_wh",
+        _IDENTITY,
+        f"{outside}: imported is consumed",
+    )
+    add(
+        OUTSIDE_PANEL_ROLE,
+        "meter/exported-energy",
+        "circuit.produced_energy_wh",
+        _IDENTITY,
+        f"{outside}: exported is produced",
+    )
+    add(OUTSIDE_PANEL_ROLE, "meter/current", "circuit.current_a", _IDENTITY, outside)
+    add(
+        OUTSIDE_PANEL_ROLE,
+        "meter/shared-with-device-ids",
+        "circuit.meter_shared_with",
+        _DERIVED,
+        "circuits._shared_with: the listed ids naming another circuit of the snapshot, in device_id_order",
+    )
 
     # --- lugs --------------------------------------------------------------
     lugs_meter = "panel.PanelFields: the lugs read import-positive and pass through"
@@ -284,6 +384,13 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
             _DERIVED,
             "devices.resolve_relative_position: a DER fed through the feedthrough is in the panel",
         )
+    add(
+        "lugs-upstream",
+        "connection/overcurrent-protection",
+        "panel.upstream_protection_rating_a",
+        _INT,
+        "panel.PanelFields: the upstream lugs' protection rating",
+    )
 
     # --- BESS --------------------------------------------------------------
     battery = "devices.build_battery"
@@ -352,6 +459,14 @@ def _transforms() -> dict[RowKey, dict[str, Transform]]:
         "evse", "info/serial-number", ANY_LEAF, _DERIVED, "snapshot.harmonised_evse_keys: the charger is keyed by its serial"
     )
     add("evse", "info/firmware-version", "evse.software_version", _LITERAL, evse)
+    # The charge-current pair, in either spelling the charger's description declares.
+    charge_limit = f"{evse} through charge_limit.resolve_charge_limit, read as an integer"
+    for node, ceiling, limit in (
+        ("config", "max-charge-current", "user-max-charge-current"),
+        ("charge-limit", "installer-max", "owner-limit"),
+    ):
+        add("evse", f"{node}/{ceiling}", "evse.charge_current_ceiling_a", _INT, charge_limit)
+        add("evse", f"{node}/{limit}", "evse.charge_current_limit_a", _INT, charge_limit)
     return table
 
 
@@ -380,6 +495,15 @@ _DERIVATIONS: Final = (
         "ctl.dps_target",
         "adapter.SchemaOneAdapter.set_dominant_power_source_target: a topic, offered where the declaration is `$settable`",
     ),
+    Derivation("battery.present", "devices.build_battery: the tree declares a battery, before any of its values"),
+    Derivation(
+        "circuit.measures_outside_panel",
+        "circuits.declares_spaces: whether the description declares info/spaces, not a value",
+    ),
+    Derivation(
+        "panel.publishes_solar_roles",
+        "snapshot.build_snapshot: whether any circuit's description declares connection/feeds-role, not a value",
+    ),
     Derivation("pv.device_id", "devices.build_pv: the inverter's device id"),
     Derivation("pv.node_id", "devices.pv_inverter_key: the feeding circuit's id, else the inverter's device id"),
     Derivation("pv_inverter.device_id", "devices.build_pv: the inverter's device id"),
@@ -404,4 +528,9 @@ _DEFERRED: Final = {
     ),
 }
 
-MAIN32_RULES: Final = CellRules(transforms=_transforms(), derivations=_DERIVATIONS, drops=_DROPS, deferred=_DEFERRED)
+TRANSFORMS: Final = _transforms()
+"""Every documented transform, shared by every cell: a transform states what the library does, whichever capture shows it."""
+
+DROPS: Final = _DROPS
+
+MAIN32_RULES: Final = CellRules(transforms=TRANSFORMS, derivations=_DERIVATIONS, drops=_DROPS, deferred=_DEFERRED)

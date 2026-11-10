@@ -25,6 +25,8 @@ contrived, which is why the cases below both republish into it and take it away.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from reference_payloads.schema_one import (
@@ -49,6 +51,18 @@ FED_BY_STATUS_TOPIC = f"{NODE_CONNECTION}/{PROP_FED_BY_DEVICE_STATUS}"
 
 def _mutable_tree() -> dict[str, dict[str, str]]:
     return {device_id: dict(topics) for device_id, topics in parent_child_tree().items()}
+
+
+def _without_a_declared_feed(tree: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    """The upstream lugs with their `fed-by-*` record undeclared, so nothing can arrive."""
+    description = json.loads(tree[UPSTREAM_LUGS]["$description"])
+    properties = description["nodes"][NODE_CONNECTION]["properties"]
+    del properties[PROP_FED_BY_DEVICE_ID]
+    del properties[PROP_FED_BY_DEVICE_STATUS]
+    tree[UPSTREAM_LUGS]["$description"] = json.dumps(description)
+    del tree[UPSTREAM_LUGS][FED_BY_ID_TOPIC]
+    del tree[UPSTREAM_LUGS][FED_BY_STATUS_TOPIC]
+    return tree
 
 
 def _snapshot(tree: RetainedTopicTree) -> SpanPanelSnapshot:
@@ -78,11 +92,23 @@ def test_a_panel_with_nothing_ahead_of_its_lugs_is_at_the_service_entrance() -> 
     that always answered `True` would pass this and fail everything above it,
     and one that always answered `False` would do the reverse.
     """
+    tree = _without_a_declared_feed(_mutable_tree())
+
+    assert _snapshot(tree).lugs_at_service_entrance is True
+
+
+def test_a_declared_feed_with_no_value_yet_leaves_it_unknown() -> None:
+    """Declared and unvalued is not an answer.
+
+    The lugs say they have a feed record and have not published it, so the feed
+    may yet name a device. `True` here would tell a panel behind a battery that
+    its lugs reading is the grid, until the value lands.
+    """
     tree = _mutable_tree()
     del tree[UPSTREAM_LUGS][FED_BY_ID_TOPIC]
     del tree[UPSTREAM_LUGS][FED_BY_STATUS_TOPIC]
 
-    assert _snapshot(tree).lugs_at_service_entrance is True
+    assert _snapshot(tree).lugs_at_service_entrance is None
 
 
 @pytest.mark.parametrize(
@@ -128,9 +154,7 @@ def test_the_grid_reading_itself_is_unchanged_either_way() -> None:
     become a reason to withhold or alter the value -- only to say what it is.
     """
     behind = _mutable_tree()
-    plain = _mutable_tree()
-    del plain[UPSTREAM_LUGS][FED_BY_ID_TOPIC]
-    del plain[UPSTREAM_LUGS][FED_BY_STATUS_TOPIC]
+    plain = _without_a_declared_feed(_mutable_tree())
 
     assert _snapshot(behind).lugs_at_service_entrance != _snapshot(plain).lugs_at_service_entrance
     assert _snapshot(behind).instant_grid_power_w == _snapshot(plain).instant_grid_power_w

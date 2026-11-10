@@ -44,7 +44,7 @@ from pathlib import Path
 import re
 from typing import Final
 
-from reference_payloads.schema_one import RetainedTopicTree, devices_from_tree
+from reference_payloads.schema_one import RetainedTopicTree, devices_from_tree, retained_payload
 from span_panel_api.models import (
     ADOPTION_IDENTITY_NODE,
     ADOPTION_TOPOLOGY_NODE,
@@ -344,7 +344,7 @@ def _frozen_clock() -> float:
 
 
 def _replay(capture: _Capture) -> SchemaOneAdapter:
-    """A fresh adapter fed the capture as retained messages."""
+    """A fresh adapter fed the capture as retained messages, an empty value as `0x00` (`retained_payload`)."""
     schema = V2HomieSchema(
         firmware_version=capture.firmware,
         types_schema_hash="sha256:capture",
@@ -358,7 +358,7 @@ def _replay(capture: _Capture) -> SchemaOneAdapter:
         adapter.handle_message(f"{prefix}/$description", json.dumps(device.description))
         adapter.handle_message(f"{prefix}/$state", "ready")
         for topic in sorted(device.values):
-            adapter.handle_message(f"{prefix}/{topic}", device.values[topic])
+            adapter.handle_message(f"{prefix}/{topic}", retained_payload(device.values[topic]))
     return adapter
 
 
@@ -542,10 +542,21 @@ class _Instance:
     deferred: bool = False
 
 
+OUTSIDE_PANEL_ROLE: Final = "meter-outside-panel"
+"""The role of a circuit-typed device that declares no breaker space: a meter outside the panel.
+
+Its own role, because the library reads it in the opposite frame from a hosted
+circuit (`circuits.build_circuit` and `SpanCircuitSnapshot.measures_outside_panel`),
+so one row could not document both.
+"""
+
+
 def _role(capture: _Capture, device: _Device) -> str:
     if device.device_id == capture.root_id:
         return "panel"
     short = device.device_type.removeprefix(DEVICE_TYPE_PREFIX)
+    if device.device_type == TYPE_CIRCUIT and "info/spaces" not in device.declared:
+        return OUTSIDE_PANEL_ROLE
     if device.device_type.startswith(TYPE_LUGS):
         direction = device.values.get("info/direction", "").strip().lower()
         return f"lugs-{direction}" if direction else "lugs"
@@ -598,13 +609,13 @@ def _measure(capture: _Capture, instances: list[_Instance], baseline: Mapping[st
         # as a later retained value does.
         target = session if instance.raw is not None else _replay(capture)
         for candidate in _candidates(instance.declaration, instance.raw, property_id, references):
-            target.handle_message(topic, candidate)
+            target.handle_message(topic, retained_payload(candidate))
             leaves = _flatten(target)
             moved = _moved(baseline, leaves)
             instance.effect |= moved
             instance.perturbed.append((candidate, {leaf: leaves[leaf] for leaf in moved if leaf in leaves}))
         if instance.raw is not None:
-            session.handle_message(topic, instance.raw)
+            session.handle_message(topic, retained_payload(instance.raw))
     unrestored = _moved(baseline, _flatten(session))
     if unrestored:
         raise AssertionError(f"republishing the captured values did not restore the session: {sorted(unrestored)[:5]}")

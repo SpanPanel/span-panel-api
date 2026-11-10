@@ -8,6 +8,9 @@ look unchanged are addressed differently.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Final
+
 # -- Device classes ---------------------------------------------------------
 
 DEVICE_TYPE_PREFIX = "energy.ebus.device."
@@ -41,6 +44,32 @@ NODE_CONNECTION = "connection"
 # imports `panel` -- so the constant has to live below both of them.
 PROP_FEEDS_DEVICE_ID = "feeds-device-id"
 PROP_FEEDS_DEVICE_STATUS = "feeds-device-status"
+PROP_FEEDS_ROLE = "feeds-role"
+PROP_SHARED_WITH_DEVICE_IDS = "shared-with-device-ids"
+PROP_OVERCURRENT_PROTECTION = "overcurrent-protection"
+PROP_BUSBAR_CURRENT = "busbar-current"
+PROP_FREQUENCY = "frequency"
+PROP_NOMINAL_VOLTAGE = "nominal-voltage"
+PROP_PROTECTION_FUNCTIONS = "protection-functions"
+
+SITE_PROPERTIES: Final[frozenset[str]] = frozenset(
+    {
+        "address-lines",
+        "locality",
+        "region",
+        "country-code",
+        "latitude",
+        "longitude",
+        "utility-meter-serial-number",
+    }
+)
+"""Property ids that say where a panel is installed, which never become a reading.
+
+Skipped by `extension` and `adoption` on whatever node a device declares them.
+Where the panel declares them, under `info` beside the site's `info/name`, the
+identity node is skipped as a whole already; this holds if a device declares
+them anywhere else. They stay discovery rows, which carry no values.
+"""
 PROP_FED_BY_DEVICE_ID = "fed-by-device-id"
 PROP_FED_BY_DEVICE_STATUS = "fed-by-device-status"
 NODE_DOOR = "door"
@@ -192,6 +221,17 @@ PANEL_SIZE_BY_MODEL: dict[str, int] = {
     "MAIN_32": 32,
     "MAIN_40": 40,
     "MLO_48": 48,
+}
+
+# The first and last breaker position for each model. Keyed like
+# `PANEL_SIZE_BY_MODEL`, and like it the numbers are ours: the panel publishes
+# only which positions are occupied.
+PANEL_POSITIONS_BY_MODEL: Final[Mapping[str, tuple[int, int]]] = {
+    "MAIN_16": (9, 24),
+    "MLO_24": (1, 24),
+    "MAIN_32": (1, 32),
+    "MAIN_40": (9, 48),
+    "MLO_48": (1, 48),
 }
 
 # The Homie attribute that carries what the flat schema published as the

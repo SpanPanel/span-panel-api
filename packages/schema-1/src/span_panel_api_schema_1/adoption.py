@@ -25,6 +25,7 @@ from span_panel_api.models import ADOPTION_IDENTITY_NODE, ADOPTION_TOPOLOGY_NODE
 from span_panel_api_schema_1.const import (
     HOMIE_DOMAIN,
     HOMIE_VERSION,
+    SITE_PROPERTIES,
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_EVSE,
@@ -34,7 +35,14 @@ from span_panel_api_schema_1.const import (
     TYPE_PANEL,
     TYPE_PV,
 )
-from span_panel_api_schema_1.description import declared_settable, device_type, nodes, optional_str, properties
+from span_panel_api_schema_1.description import (
+    declared_settable,
+    declares_class,
+    device_type,
+    nodes,
+    optional_str,
+    properties,
+)
 
 if TYPE_CHECKING:
     from ebus_sdk.homie import DiscoveredDevice
@@ -71,10 +79,11 @@ def is_modelled(declared: str) -> bool:
     Subtype-aware, because firmware may declare either a base type or a subtype
     of it -- ``…device.lugs`` with a ``direction`` property, or
     ``…device.lugs.upstream``. A subtype of something modelled is modelled: the
-    snapshot builder matches lugs by prefix for exactly this reason, and a
-    subtype arriving must not be adopted behind the builder's back.
+    snapshot builder sorts each class with the same `declares_class`, so the
+    two agree about which devices a class covers, and a subtype the builder
+    reads is never adopted behind its back.
     """
-    return any(declared == known or declared.startswith(f"{known}.") for known in MODELLED_TYPES)
+    return any(declares_class(declared, known) for known in MODELLED_TYPES)
 
 
 def build_adopted_devices(children: list[DiscoveredDevice]) -> tuple[AdoptedDevice, ...]:
@@ -132,7 +141,7 @@ def _adopt(device: DiscoveredDevice, declared: str) -> AdoptedDevice:
 
 
 def _readings(device: DiscoveredDevice, declared_nodes: dict[str, dict[str, object]]) -> tuple[AdoptedProperty, ...]:
-    """Every declared property outside the identity and topology nodes.
+    """Every declared property outside the identity and topology nodes, and no site property.
 
     Those two are excluded by *node*, which is what the eBus vocabulary defines,
     rather than by property name. The catalogs carry no marker for "this string
@@ -146,6 +155,8 @@ def _readings(device: DiscoveredDevice, declared_nodes: dict[str, dict[str, obje
         if node_id in (ADOPTION_IDENTITY_NODE, ADOPTION_TOPOLOGY_NODE):
             continue
         for property_id, definition in properties(node).items():
+            if property_id in SITE_PROPERTIES:
+                continue
             raw = device.get_property(node_id, property_id)
             # The same reading the curated controls get: this one gates a set
             # topic on an uncurated device, so a declaration that has not said

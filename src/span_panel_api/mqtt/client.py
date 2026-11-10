@@ -36,8 +36,16 @@ from ..exceptions import (
     SpanPanelTLSVerificationError,
     SpanPanelValidationError,
 )
-from ..models import AdoptedProperty, ControlTarget, FieldMetadata, HomieSchemaTypes, SpanPanelSnapshot, V2HomieSchema
-from ..protocol import PanelCapability, SchemaAdapter
+from ..models import (
+    AdoptedProperty,
+    ControlTarget,
+    FieldMetadata,
+    HomieSchemaTypes,
+    MaskedTree,
+    SpanPanelSnapshot,
+    V2HomieSchema,
+)
+from ..protocol import PanelCapability, SchemaAdapter, TreeExportingAdapter
 from .connection import AsyncMqttBridge
 from .const import MQTT_READY_TIMEOUT_S
 from .control import ControlCommand, ControlDeadlines, ControlInterceptor, PublishOutcome, PublishState
@@ -47,6 +55,11 @@ if TYPE_CHECKING:
     import httpx
 
 _LOGGER = logging.getLogger(__name__)
+
+LOCK_STATE_LOCKED = "LOCKED"
+"""The `switch/lock-state` value that locks a charger's connector, as the panel declares it."""
+LOCK_STATE_UNLOCKED = "UNLOCKED"
+"""The `switch/lock-state` value that unlocks it."""
 
 # How long to wait for circuit name properties after device ready.
 # Retained messages typically arrive within 1-2s, but allow headroom.
@@ -414,6 +427,18 @@ class SpanMqttClient:
         if adapter is None or not adapter.is_ready():
             return None
         return adapter.build_field_metadata()
+
+    def masked_tree(self) -> MaskedTree | None:
+        """The panel's device tree with serials, device ids and site details masked.
+
+        Computed from the adapter's current view at call time. None on a flat
+        panel, whose adapter does not export a tree, and before the root device
+        has described itself.
+        """
+        adapter = self._adapter
+        if isinstance(adapter, TreeExportingAdapter):
+            return adapter.export_masked_tree()
+        return None
 
     async def connect(self) -> None:
         """Connect to MQTT broker and wait for Homie device ready.
@@ -949,6 +974,41 @@ class SpanMqttClient:
             )
         return await self._publish_control(target, payload, self._control_deadlines.evse_charge_limit)
 
+    # -- EvseLockControlProtocol -------------------------------------------
+
+    async def set_evse_lock(self, node_id: str, locked: bool) -> PublishOutcome:
+        """Lock or unlock one commissioned charger's connector.
+
+        Args:
+            node_id: the key this charger has in `SpanPanelSnapshot.evse`
+            locked: True to lock, False to unlock
+
+        **The snapshot is the authorisation**, as for an adopted property: the
+        charger's `lock_control` is the topic, and it is set only where the
+        charger declares `switch/lock-state` settable. The value must be one the
+        declaration's `$format` lists, so a charger that spells its states
+        differently is refused rather than sent a word it does not know.
+        """
+        value = LOCK_STATE_LOCKED if locked else LOCK_STATE_UNLOCKED
+        charger = self._require_adapter().build_snapshot().evse.get(node_id)
+        target = None if charger is None else charger.lock_control
+        if charger is None or target is None:
+            await self._refuse_control(
+                device_id=node_id,
+                value=value,
+                detail="no such control",
+                message=f"No settable lock on EVSE {node_id!r}",
+            )
+        if value not in (charger.lock_state_options or ()):
+            await self._refuse_control(
+                target=target,
+                device_id=target.device_id,
+                value=value,
+                detail="value not declared",
+                message=f"EVSE {node_id!r} does not declare the lock state {value}",
+            )
+        return await self._publish_control(target, value, self._control_deadlines.evse_lock)
+
     # -- AdoptedControlProtocol --------------------------------------------
 
     async def set_adopted_property(self, device_id: str, node_id: str, property_id: str, value: str) -> PublishOutcome:
@@ -1039,10 +1099,16 @@ class SpanMqttClient:
         self._unregister_property_observer = adapter.register_property_callback(self._on_property_value)
 
     def _on_property_value(self, device_id: str, node_id: str, property_id: str, value: str | None) -> None:
-        """Record one property's value and resolve any write waiting for it."""
-        if value is None:
-            return
+        """Record one property's value and resolve any write waiting for it.
+
+        `None` is a property with no value, such as one the panel cleared. Its
+        last value is forgotten, so a write of that value is not taken for a
+        no-op, and no write is confirmed by it.
+        """
         key = (device_id, node_id, property_id)
+        if value is None:
+            self._observed_values.pop(key, None)
+            return
         self._observed_values[key] = value
         for verification in list(self._verifications):
             if verification.key == key and verification.expected == value and not verification.observed.done():

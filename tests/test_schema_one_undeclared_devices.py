@@ -65,7 +65,7 @@ def _upgraded_tree(stale_state: str | None) -> dict[str, dict[str, str]]:
         **tree[SOLAR_CIRCUIT],
         "connection/feeds-device-id": SECOND_PV,
         "info/name": "Garage Solar",
-        "info/spaces": "5,7",
+        "info/spaces": "13,15",
     }
     if stale_state is not None:
         tree[STALE_PV] = {**pv, "$state": stale_state, "info/model": STALE_MODEL}

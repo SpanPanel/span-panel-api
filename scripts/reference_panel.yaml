@@ -9,7 +9,7 @@
 #
 # Laid out to mirror the emitter's own `examples/forty_tab_minimal.yaml` key for key,
 # so the two can be read side by side and `diff`ed. Every difference is deliberate and
-# is marked ==> below. There are two kinds.
+# is marked ==> below. There are three kinds.
 #
 # ==> DIVERGENCE 1: shed priorities.
 # The emitter's example commissions the two ordinary loads as `NICE_TO_HAVE`. That is
@@ -31,6 +31,11 @@
 # library tests injecting those values by hand, reading as coverage while asking
 # nothing about what a panel sends. Every value here is synthetic (`example-*`),
 # because these bytes ship inside a wheel.
+#
+# ==> DIVERGENCE 3: breaker positions.
+# The example places three circuits on spaces 1-3, outside the position range
+# `PANEL_POSITIONS_BY_MODEL` gives this panel's model. A reference capture should
+# describe positions a panel of that model has, so they move to 9, 10 and 11.
 
 panel_config:
   serial_number: example-40t-001
@@ -109,11 +114,11 @@ circuits:
   - id: kitchen_lights
     name: Kitchen Lights
     template: lighting
-    tabs: [1]
+    tabs: [9]
   - id: garage_outlet
     name: Garage Outlet
     template: outlet
-    tabs: [2]
+    tabs: [10]
   - id: span_drive_garage
     name: SPAN Drive - Garage
     template: span_drive
@@ -125,7 +130,7 @@ circuits:
   - id: pool_pump
     name: Pool Pump
     template: pool_pump
-    tabs: [3]
+    tabs: [11]
   - id: solar_inverter
     name: Solar Inverter
     template: solar

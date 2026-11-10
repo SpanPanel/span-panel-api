@@ -218,6 +218,12 @@ NEW_IN_V1_0: dict[str, str] = {
         "else -- so nothing can orphan and no entity changes meaning. v1.0 is the first "
         "schema in which the enclosure says anything about the PV link"
     ),
+    "battery.present": (
+        "whether the device tree declares a battery. Flat has no battery device to declare, "
+        "and publishes its battery values whether or not one is installed, so it cannot "
+        "answer and leaves the field `None`; nothing can orphan and no entity changes "
+        "meaning. v1.0 is the first schema in which presence is a declaration"
+    ),
 }
 """Additions with no flat property to have been re-sourced from.
 

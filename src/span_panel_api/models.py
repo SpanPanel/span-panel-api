@@ -11,10 +11,24 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+import re
+from typing import Final, Literal, NotRequired, TypedDict
 
 # Homie schema type: {type_name: {property_name: {attribute: value}}}
 # Values are heterogeneous JSON (str, int, bool, nested dicts).
 type HomieSchemaTypes = dict[str, dict[str, object]]
+
+type FeedsRole = Literal["LOADS", "SUBPANEL", "SOLAR", "STORAGE", "GENERATOR", "MIXED", "UNUSED"]
+"""What a circuit feeds, as its `connection/feeds-role` declares it."""
+
+FEEDS_ROLES: Final[tuple[FeedsRole, ...]] = ("LOADS", "SUBPANEL", "SOLAR", "STORAGE", "GENERATOR", "MIXED", "UNUSED")
+"""Every `FeedsRole`, for reading a wire value into one."""
+
+type ProtectionFunction = Literal["OVERCURRENT", "SHORT_CIRCUIT", "GROUND_FAULT", "ARC_FAULT"]
+"""One protection a circuit's breaker provides, as `breaker/protection-functions` lists it."""
+
+PROTECTION_FUNCTIONS: Final[tuple[ProtectionFunction, ...]] = ("OVERCURRENT", "SHORT_CIRCUIT", "GROUND_FAULT", "ARC_FAULT")
+"""Every `ProtectionFunction`, for reading a wire value into one."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,9 +47,9 @@ class SpanCircuitSnapshot:
     # fabricated zero as a reset and books the whole counter as an offset
     # (`SpanPanel/span#259`). A new circuit legitimately reads `0.0`, and the
     # two must stay tellable apart.
-    instant_power_w: float | None  # Positive = consumption
-    produced_energy_wh: float | None  # Generation/backfeed (Wh)
-    consumed_energy_wh: float | None  # Consumption (Wh)
+    instant_power_w: float | None  # Positive = consumption; import where `measures_outside_panel`
+    produced_energy_wh: float | None  # Generation/backfeed (Wh); export where `measures_outside_panel`
+    consumed_energy_wh: float | None  # Consumption (Wh); import where `measures_outside_panel`
     tabs: list[int]
     priority: str  # v1: MUST_HAVE | NICE_TO_HAVE | NON_ESSENTIAL | UNKNOWN
     #                 v2: NEVER | SOC_THRESHOLD | OFF_GRID | UNKNOWN
@@ -44,7 +58,10 @@ class SpanCircuitSnapshot:
     is_never_backup: bool  # v1: Circuit.isNeverBackup | v2: circuit/never-backup
     device_type: str = "circuit"  # "circuit" | "pv" | "evse"
     relative_position: str = ""  # PV/EVSE: "IN_PANEL" | "UPSTREAM" | "DOWNSTREAM"
-    is_240v: bool = False
+    # From the breaker's pole count. `None` where the circuit publishes no pole
+    # count: a meter outside the panel has no breaker, and a breaker whose count
+    # has not arrived has not said.
+    is_240v: bool | None = False
     current_a: float | None = None
     breaker_rating_a: float | None = None
     always_on: bool = False  # v2 new: circuit/always-on
@@ -74,6 +91,53 @@ class SpanCircuitSnapshot:
     # runtime) and a circuit may participate in one, both, or neither.
     pcs_managed: bool | None = None  # v2: circuit pcs/managed
     pcs_priority: int | None = None  # v2: circuit pcs/priority
+
+    measures_outside_panel: bool = False
+    """The device declares no breaker space: a meter outside the panel.
+
+    Power is import-positive (positive = flowing into the panel); consumed is
+    imported energy and produced is exported energy, so consumed minus produced
+    is net import. Read from the device's declaration, never from its values, so
+    a meter that has not reported yet is already outside the panel. Such a meter
+    has no relay, no breaker and no shed priority, and occupies no position.
+    """
+
+    meter_shared_with: tuple[str, ...] | None = None
+    """The other circuits this circuit's meter also measures, by circuit id.
+
+    From `meter/shared-with-device-ids`, without the circuit itself or an id
+    naming no circuit in the snapshot, ordered by `device_id_order`. `None`
+    where the circuit declares no such list or has not published it; `()` where
+    it lists no circuit the snapshot holds. The peers' readings are the same
+    meter's, so a consumer never adds them up; `shared_meter_groups` groups
+    them.
+    """
+    relay_shared_with: tuple[str, ...] | None = None
+    """The other circuits this circuit's relay also switches, by circuit id.
+
+    From `switch/shared-with-device-ids`, read as `meter_shared_with` is.
+    """
+
+    nominal_voltage_v: float | None = None
+    """The circuit's rated voltage, from `info/nominal-voltage`.
+
+    `None` where the circuit declares none or has not published it.
+    """
+    protection_functions: tuple[ProtectionFunction, ...] | None = None
+    """The protections the circuit's breaker provides, from `breaker/protection-functions`.
+
+    In published order, without any value outside `PROTECTION_FUNCTIONS`.
+    `None` where the breaker declares none or has not published them.
+    """
+
+    feeds_role: FeedsRole | None = None
+    """What the circuit feeds, from its `connection/feeds-role`.
+
+    `None` where the circuit declares no role, has not published it, or
+    publishes a value outside `FEEDS_ROLES`. Reported as declared and nothing
+    more: `device_type` stays as published, so a circuit whose role is solar is
+    still a circuit. The flat schema declares no roles.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +465,52 @@ class SpanEvseSnapshot:
     set topic when it is not.
     """
 
+    charge_current_limit_minimum_a: int | None = None
+    """The lowest charge-current limit the charger declares a user may set, in amps. v1.0 only.
+
+    The minimum of the `<min>:<max>` range the limit's declaration states in
+    `$format`, from the same resolution as `charge_current_limit_a`; firmware
+    r202639 declares `6:<commissioned maximum>`. A write below it is refused
+    rather than published, so a control offers nothing under it.
+
+    A declaration, not a reading: it is reported as soon as the charger
+    describes itself, and whether or not the limit is settable, which
+    `charge_current_limit_settable` answers. `None` where the charger declares
+    no limit, no `$format`, or the format leaves this side open, and where the
+    format cannot be read as an integer range (not `integer`, not `<min>:<max>`,
+    a bound that is not a plain integer, or a minimum above the maximum). `None`
+    on the flat schema, which declares no range.
+    """
+
+    charge_current_limit_maximum_a: int | None = None
+    """The highest charge-current limit the charger declares a user may set, in amps. v1.0 only.
+
+    The maximum of the same declared range, `None` on the same terms. A write
+    above it is refused rather than published.
+
+    **Not `charge_current_ceiling_a`.** That is the commissioned ceiling, a
+    published value; this is the declared range, part of the limit's
+    description. Every r202639 capture declares a maximum equal to the ceiling
+    it publishes, but they are separate facts, and a write must satisfy both: a
+    control's upper bound is the lower of the two where both are present.
+    """
+
+    lock_control: ControlTarget | None = None
+    """Where the charger's connector lock is commanded, and which property reports it. v1.0 only.
+
+    Addresses `switch/lock-state` on the charger's own device, and is present
+    only where that declaration carries `$settable`: absence is refusal, so a
+    lock the charger reports but does not accept writes to has no target. The
+    value written is one of `lock_state_options`. `None` on the flat schema.
+    """
+
+    lock_state_options: tuple[str, ...] | None = None
+    """The values the charger's `switch/lock-state` declares in its `$format`. v1.0 only.
+
+    What a lock command may write: a value outside them is refused rather than
+    published. `None` where the charger declares no lock or no `$format`.
+    """
+
     connected: bool | None = None
     """The enclosure's view of the link to this charger, v1.0 only.
 
@@ -476,6 +586,20 @@ class SpanBatterySnapshot:
     # it, and the migration guide warns against conflating them.
     communication_state: str | None = None  # v2: bess status/communication-state
 
+    # Whether the panel's device tree declares a battery, v1.0 only. True from the
+    # moment the battery describes itself, before any of its values arrive, so a
+    # battery whose state of charge is never published is still a battery. None
+    # on the flat schema, which has no battery device to declare and publishes
+    # its battery values whether or not one is installed.
+    present: bool | None = None
+
+    # The circuit whose `connection/feeds-device-id` names this battery, v1.0
+    # only. Where it is set and no device claims the battery through a
+    # `fed-by-*` record, `connected` is that circuit's `feeds-device-status`.
+    # None where no circuit feeds the battery, as when it sits ahead of the
+    # upstream lugs, and on the flat schema.
+    feed_circuit_id: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class FieldMetadata:
@@ -538,6 +662,48 @@ reading a row can look it up without translating it.
 """
 
 _DISCOVERY_PREFIX = f"{DISCOVERY_NAMESPACE}."
+
+
+def device_id_order(device_id: str) -> tuple[str | int, ...]:
+    """Sort key for device ids under which digit runs compare as numbers.
+
+    `circuit-9` sorts before `circuit-10`. Splitting on a captured digit run
+    leaves the runs at the odd positions and the text between them at the even
+    ones, so every position holds the same type in every key.
+    """
+    parts = re.split(r"(\d+)", device_id)
+    return tuple(int(part) if index % 2 else part for index, part in enumerate(parts))
+
+
+def shared_meter_groups(circuits: Mapping[str, SpanCircuitSnapshot]) -> dict[str, tuple[str, ...]]:
+    """The circuits one meter measures, grouped and keyed by their first member.
+
+    A group holds every circuit linked through `meter_shared_with`, in
+    `device_id_order`, and its key is the first of them. A circuit that names no
+    known peer and is named by none is in no group. Only membership: no reading
+    is combined, because every member already reports the one meter's values.
+    """
+    links: dict[str, set[str]] = {}
+    for circuit_id, circuit in circuits.items():
+        for peer in circuit.meter_shared_with or ():
+            if peer in circuits and peer != circuit_id:
+                links.setdefault(circuit_id, set()).add(peer)
+                links.setdefault(peer, set()).add(circuit_id)
+    groups: dict[str, tuple[str, ...]] = {}
+    seen: set[str] = set()
+    for start in sorted(links, key=device_id_order):
+        if start in seen:
+            continue
+        members = {start}
+        pending = [start]
+        while pending:
+            for peer in links[pending.pop()] - members:
+                members.add(peer)
+                pending.append(peer)
+        seen |= members
+        ordered = tuple(sorted(members, key=device_id_order))
+        groups[ordered[0]] = ordered
+    return groups
 
 
 def discovery_path(device_type: str, node_id: str, property_id: str) -> str:
@@ -1135,6 +1301,45 @@ class SpanPanelSnapshot:
     and `DeviceInfo(hw_version=...)` is the consumer's abbreviation, not ours.
     """
 
+    busbar_current_a: float | None = None
+    """The panel's busbar current, from its `meter/busbar-current`. v1.0 only.
+
+    `None` where the panel declares none or has not published it.
+    """
+    frequency_hz: float | None = None
+    """The line frequency, from the panel's `meter/frequency`. v1.0 only.
+
+    `None` where the panel declares none or has not published it.
+    """
+    upstream_protection_rating_a: int | None = None
+    """The rating of the protection ahead of the upstream lugs, in amperes. v1.0 only.
+
+    From the upstream lugs' `connection/overcurrent-protection`; `None` where
+    they declare none or have not published it.
+    """
+
+    first_position: int | None = None
+    """The panel's first breaker position. v1.0 only.
+
+    The reported model's range as the adapter's model table gives it, where
+    the table knows the model, otherwise the lowest occupied space. An occupied
+    space outside a known model's range does not move it: the adapter warns
+    once for that panel instead. `None` on the flat schema and where neither is
+    known. Together with `last_position` it says which positions exist,
+    occupied or not; no circuit is made up for an empty one.
+    """
+    last_position: int | None = None
+    """The panel's last breaker position. v1.0 only; see `first_position`."""
+
+    publishes_solar_roles: bool = False
+    """Whether any circuit declares `connection/feeds-role`.
+
+    The declaration decides, not the value: a circuit that declares the role
+    before publishing it, or declares a role other than solar, still marks the
+    panel as one that says where its solar is. `False` on the flat schema,
+    which declares no roles.
+    """
+
     # `shed/policy`, v1.0 only: how the panel decides what to shed, and the two
     # SoC thresholds that make its behaviour predictable. The wire carries one
     # `json` document; these are the parsed answer plus the document itself.
@@ -1285,7 +1490,7 @@ class SpanPanelSnapshot:
     apart — every limit in this capture is a legal `0.0`.
     """
 
-    lugs_at_service_entrance: bool = True
+    lugs_at_service_entrance: bool | None = True
     """Whether this enclosure's upstream lugs *are* the utility connection point.
 
     `False` means something sits between the utility and the main lugs, so the
@@ -1316,6 +1521,9 @@ class SpanPanelSnapshot:
     flat panel's lugs are its service entrance. schema_0 leaves it alone for that
     reason.
 
+    `None` while the lugs declare `connection/fed-by-device-id` and have not
+    published it: the feed may yet name a device, so neither answer is known.
+
     A defaulted snapshot field rather than a `SchemaAdapter` member, for the
     reason `adopted_devices` gives above: the protocol derives its required
     members from itself, so a new member would be required of every adapter
@@ -1328,3 +1536,65 @@ class SpanPanelSnapshot:
     the feeding device is another panel with its own tree, not a child of this
     one.
     """
+
+
+class MaskedTreeMetadata(TypedDict):
+    """What produced a `MaskedTree` and whether it can be trusted to be whole.
+
+    `masked` is always `True`: the tree never carries a serial, a credential or
+    an address, and the marker lets whoever reads a forwarded diagnostic see that
+    without inspecting the values. `tree_complete` is `False` when the panel had
+    not finished publishing its tree, so what follows is a partial reading.
+    """
+
+    schema: Literal["tree-v1"]
+    masked: Literal[True]
+    producer: str
+    tree_complete: bool
+
+
+class MaskedTreeDevice(TypedDict):
+    """One described device in a `MaskedTree`, as a consumer forwards it in diagnostics.
+
+    Values are keyed `"<node>/<property>"` and kept as the wire strings the
+    panel published, masked where they identify the device or the site.
+    `numeric_properties` holds the values of declared `integer` and `float`
+    properties, `properties` the values of every other declared property,
+    `undeclared_properties` values the panel published that its own description
+    does not declare, and `targets` its `$target` values. A declared property
+    with no value has no key: never `None`, and never a `""` the panel did not
+    send, because a placeholder would read as a reading. A `""` the panel did
+    publish is kept as `""`.
+    """
+
+    description: dict[str, object]
+    properties: dict[str, str]
+    numeric_properties: dict[str, str]
+    targets: dict[str, str]
+    undeclared_properties: dict[str, str]
+    state: NotRequired[str]
+
+
+class UndescribedDevice(TypedDict):
+    """A device the panel published values for but never described.
+
+    With no `$description` there is nothing to say which node a property belongs
+    to, so `values` keeps each as `"<node>/<property>"` -> wire string, unsplit.
+    """
+
+    values: dict[str, str]
+    targets: dict[str, str]
+    state: NotRequired[str]
+
+
+class MaskedTree(TypedDict):
+    """The masked device tree a consumer forwards in diagnostics.
+
+    Produced by an adapter that offers `TreeExportingAdapter`. Described devices
+    and undescribed ones are kept apart so a reader never mistakes one for the
+    other.
+    """
+
+    metadata: MaskedTreeMetadata
+    devices: dict[str, MaskedTreeDevice]
+    undescribed_devices: dict[str, UndescribedDevice]

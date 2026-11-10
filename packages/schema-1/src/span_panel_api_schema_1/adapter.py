@@ -17,9 +17,10 @@ tree, and the SDK repopulates — so there is no resync hook to wire or forget.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
 import logging
 import time
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 from ebus_sdk import Controller
 
@@ -45,29 +46,90 @@ from span_panel_api_schema_1.const import (
     STATE_READY,
     TYPE_CIRCUIT,
 )
-from span_panel_api_schema_1.description import declared_settable, device_type, node_properties
+from span_panel_api_schema_1.description import declared_settable, declares_class, device_type, node_properties
 from span_panel_api_schema_1.devices import feed_circuit_ids
 from span_panel_api_schema_1.field_metadata import build_field_metadata
-from span_panel_api_schema_1.panel import integer, text
+from span_panel_api_schema_1.panel import integer, positions_outside_model, text
 from span_panel_api_schema_1.snapshot import TreeRoles, build_snapshot, harmonised_evse_keys
-from span_panel_api_schema_1.transport import ControllerRoutes
+from span_panel_api_schema_1.transport import ControllerRoutes, control_target
+from span_panel_api_schema_1.tree_export import export_masked_tree
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from ebus_sdk.homie import DiscoveredDevice
 
-    from span_panel_api.models import FieldMetadata, SpanPanelSnapshot, V2HomieSchema
+    from span_panel_api.models import FieldMetadata, MaskedTree, SpanPanelSnapshot, V2HomieSchema
 
 _LOGGER = logging.getLogger(__name__)
 
-FEED_GRACE_S: Final = 2.0
-"""How long an inverter's feed may stay unvalued once everything else has arrived.
+_DISTRIBUTION: Final = "span-panel-api-schema-1"
 
-A retained `connection/feeds-device-id` lands in the same burst as its circuit's
-name. One still missing this long after the rest of the tree's labels is taken
-as absent: a DER may be published with no connection record at all.
+
+def _producer() -> str:
+    """The distribution and version that wrote an export, or ``unknown`` where this code runs without its dist-info.
+
+    A checkout put on ``sys.path`` has no installed metadata, and an export must
+    not fail for the lack of a version string.
+    """
+    try:
+        return f"{_DISTRIBUTION} {version(_DISTRIBUTION)}"
+    except PackageNotFoundError:
+        return f"{_DISTRIBUTION} unknown"
+
+
+FEED_GRACE_S: Final = 2.0
+"""How long an inverter's feed or a DER's model may stay unvalued once every name has arrived.
+
+A retained `connection/feeds-device-id` or `info/model` lands in the same burst
+as the rest of the tree's labels. One still missing this long after every name
+and firmware version is taken as absent: a DER may be published with no
+connection record at all, and a declared model may never be valued.
 """
+
+
+class _ValueTopic(NamedTuple):
+    """One device's `node/property`, and whether the topic carries its value or its `$target`."""
+
+    device_id: str
+    node_id: str
+    property_id: str
+    target: bool
+
+
+def _value_topic(topic: str) -> _ValueTopic | None:
+    """The value or `$target` a topic addresses, or None for any other topic.
+
+    The two shapes `Controller` stores a payload under, read as it reads them:
+    `<domain>/5/<device>/<node>/<property>` is a value unless the property id
+    starts with `$`, and `<domain>/5/<device>/<node>/<property>/$target` is a
+    target. `$state`, `$description` and every other shape are not values.
+    """
+    parts = topic.split("/")
+    if parts[:2] != [HOMIE_DOMAIN, HOMIE_VERSION]:
+        return None
+    if len(parts) == 5 and not parts[4].startswith("$"):
+        return _ValueTopic(parts[2], parts[3], parts[4], target=False)
+    if len(parts) == 6 and parts[5] == "$target":
+        return _ValueTopic(parts[2], parts[3], parts[4], target=True)
+    return None
+
+
+def _forget(by_node: object, node_id: str, property_id: str) -> bool:
+    """Remove one value from an SDK `{node: {property: value}}` map; whether there was one.
+
+    A node left with no values is removed with its last one, so the map holds
+    what the broker retains and nothing more.
+    """
+    if not isinstance(by_node, dict):
+        return False
+    by_property: object = by_node.get(node_id)
+    if not isinstance(by_property, dict) or property_id not in by_property:
+        return False
+    del by_property[property_id]
+    if not by_property:
+        del by_node[node_id]
+    return True
 
 
 def _unvalued_feeds_for_unplaced_pvs(roles: TreeRoles) -> list[str]:
@@ -110,13 +172,21 @@ class SchemaOneAdapter:
         self._serial_number = serial_number
         self._schema = schema
         self._clock = clock
-        self._feed_wait_since: float | None = None
-        self._feed_wait_reported = False
+        self._grace_since: dict[str, float] = {}
+        self._grace_reported: set[str] = set()
+        self._positions_reported = False
         self._routes = ControllerRoutes()
         self._controller = Controller(root_device_id=serial_number, mqttc=self._routes)
         self._property_callbacks: list[Callable[[str, str, str, str | None], None]] = []
         self._awaiting: tuple[str, ...] = ()
+        # Readiness as last computed, or None once the tree has changed since.
+        self._ready: bool | None = None
         self._controller.set_on_property_changed_callback(self._on_property_changed)
+        # Every event that can change what `is_ready()` answers; see there.
+        self._controller.set_on_device_discovered_callback(self._tree_changed)
+        self._controller.set_on_device_state_changed_callback(self._tree_changed)
+        self._controller.set_on_device_removed_callback(self._tree_changed)
+        self._controller.set_on_description_received_callback(self._tree_changed)
         # Records the subscriptions the tree walk needs; nothing reaches the
         # wire, because this object has no connection to reach it with.
         self._controller.start_discovery()
@@ -136,7 +206,47 @@ class SchemaOneAdapter:
         return [f"{HOMIE_DOMAIN}/{HOMIE_VERSION}/#"]
 
     def handle_message(self, topic: str, payload: str) -> None:
+        """Route one message to the SDK callback that asked for it, keeping a clear a clear.
+
+        A zero-length payload deletes a retained message, and Homie 5 spells an
+        empty string differently, as one `0x00` byte, so that the two stay
+        apart. The SDK decodes both to `""` and stores it, which would leave a
+        property the panel cleared reading as one it published empty. So a
+        clear of a value or `$target` the tree holds is applied here: the
+        stored value goes, exactly as an unpublished one is absent, and
+        property observers hear `None`. A clear of `$state` (the SDK's device
+        removal) or `$description` still goes to the SDK, as does anything
+        else. A `$description` cleared on its own makes the SDK log
+        `descriptionParseError` at ERROR and keep the stale description; that
+        is normally silent only because Homie clears `$state` first, after
+        which the SDK no longer holds the device and ignores the rest.
+        """
+        if not payload and self._clear(topic):
+            return
         self._routes.dispatch(topic, payload)
+
+    def _clear(self, topic: str) -> bool:
+        """Apply a clear of a value or target; False where the topic addresses none the tree holds.
+
+        Only a device the controller holds is touched, the same test the SDK
+        applies before storing a value. Any other clear goes on to dispatch,
+        where a route the SDK still records for a device it dropped ignores it,
+        and an unrouted one takes back what is held for its topic.
+
+        A clear of a value that was never published changes nothing and is not
+        reported. A cleared value is reported as a change, so it forgets the
+        remembered readiness where a new value would; a cleared target is not,
+        as no target change is.
+        """
+        address = _value_topic(topic)
+        device = None if address is None else self._controller.get_device(address.device_id)
+        if address is None or device is None:
+            return False
+        if address.target:
+            _forget(device.property_targets, address.node_id, address.property_id)
+        elif _forget(device.properties, address.node_id, address.property_id):
+            self._notify(address.device_id, address.node_id, address.property_id, None)
+        return True
 
     def is_ready(self) -> bool:
         """Ready when the whole declared tree has described itself.
@@ -171,7 +281,22 @@ class SchemaOneAdapter:
         panel's positions with none to lay out. Asking only for what the panel
         itself promised keeps a firmware that omits the property connectable —
         it falls back to the drift warning in `panel_size_from_model`.
+
+        **The answer is remembered until the tree changes.** The transport asks
+        before and after every message, and walking the tree each time cost
+        more than routing the message did (#223). Only the Controller's own
+        events can move it: a device's first `$state`, a change of state, a
+        removal, a `$description`, and the root's `info/model` value. Each
+        forgets the answer and the next call works it out again. The events
+        never work it out themselves, because a description is announced before
+        the SDK has reconciled the children it declares.
         """
+        if self._ready is None:
+            self._ready = self._tree_ready()
+        return self._ready
+
+    def _tree_ready(self) -> bool:
+        """What `is_ready()` answers, worked out from the tree as it stands."""
         root = self._controller.get_root(self._serial_number)
         if root is None or root.state != STATE_READY or not root.description:
             return False
@@ -186,7 +311,34 @@ class SchemaOneAdapter:
 
     def build_snapshot(self) -> SpanPanelSnapshot:
         root = self._require_root()
-        return build_snapshot(root, self._children())
+        snapshot = build_snapshot(root, self._children())
+        self._report_positions_outside_model(snapshot)
+        return snapshot
+
+    def _report_positions_outside_model(self, snapshot: SpanPanelSnapshot) -> None:
+        """Warn once per panel when its circuits occupy spaces outside its model's range.
+
+        The snapshot keeps reporting the model's range, so such a circuit lies
+        outside the positions a consumer lays out until the table is corrected.
+        """
+        if self._positions_reported:
+            return
+        outside = positions_outside_model(
+            snapshot.model, (tab for circuit in snapshot.circuits.values() for tab in circuit.tabs)
+        )
+        if outside is None:
+            return
+        (first, last), (lowest, highest) = outside
+        _LOGGER.warning(
+            "Panel model %s has breaker positions %d-%d, but its circuits occupy spaces %d-%d; "
+            "the snapshot reports the model's positions",
+            snapshot.model,
+            first,
+            last,
+            lowest,
+            highest,
+        )
+        self._positions_reported = True
 
     def build_field_metadata(self) -> dict[str, FieldMetadata]:
         root = self._controller.get_root(self._serial_number)
@@ -212,6 +364,12 @@ class SchemaOneAdapter:
         the same exposure, so a DER missing the model it declared is reported
         alongside a circuit missing its name.
 
+        Only a declared label is waited for. A circuit-typed device whose
+        description declares no `info/name` -- a meter outside the panel
+        declares no `info` node at all -- has no name coming, and waiting for
+        one would hold every connect and every tree rebuild to the full
+        timeout.
+
         An inverter's feeding circuit is waited on too, because it decides the
         inverter's `pv_inverters` key, and a key that moved after the first
         snapshot would move every entity built on it. A circuit feeding nothing
@@ -223,51 +381,65 @@ class SchemaOneAdapter:
         The panel itself is reported while a declared BESS waits on the
         panel's declared firmware version, which decides the BESS meter's frame.
 
-        The feed wait is bounded by `FEED_GRACE_S`. A DER may be published with
-        no connection record pointing at it, and then no value is coming; a
-        retained feed lands in the same burst as its circuit's name, so once
-        every name, model and firmware version has arrived, a feed still
-        unvalued after the grace is taken as absent. The inverter is then keyed
-        by its device id, reported once at INFO rather than the transport
-        warning after the full name timeout. The grace restarts whenever
-        anything else is missing again, and once every inverter is placed, so
-        an inverter that appears after another's feed has arrived, within the
-        same wait, gets a whole grace of its own.
+        The feed and model waits are bounded by `FEED_GRACE_S`. A DER may be
+        published with no connection record pointing at it, and a declared
+        model may never be valued; then no value is coming. Both land in the
+        same burst as the circuits' names, so once every name and firmware
+        version has arrived, a feed or model still unvalued after the grace is
+        taken as absent and reported once per device at INFO, rather than the
+        transport warning after the full name timeout. An inverter whose feed
+        was taken as absent is keyed by its device id; a model fills device
+        metadata only, so one that lands later moves nothing. Each device's
+        grace starts when it is first waited on alone and restarts whenever a
+        name or firmware version is missing again, so a device that appears
+        after another's grace has run gets a whole grace of its own.
         """
         roles = TreeRoles(self._children())
-        missing = [circuit.device_id for circuit in roles.circuits if not circuit.get_property(NODE_INFO, PROP_NAME)]
+        missing = [
+            circuit.device_id
+            for circuit in roles.circuits
+            if PROP_NAME in circuit.get_node_properties(NODE_INFO) and not circuit.get_property(NODE_INFO, PROP_NAME)
+        ]
+        missing.extend(self._firmware_version_pending(roles))
         ders = (roles.bess, *roles.pvs, *roles.evse)
-        missing.extend(
-            device.device_id
+        graced = {
+            device.device_id: f"{NODE_INFO}/{PROP_MODEL}"
             for device in ders
             if device is not None
             and PROP_MODEL in device.get_node_properties(NODE_INFO)
             and device.get_property(NODE_INFO, PROP_MODEL) is None
+        }
+        graced.update(
+            (circuit_id, f"{NODE_CONNECTION}/{PROP_FEEDS_DEVICE_ID}")
+            for circuit_id in _unvalued_feeds_for_unplaced_pvs(roles)
         )
-        missing.extend(self._firmware_version_pending(roles))
-        feeds = _unvalued_feeds_for_unplaced_pvs(roles)
-        if feeds and not missing:
-            now = self._clock()
-            if self._feed_wait_since is None:
-                self._feed_wait_since = now
-            if now - self._feed_wait_since >= FEED_GRACE_S:
-                if not self._feed_wait_reported:
-                    _LOGGER.info(
-                        "No connection record names %d circuit(s) as an inverter's feed; "
-                        "inverters without one are keyed by device id",
-                        len(feeds),
-                    )
-                    self._feed_wait_reported = True
-                feeds = []
-        else:
-            # No feed is being waited out on its own: something else is still
-            # missing, or every inverter is placed. Either way a later feed wait
-            # is a new one and gets the whole grace.
-            self._feed_wait_since = None
-            if not feeds:
-                self._feed_wait_reported = False
-        missing.extend(feeds)
+        missing.extend(self._within_grace(graced, held=bool(missing)))
         return missing
+
+    def _within_grace(self, pending: dict[str, str], *, held: bool) -> list[str]:
+        """The devices of `pending` whose grace has not run out.
+
+        `pending` maps each device to the declared `node/property` it has not
+        valued. While `held`, something without a grace is still missing, so
+        every device is waited on and no grace runs. A device whose grace runs
+        out is reported once, and stops being waited on until its value arrives
+        or a hold starts its grace again.
+        """
+        for device_id in self._grace_since.keys() - pending.keys():
+            del self._grace_since[device_id]
+        self._grace_reported &= pending.keys()
+        if held:
+            self._grace_since.clear()
+            return list(pending)
+        now = self._clock()
+        waiting: list[str] = []
+        for device_id, path in pending.items():
+            if now - self._grace_since.setdefault(device_id, now) < FEED_GRACE_S:
+                waiting.append(device_id)
+            elif device_id not in self._grace_reported:
+                _LOGGER.info("%s declares %s and has not published it; taking it as absent", device_id, path)
+                self._grace_reported.add(device_id)
+        return waiting
 
     def _firmware_version_pending(self, roles: TreeRoles) -> list[str]:
         """The panel itself, while a declared BESS waits on the panel's firmware version.
@@ -289,13 +461,15 @@ class SchemaOneAdapter:
         return []
 
     def find_node_by_type(self, type_str: str) -> str | None:
-        """Return the id of the first device declaring `type_str`.
+        """Return the id of the first device declaring `type_str` or a subtype of it.
 
         Named for the flat schema's nodes; under parent/child the same question
-        is asked of devices, and the answer is a device id.
+        is asked of devices, and the answer is a device id. A device typed
+        ``…device.bess.hybrid`` is a ``…device.bess`` (`declares_class`), the
+        same device the snapshot reads as the battery.
         """
         for device in self._children():
-            if device_type(device) == type_str:
+            if declares_class(device_type(device), type_str):
                 return device.device_id
         return None
 
@@ -308,7 +482,7 @@ class SchemaOneAdapter:
         """Where this circuit's relay is commanded, or None if it may not be.
 
         **None where the panel declares the relay non-commandable**, by either of
-        the two signals `relay_is_settable` reads. `_target` is pure string
+        the two signals `relay_is_settable` reads. `control_target` is pure string
         formatting from a device id, so building the topic unconditionally aimed
         a write at a circuit the panel commissioned as always-on — every part of
         the refusal was already in the tree, and nothing consulted it.
@@ -325,7 +499,7 @@ class SchemaOneAdapter:
         device = self._child(circuit_id)
         if device is None or not relay_is_settable(device):
             return None
-        return self._target(circuit_id, NODE_SWITCH, PROP_RELAY)
+        return control_target(circuit_id, NODE_SWITCH, PROP_RELAY)
 
     def set_circuit_priority_target(self, circuit_id: str) -> ControlTarget | None:
         """Where this circuit's shed priority is written, or None if it may not be.
@@ -342,7 +516,7 @@ class SchemaOneAdapter:
         device = self._child(circuit_id)
         if device is None or not priority_is_settable(device):
             return None
-        return self._target(circuit_id, NODE_LOAD_SHED, PROP_PRIORITY)
+        return control_target(circuit_id, NODE_LOAD_SHED, PROP_PRIORITY)
 
     def has_circuit(self, circuit_id: str) -> bool:
         """Whether the tree carries a circuit under this id.
@@ -351,7 +525,9 @@ class SchemaOneAdapter:
         is addressable by id — the BESS, the MID, the lugs, a charger — and none
         of them is a circuit, so answering on membership alone would report a
         BESS as a circuit whose relay the panel declares non-commandable. It
-        declares no relay at all.
+        declares no relay at all. The class is the answer rather than the exact
+        type, so a subtyped circuit the snapshot reads into `circuits` is a
+        circuit here too.
 
         A child that has not described itself yet reads as absent, because it
         has declared nothing: type, nodes and properties all arrive together in
@@ -364,7 +540,7 @@ class SchemaOneAdapter:
         would put a second, weaker rule where the authorisation lives.
         """
         device = self._child(circuit_id)
-        return device is not None and device_type(device) == TYPE_CIRCUIT
+        return device is not None and declares_class(device_type(device), TYPE_CIRCUIT)
 
     def set_dominant_power_source_target(self) -> ControlTarget | None:
         """The settable successor: `shed/asserted-islanding-state` on the panel.
@@ -398,7 +574,7 @@ class SchemaOneAdapter:
         root = self._controller.get_root(self._serial_number)
         if not declared_settable(node_properties(root, NODE_SHED).get(PROP_ASSERTED_ISLANDING_STATE)):
             return None
-        return self._target(self._serial_number, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
+        return control_target(self._serial_number, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
 
     def dominant_power_source_payload(self, value: str) -> str | None:
         """Translate a flat `dominant-power-source` value into an assertion.
@@ -447,7 +623,7 @@ class SchemaOneAdapter:
         if writable is None:
             return None
         device, surface, limit = writable
-        return self._target(device.device_id, surface.node, limit.property_id)
+        return control_target(device.device_id, surface.node, limit.property_id)
 
     def evse_charge_limit_payload(self, node_id: str, amps: int) -> str | None:
         """The payload to publish for `amps`, or None if it may not be published.
@@ -463,22 +639,39 @@ class SchemaOneAdapter:
         charge-only EVSE cannot be told to export by lowering a ceiling, so a
         negative value is not a smaller limit but a malformed one.
 
+        **Refuses outside the range the limit declares.** Firmware r202639
+        publishes `<min>:<commissioned maximum>` as the limit's `$format`
+        (`6:32`), so a value under the minimum is refused here instead of being
+        published for the panel to reject or misapply. A declared maximum
+        tighter than the ceiling applies too. A format that is absent, or that
+        cannot be read as an integer range, bounds nothing extra and the
+        ceiling rule above still holds.
+
         A charger that declares no ceiling is not second-guessed — the catalog
-        makes `installer-max` a SHOULD, and the value that bounds the write is
-        the one the panel published, not one this library invents.
+        makes `installer-max` a SHOULD, and the values that bound the write are
+        the ones the panel published, not ones this library invents. With no
+        ceiling, a maximum declared in the limit's `$format` still bounds the
+        write; with neither, nothing does.
         """
         writable = self._writable_charge_limit(node_id)
         if writable is None or amps < 0:
             return None
-        device, surface, _limit = writable
+        device, surface, limit = writable
         ceiling = surface.ceiling
         commissioned = None if ceiling is None else integer(device, surface.node, ceiling.property_id)
         if commissioned is not None and amps > commissioned:
             return None
+        if limit.bounds is not None:
+            minimum, maximum = limit.bounds
+            if (minimum is not None and amps < minimum) or (maximum is not None and amps > maximum):
+                return None
         return str(amps)
 
     def register_property_callback(self, callback: Callable[[str, str, str, str | None], None]) -> Callable[[], None]:
-        """Subscribe to per-property updates: `(device_id, node_id, property_id, value)`."""
+        """Subscribe to per-property updates: `(device_id, node_id, property_id, value)`.
+
+        `value` is `None` when the panel clears a value it had published.
+        """
         self._property_callbacks.append(callback)
 
         def _unregister() -> None:
@@ -514,23 +707,21 @@ class SchemaOneAdapter:
             return device, surface, surface.limit
         return None
 
-    def _target(self, device_id: str, node: str, prop: str) -> ControlTarget:
-        """One device/node/property address as both a set topic and an observation key.
+    def export_masked_tree(self) -> MaskedTree | None:
+        """The device tree the adapter holds, masked, or None before the root has described itself.
 
-        The triple is returned alongside the topic rather than left for the
-        transport to parse back out of it: the transport is the one component
-        that is supposed to know nothing about this schema's topic grammar, and
-        under parent/child the device is a peer of the panel rather than a node
-        beneath it, so the grammar is not even the flat one.
-
-        The spelling here is the spelling `_on_property_changed` reports under,
-        because a write is verified by matching one against the other.
+        Computed at call time and not gated on `is_ready()`: a tree that has not
+        finished arriving is exactly when a diagnostic is wanted, and
+        `metadata["tree_complete"]` says whether this one is whole.
         """
-        return ControlTarget(
-            topic=f"{HOMIE_DOMAIN}/{HOMIE_VERSION}/{device_id}/{node}/{prop}/set",
-            device_id=device_id,
-            node_id=node,
-            property_id=prop,
+        root = self._controller.get_root(self._serial_number)
+        if root is None or root.description is None:
+            return None
+        return export_masked_tree(
+            root,
+            self._children(),
+            producer=_producer(),
+            tree_complete=self._controller.is_tree_complete(self._serial_number),
         )
 
     def _require_root(self) -> DiscoveredDevice:
@@ -596,5 +787,16 @@ class SchemaOneAdapter:
         protocol has no place for the previous value, and consumers that need
         one keep it themselves.
         """
+        self._notify(device_id, node_id, property_id, value)
+
+    def _notify(self, device_id: str, node_id: str, property_id: str, value: str | None) -> None:
+        """Report one property's new value, `None` once cleared, after forgetting what it invalidates."""
+        # The one value readiness waits on.
+        if (device_id, node_id, property_id) == (self._serial_number, NODE_INFO, PROP_MODEL):
+            self._ready = None
         for callback in list(self._property_callbacks):
             callback(device_id, node_id, property_id, value)
+
+    def _tree_changed(self, *_event: object) -> None:
+        """Forget the remembered readiness. Accepts any of the Controller's tree events."""
+        self._ready = None

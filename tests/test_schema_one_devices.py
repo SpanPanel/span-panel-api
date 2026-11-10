@@ -10,6 +10,7 @@ import pytest
 from ebus_sdk.homie import DiscoveredDevice
 
 from reference_payloads.schema_one import device_from_topics, parent_child_tree
+from span_panel_api.models import SpanPanelSnapshot
 from span_panel_api_schema_1.devices import (
     build_mid,
     build_battery,
@@ -18,9 +19,11 @@ from span_panel_api_schema_1.devices import (
     connection_status_for,
     feed_circuit_ids,
 )
+from span_panel_api_schema_1.firmware import release_build
 
 _TREE = parent_child_tree()
 
+PANEL = "example-40t-001"
 SOLAR_CIRCUIT = "573066aaddd7b75114c4563ce3af18c4"
 
 
@@ -34,6 +37,20 @@ def _circuits() -> list[DiscoveredDevice]:
 
 BESS_POWER_TOPIC = "meter/active-power"
 BESS_COMMS_TOPIC = "status/communication-state"
+
+R202633 = "spanos2/r202633/01"
+R202639 = "spanos2/r202639/03"
+
+
+def _in_the_old_frame(raw: float) -> float:
+    """A BESS meter reading as a release before r202639 publishes the same instant.
+
+    The capture is in r202639's frame, which negated the BESS meter and left
+    `power-flows/battery` alone, so the old frame's reading of the same battery
+    is the negation. Named rather than written as a bare minus sign so a test
+    that builds the old frame says that it does.
+    """
+    return -raw
 
 
 def _published(device_id: str, topic: str) -> str:
@@ -211,14 +228,16 @@ def test_the_capture_is_a_charging_battery() -> None:
     without appealing to any convention this library chose.
 
     In this capture 8500 W of PV meets 2653 W of site load and exports 2347 W;
-    the 3500 W left over is going into the battery. So the battery is charging,
-    and both the enclosure and the BESS publish that as a positive number.
+    the 3500 W left over is going into the battery. So the battery is charging.
+    The enclosure publishes that as a positive number, and the BESS, in the
+    discharge-positive frame firmware r202639 introduced and `ebus-panel-sim`
+    0.9.0 publishes, as a negative one.
 
     Were the capture ever retaken with the battery discharging, this fails first
-    and says so, rather than the negation tests failing and reading as a mapper
+    and says so, rather than the frame tests failing and reading as a mapper
     bug.
     """
-    flows = {name: float(_published("example-40t-001", f"power-flows/{name}")) for name in ("pv", "battery", "grid", "site")}
+    flows = {name: float(_published(PANEL, f"power-flows/{name}")) for name in ("pv", "battery", "grid", "site")}
 
     assert flows["pv"] + flows["battery"] + flows["grid"] + flows["site"] == pytest.approx(0.0, abs=1e-9)
     # PV alone exceeds the site load, so the surplus has nowhere to go but the
@@ -226,11 +245,11 @@ def test_the_capture_is_a_charging_battery() -> None:
     assert -flows["pv"] > flows["site"]
     assert flows["grid"] > 0
     assert flows["battery"] > 0
-    assert float(_published("bess", BESS_POWER_TOPIC)) > 0
+    assert float(_published("bess", BESS_POWER_TOPIC)) < 0
 
 
 def test_battery_power_is_the_negation_of_the_wire() -> None:
-    """One negation, and the frame it lands in is the BESS device's own.
+    """One negation before r202639, and the frame it lands in is the BESS device's own.
 
     Positive means power flowing *out of* the battery -- discharging -- which is
     what the eBus specification asks of a device's own meter, and deliberately
@@ -257,21 +276,27 @@ def test_battery_power_is_the_negation_of_the_wire() -> None:
     frame until it was recaptured, so this assertion used to read `> 0` on a
     capture the test above calls a charging battery -- the two contradicted each
     other, and only the fixture was wrong.
+
+    It flipped again at 0.9.0, which publishes r202639's discharge-positive meter,
+    so the capture no longer carries the frame this test is about. The frame is
+    built instead: the capture's battery as a release before r202639 publishes it
+    (`_in_the_old_frame`), named as such. The capture's own frame is held end to
+    end by `test_the_captured_tree_resolves_to_the_new_frame_through_the_snapshot`.
     """
-    raw = float(_published("bess", BESS_POWER_TOPIC))
+    old_frame = _in_the_old_frame(float(_published("bess", BESS_POWER_TOPIC)))
 
-    battery = build_battery(_device("bess"), [])
+    battery = build_battery(_bess_with({BESS_POWER_TOPIC: str(old_frame)}), [], firmware_version=R202633)
 
-    assert battery.power_w == -raw
+    assert battery.power_w == -old_frame
     assert battery.power_w is not None and battery.power_w < 0
 
 
 def test_battery_power_follows_a_republished_value() -> None:
     """Proof the value is read off the wire and not defaulted into place."""
-    raw = float(_published("bess", BESS_POWER_TOPIC))
-    discharging = -raw / 2
+    charging = _in_the_old_frame(float(_published("bess", BESS_POWER_TOPIC)))
+    discharging = -charging / 2
 
-    battery = build_battery(_bess_with({BESS_POWER_TOPIC: str(discharging)}), [])
+    battery = build_battery(_bess_with({BESS_POWER_TOPIC: str(discharging)}), [], firmware_version=R202633)
 
     # Charging became discharging, so the snapshot's sign flips with it.
     assert battery.power_w == -discharging
@@ -300,28 +325,36 @@ def test_a_bess_with_no_meter_node_has_no_power() -> None:
     assert build_battery(_bess_without_node("meter"), []).power_w is None
 
 
-def test_the_bess_meter_and_the_enclosure_flow_agree_about_direction() -> None:
-    """The two properties describing this battery's power must not disagree.
+def test_the_bess_meter_and_the_enclosure_flow_disagree_about_direction() -> None:
+    """The two properties describing this battery's power are published in opposite frames.
 
     `panel.power_flow_battery` is the enclosure's own arbitrated figure and is
-    passed through untouched; `battery.power_w` is the BESS's own meter and is
-    negated. That is only coherent because the two properties are published in
-    the *same* frame on the wire -- asserted here rather than assumed, because a
-    consumer rendering both beside each other has to negate exactly one of them,
-    and which one is a fact about the capture rather than a preference.
+    passed through untouched; `battery.power_w` is the BESS's own meter, which
+    from r202639 is published discharge-positive and passes through. That is
+    only coherent because the two properties are published in *opposite* frames
+    on the wire -- asserted here rather than assumed, because a consumer
+    rendering both beside each other has to negate exactly one of them, and
+    which frame the BESS meter is in is a fact about the capture rather than a
+    preference.
+
+    It is also what lets the frame be told without a SPAN release string: the
+    capture names none, so the opposite signs decide
+    (`test_the_captured_tree_resolves_to_the_new_frame_through_the_snapshot`).
+    Before r202639 the two carried one sign, and this test asserted that until
+    the capture was retaken with `ebus-panel-sim` 0.9.0; that frame is now built
+    by republishing
+    (`test_an_unversioned_tree_with_matching_signs_resolves_to_the_old_frame_through_the_snapshot`).
     """
     bess_meter = float(_published("bess", BESS_POWER_TOPIC))
-    enclosure_flow = float(_published("example-40t-001", "power-flows/battery"))
+    enclosure_flow = float(_published(PANEL, "power-flows/battery"))
 
-    assert (bess_meter < 0) == (enclosure_flow < 0)
+    assert bess_meter != 0.0 and enclosure_flow != 0.0
+    assert (bess_meter < 0) != (enclosure_flow < 0)
 
 
 # ---------------------------------------------------------------------------
 # Battery power: the wire frame by firmware release
 # ---------------------------------------------------------------------------
-
-R202633 = "spanos2/r202633/01"
-R202639 = "spanos2/r202639/03"
 
 
 def _battery_power(raw: str, *, firmware_version: str | None, power_flow_battery: float | None = None) -> float | None:
@@ -395,40 +428,64 @@ def test_without_a_release_or_a_signed_flow_the_old_frame_is_assumed(power_flow_
     assert _battery_power("1000.0", firmware_version="example/v0.1.0", power_flow_battery=power_flow_battery) == -1000.0
 
 
-def test_the_captured_tree_resolves_to_the_old_frame_through_the_snapshot() -> None:
-    """End to end: the capture carries no SPAN version string and equal signs.
-
-    So the fallback picks the old frame, and the snapshot's battery is the
-    negation of its wire meter: the charging battery the capture describes.
-    """
+def _snapshot_with(*, panel: Mapping[str, str], bess: Mapping[str, str]) -> SpanPanelSnapshot:
+    """The capture through the real snapshot builder, with enclosure and BESS topics rewritten."""
     from span_panel_api_schema_1.snapshot import build_snapshot
 
-    panel_id = "example-40t-001"
-    children = [_device(device_id) for device_id in _TREE if device_id != panel_id]
-    snapshot = build_snapshot(_device(panel_id), children)
+    children = [_bess_with(bess) if device_id == "bess" else _device(device_id) for device_id in _TREE if device_id != PANEL]
+    return build_snapshot(device_from_topics(PANEL, {**_TREE[PANEL], **panel}), children)
 
-    assert snapshot.battery.power_w == -float(_published("bess", BESS_POWER_TOPIC))
+
+def test_the_captured_tree_resolves_to_the_new_frame_through_the_snapshot() -> None:
+    """End to end: the capture carries no SPAN version string, and opposite signs.
+
+    So the fallback picks r202639's frame, and the snapshot's battery is its wire
+    meter passed through: the charging battery the capture describes.
+    """
+    assert release_build(_published(PANEL, "info/firmware-version")) is None
+
+    snapshot = _snapshot_with(panel={}, bess={})
+
+    assert snapshot.battery.power_w == float(_published("bess", BESS_POWER_TOPIC))
+    assert snapshot.battery.power_w is not None and snapshot.battery.power_w < 0
+
+
+def test_an_unversioned_tree_with_matching_signs_resolves_to_the_old_frame_through_the_snapshot() -> None:
+    """End to end: no SPAN version string, and the BESS meter in the flow figure's sign.
+
+    The capture's own state until it was retaken with `ebus-panel-sim` 0.9.0, and
+    now built from it: the same charging battery with its BESS meter
+    charge-positive, as a release before r202639 publishes it. The fallback picks
+    the old frame, and the snapshot's battery is the negation of its wire meter.
+    """
+    old_frame = _in_the_old_frame(float(_published("bess", BESS_POWER_TOPIC)))
+
+    snapshot = _snapshot_with(panel={}, bess={BESS_POWER_TOPIC: str(old_frame)})
+
+    assert snapshot.battery.power_w == -old_frame
     assert snapshot.battery.power_w is not None and snapshot.battery.power_w < 0
 
 
 def test_an_r202639_tree_reports_the_same_charging_battery_through_the_snapshot() -> None:
-    """The capture republished as r202639 would publish it: BESS meter negated, flow unchanged."""
-    from span_panel_api_schema_1.snapshot import build_snapshot
-
-    panel_id = "example-40t-001"
-    raw = float(_published("bess", BESS_POWER_TOPIC))
-    panel_topics = {**_TREE[panel_id], "info/firmware-version": R202639}
-    bess_topics = {**_TREE["bess"], BESS_POWER_TOPIC: str(-raw)}
-    children = [
-        device_from_topics("bess", bess_topics) if device_id == "bess" else _device(device_id)
-        for device_id in _TREE
-        if device_id != panel_id
-    ]
-    snapshot = build_snapshot(device_from_topics(panel_id, panel_topics), children)
+    """The capture under an r202639 release string: its BESS meter is already in that frame."""
+    snapshot = _snapshot_with(panel={"info/firmware-version": R202639}, bess={})
 
     assert snapshot.firmware_version == R202639
-    assert snapshot.battery.power_w == -raw
-    assert snapshot.power_flow_battery == float(_published(panel_id, "power-flows/battery"))
+    assert snapshot.battery.power_w == float(_published("bess", BESS_POWER_TOPIC))
+    assert snapshot.battery.power_w is not None and snapshot.battery.power_w < 0
+    assert snapshot.power_flow_battery == float(_published(PANEL, "power-flows/battery"))
+
+
+def test_an_r202633_tree_reports_the_same_charging_battery_through_the_snapshot() -> None:
+    """The capture republished as r202633 would publish it: BESS meter negated, flow unchanged."""
+    raw = float(_published("bess", BESS_POWER_TOPIC))
+
+    snapshot = _snapshot_with(panel={"info/firmware-version": R202633}, bess={BESS_POWER_TOPIC: str(_in_the_old_frame(raw))})
+
+    assert snapshot.firmware_version == R202633
+    assert snapshot.battery.power_w == raw
+    assert snapshot.battery.power_w is not None and snapshot.battery.power_w < 0
+    assert snapshot.power_flow_battery == float(_published(PANEL, "power-flows/battery"))
 
 
 # ---------------------------------------------------------------------------

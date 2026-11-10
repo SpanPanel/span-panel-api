@@ -11,23 +11,35 @@ Pre-releases are not listed separately. A beta is a step towards the next public
 
 ## [Unreleased]
 
-Requires `span-panel-api` **3.7.0 or newer**, whose snapshot fields accept the unknown values this parser now reports.
+Requires `span-panel-api` **3.8.0 or newer**, whose snapshot fields accept the unknown values this parser now reports and carry the fields it now fills.
+
+### Added
+
+- **spanos3/r202639/03 batch 2: reads more of the data this firmware publishes.**
+- **`SchemaOneAdapter` exports the tree it holds, masked**, for `SpanMqttClient.masked_tree()`.
+- **Each SPAN Drive's declared charge-current limit range is reported.**
 
 ### Changed
 
+- The shipped reference tree is recaptured with `ebus-panel-sim` 0.9.0: every circuit inside the panel's breaker positions, firmware r202639's discharge-positive battery meter, and no user charge limit until one is set.
 - **`proximity_proven` is `None`**, where it was a hard-coded `True`, because the tree publishes no proximity property.
 - **`uptime_s` is `None`**, where it was always `0`, because no device publishes an uptime and this parser keeps no readiness clock to measure one.
 
 ### Removed
 
 - **BREAKING FOR CONSUMERS: `snapshot.build_snapshot()` no longer takes the `ready_since` argument**, which no caller in this repository passed, so a call that passes it by keyword or position now raises `TypeError`.
-
 - **BREAKING: snapshots no longer include synthesised `unmapped_tab_N` entries for unoccupied breaker positions, which carried no measured data**, and `panel.build_unmapped_tabs` and `const.UNMAPPED_TAB_PREFIX` are gone with them.
 
 ### Fixed
 
 - **A circuit whose shed priority is `UNKNOWN` is no longer reported as sheddable.**
 - **The grid-forming device name falls back to vendor and model instead of showing a device id.**
+- **A panel with no MID reports `dsm_state` `DSM_ON_GRID` and `current_run_config` `PANEL_ON_GRID` whenever it is publishing**, where both dropped to `UNKNOWN` each time `power-flows/grid` read within 1 W of zero
+  ([#215](https://github.com/SpanPanel/span-panel-api/issues/215)).
+- **Each MQTT message costs the same few microseconds however many devices the panel declares**, where routing and readiness checks grew with the tree ([#223](https://github.com/SpanPanel/span-panel-api/issues/223)).
+- **A property the panel clears reads as unpublished**, where it read as an empty value until the panel published it again.
+- **A charge-current limit outside the range a SPAN Drive declares is refused** instead of published.
+- **A device typed as a subtype of a class (`energy.ebus.device.bess.<x>`) is read as that class**, where it was dropped from the snapshot, adoption and discovery ([#228](https://github.com/SpanPanel/span-panel-api/issues/228)).
 
 ## [1.2.2]
 

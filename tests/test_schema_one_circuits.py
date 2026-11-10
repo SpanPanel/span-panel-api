@@ -101,7 +101,7 @@ def test_tabs_come_from_the_published_list_not_a_derivation(solar: DiscoveredDev
 def test_single_pole_circuit(kitchen: DiscoveredDevice) -> None:
     circuit = build_circuit(kitchen)
 
-    assert circuit.tabs == [1]
+    assert circuit.tabs == [9]
     assert circuit.is_240v is False
 
 

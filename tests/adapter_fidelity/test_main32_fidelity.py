@@ -19,8 +19,13 @@ from pathlib import Path
 
 import pytest
 
-from span_panel_api_schema_1.const import DEVICE_TYPE_PREFIX, NODE_METER, TYPE_PANEL
-from span_panel_api_schema_1.field_metadata import _DOWNSTREAM_LUGS_FIELDS, _PROPERTY_FIELD_MAP, _UPSTREAM_LUGS_FIELDS
+from span_panel_api_schema_1.const import DEVICE_TYPE_PREFIX, NODE_CONNECTION, NODE_METER, TYPE_PANEL
+from span_panel_api_schema_1.field_metadata import (
+    _DOWNSTREAM_LUGS_FIELDS,
+    _PROPERTY_FIELD_MAP,
+    _UPSTREAM_LUGS_CONNECTION_FIELDS,
+    _UPSTREAM_LUGS_FIELDS,
+)
 
 from .harness import DropReason, FidelityReport, RowKey, run_cell
 from .rules import MAIN32_RULES
@@ -160,8 +165,12 @@ def _role(device_type: str) -> str:
 def test_every_mapped_field_has_a_documented_transform() -> None:
     """A field the library starts mapping cannot reach a snapshot unchecked."""
     mapped = {(RowKey(_role(device_type), f"{node}/{prop}"), path) for device_type, node, prop, path in _PROPERTY_FIELD_MAP}
-    for role, lugs_fields in (("lugs-upstream", _UPSTREAM_LUGS_FIELDS), ("lugs-downstream", _DOWNSTREAM_LUGS_FIELDS)):
-        mapped |= {(RowKey(role, f"{NODE_METER}/{prop}"), path) for prop, path in lugs_fields}
+    for role, node, lugs_fields in (
+        ("lugs-upstream", NODE_METER, _UPSTREAM_LUGS_FIELDS),
+        ("lugs-downstream", NODE_METER, _DOWNSTREAM_LUGS_FIELDS),
+        ("lugs-upstream", NODE_CONNECTION, _UPSTREAM_LUGS_CONNECTION_FIELDS),
+    ):
+        mapped |= {(RowKey(role, f"{node}/{prop}"), path) for prop, path in lugs_fields}
     missing = sorted((key, path) for key, path in mapped if path not in MAIN32_RULES.transforms.get(key, {}))
     assert missing == []
 

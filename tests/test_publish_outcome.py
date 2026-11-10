@@ -373,6 +373,25 @@ class TestWriteThenVerify:
         paho_client.publish.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_a_value_the_panel_cleared_is_not_current(self) -> None:
+        """An adapter reports a cleared property as `None`: there is no value for a write to match.
+
+        Keeping the last value instead would answer "already reports this value"
+        for a property that reports nothing, and the write would never be sent.
+        """
+        paho_client = _paho()
+        client = _client(deadlines=ControlDeadlines(relay=0.05))
+        client._bridge = _bridge(connected=True, paho_client=paho_client)
+        target = client._adapter.set_circuit_relay_target(CIRCUIT)
+        self._observe(client, target, "OPEN")
+        client._on_property_value(target.device_id, target.node_id, target.property_id, None)
+
+        outcome = await client.set_circuit_relay(CIRCUIT, "OPEN")
+
+        assert outcome.no_op is False
+        paho_client.publish.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_the_no_op_check_compares_wire_vocabulary(self) -> None:
         """The caller says BATTERY; the wire says OFF_GRID under v1.0.
 

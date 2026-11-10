@@ -105,6 +105,7 @@ class ControlDeadlines:
     priority: float = 2.0
     dominant_power_source: float = 2.0
     evse_charge_limit: float = 2.0
+    evse_lock: float = 2.0
     adopted_property: float = 2.0
 
 

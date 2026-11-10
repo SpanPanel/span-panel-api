@@ -974,7 +974,7 @@ wheels = [
 
 [[package]]
 name = "span-panel-api"
-version = "3.8.0"
+version = "3.9.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -1057,7 +1057,7 @@ requires-dist = [{ name = "span-panel-api", editable = "." }]
 
 [[package]]
 name = "span-panel-api-schema-1"
-version = "1.4.0"
+version = "1.5.0b1"
 source = { editable = "packages/schema-1" }
 dependencies = [
     { name = "ebus-sdk" },

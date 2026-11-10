@@ -13,16 +13,32 @@ panel gets, and a classifier that agrees with itself proves nothing about that.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from typing import TYPE_CHECKING
 
 import pytest
 from reference_payloads.schema_one import device_from_topics, parent_child_tree
-from span_panel_api.models import SpanPanelSnapshot
+from span_panel_api.models import DISCOVERY_NAMESPACE, FieldMetadata, SpanPanelSnapshot
 from span_panel_api_schema_1.adoption import MODELLED_TYPES
+from span_panel_api_schema_1.const import (
+    DEVICE_TYPE_PREFIX,
+    TYPE_BESS,
+    TYPE_CIRCUIT,
+    TYPE_EVSE,
+    TYPE_INVERTER,
+    TYPE_LUGS,
+    TYPE_MID,
+    TYPE_PANEL,
+    TYPE_PV,
+)
+from span_panel_api_schema_1.field_metadata import build_discovery, build_field_metadata
 from span_panel_api_schema_1.snapshot import build_snapshot
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
+    from ebus_sdk.homie import DiscoveredDevice
     from span_panel_api.models import AdoptedDevice
 
 PANEL = "example-40t-001"
@@ -117,6 +133,204 @@ def test_a_subtype_of_a_modelled_type_is_not_adopted(subtype: str) -> None:
     """
     tree = _with(_tree(), "extra-device", _device(subtype))
     assert "extra-device" not in _adopted(_snapshot(tree))
+
+
+# -- A subtype is read as its class, and a look-alike is not -----------------
+#
+# Not adopting a subtype is half the rule. The other half is that the snapshot
+# reads it, or the device is invisible to both paths at once -- the failure
+# `MODELLED_TYPES` exists to rule out, arriving through a spelling (#228).
+
+INVERTER = "bess-inverter"
+
+_Reading = tuple[SpanPanelSnapshot, dict[str, FieldMetadata]]
+
+
+def _tree_with_an_inverter() -> dict[str, dict[str, str]]:
+    """The reference tree plus a BESS inverter that declares it can form a grid.
+
+    The emitter models no inverter child, so without one the inverter class
+    would have nothing to retype and its case below would pass on an empty tree.
+    """
+    capable: dict[str, object] = {"name": "Can form a grid", "datatype": "boolean"}
+    inverter = _device(
+        TYPE_INVERTER,
+        name="BESS Inverter",
+        nodes={"grid-forming": {"properties": {"capable": capable}}},
+        values={"grid-forming/capable": "true"},
+        parent="bess",
+    )
+    return _with(_tree(), INVERTER, inverter)
+
+
+def _retyped(
+    tree: dict[str, dict[str, str]], declared: str, replacement: str
+) -> tuple[dict[str, dict[str, str]], frozenset[str]]:
+    """A copy of the tree with every device declaring exactly `declared` declaring `replacement`.
+
+    Returned with the ids it retyped, so a case can assert it changed something.
+    """
+    retyped: dict[str, dict[str, str]] = {}
+    ids: set[str] = set()
+    for device_id, topics in tree.items():
+        description = json.loads(topics["$description"])
+        if description.get("type") == declared:
+            description["type"] = replacement
+            ids.add(device_id)
+        retyped[device_id] = {**topics, "$description": json.dumps(description)}
+    return retyped, frozenset(ids)
+
+
+def _devices(tree: dict[str, dict[str, str]]) -> list[DiscoveredDevice]:
+    """Every device in the tree, the root included, as the adapter hands them to field metadata."""
+    return [device_from_topics(device_id, topics) for device_id, topics in tree.items()]
+
+
+def _read(tree: dict[str, dict[str, str]]) -> _Reading:
+    return _snapshot(tree), build_field_metadata(_devices(tree))
+
+
+def _renamed(rows: Mapping[str, FieldMetadata], declared: str, replacement: str) -> dict[str, FieldMetadata]:
+    """Metadata rows with `declared`'s discovery paths spelled as `replacement`'s.
+
+    A discovery path carries the declaring device's type, so the same property
+    on a retyped device is a differently spelled path. Renaming it back is what
+    lets two trees that differ only in that spelling be compared whole.
+    """
+    old = f"{DISCOVERY_NAMESPACE}.{declared.removeprefix(DEVICE_TYPE_PREFIX)}/"
+    new = f"{DISCOVERY_NAMESPACE}.{replacement.removeprefix(DEVICE_TYPE_PREFIX)}/"
+    return {(new + path.removeprefix(old) if path.startswith(old) else path): row for path, row in rows.items()}
+
+
+_ROLE: dict[str, Callable[[_Reading], object]] = {
+    # The root is read as the panel whatever it declares; its type decides
+    # only which metadata rows answer for it.
+    TYPE_PANEL: lambda reading: reading[1].get("panel.firmware_version"),
+    TYPE_CIRCUIT: lambda reading: reading[0].circuits,
+    TYPE_LUGS: lambda reading: (reading[0].instant_grid_power_w, reading[0].feedthrough_power_w),
+    TYPE_EVSE: lambda reading: reading[0].evse,
+    TYPE_BESS: lambda reading: (reading[0].battery.present, reading[0].battery.soe_percentage),
+    TYPE_PV: lambda reading: reading[0].pv_inverters,
+    TYPE_MID: lambda reading: reading[0].mid,
+    TYPE_INVERTER: lambda reading: reading[0].grid_islandable,
+}
+"""What each modelled type fills, for a failure that names the role rather than a diff."""
+
+
+def test_every_modelled_type_names_the_role_it_fills() -> None:
+    assert set(_ROLE) == set(MODELLED_TYPES)
+
+
+@pytest.mark.parametrize("modelled", MODELLED_TYPES)
+def test_a_subtype_of_a_modelled_type_is_read_as_that_type(modelled: str) -> None:
+    """A device typed `X.hybrid` reaches the snapshot exactly as a device typed `X` does.
+
+    eBus device types are hierarchical, and a subtype carries its parent's class.
+    Asserted on the whole snapshot and the whole field-metadata map, discovery
+    rows included, so no reader of the type can be left exact-matching: a
+    battery that drops out of `snapshot.battery`, or whose mapped properties
+    resurface as discovered, fails here.
+    """
+    base = _tree_with_an_inverter()
+    subtype = f"{modelled}.hybrid"
+    subtyped, retyped = _retyped(base, modelled, subtype)
+    unmodelled, _ = _retyped(base, modelled, UNMODELLED_TYPE)
+    assert retyped, f"precondition: the tree carries a {modelled} device"
+
+    role = _ROLE[modelled]
+    expected = _read(base)
+    assert role(expected) != role(_read(unmodelled)), f"precondition: {modelled} fills its role"
+
+    snapshot, metadata = _read(subtyped)
+    assert role((snapshot, metadata)) == role(expected)
+    assert snapshot == expected[0]
+    assert _renamed(metadata, subtype, modelled) == expected[1]
+    assert _renamed(build_discovery(_devices(subtyped)), subtype, modelled) == build_discovery(_devices(base))
+
+
+def _adopted_as_untyped(snapshot: SpanPanelSnapshot) -> SpanPanelSnapshot:
+    """The snapshot with each adopted device's declared type blanked, for comparing two spellings."""
+    return dataclasses.replace(
+        snapshot,
+        adopted_devices=tuple(dataclasses.replace(device, device_type="") for device in snapshot.adopted_devices),
+    )
+
+
+@pytest.mark.parametrize("modelled", MODELLED_TYPES)
+def test_a_type_that_merely_begins_with_a_modelled_type_is_unmodelled(modelled: str) -> None:
+    """`…lugsfoo` is not a subtype of `…lugs`; it is a different class, read as any unmodelled one is.
+
+    The hierarchy is dotted, so a subtype begins with its parent's type *and a
+    dot*. A bare prefix match would read a look-alike as the class it resembles
+    -- into the snapshot and the metadata -- while adoption, which honours the
+    dot, adopts it as well: one device, two surfaces.
+    """
+    base = _tree_with_an_inverter()
+    lookalike = f"{modelled}foo"
+    retyped_tree, retyped = _retyped(base, modelled, lookalike)
+    unmodelled_tree, _ = _retyped(base, modelled, UNMODELLED_TYPE)
+    assert retyped, f"precondition: the tree carries a {modelled} device"
+
+    snapshot, metadata = _read(retyped_tree)
+    unmodelled_snapshot, unmodelled_metadata = _read(unmodelled_tree)
+    assert set(_adopted(snapshot)) == retyped - {PANEL}
+    assert _adopted_as_untyped(snapshot) == _adopted_as_untyped(unmodelled_snapshot)
+    assert _renamed(metadata, lookalike, UNMODELLED_TYPE) == unmodelled_metadata
+
+
+def test_lugs_subtyped_by_direction_are_lugs_and_a_look_alike_is_not() -> None:
+    """The case `TreeRoles` was written for, and the look-alike its prefix match let in."""
+    expected = _snapshot(_tree()).instant_grid_power_w
+    assert expected is not None, "precondition: the upstream lugs publish grid power"
+
+    tree = _tree()
+    upstream = json.loads(tree["lugs-upstream"]["$description"])
+
+    upstream["type"] = f"{TYPE_LUGS}.upstream"
+    tree["lugs-upstream"]["$description"] = json.dumps(upstream)
+    subtyped = _snapshot(tree)
+    assert subtyped.instant_grid_power_w == expected
+    assert "lugs-upstream" not in _adopted(subtyped)
+
+    upstream["type"] = f"{TYPE_LUGS}foo"
+    tree["lugs-upstream"]["$description"] = json.dumps(upstream)
+    lookalike = _snapshot(tree)
+    assert lookalike.instant_grid_power_w is None
+    assert "lugs-upstream" in _adopted(lookalike)
+
+
+@pytest.mark.parametrize(
+    ("forming", "device_id", "run_config", "power_source"),
+    [(TYPE_BESS, "bess", "PANEL_BACKUP", "BATTERY"), (TYPE_PV, "pv", "PANEL_OFF_GRID", "PV")],
+)
+def test_a_subtyped_grid_forming_device_resolves_to_its_class(
+    forming: str, device_id: str, run_config: str, power_source: str
+) -> None:
+    """The MID names the device forming the grid, and its class is what the run config reads.
+
+    A battery forming the grid is backup whatever subtype it declares; resolved
+    by exact type, a `bess.<x>` would read as some other device forming it.
+    """
+    tree = _tree()
+    tree["bess-mid"] = {**tree["bess-mid"], "grid/grid-forming-entity": device_id, "grid/islanding-state": "OFF_GRID"}
+    base = _snapshot(tree)
+    assert (base.current_run_config, base.dominant_power_source) == (run_config, power_source), "precondition"
+
+    subtyped_tree, retyped = _retyped(tree, forming, f"{forming}.hybrid")
+    assert retyped == {device_id}
+    subtyped = _snapshot(subtyped_tree)
+    assert (subtyped.current_run_config, subtyped.dominant_power_source) == (run_config, power_source)
+
+
+def test_a_grid_forming_look_alike_is_not_a_battery() -> None:
+    """A device typed `bessfoo` forming the grid is some other device, not backup from a battery."""
+    tree = _tree()
+    tree["bess-mid"] = {**tree["bess-mid"], "grid/grid-forming-entity": "bess", "grid/islanding-state": "OFF_GRID"}
+    lookalike_tree, retyped = _retyped(tree, TYPE_BESS, f"{TYPE_BESS}foo")
+    assert retyped == {"bess"}
+
+    lookalike = _snapshot(lookalike_tree)
+    assert (lookalike.current_run_config, lookalike.dominant_power_source) == ("PANEL_OFF_GRID", "UNKNOWN")
 
 
 def test_a_device_declaring_no_type_yet_is_skipped_rather_than_adopted() -> None:

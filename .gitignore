@@ -16,6 +16,7 @@ xnotes/*
 .env
 .envrc
 .venv
+.deps-installed
 .vscode/settings.json
 
 # mypy

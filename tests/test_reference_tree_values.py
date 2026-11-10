@@ -26,27 +26,38 @@ gap, not six. The same choice the integration's `test_declared_but_unread`
 makes, for the same reason.
 
 The reduction loses nothing here, and that is measured rather than assumed:
-reduced the same way, panelbench's baseline is exactly the declared-but-unvalued
-set of its own committed wire capture (`tests/conformance/fixtures/golden_wire.json`).
+reduced the same way, panelbench's baseline at `7ddd953` is exactly the
+declared-but-unvalued set of the wire capture committed beside it
+(`tests/conformance/fixtures/golden_wire.json` at that commit).
 
-Refresh the vendored copy with:
+The vendored copy is panelbench's baseline at commit `7ddd953`:
 
-    cp ../panelbench/tests/fidelity/fixtures/unvalued_by_both_baseline.json \
-       tests/fixtures/panelbench_unvalued_by_both.json
+    git -C ../panelbench show 7ddd953:tests/fidelity/fixtures/unvalued_by_both_baseline.json \
+       > tests/fixtures/panelbench_unvalued_by_both.json
 
 It is vendored verbatim rather than pre-reduced so that refreshing it is a copy
 whose correctness a reader can check with `diff`, and so the reduction stays
 here where it is explained.
 
-**A failure here does not say which side moved, and both have.** Refreshing the
-vendored baseline is the fix when panelbench has already re-captured, which was
-the case the first time this fired: the copy carried 32 `connection/count`
-entries that panelbench had itself already dropped, so the two
-artifacts agreed only because both were stale. Regenerating the reference tree
-is the fix when the producer this side follows has moved -- see
-`scripts/capture_parent_child_reference.py`, which reproduces every identifier
-and every device in this capture, so the old instruction to port values in by
-hand rather than recapture no longer applies.
+**Why that commit and not panelbench's current baseline.** After it
+(`a89f104`, `e551701`) panelbench keys each line by role rather than by
+`type::name`, and measures upstream's example panel rather than its own, which
+names no battery, MID or inverter identity and no network. That file reduces to
+something this comparison cannot read, and disagrees with this capture for
+reasons that are not drift, so it cannot be copied verbatim until this
+comparison is reworked.
+
+**A failure here does not say which side moved, and both have.** The first time
+this fired the vendored copy was the stale side: it carried 32
+`connection/count` entries that panelbench had itself already dropped, so the
+two artifacts agreed only because both were stale, and the fix was a fresh copy
+of panelbench's baseline. That fix is closed until this comparison is reworked
+(above): panelbench's current baseline cannot be copied verbatim, so a
+disagreement with it today is settled by reading both sides, not by copying.
+Regenerating the reference tree is the fix when the producer this side follows
+has moved -- see `scripts/capture_parent_child_reference.py`, which reproduces
+every identifier and every device in this capture, so the old instruction to
+port values in by hand rather than recapture no longer applies.
 """
 
 from __future__ import annotations

@@ -80,6 +80,8 @@
   "energy.ebus.device.circuit::kitchen Lights  connection/feeds-device-id",
   "energy.ebus.device.circuit::kitchen Lights  connection/feeds-device-status",
   "energy.ebus.device.circuit::kitchen Lights  connection/feeds-device-type",
+  "energy.ebus.device.evse::SPAN Drive - Driveway  config/user-max-charge-current",
+  "energy.ebus.device.evse::SPAN Drive - Garage  config/user-max-charge-current",
   "energy.ebus.device.lugs::Downstream lugs  connection/fed-by-device-id",
   "energy.ebus.device.lugs::Downstream lugs  connection/fed-by-device-status",
   "energy.ebus.device.lugs::Downstream lugs  connection/fed-by-device-type",

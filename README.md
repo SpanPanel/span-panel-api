@@ -129,35 +129,42 @@ The library defines structural subtyping protocols (PEP 544). All are `runtime_c
 | `CircuitControlProtocol`      | Relay and shed-priority control: `set_circuit_relay`, `set_circuit_priority`               |
 | `PanelControlProtocol`        | Panel-level control: `set_dominant_power_source`                                           |
 | `EvseControlProtocol`         | Per-charger control: `set_evse_charge_limit(node_id, amps)`                                |
+| `EvseLockControlProtocol`     | Per-charger connector lock: `set_evse_lock(node_id, locked)`                               |
 | `AdoptedControlProtocol`      | Write to a settable property of a device this library models nothing for                   |
 | `ControlInterceptionProtocol` | Install one veto-and-observe point for every control command: `set_control_interceptor`    |
 | `StreamingCapableProtocol`    | Push-based updates: `register_snapshot_callback`, `start_streaming`, `stop_streaming`      |
 
-The first five differ in subject, not just in name. `EvseControlProtocol` is separate from `PanelControlProtocol` because several chargers may be commissioned at once and every call names which one. `AdoptedControlProtocol` differs in kind: the curated
-setters name a control this library understands and translate or bound the value on the way out, while this one names a property by its wire address and passes the value through, because the declaration is all anybody here knows about it. That write is
-authorised by the snapshot rather than by its arguments — the transport resolves the property against the current `adopted_devices` and refuses anything it does not find carrying a set topic, so a device this library _does_ model cannot be addressed
-through it.
+The first six differ in subject, not just in name. `EvseControlProtocol` is separate from `PanelControlProtocol` because several chargers may be commissioned at once and every call names which one. `EvseLockControlProtocol` is separate from
+`EvseControlProtocol` so that protocol's implementers are unchanged, and its write is authorised by the snapshot: only a charger whose `SpanEvseSnapshot.lock_control` is set can be addressed, and only with a value its `lock_state_options` lists.
+`AdoptedControlProtocol` differs in kind: the curated setters name a control this library understands and translate or bound the value on the way out, while this one names a property by its wire address and passes the value through, because the declaration
+is all anybody here knows about it. That write is authorised by the snapshot rather than by its arguments — the transport resolves the property against the current `adopted_devices` and refuses anything it does not find carrying a set topic, so a device
+this library _does_ model cannot be addressed through it.
 
-`ControlInterceptionProtocol` is separate from the four control protocols rather than a member of them because adding it there would break every implementer of those protocols a second time in one release, and separate from `StreamingCapableProtocol`
-because a transport could reasonably offer one and not the other.
+`ControlInterceptionProtocol` is separate from the control protocols rather than a member of them because adding it there would break every implementer of those protocols a second time in one release, and separate from `StreamingCapableProtocol` because a
+transport could reasonably offer one and not the other.
 
 One further protocol, `SchemaAdapter`, is the bootstrap-to-parser contract rather than a consumer-facing one; it is what an adapter distribution implements and what discovery checks. Integration code programs against the protocols above, not against
 transport-specific classes.
+
+`TreeExportingAdapter` sits beside `SchemaAdapter` as an optional protocol, not one every adapter must implement: an adapter that offers `export_masked_tree()` lets `SpanMqttClient.masked_tree()` return the panel's device tree with serials, device ids and
+site details masked, and `None` otherwise.
 
 ### Snapshots
 
 All panel state is represented as immutable, frozen dataclasses:
 
 - **`SpanPanelSnapshot`**: complete panel state. Identity (serial, firmware, vendor, model, hardware version), panel size, main breaker rating, main relay, door state, connection uptime on a flat panel, network links with the Wi-Fi SSID and vendor cloud,
-  grid and feedthrough power and energy, grid/DSM state, run configuration, dominant power source, grid islandability, per-leg voltages, power flows, lugs current and whether the lugs are the service entrance, shed policy and forecast. It holds `circuits`,
-  `battery`, `pv`, `pv_inverters`, `evse`, `mid`, `pcs`, `adopted_devices` and `extension_properties`.
+  grid and feedthrough power and energy, grid/DSM state, run configuration, dominant power source, grid islandability, per-leg voltages, power flows, lugs current and whether the lugs are the service entrance, busbar current, line frequency, the rating of
+  the protection ahead of the upstream lugs, the first and last breaker positions, whether any circuit declares what it feeds, shed policy and forecast. It holds `circuits`, `battery`, `pv`, `pv_inverters`, `evse`, `mid`, `pcs`, `adopted_devices` and
+  `extension_properties`.
 - **`SpanCircuitSnapshot`**: one circuit. Id, name, relay state and requester, power, energy and their update times, tabs, 240 V, breaker rating, current, priority, user controllability, sheddable / never-backup / always-on flags, device type, relative
-  position, PCS management and priority, and the `$target` pending state for relay and priority.
-- **`SpanBatterySnapshot`**: the BESS. SoE percentage and kWh, its own meter reading, communication state, link health, vendor / `model` / `part_number` / serial / version, nameplate capacity.
+  position, PCS management and priority, the `$target` pending state for relay and priority, nominal voltage, the breaker's protection functions, the role it declares for what it feeds, the other circuits its meter or relay is shared with, and whether it
+  is a meter outside the panel, which has no breaker space, relay or shed priority and reads import-positive.
+- **`SpanBatterySnapshot`**: the BESS. Whether the panel declares one, SoE percentage and kWh, its own meter reading, communication state, link health, the circuit that feeds it, vendor / `model` / `part_number` / serial / version, nameplate capacity.
 - **`SpanPVSnapshot`**: one PV inverter. Link health, vendor / `model` / serial / version, nameplate capacity (the array's DC size), feeding circuit, relative position, its wire `device_id` and its `node_id`, which is its key in `pv_inverters`.
   `SpanPanelSnapshot.pv` is the lone inverter, or describes several together.
-- **`SpanEvseSnapshot`**: one EV charger. `node_id`, feeding circuit, status, lock state, advertised current, link health, vendor / `model` / `part_number` / serial / version, charge-current limit, ceiling, pending target and settability, and the effective
-  limit it applies.
+- **`SpanEvseSnapshot`**: one EV charger. `node_id`, feeding circuit, status, lock state, advertised current, link health, vendor / `model` / `part_number` / serial / version, charge-current limit, ceiling, pending target and settability, the effective
+  limit it applies, the range it declares for that limit, and where its connector lock is commanded with the values it accepts.
 - **`SpanMidSnapshot`**: the Microgrid Interconnect Device. `node_id`, islanding state, grid state, grid-forming entity and its device name, vendor / `model` / serial / software and hardware version.
 - **`SpanPcsSnapshot`**: the Power Control System. Enabled and active, the enforced import limit and its binding constraint, and each import constraint's limit, enablement and active state (feed, operator, off-grid, requested).
 - **`AdoptedDevice`**: a device type this library models nothing for, carried whole. Identity (id, type, name, vendor, model, serial, versions), its declared parent, whether a peer proxies it, and its readings.
@@ -170,6 +177,10 @@ see the changelog, because `battery.model` changes value for existing flat users
 
 `uptime_s` and a circuit's update times are the reverse: only the flat parser measures them, and they are `None` under the parent/child schema. Neither schema publishes proximity, so `SpanPanelSnapshot.proximity_proven` is always `None`; the panel's own
 answer is `V2StatusInfo.proximity_proven`, from `GET /api/v2/status`.
+
+Two booleans can be unknown under the parent/child schema: `SpanCircuitSnapshot.is_240v` is `None` where no pole count is published, and `SpanPanelSnapshot.lugs_at_service_entrance` is `None` while the upstream lugs declare their feed and have not
+published it, so a consumer tests both against `None` before reading them as a boolean. `SpanPanelSnapshot.circuits` holds only circuits the panel publishes: no entry stands in for an unoccupied breaker position, and `panel_size`, with `first_position` and
+`last_position` under the parent/child schema, says which positions exist.
 
 ## Usage
 
@@ -195,8 +206,11 @@ async def main():
         # The upstream lugs' own meter. That is grid flow only where the lugs are
         # the utility connection point; a BESS wired ahead of them, or a panel fed
         # by another panel, makes it this panel's feed instead. `power_flow_grid`
-        # is the site-level figure in every topology.
-        if snapshot.lugs_at_service_entrance:
+        # is the site-level figure in every topology. `None` means the lugs have
+        # not yet published what feeds them, so neither reading is known.
+        if snapshot.lugs_at_service_entrance is None:
+            print(f"Grid power: {snapshot.power_flow_grid}W")
+        elif snapshot.lugs_at_service_entrance:
             print(f"Grid power: {snapshot.instant_grid_power_w}W")
         else:
             print(f"Panel feed: {snapshot.instant_grid_power_w}W")
@@ -358,8 +372,9 @@ deliver it minutes later. `CONFIRMED` is strong evidence rather than proof: the 
 idempotent in its physical effect.
 
 **A control the panel declares non-commandable raises rather than returning an outcome**, because there is no topic to publish to and so nothing to report on. `SpanPanelServerError` is raised for a relay on a circuit commissioned always-on, for the shed
-priority of a circuit commissioned never-backup, and for a charger with no settable charge-current limit. The same facts are on the snapshot ahead of the call — `SpanCircuitSnapshot.is_user_controllable` and `.is_never_backup` — so a consumer that offers
-the control only where the panel offers it will not meet this; it is the backstop for the case a setup-time gate cannot see, since re-commissioning a circuit in place changes its settability while an entity built from the earlier snapshot is still alive.
+priority of a circuit commissioned never-backup, and for a charger with no settable charge-current limit or connector lock. The same facts are on the snapshot ahead of the call — `SpanCircuitSnapshot.is_user_controllable` and `.is_never_backup` — so a
+consumer that offers the control only where the panel offers it will not meet this; it is the backstop for the case a setup-time gate cannot see, since re-commissioning a circuit in place changes its settability while an entity built from the earlier
+snapshot is still alive.
 
 ### Control Interception
 
@@ -505,6 +520,7 @@ All exceptions inherit from `SpanPanelError`:
 | `SpanPanelValidationError` | Data validation failure                                                                            |
 | `SpanPanelAPIError`        | Unexpected HTTP response from v2 endpoints                                                         |
 | `SpanPanelServerError`     | Panel answered 5xx, or answered `200` with a body that cannot be used — "not ready yet"            |
+| `SpanPanelRateLimitError`  | Panel refused a registration with HTTP 429; `retry_after_s` carries the wait it asked for          |
 
 Three more are specific to the hot-loading model, and they are separate because the remedy differs:
 
@@ -584,6 +600,7 @@ One repository, three distributions. The bootstrap is at the root; each parser i
 src/span_panel_api/          # distribution: span-panel-api (no parser)
 ├── __init__.py              # Public API exports
 ├── _http.py                 # Shared httpx plumbing / client ownership rules
+├── _ssl.py                  # The panel's trust anchor: SSL context, CA fingerprint, leaf-name probe
 ├── adapters.py              # installed_adapter_keys(), resolve_adapter() — metadata, then lazy import
 ├── auth.py                  # v2 HTTP provisioning (register, cert, schema, passphrase)
 ├── const.py                 # Panel state constants (DSM, relay)
@@ -601,6 +618,7 @@ src/span_panel_api/          # distribution: span-panel-api (no parser)
     ├── client.py            # SpanMqttClient (transport + control protocols)
     ├── connection.py        # AsyncMqttBridge (event-loop-driven, no threads)
     ├── const.py             # MQTT/Homie constants + UUID helpers
+    ├── control.py           # PublishOutcome, ControlCommand, ControlInterceptor
     └── models.py            # MqttClientConfig, MqttTransport
 
 packages/schema-0/           # distribution: span-panel-api-schema-0

@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from span_panel_api.models import ADOPTION_IDENTITY_NODE, ADOPTION_TOPOLOGY_NODE, ExtensionProperty, ExtensionSubject
+from span_panel_api_schema_1.const import SITE_PROPERTIES
 from span_panel_api_schema_1.description import declared_settable, nodes, optional_str, properties
 from span_panel_api_schema_1.field_metadata import is_addressed
 
@@ -69,12 +70,19 @@ def build_extension_properties(
             if node_id in (ADOPTION_IDENTITY_NODE, ADOPTION_TOPOLOGY_NODE):
                 continue
             declarations = properties(node)
+            # A site property never becomes a reading, but it still counts as
+            # an unaddressed sibling below: it is not one this adapter reads.
             unaddressed = {
                 property_id: definition
                 for property_id, definition in declarations.items()
                 if not is_addressed(addressed, declared, node_id, property_id)
             }
-            if not unaddressed:
+            readable = {
+                property_id: definition
+                for property_id, definition in unaddressed.items()
+                if property_id not in SITE_PROPERTIES
+            }
+            if not readable:
                 continue
             # True when the node carries at least one property this adapter does
             # read. One bit rather than the node-to-field map: a vendor
@@ -82,7 +90,7 @@ def build_extension_properties(
             # a consumer can act on. Exporting which fields would freeze this
             # adapter's internals as API for a signal the design ranks last.
             has_curated_siblings = len(unaddressed) < len(declarations)
-            for property_id, definition in unaddressed.items():
+            for property_id, definition in readable.items():
                 raw = device.get_property(node_id, property_id)
                 found.append(
                     ExtensionProperty(

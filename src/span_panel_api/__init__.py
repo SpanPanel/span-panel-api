@@ -29,6 +29,7 @@ from .exceptions import (
     SpanPanelError,
     SpanPanelInsufficientPrivilegeError,
     SpanPanelPassphraseUnavailableError,
+    SpanPanelRateLimitError,
     SpanPanelSchemaVersionError,
     SpanPanelServerError,
     SpanPanelStaleDataError,
@@ -41,15 +42,22 @@ from .models import (
     ADOPTION_IDENTITY_NODE,
     ADOPTION_TOPOLOGY_NODE,
     DISCOVERY_NAMESPACE,
+    FEEDS_ROLES,
+    PROTECTION_FUNCTIONS,
     AdoptedDevice,
     AdoptedProperty,
     ControlTarget,
     DiscoveredMetadata,
     ExtensionProperty,
     ExtensionSubject,
+    FeedsRole,
     FieldMetadata,
     HomieSchemaTypes,
+    MaskedTree,
+    MaskedTreeDevice,
+    MaskedTreeMetadata,
     PassphraseRotation,
+    ProtectionFunction,
     SpanBatterySnapshot,
     SpanCircuitSnapshot,
     SpanEvseSnapshot,
@@ -57,10 +65,12 @@ from .models import (
     SpanPanelSnapshot,
     SpanPcsSnapshot,
     SpanPVSnapshot,
+    UndescribedDevice,
     V2AuthResponse,
     V2HomieSchema,
     V2StatusInfo,
     is_discovery_path,
+    shared_meter_groups,
 )
 from .mqtt import (
     ControlCommand,
@@ -84,10 +94,12 @@ from .protocol import (
     CircuitControlProtocol,
     ControlInterceptionProtocol,
     EvseControlProtocol,
+    EvseLockControlProtocol,
     PanelCapability,
     PanelControlProtocol,
     SpanPanelClientProtocol,
     StreamingCapableProtocol,
+    TreeExportingAdapter,
 )
 
 __version__ = _pkg_version("span-panel-api")
@@ -106,6 +118,9 @@ __all__ = [  # noqa: RUF022
     # snapshot rather than by its arguments -- a device the adapter models
     # produces no AdoptedDevice and so cannot be addressed through it.
     "AdoptedControlProtocol",
+    # A charger's connector lock, authorised by `SpanEvseSnapshot.lock_control`.
+    # A protocol of its own so `EvseControlProtocol`'s implementers are unchanged.
+    "EvseLockControlProtocol",
     # Added 2026-08-25 (3.1.0): one veto/observe point for every control
     # command. A protocol of its own rather than a member on the four control
     # protocols, which would break their implementers a second time in one
@@ -137,6 +152,15 @@ __all__ = [  # noqa: RUF022
     "ControlTarget",
     "ExtensionProperty",
     "ExtensionSubject",
+    # Added 2026-10-31: the masked device tree a consumer forwards in diagnostics,
+    # and the optional protocol an adapter offers it through. Deliberately not a
+    # SchemaAdapter member: the protocol derives its required set from itself, so a
+    # member there would invalidate every built adapter wheel.
+    "MaskedTree",
+    "MaskedTreeDevice",
+    "MaskedTreeMetadata",
+    "UndescribedDevice",
+    "TreeExportingAdapter",
     # Snapshots
     "SpanBatterySnapshot",
     "SpanCircuitSnapshot",
@@ -145,6 +169,16 @@ __all__ = [  # noqa: RUF022
     "SpanPVSnapshot",
     "SpanPanelSnapshot",
     "SpanPcsSnapshot",
+    # What a circuit's `connection/feeds-role` declares, read into
+    # `SpanCircuitSnapshot.feeds_role`.
+    "FEEDS_ROLES",
+    "FeedsRole",
+    # What a circuit's `breaker/protection-functions` lists, read into
+    # `SpanCircuitSnapshot.protection_functions`.
+    "PROTECTION_FUNCTIONS",
+    "ProtectionFunction",
+    # The circuits one meter measures, from `SpanCircuitSnapshot.meter_shared_with`.
+    "shared_meter_groups",
     # Factory
     "create_span_client",
     # Detection
@@ -216,6 +250,10 @@ __all__ = [  # noqa: RUF022
     # keep their meaning; deliberately not a SpanPanelAuthError, because the
     # passphrase the user supplied may be correct.
     "SpanPanelPassphraseUnavailableError",
+    # Registration refused with HTTP 429, carrying the panel's `Retry-After` in
+    # seconds. A subclass of SpanPanelAPIError, so existing except clauses keep
+    # their meaning; not a SpanPanelAuthError, because no credential was judged.
+    "SpanPanelRateLimitError",
     "SpanPanelServerError",
     "SpanPanelStaleDataError",
     # Added 2026-08-31 (3.4.0): a bootstrap REST call that failed verification

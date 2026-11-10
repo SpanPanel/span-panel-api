@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Collection, Mapping
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 import hashlib
 import json
 import logging
+import math
 import ssl
 import uuid
 
@@ -24,6 +27,7 @@ from .exceptions import (
     SpanPanelAuthError,
     SpanPanelInsufficientPrivilegeError,
     SpanPanelPassphraseUnavailableError,
+    SpanPanelRateLimitError,
     SpanPanelServerError,
 )
 from .models import HomieSchemaTypes, PassphraseRotation, V2AuthResponse, V2HomieSchema, V2StatusInfo
@@ -216,21 +220,37 @@ CA_CERT_MAX_ATTEMPTS = 5
 CA_CERT_BACKOFF_S = 1.5
 
 
+def _retry_after_s(retry_after: str | None, now: datetime) -> float | None:
+    """The wait a ``Retry-After`` header asks for, in seconds, or None if it asks for none.
+
+    Both forms RFC 9110 allows: delta-seconds, taken as given, and an HTTP-date,
+    taken as the seconds from `now` until then (0.0 once it has passed). A
+    negative, infinite or unparseable value is no answer, so a bad header can
+    never stall or skip a retry.
+    """
+    if retry_after is None:
+        return None
+    try:
+        seconds = float(retry_after)
+    except ValueError:
+        try:
+            until = parsedate_to_datetime(retry_after)
+        except (TypeError, ValueError):
+            return None
+        if until.tzinfo is None:
+            return None
+        return max((until - now).total_seconds(), 0.0)
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
 def _retry_delay(retry_after: str | None, attempt: int, backoff_s: float) -> float:
     """Return how long to wait before retrying a rate-limited request.
 
-    Prefers the panel's ``Retry-After`` header (delta-seconds form) and falls
-    back to exponential backoff. Malformed or negative values fall back too,
-    so a bad header can never stall or skip the retry.
+    Prefers the panel's ``Retry-After`` header and falls back to exponential
+    backoff where it gives no usable wait.
     """
-    fallback = backoff_s * (2.0 ** (attempt - 1))
-    if retry_after is None:
-        return fallback
-    try:
-        parsed = float(retry_after)
-    except (TypeError, ValueError):
-        return fallback
-    return parsed if parsed >= 0 else fallback
+    parsed = _retry_after_s(retry_after, datetime.now(UTC))
+    return backoff_s * (2.0 ** (attempt - 1)) if parsed is None else parsed
 
 
 async def register_v2(
@@ -276,6 +296,7 @@ async def register_v2(
     Raises:
         SpanPanelAuthError: Invalid passphrase or auth failure
         SpanPanelPassphraseUnavailableError: The panel cannot read its own passphrase
+        SpanPanelRateLimitError: HTTP 429; the panel is limiting registrations. Not retried
         SpanPanelServerError: The panel is not ready to register clients (any 5xx,
             including the 503 it answers before its serial number is known); retryable
         SpanPanelConnectionError: Cannot reach panel
@@ -312,6 +333,16 @@ async def register_v2(
         raise SpanPanelServerError(
             f"Panel not ready: HTTP {reply.status_code} from /api/v2/auth/register",
             status_code=reply.status_code,
+        )
+
+    if reply.status_code == HTTP_TOO_MANY_REQUESTS:
+        # Not retried: the panel limits registrations per client address, and a
+        # retry here would spend the caller's next attempt on its behalf.
+        _log_auth_failure(reply.endpoint, reply.response, sent)
+        raise SpanPanelRateLimitError(
+            f"Panel is rate-limiting registration (HTTP {reply.status_code})",
+            status_code=reply.status_code,
+            retry_after_s=_retry_after_s(reply.headers.get("retry-after"), datetime.now(UTC)),
         )
 
     if reply.status_code == 422 and _error_detail(reply.response) == REGISTRATION_UNAVAILABLE_DETAIL:
@@ -613,8 +644,8 @@ async def rotate_passphrase(
     Raises:
         SpanPanelInsufficientPrivilegeError: HTTP 403; the token is reduced-privilege
         SpanPanelAuthError: HTTP 401 (token invalid or stale) or 412 (no bearer token)
-        SpanPanelServerError: HTTP 5xx. After a 500 the outcome is unknown: the
-            passphrase may or may not have changed.
+        SpanPanelServerError: HTTP 5xx. After a 500 or a 504 the outcome is unknown:
+            the passphrase may or may not have changed.
         SpanPanelConnectionError: Cannot reach panel
         SpanPanelTimeoutError: Request timed out
         SpanPanelAPIError: Unexpected response

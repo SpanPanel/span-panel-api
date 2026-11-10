@@ -8,7 +8,8 @@ therefore reaches the SDK; importing `bootstrap` does not.
 `devices_from_tree` stays beside the capture for the reason it was written: a
 tree is not directly usable, every consumer of it has to replay the retained
 topics through `DiscoveredDevice` first, and separating the two would put the
-same twelve lines in each of the test modules that read it.
+same twelve lines in each of the test modules that read it. `replay` is the same
+step one level up, for a test that wants the adapter rather than the devices.
 
 **The bytes come out of the installed wheel, not out of this tree.** The capture
 is package data of `span-panel-api-schema-1` — read through
@@ -21,23 +22,49 @@ it, and a real consumer gets this tree off a broker.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from importlib.resources import files
 import json
+from pathlib import Path
+import time
 
+from ebus_sdk import decode_empty_string, encode_empty_string
 from ebus_sdk.homie import DiscoveredDevice
+
+from span_panel_api.models import V2HomieSchema
+from span_panel_api_schema_1 import SchemaOneAdapter
 
 type RetainedTopicTree = Mapping[str, Mapping[str, str]]
 """A retained-topic capture: device id -> topic -> payload, all strings.
 
 `$description` is a JSON *string*, not a nested object — it is stored on the
 wire exactly as the panel publishes it, and `update_description` parses it.
+
+A value is the payload as retained, with one reading added: `""` is an empty
+value. A broker never retains a zero-length payload, because publishing one
+deletes the retained message, so a tree can only hold `""` where an empty value
+was written in its decoded form, as the masked export writes it. It is replayed
+as Homie 5 spells an empty value on the wire, a single `0x00`, and read as
+`""`, exactly as `"\x00"` is.
 """
 
+
+def retained_payload(value: str) -> str:
+    """The payload a tree's value is replayed as: `""` as `0x00`, anything else as itself.
+
+    The one rule every replay of a tree applies (see `RetainedTopicTree`), shared
+    so that a replay sending `""` raw, which is a clear, cannot be written again.
+    """
+    return encode_empty_string(value)
+
+
 _PARENT_CHILD_TREE = files("span_panel_api_schema_1") / "reference" / "parent_child_tree.json"
+_OTHER_MODEL_TREE = Path(__file__).parent.parent / "fixtures" / "other_model_tree.json"
 
 _DEFAULT_STATE = "ready"
 _DOMAIN = "ebus"
+_HOMIE_VERSION = "5"
+_INFO = "info"
 
 
 def parent_child_tree() -> RetainedTopicTree:
@@ -50,6 +77,18 @@ def parent_child_tree() -> RetainedTopicTree:
     tree: object = json.loads(_PARENT_CHILD_TREE.read_text(encoding="utf-8"))
     if not isinstance(tree, dict):
         raise TypeError(f"{_PARENT_CHILD_TREE.name} is not a JSON object")
+    return tree
+
+
+def other_model_tree() -> RetainedTopicTree:
+    """The hand-authored tree `test_schema_one_other_models.py` reads.
+
+    Test data only, kept under `tests/fixtures/` rather than shipped with
+    schema-1: it is not a capture, and no downstream suite replays it.
+    """
+    tree: object = json.loads(_OTHER_MODEL_TREE.read_text(encoding="utf-8"))
+    if not isinstance(tree, dict):
+        raise TypeError(f"{_OTHER_MODEL_TREE.name} is not a JSON object")
     return tree
 
 
@@ -69,7 +108,7 @@ def device_from_topics(device_id: str, topics: Mapping[str, str]) -> DiscoveredD
             continue
         node, _, prop = topic.partition("/")
         if prop:
-            device.update_property(node, prop, value)
+            device.update_property(node, prop, decode_empty_string(value))
     return device
 
 
@@ -81,3 +120,55 @@ def devices_from_tree(tree: RetainedTopicTree) -> list[DiscoveredDevice]:
     build devices the same way.
     """
     return [device_from_topics(device_id, topics) for device_id, topics in tree.items()]
+
+
+def replay(
+    tree: RetainedTopicTree,
+    root_id: str,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    withhold_description_of: str | None = None,
+) -> SchemaOneAdapter:
+    """Feed a whole tree to a fresh adapter the way the broker replays it.
+
+    Every message goes through `handle_message`, so the tree takes the SDK's real
+    discovery path rather than a stubbed one. The root comes first, then the
+    rest in the tree's order. That is the friendly order, not a requirement: the
+    SDK routes a child only once its parent is ready, and the adapter holds a
+    message that arrives earlier until its route exists.
+
+    The REST half of connecting is answered from the tree itself: the schema's
+    firmware and data-model versions are the ones the root retains, so a test
+    never states a second firmware beside the one its tree publishes.
+
+    `clock` is the adapter's monotonic source, for a test that steps through a
+    grace the adapter waits out.
+
+    `withhold_description_of` leaves out one device's `$description` and `$state`
+    but still delivers its values: the device its parent declared as a child and
+    that has not yet described itself, with whatever it has already published.
+
+    An empty value goes out as `0x00` (see `RetainedTopicTree`): sent as `""`,
+    it would be a clear, which no retained tree holds.
+    """
+    root = tree[root_id]
+    adapter = SchemaOneAdapter(
+        root_id,
+        V2HomieSchema(
+            firmware_version=root.get(f"{_INFO}/firmware-version", ""),
+            types_schema_hash="sha256:test",
+            types={},
+            data_model_version=root.get(f"{_INFO}/data-model-version", "1.0"),
+        ),
+        clock=clock,
+    )
+    for device_id in [root_id, *(other for other in tree if other != root_id)]:
+        topics = tree[device_id]
+        prefix = f"{_DOMAIN}/{_HOMIE_VERSION}/{device_id}"
+        if device_id != withhold_description_of:
+            adapter.handle_message(f"{prefix}/$description", topics["$description"])
+            adapter.handle_message(f"{prefix}/$state", topics.get("$state", _DEFAULT_STATE))
+        for topic, value in topics.items():
+            if not topic.startswith("$"):
+                adapter.handle_message(f"{prefix}/{topic}", retained_payload(value))
+    return adapter

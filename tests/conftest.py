@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import itertools
 import json
 import os
 from pathlib import Path
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterable
 from unittest.mock import MagicMock, patch
 
 import paho.mqtt.client as paho
@@ -15,6 +16,7 @@ import pytest
 from paho.mqtt.client import ConnectFlags
 from paho.mqtt.reasoncodes import ReasonCode
 
+from expected_failures import EXPECTED_FAILURES
 import span_panel_api._http as _http_mod
 from span_panel_api.models import V2HomieSchema
 from span_panel_api.mqtt.control import ControlDeadlines
@@ -47,6 +49,57 @@ def _load_dotenv() -> None:
 
 
 _load_dotenv()
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Mark every test `expected_failures.py` lists as a strict expected failure.
+
+    A row naming a file that does not exist, or a test that file does not
+    define, is a typo, a rename or a deletion that would silently mark nothing,
+    so it stops the run. The check reads the files themselves rather than what
+    this run collected, so a partial run (`-k`, one file) judges every row the
+    same way a full one does.
+    """
+    stale = stale_rows(EXPECTED_FAILURES, config.rootpath)
+    if stale:
+        raise pytest.UsageError(f"expected_failures.py names tests that do not exist: {', '.join(stale)}")
+    for item in items:
+        if not isinstance(item, pytest.Function):
+            continue
+        path = item.nodeid.partition("::")[0]
+        reason = EXPECTED_FAILURES.get(f"{path}::{item.originalname}")
+        if reason is not None:
+            item.add_marker(pytest.mark.xfail(strict=True, reason=reason))
+
+
+def stale_rows(rows: Iterable[str], root: Path) -> list[str]:
+    """The rows, sorted, whose file under `root` is missing or defines no such test."""
+    defined: dict[str, frozenset[str]] = {}
+    stale: list[str] = []
+    for key in rows:
+        path, _, name = key.partition("::")
+        if path not in defined:
+            defined[path] = _test_functions(root / path)
+        if name not in defined[path]:
+            stale.append(key)
+    return sorted(stale)
+
+
+def _test_functions(path: Path) -> frozenset[str]:
+    """The test functions `path` defines under the default `test` prefix, or none if it is not a file.
+
+    At module level or as a method of one of its `Test` classes, read from the
+    source, so nothing is imported to answer.
+    """
+    if not path.is_file():
+        return frozenset()
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    functions = (ast.FunctionDef, ast.AsyncFunctionDef)
+    names = {node.name for node in tree.body if isinstance(node, functions)}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            names.update(member.name for member in node.body if isinstance(member, functions))
+    return frozenset(name for name in names if name.startswith("test"))
 
 
 @pytest.fixture(autouse=True)
@@ -250,5 +303,6 @@ FAST_CONTROL_DEADLINES = ControlDeadlines(
     priority=0.05,
     dominant_power_source=0.05,
     evse_charge_limit=0.05,
+    evse_lock=0.05,
     adopted_property=0.05,
 )

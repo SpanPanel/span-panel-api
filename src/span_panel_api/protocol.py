@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from ._ssl import LeafNameMismatch
     from .exceptions import SpanPanelError
-    from .models import ControlTarget, FieldMetadata, SpanPanelSnapshot, V2HomieSchema
+    from .models import ControlTarget, FieldMetadata, MaskedTree, SpanPanelSnapshot, V2HomieSchema
     from .mqtt.control import ControlInterceptor, PublishOutcome
 
 
@@ -122,6 +122,19 @@ class EvseControlProtocol(Protocol):
     """
 
     async def set_evse_charge_limit(self, node_id: str, amps: int) -> PublishOutcome: ...
+
+
+@runtime_checkable
+class EvseLockControlProtocol(Protocol):
+    """Control protocol for a commissioned EV charger's connector lock.
+
+    A protocol of its own rather than a member on `EvseControlProtocol`, which
+    would break that protocol's implementers. The write is authorised by the
+    snapshot: only a charger whose `SpanEvseSnapshot.lock_control` is set can be
+    addressed, and only with a value its `lock_state_options` lists.
+    """
+
+    async def set_evse_lock(self, node_id: str, locked: bool) -> PublishOutcome: ...
 
 
 @runtime_checkable
@@ -373,3 +386,18 @@ class SchemaAdapter(Protocol):
         `device_id` is the panel serial rather than being omitted. Filling it in
         is what lets a consumer treat both schemas' streams as one shape.
         """
+
+
+@runtime_checkable
+class TreeExportingAdapter(Protocol):
+    """Adapter that can export the device tree it holds, masked for diagnostics.
+
+    A protocol of its own rather than a `SchemaAdapter` member: the required set
+    of that protocol is derived from itself, so a member added there would be
+    demanded of every built adapter and invalidate those already shipped. A
+    consumer asks `isinstance(adapter, TreeExportingAdapter)` and offers the
+    export only when it holds.
+    """
+
+    def export_masked_tree(self) -> MaskedTree | None:
+        """The masked tree, or None when the adapter holds no tree yet."""

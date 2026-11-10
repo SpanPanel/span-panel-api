@@ -165,6 +165,21 @@ report, and a smaller report looks exactly like a panel with nothing new on it.
 a snapshot field, and every reported property moves none. `_CONSUMED_OFF_SNAPSHOT` holds the three declarations consumed by a route no snapshot field can show (tier-1 dispatch, the shadowed islanding tier, the unreached feedthrough branch); each names the
 code that reads it, and each fails the day its property does move a field.
 
+### A masked tree for diagnostics
+
+Discovery rows never carry a value, so they can be forwarded as they stand. `MaskedTree` is the opposite trade: it carries the whole tree, every declared property with the value the panel published, so a consumer can attach a panel's real shape to a report
+and a maintainer can replay it through the same loader, adapter and fidelity harness the vendored captures use. It can carry values because it is safe by construction: `SchemaOneAdapter.export_masked_tree` runs the tree through
+`span_panel_api_schema_1.tree_export`, which masks by rule, so a consumer forwards the result whole and decides nothing about what is sensitive.
+
+The masks match the site properties (`utility-meter-serial-number`, `wifi-ssid`, `postal-code`, `address-lines`, `locality`, `region`, `latitude`, `longitude`, `time-zone` as `UTC`, `country-code` as `ZZ`) and `serial-number` by property id on any node,
+and the panel's `info/name` and its `$description` `name`; `name` on any other node or device is kept. Device ids become placeholders that start `masked-`, and a final sweep replaces any device id, and any serial that reads as an identifier (six characters
+or more with a digit; a placeholder such as `0` or `N/A` is masked at its own property only), still present in any wire string. It decodes JSON string literals to do so, to a bound of four nested levels, and in the plain text between them a JSON-style
+escape written out (`\n`, `\u00b0`) is a boundary before an identifier, as a backslash alone is. A `$description` is read as parsed to a looser bound of thirty-two containers, after which a subtree is masked whole only if something in it would be swept.
+The module and `_Sweep` docstrings in `tree_export.py` hold the rules; change them there.
+
+It is optional, like the discovery rows: `TreeExportingAdapter` is a separate `runtime_checkable` protocol, not a `SchemaAdapter` member, so no `ADAPTER_CONTRACT` bump and no adapter distribution is rejected. `SpanMqttClient.masked_tree()` returns `None`
+for an adapter that does not offer it, which includes the flat adapter, and before the root device has described itself.
+
 ## Devices this library models nothing for
 
 `TreeRoles` sorts a v1.0 tree into the roles a snapshot needs. Anything matching none of them used to fall off the end silently — a panel publishing a device type nobody modelled produced no field, no metadata row and no sign it was there. The eBus schema
@@ -197,6 +212,7 @@ The two answer opposite questions and are separate types so that conflating them
 | Type                 | Question                                     | Destination                       | Carries a value |
 | -------------------- | -------------------------------------------- | --------------------------------- | --------------- |
 | `DiscoveredMetadata` | "we model this device and read nothing here" | consumer diagnostics, which leave | **no**          |
+| `MaskedTree`         | "the whole tree, safe to forward"            | consumer diagnostics, which leave | **yes, masked** |
 | `AdoptedProperty`    | "nothing here models this device at all"     | an entity on the same machine     | **yes**         |
 
 `AdoptedProperty` also carries the declared `format` and `settable` flag, which together are the value domain a consumer needs to build a control rather than a reading.
@@ -280,7 +296,20 @@ To install pre-commit hooks:
 ./setup-hooks.sh
 ```
 
-This installs dependencies (if needed) and configures git pre-commit hooks.
+This syncs dependencies and, in the primary checkout, installs the git pre-commit hook. Run from a worktree, it syncs that worktree's own environment and checks the shared hook instead of reinstalling it: hooks are shared by every worktree and record the
+interpreter that installed them, so a hook installed from a worktree stops working when that worktree is removed. `./setup-hooks.sh --check-hook` only checks the shared hook, and exits non-zero when it is missing or not bound to the primary checkout.
+
+## Worktrees
+
+Create worktrees with the script rather than `git worktree add`:
+
+```bash
+./scripts/new-worktree.sh <name> [<branch>]    # <branch> defaults to feat/<name>
+```
+
+It fetches `origin`, fast-forwards `main` where that is safe, installs the shared pre-commit hook from the primary checkout if it is missing or bound elsewhere, creates `../span-panel-api-<name>` on a branch that does not track a remote, links `.env` from
+the primary checkout, and runs `setup-hooks.sh` inside it. The worktree gets a virtual environment of its own rather than a link to the primary checkout's: editable installs record one checkout's source path, so a shared environment would import whichever
+checkout synced last.
 
 ## Workspace layout
 

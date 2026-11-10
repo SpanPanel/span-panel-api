@@ -50,6 +50,7 @@ from span_panel_api_schema_1.const import (
     NODE_SHED,
     NODE_SHED_FORECAST,
     NODE_STATUS,
+    PANEL_POSITIONS_BY_MODEL,
     PANEL_SIZE_BY_MODEL,
     PCS_ACTIVE_SUFFIX,
     PCS_ENABLEMENT_SUFFIX,
@@ -58,6 +59,7 @@ from span_panel_api_schema_1.const import (
     PROP_ACTIVE_POWER,
     PROP_ASSERTED_ISLANDING_STATE,
     PROP_BINDING_CONSTRAINT,
+    PROP_BUSBAR_CURRENT,
     PROP_CAPABLE,
     PROP_CLOUD_CONNECTION,
     PROP_CONFIDENCE,
@@ -66,6 +68,7 @@ from span_panel_api_schema_1.const import (
     PROP_EXPORTED_ENERGY,
     PROP_FED_BY_DEVICE_ID,
     PROP_FIRMWARE_VERSION,
+    PROP_FREQUENCY,
     PROP_FULL_CHARGE_TIME_TO_PRIORITY_SHED,
     PROP_FULL_CHARGE_TOTAL_TIME_REMAINING,
     PROP_GRID_FORMING_ENTITY,
@@ -73,6 +76,7 @@ from span_panel_api_schema_1.const import (
     PROP_IMPORT_LIMIT,
     PROP_IMPORTED_ENERGY,
     PROP_MODEL,
+    PROP_OVERCURRENT_PROTECTION,
     PROP_POLICY,
     PROP_RATING,
     PROP_RELAY,
@@ -90,9 +94,10 @@ from span_panel_api_schema_1.const import (
     TYPE_PV,
     UNKNOWN,
 )
+from span_panel_api_schema_1.description import declares_class
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from ebus_sdk.homie import DiscoveredDevice
 
@@ -206,11 +211,13 @@ def panel_size_from_model(model: str) -> int:
 
     Unknown models return 0 and log, because inventing a size is worse than
     reporting none: a wrong total lays out positions that are not there, or
-    hides real ones.
+    hides real ones. `UNKNOWN` is a member of the model enum that names no
+    model, so it returns 0 without logging on every snapshot.
     """
-    size = PANEL_SIZE_BY_MODEL.get(model.strip().upper())
+    normalized = model.strip().upper()
+    size = PANEL_SIZE_BY_MODEL.get(normalized)
     if size is None:
-        if model:
+        if model and normalized != UNKNOWN:
             _LOGGER.warning(
                 "Unknown panel model %r; panel size unavailable. Known models: %s",
                 model,
@@ -218,6 +225,45 @@ def panel_size_from_model(model: str) -> int:
             )
         return 0
     return size
+
+
+def panel_positions(model: str | None, occupied: Iterable[int]) -> tuple[int | None, int | None]:
+    """The panel's first and last breaker positions.
+
+    The reported model's range, exactly as `PANEL_POSITIONS_BY_MODEL` gives it,
+    where the table knows the model; an occupied space outside that range does
+    not move it (`positions_outside_model` says when one does). With no known
+    model, the lowest and highest occupied spaces, and `(None, None)` when none
+    is occupied. Only the range: nothing is filled in over it.
+    """
+    known = _model_positions(model)
+    if known is not None:
+        return known
+    spaces = set(occupied)
+    if not spaces:
+        return None, None
+    return min(spaces), max(spaces)
+
+
+def positions_outside_model(model: str | None, occupied: Iterable[int]) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """The model's position range and the occupied extremes, where a space lies outside the range.
+
+    `None` where the table does not know the model, or every occupied space lies
+    inside its range. A panel that answers otherwise disagrees with the table,
+    which is ours to correct; the range reported stays the table's.
+    """
+    known = _model_positions(model)
+    spaces = set(occupied)
+    if known is None or not spaces:
+        return None
+    extremes = (min(spaces), max(spaces))
+    if known[0] <= extremes[0] and extremes[1] <= known[1]:
+        return None
+    return known, extremes
+
+
+def _model_positions(model: str | None) -> tuple[int, int] | None:
+    return PANEL_POSITIONS_BY_MODEL.get(model.strip().upper()) if model else None
 
 
 def panel_model_drift(panel: DiscoveredDevice) -> tuple[str, ...]:
@@ -239,10 +285,11 @@ def panel_model_drift(panel: DiscoveredDevice) -> tuple[str, ...]:
     advertised = str(definition.get("format", ""))
     if not advertised:
         return ()
+    # `UNKNOWN` is a member that names no model, so there is no size to miss.
     unknown = [
         value.strip()
         for value in advertised.split(",")
-        if value.strip() and value.strip().upper() not in PANEL_SIZE_BY_MODEL
+        if value.strip() and value.strip().upper() not in {*PANEL_SIZE_BY_MODEL, UNKNOWN}
     ]
     if unknown:
         _LOGGER.warning(
@@ -346,6 +393,24 @@ def _percent(value: object) -> int | None:
     return None
 
 
+def lugs_at_service_entrance(upstream_lugs: DiscoveredDevice | None) -> bool | None:
+    """Whether nothing sits between the utility and the upstream lugs, or None if not yet said.
+
+    Read from the lugs' own `connection/fed-by-device-id`, the mechanism
+    `power-flows` 0.3 names when it qualifies the `grid` row of its negation
+    table. A device id there means something feeds the lugs: `False`. No such
+    property declared, or one published empty, is the ordinary case: `True`.
+    Declared and not yet valued, the lugs have not said, and either answer
+    would be a guess: `None`.
+    """
+    if upstream_lugs is None or PROP_FED_BY_DEVICE_ID not in upstream_lugs.get_node_properties(NODE_CONNECTION):
+        return True
+    fed_by = upstream_lugs.get_property(NODE_CONNECTION, PROP_FED_BY_DEVICE_ID)
+    if fed_by is None:
+        return None
+    return not str(fed_by)
+
+
 class PanelFields:
     """Panel-level values gathered from the tree, ready for the snapshot.
 
@@ -368,7 +433,10 @@ class PanelFields:
         # one: the consumer owns the fallback text it has always shown, and a
         # default invented here would replace it with a different invention.
         self.vendor_name = text(panel, NODE_INFO, PROP_VENDOR_NAME) or None
-        self.model = text(panel, NODE_INFO, PROP_MODEL) or None
+        # `UNKNOWN` is a member of the model enum that names no model, so it
+        # reads as absent and the consumer keeps its own fallback.
+        model = text(panel, NODE_INFO, PROP_MODEL)
+        self.model = model if model and model.strip().upper() != UNKNOWN else None
         self.hardware_version = text(panel, NODE_INFO, PROP_HARDWARE_VERSION) or None
         self.main_relay_state = text(panel, NODE_STATUS, PROP_RELAY, UNKNOWN)
         self.door_state = text(panel, NODE_DOOR, PROP_STATE, UNKNOWN)
@@ -381,6 +449,9 @@ class PanelFields:
         # the entity does not change meaning between adapters.
         self.wwan_link = self.vendor_cloud == CLOUD_CONNECTED
 
+        self.busbar_current_a = number(panel, NODE_METER, PROP_BUSBAR_CURRENT)
+        self.frequency_hz = number(panel, NODE_METER, PROP_FREQUENCY)
+        self.upstream_protection_rating_a = integer(upstream_lugs, NODE_CONNECTION, PROP_OVERCURRENT_PROTECTION)
         self.l1_voltage = number(panel, NODE_METER, PROP_VOLTAGE_A)
         self.l2_voltage = number(panel, NODE_METER, PROP_VOLTAGE_B)
         rating = number(panel, NODE_BREAKER, PROP_RATING)
@@ -393,12 +464,8 @@ class PanelFields:
 
         # Whether the upstream lugs are the utility connection point, which is not
         # a given: a BESS wired ahead of the main lugs, or a panel fed by another
-        # panel, puts a device between the utility and this meter. Read from the
-        # lugs' own `connection/fed-by-device-id`, the mechanism `power-flows` 0.3
-        # names when it qualifies the `grid` row of its negation table. Empty
-        # string is the absence -- `text` defaults to it -- and absence is the
-        # ordinary case.
-        self.lugs_at_service_entrance = not text(upstream_lugs, NODE_CONNECTION, PROP_FED_BY_DEVICE_ID)
+        # panel, puts a device between the utility and this meter.
+        self.lugs_at_service_entrance = lugs_at_service_entrance(upstream_lugs)
 
         # No sign flip: the enclosure frame already reports import-positive, which
         # is what consumption means here.
@@ -557,11 +624,6 @@ def build_pcs(panel: DiscoveredDevice) -> SpanPcsSnapshot | None:
     )
 
 
-# Matches `schema_0`'s epsilon so the no-MID heuristic answers identically on the two
-# adapters — the tier exists precisely for panels where nothing authoritative is
-# published, and disagreeing about the threshold would make it schema-dependent.
-_GRID_POWER_EPSILON_W = 1.0
-
 ISLANDING_ON_GRID = "ON_GRID"
 ISLANDING_OFF_GRID = "OFF_GRID"
 
@@ -573,8 +635,8 @@ def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevic
     | --- | --- | --- |
     | 1 | `shed/asserted-islanding-state` is `ON_GRID` or `OFF_GRID` | asserted |
     | 2 | MID `$state` is `ready` and `islanding-state` present | sensed |
-    | 3 | no MID at all | `power-flows/grid` heuristic |
-    | 4 | none of the above | unknown |
+    | 3 | no MID at all | on-grid, by elimination |
+    | 4 | a MID that has not answered | unknown |
 
     **An assertion in force is the effective state, so it outranks the MID.** When the
     panel's link to the battery is not healthy (the battery's `status/communication-state`
@@ -585,12 +647,25 @@ def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevic
     different one. The assertion clears itself back to `NONE` once the battery link
     recovers, so the MID's answer returns without anything here having to expire it.
 
-    **Tier 3 never answers `OFF_GRID`, and never asserts on-grid from a missing MID.** An
-    earlier draft reasoned that no MID means no islanding authority means on-grid. That is
-    wrong: a missing MID means *SPAN* is not the islanding authority, and says nothing
-    about whether the site is islanded — a generator-fed island is the plain
-    counterexample. Grid power flowing is positive evidence of being on-grid; its absence
-    is not evidence of the opposite.
+    **No MID at all means on-grid, and tier 3 never answers `OFF_GRID`.** A commissioned
+    MID is what a SPAN panel islands with, so a panel without one cannot separate from
+    whatever feeds it, and what feeds it is what SPAN treats as the grid. This is the
+    elimination `resolve_dominant_power_source` makes, and the two now agree on every
+    tree. A panel that loses that feed loses power and stops publishing, so the answer
+    is withdrawn with the panel rather than left standing.
+
+    Tier 3 read `power-flows/grid` before, and answered on-grid only above 1 W, on the
+    reasoning that a missing MID says nothing about whether the site is islanded — a
+    generator-fed island being the counterexample. The threshold never defended that
+    case: a generator-fed panel carrying any load reads far above it and was reported
+    on-grid all the same. What it did was withdraw the answer each time the reading
+    touched zero, which a sub-panel with a small net draw does many times a day, and a
+    consumer saw each return as the grid coming back. How much power is flowing says
+    nothing about where it comes from, so the reading no longer takes part.
+
+    `mid is None` means no MID is declared, not that one has yet to be discovered: the
+    adapter builds no snapshot until every device the tree declares has described
+    itself. A MID that exists and has not answered is tier 4, and stays unknown.
     """
     asserted = text(panel, NODE_SHED, PROP_ASSERTED_ISLANDING_STATE)
     if asserted in (ISLANDING_ON_GRID, ISLANDING_OFF_GRID):
@@ -603,10 +678,7 @@ def resolve_islanding_state(mid: DiscoveredDevice | None, panel: DiscoveredDevic
                 return sensed
         return None
 
-    grid_power = number(panel, NODE_POWER_FLOWS, "grid")
-    if grid_power is not None and abs(grid_power) > _GRID_POWER_EPSILON_W:
-        return ISLANDING_ON_GRID
-    return None
+    return ISLANDING_ON_GRID
 
 
 def resolve_dsm_state(islanding: str | None) -> str:
@@ -634,7 +706,7 @@ def resolve_run_config(
     | condition | result |
     | --- | --- |
     | `grid-forming-entity == "GRID"` | `PANEL_ON_GRID` |
-    | resolves to a device of class `bess` | `PANEL_BACKUP` |
+    | resolves to a device of class `bess`, or a subtype of it | `PANEL_BACKUP` |
     | resolves to any other device | `PANEL_OFF_GRID` |
     | absent, empty, or unresolvable | falls through below |
 
@@ -652,10 +724,8 @@ def resolve_run_config(
         if forming.upper() == "GRID":
             return "PANEL_ON_GRID"
         resolved = device_types.get(forming)
-        if resolved == TYPE_BESS:
-            return "PANEL_BACKUP"
         if resolved is not None:
-            return "PANEL_OFF_GRID"
+            return "PANEL_BACKUP" if declares_class(resolved, TYPE_BESS) else "PANEL_OFF_GRID"
 
     if islanding == ISLANDING_ON_GRID:
         return "PANEL_ON_GRID"
@@ -686,10 +756,11 @@ def resolve_grid_islandable(inverters: Sequence[DiscoveredDevice]) -> bool | Non
 
 
 # Flat's `dominant-power-source` enum, keyed by the device class v1.0 names instead.
+# A class covers its subtypes (`declares_class`), so this is searched rather than indexed.
 # `GENERATOR` has no row because the device-type registry has no generator: flat's value
 # came from the panel computing a source class, v1.0 names an actual device, and there is
 # no generator device to name yet. One row when there is.
-_POWER_SOURCE_BY_TYPE: dict[str, str] = {
+_POWER_SOURCE_BY_CLASS: dict[str, str] = {
     TYPE_BESS: "BATTERY",
     TYPE_PV: "PV",
 }
@@ -734,12 +805,11 @@ def resolve_dominant_power_source(
     A site genuinely running off-grid without storage is not a counterexample; it goes
     dark at sunset.
 
-    This deliberately does **not** follow `resolve_islanding_state`, which refuses the
-    same shortcut. The two answer different questions and the counterexample that defeats
-    it there is the one that supports it here: a generator-fed island is islanded — so
-    inferring on-grid from a missing MID would be wrong — while its grid-forming entity
-    really is what SPAN calls the grid. Islanding is a safety fact about separation; this
-    is a class of source.
+    `resolve_islanding_state` rests on the same elimination and answers on-grid for the
+    same trees. It refused the shortcut at first, on the grounds that a generator-fed
+    island is islanded, and read grid power instead — which reported that same island
+    on-grid whenever it carried load. A source with no MID interface is the grid as far
+    as SPAN can tell, and both fields now say so.
 
     It is also no worse than flat, which is the bar. Flat could not see an uninterfaced
     generator either and published `GRID` regardless; a panel upgrading to v1.0 keeps the
@@ -756,7 +826,8 @@ def resolve_dominant_power_source(
         return None
     if forming.upper() == "GRID":
         return "GRID"
-    return _POWER_SOURCE_BY_TYPE.get(device_types.get(forming, ""), UNKNOWN)
+    resolved = device_types.get(forming, "")
+    return next((source for known, source in _POWER_SOURCE_BY_CLASS.items() if declares_class(resolved, known)), UNKNOWN)
 
 
 def device_display_name(device: DiscoveredDevice) -> str | None:

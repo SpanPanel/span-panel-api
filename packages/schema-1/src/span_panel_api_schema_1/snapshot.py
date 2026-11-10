@@ -17,6 +17,7 @@ from span_panel_api_schema_1.const import (
     NODE_CONNECTION,
     NODE_INFO,
     PROP_FEEDS_DEVICE_ID,
+    PROP_FEEDS_ROLE,
     PROP_MODEL,
     PROP_SERIAL_NUMBER,
     TYPE_BESS,
@@ -27,7 +28,7 @@ from span_panel_api_schema_1.const import (
     TYPE_MID,
     TYPE_PV,
 )
-from span_panel_api_schema_1.description import device_type
+from span_panel_api_schema_1.description import declares_class, device_type, node_properties
 from span_panel_api_schema_1.devices import (
     build_battery,
     build_evse,
@@ -44,6 +45,7 @@ from span_panel_api_schema_1.panel import (
     build_pcs,
     device_display_name,
     find_lugs,
+    panel_positions,
     panel_size_from_model,
     resolve_dominant_power_source,
     resolve_dsm_state,
@@ -62,10 +64,13 @@ if TYPE_CHECKING:
 class TreeRoles:
     """The tree sorted into the roles a snapshot needs.
 
-    Matching is prefix-based for lugs, because firmware may declare either the
-    base ``…device.lugs`` type with a ``direction`` property or a subtyped
-    ``…device.lugs.upstream`` — the flat adapter already had to handle both
-    conventions, and there is no reason to assume v1.0 settled it.
+    Each role takes its class and every subtype of it (`declares_class`),
+    because firmware may declare either the base ``…device.lugs`` type with a
+    ``direction`` property or a subtyped ``…device.lugs.upstream`` — the flat
+    adapter already had to handle both conventions for lugs, and the same
+    hierarchy applies to every class here. Matching the others by exact type
+    left a subtype read by no role, while adoption, which honours the
+    hierarchy, declined it as modelled (#228).
     """
 
     def __init__(self, devices: list[DiscoveredDevice]) -> None:
@@ -81,17 +86,17 @@ class TreeRoles:
 
         for device in devices:
             declared = device_type(device)
-            if declared == TYPE_CIRCUIT:
+            if declares_class(declared, TYPE_CIRCUIT):
                 self.circuits.append(device)
-            elif declared.startswith(TYPE_LUGS):
+            elif declares_class(declared, TYPE_LUGS):
                 self.lugs.append(device)
-            elif declared == TYPE_EVSE:
+            elif declares_class(declared, TYPE_EVSE):
                 self.evse.append(device)
-            elif declared == TYPE_BESS and self.bess is None:
+            elif declares_class(declared, TYPE_BESS) and self.bess is None:
                 self.bess = device
-            elif declared == TYPE_PV:
+            elif declares_class(declared, TYPE_PV):
                 self.pvs.append(device)
-            elif declared == TYPE_MID and self.mid is None:
+            elif declares_class(declared, TYPE_MID) and self.mid is None:
                 self.mid = device
 
 
@@ -159,13 +164,19 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
     # uses, and this loop is where a circuit's is decided -- deriving it a
     # second time downstream would be a second implementation free to drift.
     circuit_subjects: list[tuple[DiscoveredDevice, ExtensionSubject]] = []
+    circuit_ids = frozenset(circuit.device_id for circuit in roles.circuits)
     for circuit in roles.circuits:
-        snapshot = build_circuit(circuit, device_type=der_type_by_circuit.get(circuit.device_id, "circuit"))
+        snapshot = build_circuit(
+            circuit, device_type=der_type_by_circuit.get(circuit.device_id, "circuit"), circuit_ids=circuit_ids
+        )
         circuits[snapshot.circuit_id] = snapshot
         circuit_subjects.append((circuit, ExtensionSubject(kind="circuit", instance_key=snapshot.circuit_id)))
 
     # An unknown model yields size 0 rather than a guessed total.
     panel_size = panel_size_from_model(text(panel, NODE_INFO, PROP_MODEL))
+    first_position, last_position = panel_positions(
+        fields.model, (tab for circuit in circuits.values() for tab in circuit.tabs)
+    )
 
     # Owners are every device that can claim a DER through a `connection` node.
     owners = [*roles.lugs, *roles.circuits, panel]
@@ -176,7 +187,7 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
     # instead of guessed from a power source the way flat had to.
     device_types = {device.device_id: device_type(device) for device in children}
     device_names = {device.device_id: name for device in children if (name := device_display_name(device)) is not None}
-    inverters = [device for device in children if device_type(device) == TYPE_INVERTER]
+    inverters = [device for device in children if declares_class(device_type(device), TYPE_INVERTER)]
     islanding = resolve_islanding_state(roles.mid, panel)
 
     # Vendor extensions on devices this adapter *does* model. The pairing is
@@ -244,8 +255,8 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
         feedthrough_energy_produced_wh=fields.feedthrough_energy_produced_wh,
         # Read, not derived. Flat had to infer both from `dominant-power-source`
         # plus grid power because nothing stated them; v1.0 states them on the MID,
-        # so the multi-signal heuristic is gone and only the no-MID tier remains a
-        # heuristic. The user-visible value set is unchanged.
+        # so the multi-signal heuristic is gone, and a panel with no MID is on-grid
+        # by elimination. The user-visible value set is unchanged.
         dsm_state=resolve_dsm_state(islanding),
         current_run_config=resolve_run_config(roles.mid, islanding, device_types),
         door_state=fields.door_state,
@@ -270,6 +281,14 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
         vendor_name=fields.vendor_name,
         model=fields.model,
         hardware_version=fields.hardware_version,
+        busbar_current_a=fields.busbar_current_a,
+        frequency_hz=fields.frequency_hz,
+        upstream_protection_rating_a=fields.upstream_protection_rating_a,
+        first_position=first_position,
+        last_position=last_position,
+        publishes_solar_roles=any(
+            PROP_FEEDS_ROLE in node_properties(circuit, NODE_CONNECTION) for circuit in roles.circuits
+        ),
         shed_policy=fields.shed_policy,
         shed_policy_algorithm=fields.shed_policy_algorithm,
         shed_soc_threshold_shed_percent=fields.shed_soc_threshold_shed_percent,
@@ -291,6 +310,8 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
         battery=build_battery(
             roles.bess,
             owners,
+            feeds=feeds,
+            feed_statuses=feed_statuses,
             firmware_version=fields.firmware_version,
             power_flow_battery=fields.power_flow_battery,
         ),

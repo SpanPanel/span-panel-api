@@ -32,6 +32,8 @@ pip install "span-panel-api[schema-0,schema-1]"
 - **Adopted devices** (`SpanPanelSnapshot.adopted_devices`). A device type this parser models nothing for is reported whole — identity and readings — rather than dropped. The schema is explicitly vendor-extensible, so an unmodelled device is an expected
   arrival rather than a hypothetical one.
 - **Extension properties** (`SpanPanelSnapshot.extension_properties`). A vendor property on a device this parser _does_ model, carried with its value and the snapshot subject it hangs off.
+- **Meters outside the panel** (`SpanCircuitSnapshot.measures_outside_panel`). A circuit device that declares no breaker space is reported as a meter with no relay, breaker or shed priority, its power import-positive.
+- **The masked device tree** (`SchemaOneAdapter.export_masked_tree()`). The tree the adapter holds with serials, device ids and site details masked, which `SpanMqttClient.masked_tree()` returns for a consumer's diagnostics.
 
 Devices are sorted by declared device type, never by device id. Field metadata comes from each device's own `$description` rather than from a schema document, because the same capability exposes different properties on different device classes — `meter` is
 voltage on the panel, power and energy on a circuit, and both currents on the lugs.

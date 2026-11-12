@@ -155,8 +155,8 @@ All panel state is represented as immutable, frozen dataclasses:
 
 - **`SpanPanelSnapshot`**: complete panel state. Identity (serial, firmware, vendor, model, hardware version), panel size, main breaker rating, main relay, door state, connection uptime on a flat panel, network links with the Wi-Fi SSID and vendor cloud,
   grid and feedthrough power and energy, grid/DSM state, run configuration, dominant power source, grid islandability, per-leg voltages, power flows, lugs current and whether the lugs are the service entrance, busbar current, line frequency, the rating of
-  the protection ahead of the upstream lugs, the first and last breaker positions, whether any circuit declares what it feeds, shed policy and forecast. It holds `circuits`, `battery`, `pv`, `pv_inverters`, `evse`, `mid`, `pcs`, `adopted_devices` and
-  `extension_properties`.
+  the protection ahead of the upstream lugs, the first and last breaker positions, whether any circuit declares what it feeds or a shared meter, shed policy and forecast. It holds `circuits`, `battery`, `pv`, `pv_inverters`, `evse`, `mid`, `pcs`,
+  `adopted_devices` and `extension_properties`.
 - **`SpanCircuitSnapshot`**: one circuit. Id, name, relay state and requester, power, energy and their update times, tabs, 240 V, breaker rating and whether it declares one, current, priority, user controllability, sheddable / never-backup / always-on
   flags, device type, relative position, PCS management and priority, the `$target` pending state for relay and priority, nominal voltage, the breaker's protection functions, the role it declares for what it feeds, the other circuits its meter or relay is
   shared with, and whether it is a meter outside the panel, which has no breaker space, relay or shed priority and reads import-positive.

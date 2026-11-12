@@ -30,6 +30,7 @@ _SHARED: Final = frozenset(
         "circuit.measures_outside_panel",
         "ctl.dps_target",
         "ctl.priority_target",
+        "panel.publishes_shared_meters",
         "panel.publishes_solar_roles",
     }
 )

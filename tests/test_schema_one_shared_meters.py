@@ -113,3 +113,44 @@ def test_a_flat_panel_shares_nothing() -> None:
 
     assert all(circuit.meter_shared_with is None for circuit in snapshot.circuits.values())
     assert shared_meter_groups(snapshot.circuits) == {}
+
+
+# --- whether a panel publishes shared meters structurally ---------------------
+
+
+def test_a_panel_whose_circuits_declare_a_shared_meter_publishes_shared_meters() -> None:
+    assert _snapshot(*shared_pair("c-1", "c-2")).publishes_shared_meters is True
+
+
+def test_a_declared_list_with_no_value_still_marks_the_panel() -> None:
+    """The declaration decides: a standard breaker declares the list and publishes no value."""
+    first, second = shared_pair("c-1", "c-2")
+    snapshot = _snapshot(
+        without_values(first, "meter/shared-with-device-ids"),
+        without_values(second, "meter/shared-with-device-ids"),
+    )
+
+    assert snapshot.publishes_shared_meters is True
+
+
+def test_a_list_naming_no_known_circuit_still_marks_the_panel() -> None:
+    assert _snapshot(hosted_circuit("c-1", (1,), meter_shared_with=("ghost",))).publishes_shared_meters is True
+
+
+def test_only_the_meter_list_counts() -> None:
+    """A relay shared with nothing on the meter says nothing about how the meters are described."""
+    snapshot = _snapshot(hosted_circuit("c-1", (1,), relay_shared_with=("c-2",)), hosted_circuit("c-2", (3,)))
+
+    assert snapshot.publishes_shared_meters is False
+
+
+def test_a_panel_with_no_circuit_declaring_the_list_does_not() -> None:
+    assert _snapshot(hosted_circuit("c-1", (1,)), hosted_circuit("c-2", (3,))).publishes_shared_meters is False
+
+
+def test_main_32_and_the_flat_schema_do_not() -> None:
+    reference = replay(parent_child_tree(), _REFERENCE_PANEL).build_snapshot()
+    flat = SchemaZeroAdapter(serial_number="sim-40t-001", schema=flat_schema(40)).build_snapshot()
+
+    assert reference.publishes_shared_meters is False
+    assert flat.publishes_shared_meters is False

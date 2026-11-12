@@ -1347,6 +1347,17 @@ class SpanPanelSnapshot:
     which declares no roles.
     """
 
+    publishes_shared_meters: bool = False
+    """Whether any circuit declares `meter/shared-with-device-ids`.
+
+    The declaration decides, not the value: a panel model that describes its
+    multi-load breakers declares the list on every circuit, a standard breaker
+    included, and publishes a value only where a meter is shared. Such a panel
+    publishes each circuit of a multi-load breaker as its own device with its
+    own rating. `False` where no circuit declares the list, as on MAIN 32, and
+    on the flat schema, which declares none.
+    """
+
     # `shed/policy`, v1.0 only: how the panel decides what to shed, and the two
     # SoC thresholds that make its behaviour predictable. The wire carries one
     # `json` document; these are the parsed answer plus the document itself.

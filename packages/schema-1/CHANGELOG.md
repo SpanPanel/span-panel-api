@@ -16,6 +16,7 @@ Requires `span-panel-api` **3.9.0 or newer**, whose circuit snapshot carries the
 ### Added
 
 - **Circuits report whether they declare a breaker rating** (`breaker_rating_declared`).
+- **The snapshot reports whether any circuit declares a shared-meter list** (`publishes_shared_meters`).
 
 ## [1.4.0]
 

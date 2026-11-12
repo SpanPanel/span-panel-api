@@ -51,6 +51,16 @@ def test_the_captures_hold_shared_meters() -> None:
 
 
 @pytest.mark.parametrize("stem", CAPTURES)
+def test_shared_meters_are_published_exactly_where_a_circuit_declares_the_list(stem: str) -> None:
+    """Every one of these models declares the list, on standard breakers too, whether or not any group exists."""
+    tree = capture_tree(stem)
+    declared = any(tree.declares(circuit_id, _SHARED_WITH[0]) for circuit_id in tree.circuits())
+
+    assert declared
+    assert capture_snapshot(stem).publishes_shared_meters is declared
+
+
+@pytest.mark.parametrize("stem", CAPTURES)
 def test_shared_with_is_neither_discovered_nor_an_extension_reading(stem: str) -> None:
     adapter = capture_adapter(stem)
     discovered = [path for path in adapter.build_field_metadata() if is_discovery_path(path)]

@@ -12,6 +12,7 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 ### Added
 
 - **`SpanCircuitSnapshot.breaker_rating_declared`** says whether a circuit declares a breaker rating, so a consumer can tell a rating the panel does not publish from one that has not arrived yet; `None` where the adapter does not say.
+- **`SpanPanelSnapshot.publishes_shared_meters`** says whether any circuit declares `meter/shared-with-device-ids`, so a consumer can tell a panel that describes its multi-load breakers from one, such as MAIN 32, that publishes each as a single circuit.
 
 ## [3.8.0]
 

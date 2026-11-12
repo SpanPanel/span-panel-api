@@ -508,6 +508,10 @@ _DERIVATIONS: Final = (
         "panel.publishes_solar_roles",
         "snapshot.build_snapshot: whether any circuit's description declares connection/feeds-role, not a value",
     ),
+    Derivation(
+        "panel.publishes_shared_meters",
+        "snapshot.build_snapshot: whether any circuit's description declares meter/shared-with-device-ids, not a value",
+    ),
     Derivation("pv.device_id", "devices.build_pv: the inverter's device id"),
     Derivation("pv.node_id", "devices.pv_inverter_key: the feeding circuit's id, else the inverter's device id"),
     Derivation("pv_inverter.device_id", "devices.build_pv: the inverter's device id"),

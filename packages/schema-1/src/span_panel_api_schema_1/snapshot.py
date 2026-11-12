@@ -16,10 +16,12 @@ from span_panel_api_schema_1.circuits import build_circuit
 from span_panel_api_schema_1.const import (
     NODE_CONNECTION,
     NODE_INFO,
+    NODE_METER,
     PROP_FEEDS_DEVICE_ID,
     PROP_FEEDS_ROLE,
     PROP_MODEL,
     PROP_SERIAL_NUMBER,
+    PROP_SHARED_WITH_DEVICE_IDS,
     TYPE_BESS,
     TYPE_CIRCUIT,
     TYPE_EVSE,
@@ -288,6 +290,9 @@ def build_snapshot(panel: DiscoveredDevice, children: list[DiscoveredDevice]) ->
         last_position=last_position,
         publishes_solar_roles=any(
             PROP_FEEDS_ROLE in node_properties(circuit, NODE_CONNECTION) for circuit in roles.circuits
+        ),
+        publishes_shared_meters=any(
+            PROP_SHARED_WITH_DEVICE_IDS in node_properties(circuit, NODE_METER) for circuit in roles.circuits
         ),
         shed_policy=fields.shed_policy,
         shed_policy_algorithm=fields.shed_policy_algorithm,

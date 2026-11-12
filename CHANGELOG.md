@@ -18,6 +18,7 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 
 - **Each broker connection subscribes once, so the panel's retained tree arrives once per connection**, where `connect()` subscribed twice and received the whole tree twice, and a panel that changes schema generation while connected no longer has every
   message under its own device delivered twice until the next reconnect.
+- **`connect()` raises `SpanPanelConnectionError` when `close()` is called while it is connecting**, where it could carry on and return as if connected, or wait for the panel and report a timeout.
 
 ## [3.8.0]
 

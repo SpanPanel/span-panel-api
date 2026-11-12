@@ -55,6 +55,32 @@ _LOGGER = logging.getLogger(__name__)
 # return codes 4 and 5 as these same MQTT 5 reason codes.
 _CONNACK_AUTH_REFUSALS = frozenset({0x86, 0x87})
 
+# The longest UTF-8 string an MQTT packet can carry (MQTT 3.1.1, section 1.5.3).
+_MQTT_MAX_STRING_BYTES = 65535
+
+
+def _check_topic_filter(topic: str) -> None:
+    """Refuse what MQTT 3.1.1 does not accept as a topic filter (section 4.7).
+
+    A filter is at least one character, carries no null character, and fits an
+    MQTT string. `#` is a whole level and the last one; `+` is a whole level.
+
+    Raises:
+        ValueError: `topic` is not a valid topic filter, saying why.
+    """
+    if not topic:
+        raise ValueError("A topic filter cannot be empty")
+    if "\x00" in topic:
+        raise ValueError(f"Topic filter {topic!r} contains a null character")
+    if len(topic.encode("utf-8")) > _MQTT_MAX_STRING_BYTES:
+        raise ValueError(f"Topic filter {topic[:40]!r}... is longer than the {_MQTT_MAX_STRING_BYTES} bytes MQTT allows")
+    levels = topic.split("/")
+    for index, level in enumerate(levels):
+        if "#" in level and (level != "#" or index != len(levels) - 1):
+            raise ValueError(f"Topic filter {topic!r} uses '#' other than as its whole last level")
+        if "+" in level and level != "+":
+            raise ValueError(f"Topic filter {topic!r} uses '+' other than as a whole level")
+
 
 class AsyncMqttBridge:
     """Event-loop-driven paho-mqtt wrapper with async callback dispatch.
@@ -573,10 +599,32 @@ class AsyncMqttBridge:
         left is unsubscribed because overlapping filters each deliver their own
         copy of every message they share.
 
-        Topics are subscribed at QoS 0.
+        Live means the CONNACK has arrived, not merely that a socket is open: paho
+        sends a SUBSCRIBE on a socket still waiting for its CONNACK, and that
+        CONNACK would then subscribe the session a second time.
+
+        Topics are subscribed at QoS 0. Call this on the event loop, like every
+        other call into this bridge: paho runs there with its locks removed (see
+        `AsyncMQTTClient`), so a call from another thread would race it.
+
+        Raises:
+            TypeError: `topics` is one string. It is a `Sequence[str]` to the
+                type checker, and read as one would subscribe each character
+                as a filter of its own.
+            ValueError: A topic is not a valid MQTT topic filter. Refused here,
+                before anything is recorded. Accepted, it would fail only at
+                the next CONNACK, inside `_on_connect`: paho's own refusal
+                escapes the read callback there and the connect it belongs to
+                times out, and a null character, which paho does not check, is
+                one MQTT requires the broker to close the connection over.
         """
+        if isinstance(topics, str):
+            raise TypeError(f"set_subscriptions takes a sequence of topic filters, not one string: {topics!r}")
+        wanted = tuple(dict.fromkeys(topics))
+        for topic in wanted:
+            _check_topic_filter(topic)
         previous = self._subscriptions
-        self._subscriptions = tuple(dict.fromkeys(topics))
+        self._subscriptions = wanted
         client = self._client
         if client is None or not self._connected:
             return

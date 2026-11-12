@@ -321,9 +321,15 @@ class SpanMqttClient:
         Handing the topics to the bridge here, rather than at each caller, is
         what ties a subscription to every parser: the bridge subscribes each
         session to them on its CONNACK, and a live session at once, which is how
-        a parser swapped in mid-session receives the tree it has not seen. The
-        bridge exists before the first parser is built (see connect()), so no
-        parser goes without.
+        a parser swapped in mid-session receives the tree it has not seen. They
+        are handed over before the parser is installed, so topics the bridge
+        refuses leave the previous parser and its subscription in place.
+
+        connect() creates the bridge before building the first parser, and
+        gives up rather than connect a bridge that close() let go of while
+        connect() was suspended (see `_stop_if_closed`). Between them, no
+        session opens without the topics of the parser it feeds. A parser built
+        after close() has no bridge to hand them to, and none is needed.
 
         With no injected factory this dispatches on the schema rather than
         assuming the flat adapter. That matters because a client can be built
@@ -344,6 +350,8 @@ class SpanMqttClient:
                 whose schema major cannot be determined.
             SpanPanelAdapterMissingError: No adapter_factory was supplied and no
                 installed package registers the key this panel needs.
+            ValueError: The parser names a topic that is not a valid MQTT
+                topic filter (see `AsyncMqttBridge.set_subscriptions`).
         """
         factory = self._adapter_factory
         if factory is None:
@@ -352,10 +360,10 @@ class SpanMqttClient:
             self._schema_dispatch_reason = dispatch_reason
             factory = resolve_adapter(adapter_key, dispatch_reason)
         adapter = factory(self._serial_number, schema)
-        self._adapter = adapter
-        self._observe(adapter)
         if self._bridge is not None:
             self._bridge.set_subscriptions(adapter.topics_to_subscribe())
+        self._adapter = adapter
+        self._observe(adapter)
         return adapter
 
     @property
@@ -461,9 +469,17 @@ class SpanMqttClient:
         4. Connect to MQTT broker, whose CONNACK the bridge subscribes on
         5. Wait for $state==ready and $description parsed
 
+        close() may land while this is suspended at any of its awaits. It then
+        stops before the next of its steps -- building the parser, connecting
+        the bridge, waiting on the panel, returning -- rather than go on to
+        connect a bridge nothing can close or report a connection the caller
+        has already closed (see `_stop_if_closed`). A close() during the wait
+        for the panel is noticed when that wait ends.
+
         Raises:
             SpanPanelAuthError: The broker refused the credentials
-            SpanPanelConnectionError: Cannot connect or device not ready
+            SpanPanelConnectionError: Cannot connect, device not ready, or
+                close() was called while connecting
             SpanPanelTimeoutError: Connection or ready timed out
         """
         self._loop = asyncio.get_running_loop()
@@ -510,6 +526,10 @@ class SpanMqttClient:
         schema = self._schema if self._schema is not None else await self._fetch_schema()
         self._schema = schema
         await self._preload_adapter(schema)
+        # After both awaits the build waits on, with none between this and the
+        # build, so the parser's topics go to this bridge and a client closed
+        # before it had a parser does not grow one.
+        await self._stop_if_closed(bridge)
         adapter = self._build_adapter(schema)
 
         # Both halves of this line read distribution metadata off disk, and both
@@ -521,6 +541,7 @@ class SpanMqttClient:
         # Threaded on their own account rather than relying on the preload above,
         # which skips discovery entirely when a factory was injected.
         installed, library_version = await asyncio.to_thread(_metadata_for_the_log)
+        await self._stop_if_closed(bridge)
         _LOGGER.info(
             "MQTT adapter selected: %s (span-panel-api %s)\n  data-model-version: %r\n  reason: %s\n  installed: %s",
             adapter.schema_major,
@@ -547,13 +568,23 @@ class SpanMqttClient:
         # topics `_build_adapter` gave the bridge; nothing here subscribes again,
         # since every SUBSCRIBE makes the broker replay the whole retained tree.
         _LOGGER.debug("MQTT: Connecting to broker...")
-        await bridge.connect()
+        try:
+            await bridge.connect()
+        except SpanPanelError:
+            # A connect that close() cut short reports the close, not the failure
+            # the close caused.
+            await self._stop_if_closed(bridge)
+            raise
+        await self._stop_if_closed(bridge)
         _LOGGER.debug("MQTT: Broker connected, waiting for Homie ready...")
 
         # Wait for Homie ready state
         try:
             await asyncio.wait_for(self._ready_event.wait(), timeout=MQTT_READY_TIMEOUT_S)
         except TimeoutError as exc:
+            # A close() during the wait is why nothing arrived, and the bridge to
+            # tear down is this one, whatever the client holds by now.
+            await self._stop_if_closed(bridge)
             await self.close()
             raise SpanPanelConnectionError(f"Timed out waiting for Homie device ready ({self._serial_number})") from exc
 
@@ -565,14 +596,35 @@ class SpanMqttClient:
         # caller can take carries them.
         # `wait` rather than awaiting the task: `close()` cancels it, and that must
         # end this wait rather than surface here as a cancellation of connect().
+        # The close is then reported as one, below.
         settle = self._settle_task
         if settle is not None:
             await asyncio.wait([settle])
             if not settle.cancelled():
                 settle.result()
+        await self._stop_if_closed(bridge)
 
         self._assert_transports_agree_on_schema_generation()
         _LOGGER.debug("MQTT: Connection fully established")
+
+    async def _stop_if_closed(self, bridge: AsyncMqttBridge) -> None:
+        """End connect() if close() let go of `bridge` while connect() was suspended.
+
+        close() disconnects the bridge it finds and drops it, and a connect()
+        suspended at that moment holds the only other reference. Going on would
+        connect it: a session nobody reads, its reconnect loop armed, that no
+        later close() can reach -- and, before the parser is built, one with no
+        subscription at all. So this disconnects `bridge`, which is harmless
+        when close() already has, and raises rather than let connect() report a
+        connection the caller has closed.
+
+        Raises:
+            SpanPanelConnectionError: close() was called while connecting.
+        """
+        if self._bridge is bridge:
+            return
+        await bridge.disconnect()
+        raise SpanPanelConnectionError(f"Closed while connecting ({self._serial_number})")
 
     def _assert_transports_agree_on_schema_generation(self) -> None:
         """Refuse a panel whose two schema-generation signals disagree.

@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+import contextlib
 from dataclasses import dataclass, field
 import ssl
+import threading
 from unittest.mock import patch
 
 from paho.mqtt.client import ConnectFlags, DisconnectFlags, MQTTMessage, topic_matches_sub
@@ -30,12 +32,24 @@ from paho.mqtt.properties import Properties
 from paho.mqtt.reasoncodes import ReasonCode
 import pytest
 
+from span_panel_api.adapters import resolve_adapter
+from span_panel_api.exceptions import SpanPanelConnectionError
 from span_panel_api.models import V2HomieSchema
 from span_panel_api.mqtt.client import SpanMqttClient
+from span_panel_api.mqtt.connection import AsyncMqttBridge
 from span_panel_api.mqtt.models import MqttClientConfig, MqttTransport
+from span_panel_api.protocol import SchemaAdapter
+from span_panel_api_schema_0.adapter import SchemaZeroAdapter
 from span_panel_api_schema_0.const import WILDCARD_TOPIC_FMT
 
-from conftest import MINIMAL_DESCRIPTION, SERIAL, TOPIC_PREFIX_SERIAL, flat_schema, parent_child_schema
+from conftest import (
+    DESCRIPTION_WITH_CIRCUIT,
+    MINIMAL_DESCRIPTION,
+    SERIAL,
+    TOPIC_PREFIX_SERIAL,
+    flat_schema,
+    parent_child_schema,
+)
 
 _FLAT_FILTER = WILDCARD_TOPIC_FMT.format(serial=SERIAL)
 """What the flat parser subscribes to: the panel's own device."""
@@ -82,8 +96,17 @@ class _Broker:
         self.clients: list[_FakePaho] = []
         self.refusing = False
         """While set, every connect and reconnect is refused, as a broker that is down refuses them."""
+        self.holding_connacks = False
+        """While set, a session opens without its CONNACK, which waits in `held` for `release_connacks`."""
+        self.held: list[tuple[_FakePaho, _Session]] = []
         self.pending = 0
         """Deliveries scheduled and not yet made."""
+
+    def release_connacks(self) -> None:
+        self.holding_connacks = False
+        held, self.held = self.held, []
+        for client, session in held:
+            self.loop.call_soon_threadsafe(client.connack, session)
 
     def client(
         self, *, callback_api_version: CallbackAPIVersion, transport: MqttTransport, reconnect_on_failure: bool
@@ -164,6 +187,9 @@ class _FakePaho:
     def username_pw_set(self, username: str, password: str | None = None) -> None:
         """Credentials are not checked by this broker."""
 
+    def tls_set_context(self, context: ssl.SSLContext | None = None) -> None:
+        """TLS is not negotiated with this broker."""
+
     def connect(self, host: str, port: int = 1883, keepalive: int = 60) -> MQTTErrorCode:
         """Open a session and schedule its CONNACK, as paho's executor connect does."""
         assert host and port > 0 and keepalive > 0
@@ -216,9 +242,13 @@ class _FakePaho:
             raise ConnectionRefusedError(61, "Connection refused")
         session = self._broker.open_session()
         self.session = session
-        self._broker.loop.call_soon_threadsafe(self._connack, session)
+        if self._broker.holding_connacks:
+            self._broker.held.append((self, session))
+            return
+        self._broker.loop.call_soon_threadsafe(self.connack, session)
 
-    def _connack(self, session: _Session) -> None:
+    def connack(self, session: _Session) -> None:
+        """The broker's answer to the CONNECT that opened `session`, if that session is still this client's."""
         if session is not self.session or not session.open or self.on_connect is None:
             return
         self.on_connect(self, None, ConnectFlags(session_present=False), ReasonCode(PacketTypes.CONNACK, "Success"), None)
@@ -247,21 +277,52 @@ class _Panel:
             await asyncio.sleep(0)
 
 
-@pytest.fixture
-async def panel(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Panel]:
-    """A connected-on-demand client on a plaintext broker serving `_FLAT_TREE`."""
-    # Short enough that a refused reconnect is retried inside a test's patience.
-    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
-    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+@contextlib.asynccontextmanager
+async def _serving(tree: dict[str, str], schema: V2HomieSchema | None, use_tls: bool = False) -> AsyncIterator[_Panel]:
+    """A client, connected on demand, on a broker serving `tree`.
+
+    With no `schema` the client fetches one at connect, as a directly constructed
+    client does. With `use_tls` it has no pinned CA, so its bridge fetches one
+    from the panel on every connect.
+    """
+    broker = _Broker(asyncio.get_running_loop(), tree)
     client = SpanMqttClient(
         host="192.168.1.1",
         serial_number=SERIAL,
-        broker_config=MqttClientConfig(broker_host="broker.local", username="u", password="p", use_tls=False),
-        schema=flat_schema(),
+        broker_config=MqttClientConfig(broker_host="broker.local", username="u", password="p", use_tls=use_tls),
+        schema=schema,
     )
     with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
-        yield _Panel(client, broker)
-        await client.close()
+        try:
+            yield _Panel(client, broker)
+        finally:
+            await client.close()
+
+
+def _bridge() -> AsyncMqttBridge:
+    """A bare bridge for the broker `AsyncMQTTClient` is patched to."""
+    return AsyncMqttBridge(
+        host="broker.local",
+        port=1883,
+        username="u",
+        password="p",
+        panel_host="192.168.1.1",
+        serial_number=SERIAL,
+        use_tls=False,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _quick_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Short enough that a refused reconnect is retried inside a test's patience."""
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
+
+
+@pytest.fixture
+async def panel() -> AsyncIterator[_Panel]:
+    """A connected-on-demand client on a plaintext broker serving `_FLAT_TREE`."""
+    async with _serving(_FLAT_TREE, flat_schema()) as served:
+        yield served
 
 
 async def _connected(panel: _Panel) -> _Session:
@@ -408,3 +469,290 @@ async def test_a_swap_finished_while_disconnected_is_subscribed_by_the_next_sess
 
     reconnected = panel.broker.sessions[1]
     assert reconnected.subscribed == [_PARENT_CHILD_FILTER]
+
+
+@pytest.mark.asyncio
+async def test_a_swap_between_connect_and_connack_is_subscribed_once_by_the_connack(
+    panel: _Panel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parser installed after a CONNECT and before its CONNACK waits for the CONNACK.
+
+    paho sends a SUBSCRIBE on any open socket, including one still waiting for its
+    CONNACK, and the CONNACK then subscribes the session again. So a session is
+    live, for the bridge, only once its CONNACK has arrived.
+    """
+    # One reconnect attempt and then a long pause, so no second CONNECT overtakes the held CONNACK.
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 5.0)
+    await _connected(panel)
+    [paho] = panel.broker.clients
+    release = asyncio.Event()
+
+    async def schema_once_released(*_args: object, **_kwargs: object) -> V2HomieSchema:
+        await release.wait()
+        return parent_child_schema()
+
+    with patch("span_panel_api.mqtt.client.get_homie_schema", side_effect=schema_once_released):
+        panel.broker.publish(_DATA_MODEL_VERSION_TOPIC, "1.0")
+        await panel.quiesce()
+        panel.broker.holding_connacks = True
+        paho.drop()
+        await panel.until(lambda: len(panel.broker.sessions) == 2, "the reconnect's CONNECT")
+        awaiting = panel.broker.sessions[1]
+        release.set()
+        await panel.until(lambda: panel.client.data_model_version == "1.0", "the parser swap")
+        assert awaiting.subscribed == [], "nothing may be subscribed before the CONNACK"
+        panel.broker.release_connacks()
+        await panel.until(lambda: bool(awaiting.subscribed), "the CONNACK's SUBSCRIBE")
+        await panel.quiesce()
+
+    assert awaiting.subscribed == [_PARENT_CHILD_FILTER]
+
+
+@pytest.mark.asyncio
+async def test_one_string_is_refused_rather_than_read_as_one_filter_per_character() -> None:
+    """A `str` is a `Sequence[str]` to the type checker, and would subscribe `e`, `b`, ..., `#`."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+
+        with pytest.raises(TypeError, match="not one string"):
+            bridge.set_subscriptions(_PARENT_CHILD_FILTER)
+
+        await bridge.connect()
+        await bridge.disconnect()
+
+    assert broker.sessions[0].subscribed == [_FLAT_FILTER], "a refused call changes nothing"
+
+
+@pytest.mark.parametrize(
+    "topic_filter",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("ebus/5/#/core", id="hash-not-last"),
+        pytest.param("ebus/5#", id="hash-inside-a-level"),
+        pytest.param("ebus/+5/core", id="plus-inside-a-level"),
+        pytest.param("ebus/5/\x00", id="null-character"),
+        pytest.param("e" * 65536, id="longer-than-mqtt-allows"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_malformed_filter_is_refused_where_it_is_set(topic_filter: str) -> None:
+    """Refused in the caller's frame, before anything is recorded.
+
+    Accepted, it would reach paho only at the next CONNACK, inside `_on_connect`,
+    where paho's own refusal escapes the read callback and the connect it belongs
+    to waits out its timeout instead.
+    """
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+
+        with pytest.raises(ValueError, match="(?i)topic filter"):
+            bridge.set_subscriptions([_PARENT_CHILD_FILTER, topic_filter])
+
+        await bridge.connect()
+        await bridge.disconnect()
+
+    assert broker.sessions[0].subscribed == [_FLAT_FILTER], "a refused call changes nothing"
+
+
+@pytest.mark.asyncio
+async def test_every_well_formed_filter_is_accepted() -> None:
+    """The check refuses what MQTT refuses, and nothing more."""
+    filters = ["#", "+", "+/+/#", "ebus/5/+/$state", "/", "ebus//5"]
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions(filters)
+        await bridge.connect()
+        await bridge.disconnect()
+
+    assert broker.sessions[0].subscribed == filters
+
+
+async def _close_while_connect_waits(panel: _Panel, waiting: Callable[[], bool], resume: Callable[[], None]) -> None:
+    """Start connect(), close the client once `waiting` says connect() is suspended, then let it resume.
+
+    However far connect() had got, it must not report a connection the caller
+    has already closed.
+    """
+    connecting = asyncio.create_task(panel.client.connect())
+    await panel.until(waiting, "connect() to suspend")
+    await panel.client.close()
+    resume()
+    with pytest.raises(SpanPanelConnectionError, match="Closed while connecting"):
+        await asyncio.wait_for(connecting, timeout=5)
+    await panel.quiesce()
+
+
+@pytest.mark.asyncio
+async def test_close_while_connect_fetches_the_schema_opens_no_session() -> None:
+    """The window the review found: close() lets go of the bridge, and connect() went on to connect it.
+
+    The bridge it connected had no subscription -- the parser was built after
+    close() had dropped the client's reference -- so the broker saw a CONNECT and
+    no SUBSCRIBE, connect() timed out waiting for a tree that never came, and the
+    bridge stayed connected with its reconnect loop armed and nothing to close it.
+    """
+    fetching = asyncio.Event()
+    fetched = asyncio.Event()
+
+    async def schema_once_released(*_args: object, **_kwargs: object) -> V2HomieSchema:
+        fetching.set()
+        await fetched.wait()
+        return flat_schema()
+
+    async with _serving(_FLAT_TREE, None) as panel:
+        with patch("span_panel_api.mqtt.client.get_homie_schema", side_effect=schema_once_released):
+            await _close_while_connect_waits(panel, fetching.is_set, fetched.set)
+
+        assert panel.broker.clients == [], "no paho client is built for a closed client"
+        assert panel.broker.sessions == []
+        assert panel.client.adapter is None, "nor a parser"
+
+
+@pytest.mark.asyncio
+async def test_close_while_connect_preloads_the_parser_opens_no_session() -> None:
+    """The same window one await later: the parser's import, which runs in a thread."""
+    loading = threading.Event()
+    loaded = threading.Event()
+    resolved: list[str] = []
+
+    def resolve_once_released(key: str, reason: str) -> type[SchemaAdapter]:
+        resolved.append(key)
+        if len(resolved) == 1:
+            loading.set()
+            assert loaded.wait(timeout=5), "the test never released the preload"
+        return resolve_adapter(key, reason)
+
+    async with _serving(_FLAT_TREE, flat_schema()) as panel:
+        with patch("span_panel_api.mqtt.client.resolve_adapter", resolve_once_released):
+            await _close_while_connect_waits(panel, loading.is_set, loaded.set)
+
+        assert panel.broker.clients == []
+        assert panel.broker.sessions == []
+        assert panel.client.adapter is None
+
+
+@pytest.mark.asyncio
+async def test_close_while_connect_reads_package_metadata_opens_no_session() -> None:
+    """After the parser is built, so this bridge did have the topics: connected, it would have been read by nobody."""
+    reading = threading.Event()
+    read = threading.Event()
+
+    def metadata_once_released() -> tuple[list[str], str]:
+        reading.set()
+        assert read.wait(timeout=5), "the test never released the metadata read"
+        return ["schema_0"], "0.0.0"
+
+    async with _serving(_FLAT_TREE, flat_schema()) as panel:
+        with patch("span_panel_api.mqtt.client._metadata_for_the_log", metadata_once_released):
+            await _close_while_connect_waits(panel, reading.is_set, read.set)
+
+        assert panel.broker.clients == []
+        assert panel.broker.sessions == []
+
+
+@pytest.mark.asyncio
+async def test_close_while_the_bridge_awaits_its_connack_reports_the_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bridge's connect fails because close() disconnected it; connect() names the close, not the timeout."""
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_CONNECT_TIMEOUT_S", 0.3)
+
+    async with _serving(_FLAT_TREE, flat_schema()) as panel:
+        panel.broker.holding_connacks = True
+        await _close_while_connect_waits(panel, lambda: bool(panel.broker.held), lambda: None)
+
+        [session] = panel.broker.sessions
+        assert not session.open
+        assert session.subscribed == []
+
+
+@pytest.mark.asyncio
+async def test_close_while_the_bridge_fetches_an_unpinned_ca_stops_once_it_connects() -> None:
+    """The one window in which the bridge connects after close() has disconnected it.
+
+    Unpinned, the bridge fetches the panel's CA before building its paho client,
+    so a close() in that fetch finds nothing to disconnect, and the bridge then
+    connects and subscribes. connect() disconnects it as soon as it returns,
+    rather than wait out a tree it will not read.
+    """
+    fetching = asyncio.Event()
+    fetched = asyncio.Event()
+
+    async def ca_once_released(*_args: object, **_kwargs: object) -> str:
+        fetching.set()
+        await fetched.wait()
+        return "PEM"
+
+    never_ready = {f"{TOPIC_PREFIX_SERIAL}/$description": MINIMAL_DESCRIPTION}
+    async with _serving(never_ready, flat_schema(), use_tls=True) as panel:
+        with (
+            patch("span_panel_api.mqtt.connection.download_ca_cert", side_effect=ca_once_released),
+            patch("span_panel_api.mqtt.connection.build_panel_ssl_context", return_value=ssl.create_default_context()),
+        ):
+            await _close_while_connect_waits(panel, fetching.is_set, fetched.set)
+
+        assert [session.open for session in panel.broker.sessions] == [False]
+
+
+@pytest.mark.asyncio
+async def test_close_while_connect_waits_for_ready_reports_the_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Connected and subscribed, then closed: connect() says so rather than blaming the panel for never being ready."""
+    monkeypatch.setattr("span_panel_api.mqtt.client.MQTT_READY_TIMEOUT_S", 0.5)
+    never_ready = {f"{TOPIC_PREFIX_SERIAL}/$description": MINIMAL_DESCRIPTION}
+
+    async with _serving(never_ready, flat_schema()) as panel:
+        await _close_while_connect_waits(
+            panel, lambda: bool(panel.broker.sessions) and bool(panel.broker.sessions[0].subscribed), lambda: None
+        )
+
+        [session] = panel.broker.sessions
+        assert not session.open
+
+
+@pytest.mark.asyncio
+async def test_close_while_connect_waits_for_labels_reports_the_close() -> None:
+    """The tree is ready and its circuit's name is still to come when close() lands: connect() does not return as if connected."""
+    unnamed = {f"{TOPIC_PREFIX_SERIAL}/$description": DESCRIPTION_WITH_CIRCUIT, f"{TOPIC_PREFIX_SERIAL}/$state": "ready"}
+
+    async with _serving(unnamed, flat_schema()) as panel:
+
+        def settling() -> bool:
+            parser = panel.client.adapter
+            return parser is not None and parser.is_ready()
+
+        await _close_while_connect_waits(panel, settling, lambda: None)
+
+        [session] = panel.broker.sessions
+        assert not session.open
+
+
+class _MalformedTopics(SchemaZeroAdapter):
+    """A flat parser naming a filter MQTT refuses."""
+
+    def topics_to_subscribe(self) -> list[str]:
+        return ["ebus/#/core"]
+
+
+@pytest.mark.asyncio
+async def test_a_parser_whose_topics_are_refused_is_not_installed() -> None:
+    """The refusal reaches connect()'s caller, and leaves no parser that no session could ever feed."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    client = SpanMqttClient(
+        host="192.168.1.1",
+        serial_number=SERIAL,
+        broker_config=MqttClientConfig(broker_host="broker.local", username="u", password="p", use_tls=False),
+        adapter_factory=_MalformedTopics,
+        schema=flat_schema(),
+    )
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        try:
+            with pytest.raises(ValueError, match="(?i)topic filter"):
+                await client.connect()
+        finally:
+            await client.close()
+
+    assert client.adapter is None
+    assert broker.sessions == []

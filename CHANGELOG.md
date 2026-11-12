@@ -12,13 +12,16 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 ### Added
 
 - **`SpanCircuitSnapshot.breaker_rating_declared`** says whether a circuit declares a breaker rating, so a consumer can tell a rating the panel does not publish from one that has not arrived yet; `None` where the adapter does not say.
-- **`SpanPanelSnapshot.publishes_shared_meters`** says whether any circuit declares `meter/shared-with-device-ids`, so a consumer can tell a panel that describes its multi-load breakers from one, such as MAIN 32, that publishes each as a single circuit.
+- **`SpanPanelSnapshot.publishes_shared_meters`** says whether any circuit declares `meter/shared-with-device-ids`, so a consumer can tell a panel that describes its multi-load breakers from one, such as MAIN 32, that publishes each as a single circuit;
+  `None` where the adapter does not say, as with `span-panel-api-schema-0` or a `span-panel-api-schema-1` older than 1.5.0.
 
 ### Fixed
 
 - **Each broker connection subscribes once, so the panel's retained tree arrives once per connection**, where `connect()` subscribed twice and received the whole tree twice, and a panel that changes schema generation while connected no longer has every
   message under its own device delivered twice until the next reconnect.
-- **`connect()` raises `SpanPanelConnectionError` when `close()` is called while it is connecting**, where it could carry on and return as if connected, or wait for the panel and report a timeout.
+- **`connect()` raises `SpanPanelConnectionError` when `close()` is called while it is connecting**, where it could carry on and return as if connected, raise `AttributeError`, or wait for the panel and report a timeout.
+- **`AsyncMqttBridge.connect()` raises `SpanPanelConnectionError` when `disconnect()` is called while it is connecting**, where it could raise `AttributeError` or carry on and connect.
+- **`AsyncMqttBridge.subscribe()` keeps its topic subscribed on every later connection**, where the subscription ended with the connection it was made on and was lost if made before the first.
 
 ## [3.8.0]
 

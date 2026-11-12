@@ -977,3 +977,73 @@ async def test_the_bridge_builds_no_client_after_a_disconnect_during_its_ca_fetc
 
     assert broker.clients == []
     assert not bridge.is_connected()
+
+
+@pytest.mark.asyncio
+async def test_a_replaced_clients_late_disconnect_does_not_end_the_rebuilt_session(panel: _Panel) -> None:
+    """The rebuild's new client is connected; the client it replaced reporting its own end changes nothing.
+
+    Acted on, it marked the bridge disconnected under a live session, told every
+    consumer the panel was lost, and started a reconnect that tore down the
+    session the rebuild had just opened and replayed the tree into another.
+    """
+    edges: list[bool] = []
+    panel.client.register_connection_callback(edges.append)
+    await _connected(panel)
+    [old] = panel.broker.clients
+    old.next_reconnect_error = ssl.SSLError("handshake failed")
+    old.drop()
+    await panel.until(lambda: len(panel.broker.sessions) == 2, "the rebuilt client's session")
+    await panel.quiesce()
+    assert edges == [True, False, True], "precondition: rebuilt and announced"
+
+    old.drop()
+    await asyncio.sleep(0.1)
+    await panel.quiesce()
+
+    assert edges == [True, False, True]
+    assert len(panel.broker.sessions) == 2, "no reconnect replaces the rebuilt session"
+    assert panel.broker.sessions[1].open
+    assert await panel.client.ping() is True
+
+
+async def _rebuilt(broker: _Broker) -> _Session:
+    """Drop the bridge's session with a TLS failure, so the reconnect rebuilds paho, and return the rebuilt client's session."""
+    opened = len(broker.sessions)
+    old = broker.clients[-1]
+    old.next_reconnect_error = ssl.SSLError("handshake failed")
+    old.drop()
+    await _until(lambda: len(broker.sessions) == opened + 1, "the rebuilt client's session")
+    return broker.sessions[-1]
+
+
+@pytest.mark.asyncio
+async def test_after_a_rebuild_the_bridge_acts_through_the_client_it_rebuilt() -> None:
+    """A subscription made on the rebuilt session reaches that session, not the client it replaced."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+        await bridge.connect()
+        rebuilt = await _rebuilt(broker)
+
+        bridge.subscribe(_CONSUMER_TOPIC)
+        await bridge.disconnect()
+
+    assert rebuilt.subscribed == [_FLAT_FILTER, _CONSUMER_TOPIC]
+
+
+@pytest.mark.asyncio
+async def test_a_rebuilt_clients_own_drop_is_noticed_and_reconnected() -> None:
+    """Ignoring a let-go client's disconnect must not mean ignoring the live one's: that would leave readings stale with no error."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+        await bridge.connect()
+        await _rebuilt(broker)
+
+        reconnected = await _reconnected(broker)
+        await bridge.disconnect()
+
+    assert reconnected.subscribed == [_FLAT_FILTER]

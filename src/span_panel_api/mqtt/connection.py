@@ -1002,13 +1002,24 @@ class AsyncMqttBridge:
 
     def _on_disconnect(
         self,
-        _client: paho.Client,
+        client: paho.Client,
         _userdata: object,
         _flags: DisconnectFlags,
         reason_code: ReasonCode,
         _properties: Properties | None,
     ) -> None:
-        """Handle disconnect from broker."""
+        """Handle disconnect from broker.
+
+        A disconnect reported by a client this bridge no longer holds changes
+        nothing, as its CONNACK would not (see `_on_connect`): that client's
+        session already ended when it was let go of. Acted on, a rebuild's
+        replaced client reporting late would mark the bridge disconnected under
+        the new client's live session, tell consumers the panel was lost, and
+        start a reconnect that replaced that session.
+        """
+        if client is not self._client:
+            _LOGGER.debug("MQTT disconnect from a client this bridge has let go of; ignored")
+            return
         self._connected = False
         if reason_code.is_failure:
             _LOGGER.warning("MQTT disconnected abnormally: %s", reason_code)
@@ -1135,15 +1146,17 @@ class AsyncMqttBridge:
                     keepalive=MQTT_KEEPALIVE_S,
                 )
 
+            # A CancelledError here -- bridge teardown or _on_connect cancelling us
+            # mid-rebuild -- passes the clause below, as a BaseException, and
+            # propagates with `self._client` as it is: neither leaves the old
+            # client to restore. disconnect() has let every client go, and putting
+            # the old one back would undo that; a CONNACK from the new client made
+            # it the live one. The bridge acts through `self._client` -- `publish`,
+            # `set_subscriptions` -- and `_on_connect` and `_on_disconnect` hear
+            # only from it, so holding a client whose session is over would leave
+            # the live session's own disconnect unheard.
             try:
                 await self._loop.run_in_executor(None, _blocking_connect)
-            except asyncio.CancelledError:
-                # Bridge teardown or _on_connect cancelled us mid-rebuild.
-                # Restore the previous client reference so post-teardown
-                # state stays consistent, then re-raise — CancelledError
-                # must propagate to keep the loop's cancel semantics intact.
-                self._client = old_client
-                raise
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 _LOGGER.warning("Client rebuild — initial connect failed: %s", exc)
                 # Restore the previous client so the loop keeps retrying

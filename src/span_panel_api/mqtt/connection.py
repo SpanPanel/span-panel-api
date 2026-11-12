@@ -150,6 +150,9 @@ class AsyncMqttBridge:
         self._connected = False
         self._client: AsyncMQTTClient | None = None
         self._connect_event: asyncio.Event | None = None
+        # The connect() in progress, by identity, until disconnect() abandons it.
+        # See `_abandoned`.
+        self._connect_attempt: object | None = None
         # Reason code of the most recent refused CONNACK; `connect()` reads it.
         self._connack_refusal: ReasonCode | None = None
 
@@ -463,7 +466,8 @@ class AsyncMqttBridge:
         Raises:
             SpanPanelAuthError: The broker refused the username or password
                 (CONNACK "Bad user name or password" or "Not authorized").
-            SpanPanelConnectionError: Cannot connect to broker.
+            SpanPanelConnectionError: Cannot connect to broker, or disconnect()
+                was called while connecting.
             SpanPanelTimeoutError: Connection timed out.
             SpanPanelCAChangedError: The panel is pinned and now advertises a
                 different CA. If the CA rotated while the consumer was down, the
@@ -474,7 +478,10 @@ class AsyncMqttBridge:
         if self._loop is None:
             self._loop = asyncio.get_running_loop()
 
-        self._connect_event = asyncio.Event()
+        attempt = object()
+        self._connect_attempt = attempt
+        connack = asyncio.Event()
+        self._connect_event = connack
         self._connack_refusal = None
         self._should_reconnect = True
 
@@ -494,24 +501,28 @@ class AsyncMqttBridge:
                 ssl_context = build_panel_ssl_context(ca_pem)
             except (ssl.SSLError, ValueError) as exc:
                 raise SpanPanelConnectionError(f"Failed to build SSL context for {self._panel_host}") from exc
+        # Before a paho client exists, so a disconnect() during the CA fetch -- which
+        # had no client to disconnect -- does not leave one connecting after it.
+        self._raise_if_abandoned(attempt)
 
-        self._client = self._make_paho_client(ssl_context)
+        # Held locally as well as on `self._client`: disconnect() clears the
+        # attribute, and everything below must still reach the client it built.
+        client = self._make_paho_client(ssl_context)
+        self._client = client
 
         # Connect in executor (blocking: DNS, TCP, TLS handshake).
         # During executor connect, socket callbacks bridge to the event
         # loop via call_soon_threadsafe.
         def _blocking_connect() -> None:
-            if self._client is None:
-                raise RuntimeError("MQTT client not initialised before connect")
-            self._client.connect(
+            client.connect(
                 host=self._host,
                 port=self._port,
                 keepalive=MQTT_KEEPALIVE_S,
             )
 
         try:
-            self._client.on_socket_open = self._on_socket_open_sync
-            self._client.on_socket_register_write = self._on_socket_register_write_sync
+            client.on_socket_open = self._on_socket_open_sync
+            client.on_socket_register_write = self._on_socket_register_write_sync
             _LOGGER.debug("BRIDGE: Running connect in executor to %s:%s", self._host, self._port)
             try:
                 await self._loop.run_in_executor(None, _blocking_connect)
@@ -538,15 +549,23 @@ class AsyncMqttBridge:
         finally:
             # Switch to async-only socket callbacks now that we are
             # back on the event loop thread.
-            self._client.on_socket_open = self._async_on_socket_open
-            self._client.on_socket_register_write = self._async_on_socket_register_write
+            client.on_socket_open = self._async_on_socket_open
+            client.on_socket_register_write = self._async_on_socket_register_write
 
-        # Wait for CONNACK
+        if self._abandoned(attempt):
+            # disconnect() ran while the executor held the client, and the socket
+            # the executor then opened is one it could not reach. Closed here, on
+            # the loop, now that nothing else is using the client.
+            client.disconnect()
+            self._raise_if_abandoned(attempt)
+
+        # Wait for CONNACK, or for disconnect(), which sets the same event.
         try:
-            await asyncio.wait_for(self._connect_event.wait(), timeout=MQTT_CONNECT_TIMEOUT_S)
+            await asyncio.wait_for(connack.wait(), timeout=MQTT_CONNECT_TIMEOUT_S)
         except TimeoutError as exc:
             await self.disconnect()
             raise SpanPanelTimeoutError(f"Timed out connecting to MQTT broker at {self._host}:{self._port}") from exc
+        self._raise_if_abandoned(attempt)
 
         if not self._connected:
             refusal = self._connack_refusal
@@ -557,8 +576,17 @@ class AsyncMqttBridge:
         self._initial_connect_done = True
 
     async def disconnect(self) -> None:
-        """Disconnect from the MQTT broker."""
+        """Disconnect from the MQTT broker.
+
+        Also abandons a connect() in progress: it raises `SpanPanelConnectionError`
+        at its next step rather than go on to connect, and its wait for a CONNACK
+        ends here rather than running out.
+        """
         self._should_reconnect = False
+        self._connect_attempt = None
+        connack = self._connect_event
+        if connack is not None and not connack.is_set():
+            connack.set()
 
         # Cancel reconnect task
         if self._reconnect_task is not None:
@@ -578,6 +606,26 @@ class AsyncMqttBridge:
         self._connected = False
         self._client = None
         self._initial_connect_done = False
+
+    def _abandoned(self, attempt: object) -> bool:
+        """Whether disconnect() has abandoned the connect() that `attempt` identifies.
+
+        A token rather than a flag because connect() may be called again after a
+        disconnect(): each attempt carries its own, and only a disconnect() made
+        after it began abandons it.
+        """
+        return self._connect_attempt is not attempt
+
+    def _raise_if_abandoned(self, attempt: object) -> None:
+        """End a connect() that disconnect() abandoned while it was suspended.
+
+        Raises:
+            SpanPanelConnectionError: disconnect() was called while connecting.
+        """
+        if self._abandoned(attempt):
+            raise SpanPanelConnectionError(
+                f"disconnect() was called while connecting to the MQTT broker at {self._host}:{self._port}"
+            )
 
     def set_subscriptions(self, topics: Sequence[str]) -> None:
         """Make `topics` the set every session of this bridge is subscribed to, replacing the last set given here.
@@ -916,7 +964,15 @@ class AsyncMqttBridge:
         A CONNACK with no disconnect reported before it is still a new session --
         paho's `reconnect()` closes the socket it replaces without one -- so it is
         subscribed like any other.
+
+        A CONNACK from a client this bridge no longer holds changes nothing: one
+        whose connect() disconnect() abandoned, or one a rebuild replaced. Its
+        socket is already being closed, and acting on it would mark the bridge
+        connected and subscribe a session nothing reads.
         """
+        if client is not self._client:
+            _LOGGER.debug("MQTT CONNACK from a client this bridge has let go of; ignored")
+            return
         connected = not reason_code.is_failure
         self._connected = connected
 

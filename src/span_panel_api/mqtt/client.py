@@ -125,6 +125,11 @@ def _discard_verification(verification: _Verification, acknowledged: asyncio.Fut
         verification.observed.set_result(False)
 
 
+async def _until_set(event: asyncio.Event) -> None:
+    """Return once `event` is set: a wait that can run as a task of its own, and be cancelled."""
+    await event.wait()
+
+
 def _metadata_for_the_log() -> tuple[list[str], str]:
     """Every distribution-metadata read connect() needs, in one place.
 
@@ -473,8 +478,8 @@ class SpanMqttClient:
         stops before the next of its steps -- building the parser, connecting
         the bridge, waiting on the panel, returning -- rather than go on to
         connect a bridge nothing can close or report a connection the caller
-        has already closed (see `_stop_if_closed`). A close() during the wait
-        for the panel is noticed when that wait ends.
+        has already closed (see `_stop_if_closed`). A close() during a wait --
+        for the broker, for the tree, for its labels -- ends that wait.
 
         Raises:
             SpanPanelAuthError: The broker refused the credentials
@@ -568,25 +573,28 @@ class SpanMqttClient:
         # topics `_build_adapter` gave the bridge; nothing here subscribes again,
         # since every SUBSCRIBE makes the broker replay the whole retained tree.
         _LOGGER.debug("MQTT: Connecting to broker...")
+        # The bridge raises rather than return from a connect that close()
+        # disconnected, so only its failure needs checking: one that close() caused
+        # reports the close.
         try:
             await bridge.connect()
         except SpanPanelError:
-            # A connect that close() cut short reports the close, not the failure
-            # the close caused.
             await self._stop_if_closed(bridge)
             raise
-        await self._stop_if_closed(bridge)
         _LOGGER.debug("MQTT: Broker connected, waiting for Homie ready...")
 
-        # Wait for Homie ready state
-        try:
-            await asyncio.wait_for(self._ready_event.wait(), timeout=MQTT_READY_TIMEOUT_S)
-        except TimeoutError as exc:
-            # A close() during the wait is why nothing arrived, and the bridge to
-            # tear down is this one, whatever the client holds by now.
-            await self._stop_if_closed(bridge)
+        # Wait for Homie ready state. A background task, as the label wait below
+        # is, so that close() -- which cancels every one -- ends it at once rather
+        # than leaving it to run out.
+        ready = self._loop.create_task(_until_set(self._ready_event), name="span_mqtt_wait_ready")
+        self._background_tasks.add(ready)
+        ready.add_done_callback(self._background_tasks.discard)
+        done, _ = await asyncio.wait([ready], timeout=MQTT_READY_TIMEOUT_S)
+        await self._stop_if_closed(bridge)
+        if not done:
+            ready.cancel()
             await self.close()
-            raise SpanPanelConnectionError(f"Timed out waiting for Homie device ready ({self._serial_number})") from exc
+            raise SpanPanelConnectionError(f"Timed out waiting for Homie device ready ({self._serial_number})")
 
         _LOGGER.debug("MQTT: Homie device ready, waiting for its labels...")
 

@@ -63,9 +63,15 @@ def _bridge(chain: Chain | None, host: str, port: int) -> AsyncMqttBridge:
 
 
 def _succeed_connect(bridge: AsyncMqttBridge) -> None:
-    """Drive the CONNACK the bridge would see on a successful (re)connect."""
+    """Drive the CONNACK the bridge would see on a successful (re)connect.
+
+    Delivered from the client the bridge holds, as paho delivers it: the bridge
+    ignores a CONNACK from a client it has let go of.
+    """
+    client = bridge._client
+    assert client is not None, "a bridge receives a CONNACK only on a client it holds"
     bridge._on_connect(
-        MagicMock(),
+        client,
         None,
         ConnectFlags(session_present=0),
         ReasonCode(packetType=2, aName="Success"),
@@ -126,7 +132,7 @@ class TestTheDiagnosis:
         assert "would both look like this" not in caplog.text
 
     @pytest.mark.asyncio
-    async def test_reported_once_until_a_successful_connect(self) -> None:
+    async def test_reported_once_until_a_successful_connect(self, mqtt_client_mock: MagicMock) -> None:
         """A mismatch that lasts a week is one condition, not one per backoff tick.
 
         And a mismatch that comes back after a recovery is a second condition,
@@ -137,6 +143,7 @@ class TestTheDiagnosis:
 
         with tls_server(chain) as (host, port):
             bridge = _bridge(chain, host, port)
+            await bridge.connect()
             bridge.set_leaf_mismatch_callback(seen.append)
             with patch("span_panel_api.mqtt.connection.download_ca_cert", return_value=chain.ca_pem):
                 await bridge._diagnose_verification_failure()
@@ -145,6 +152,7 @@ class TestTheDiagnosis:
 
                 _succeed_connect(bridge)
                 await bridge._diagnose_verification_failure()
+            await bridge.disconnect()
 
         assert len(seen) == 2
         assert seen[0] == seen[1]

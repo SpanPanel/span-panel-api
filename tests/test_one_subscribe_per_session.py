@@ -101,6 +101,10 @@ class _Broker:
         self.holding_connacks = False
         """While set, a session opens without its CONNACK, which waits in `held` for `release_connacks`."""
         self.held: list[tuple[_FakePaho, _Session]] = []
+        self.connecting = threading.Event()
+        """Set when a client's blocking connect starts, in the executor thread."""
+        self.connect_gate: threading.Event | None = None
+        """While set to an unset event, a blocking connect waits on it before opening its socket."""
         self.pending = 0
         """Deliveries scheduled and not yet made."""
 
@@ -196,6 +200,10 @@ class _FakePaho:
     def connect(self, host: str, port: int = 1883, keepalive: int = 60) -> MQTTErrorCode:
         """Open a session and schedule its CONNACK, as paho's executor connect does."""
         assert host and port > 0 and keepalive > 0
+        self._broker.connecting.set()
+        gate = self._broker.connect_gate
+        if gate is not None:
+            assert gate.wait(timeout=5), "the test never released the blocking connect"
         self._open()
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
@@ -663,10 +671,8 @@ async def test_close_while_connect_reads_package_metadata_opens_no_session() -> 
 
 
 @pytest.mark.asyncio
-async def test_close_while_the_bridge_awaits_its_connack_reports_the_close(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The bridge's connect fails because close() disconnected it; connect() names the close, not the timeout."""
-    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_CONNECT_TIMEOUT_S", 0.3)
-
+async def test_close_while_the_bridge_awaits_its_connack_reports_the_close_at_once() -> None:
+    """The bridge's wait for its CONNACK ends when close() disconnects it, rather than running out its 15 s."""
     async with _serving(_FLAT_TREE, flat_schema()) as panel:
         panel.broker.holding_connacks = True
         await _close_while_connect_waits(panel, lambda: bool(panel.broker.held), lambda: None)
@@ -677,13 +683,23 @@ async def test_close_while_the_bridge_awaits_its_connack_reports_the_close(monke
 
 
 @pytest.mark.asyncio
-async def test_close_while_the_bridge_fetches_an_unpinned_ca_stops_once_it_connects() -> None:
-    """The one window in which the bridge connects after close() has disconnected it.
+async def test_close_during_the_bridges_blocking_connect_reports_the_close() -> None:
+    """The executor connect returned to a bridge close() had disconnected: in 3.8.0 an `AttributeError`."""
+    async with _serving(_FLAT_TREE, flat_schema()) as panel:
+        gate = threading.Event()
+        panel.broker.connect_gate = gate
+        await _close_while_connect_waits(panel, panel.broker.connecting.is_set, gate.set)
 
-    Unpinned, the bridge fetches the panel's CA before building its paho client,
-    so a close() in that fetch finds nothing to disconnect, and the bridge then
-    connects and subscribes. connect() disconnects it as soon as it returns,
-    rather than wait out a tree it will not read.
+        assert all(not session.open for session in panel.broker.sessions)
+        assert all(session.subscribed == [] for session in panel.broker.sessions)
+
+
+@pytest.mark.asyncio
+async def test_close_while_the_bridge_fetches_an_unpinned_ca_opens_no_session() -> None:
+    """Unpinned, the bridge fetches the panel's CA before it has a paho client, so close() finds nothing to disconnect.
+
+    The bridge notices the disconnect() when the fetch returns and builds no
+    client, where it used to go on to connect and subscribe.
     """
     fetching = asyncio.Event()
     fetched = asyncio.Event()
@@ -693,21 +709,20 @@ async def test_close_while_the_bridge_fetches_an_unpinned_ca_stops_once_it_conne
         await fetched.wait()
         return "PEM"
 
-    never_ready = {f"{TOPIC_PREFIX_SERIAL}/$description": MINIMAL_DESCRIPTION}
-    async with _serving(never_ready, flat_schema(), use_tls=True) as panel:
+    async with _serving(_FLAT_TREE, flat_schema(), use_tls=True) as panel:
         with (
             patch("span_panel_api.mqtt.connection.download_ca_cert", side_effect=ca_once_released),
             patch("span_panel_api.mqtt.connection.build_panel_ssl_context", return_value=ssl.create_default_context()),
         ):
             await _close_while_connect_waits(panel, fetching.is_set, fetched.set)
 
-        assert [session.open for session in panel.broker.sessions] == [False]
+        assert panel.broker.clients == []
+        assert panel.broker.sessions == []
 
 
 @pytest.mark.asyncio
-async def test_close_while_connect_waits_for_ready_reports_the_close(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Connected and subscribed, then closed: connect() says so rather than blaming the panel for never being ready."""
-    monkeypatch.setattr("span_panel_api.mqtt.client.MQTT_READY_TIMEOUT_S", 0.5)
+async def test_close_while_connect_waits_for_ready_reports_the_close_at_once() -> None:
+    """Connected and subscribed, then closed: the wait for a ready tree ends there, rather than running out its 30 s."""
     never_ready = {f"{TOPIC_PREFIX_SERIAL}/$description": MINIMAL_DESCRIPTION}
 
     async with _serving(never_ready, flat_schema()) as panel:
@@ -884,3 +899,81 @@ async def test_subscribe_refuses_what_mqtt_would_where_it_is_called(topic: str, 
         await bridge.disconnect()
 
     assert broker.sessions[0].subscribed == [], "a refused call records nothing"
+
+
+async def _disconnect_while_bridge_connects(
+    broker: _Broker, bridge: AsyncMqttBridge, waiting: Callable[[], bool], resume: Callable[[], None]
+) -> None:
+    """Start the bridge's connect(), disconnect it once `waiting` says connect() is suspended, then let it resume."""
+    connecting = asyncio.create_task(bridge.connect())
+    await _until(waiting, "the bridge's connect() to suspend")
+    await bridge.disconnect()
+    resume()
+    with pytest.raises(SpanPanelConnectionError, match="disconnect"):
+        await asyncio.wait_for(connecting, timeout=5)
+    await _until(lambda: broker.pending == 0, "the broker's deliveries")
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_the_bridge_notices_a_disconnect_during_its_blocking_connect() -> None:
+    """A SpanPanelError, not 3.8.0's `AttributeError`, and the socket the executor opened is closed and never subscribed.
+
+    The CONNACK for that socket can still arrive after `disconnect()`. It belongs
+    to a client the bridge has let go of, so it changes nothing: the bridge is
+    not connected again by it and the session is not subscribed.
+    """
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+        gate = threading.Event()
+        broker.connect_gate = gate
+
+        await _disconnect_while_bridge_connects(broker, bridge, broker.connecting.is_set, gate.set)
+
+    assert not bridge.is_connected()
+    [session] = broker.sessions
+    assert not session.open
+    assert session.subscribed == []
+
+
+@pytest.mark.asyncio
+async def test_the_bridge_ends_its_connack_wait_on_disconnect() -> None:
+    """Rather than waiting out MQTT_CONNECT_TIMEOUT_S for a CONNACK nobody will read."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        broker.holding_connacks = True
+
+        await _disconnect_while_bridge_connects(broker, bridge, lambda: bool(broker.held), lambda: None)
+
+    assert not bridge.is_connected()
+    assert [session.open for session in broker.sessions] == [False]
+
+
+@pytest.mark.asyncio
+async def test_the_bridge_builds_no_client_after_a_disconnect_during_its_ca_fetch() -> None:
+    """Unpinned, the CA is fetched before there is a paho client for disconnect() to reach."""
+    fetching = asyncio.Event()
+    fetched = asyncio.Event()
+
+    async def ca_once_released(*_args: object, **_kwargs: object) -> str:
+        fetching.set()
+        await fetched.wait()
+        return "PEM"
+
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with (
+        patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client),
+        patch("span_panel_api.mqtt.connection.download_ca_cert", side_effect=ca_once_released),
+        patch("span_panel_api.mqtt.connection.build_panel_ssl_context", return_value=ssl.create_default_context()),
+    ):
+        bridge = AsyncMqttBridge(
+            host="broker.local", port=8883, username="u", password="p", panel_host="192.168.1.1", serial_number=SERIAL
+        )
+        await _disconnect_while_bridge_connects(broker, bridge, fetching.is_set, fetched.set)
+
+    assert broker.clients == []
+    assert not bridge.is_connected()

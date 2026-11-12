@@ -18,8 +18,9 @@ and what it sent back, which is what the packet log measured.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 import contextlib
+import gc
 from dataclasses import dataclass, field
 import ssl
 import threading
@@ -105,6 +106,16 @@ class _Broker:
         """Set when a client's blocking connect starts, in the executor thread."""
         self.connect_gate: threading.Event | None = None
         """While set to an unset event, a blocking connect waits on it before opening its socket."""
+        self.reconnecting = threading.Event()
+        """Set when a client's blocking reconnect starts, in the executor thread."""
+        self.reconnect_gate: threading.Event | None = None
+        """As `connect_gate`, for a blocking reconnect."""
+        self.calls_while_held: list[str] = []
+        """Every call that reached a client while a blocking connect or reconnect was inside it.
+
+        paho runs with its locks removed, so the thread holding a client is the
+        only one that may call into it; anything listed here came from another.
+        """
         self.pending = 0
         """Deliveries scheduled and not yet made."""
 
@@ -178,6 +189,7 @@ class _FakePaho:
         self._broker = broker
         self.session: _Session | None = None
         self.next_reconnect_error: OSError | ssl.SSLError | None = None
+        self.held_by_a_thread = False
         self.on_connect: ConnackHandler | None = None
         self.on_disconnect: DisconnectHandler | None = None
         self.on_message: MessageHandler | None = None
@@ -200,24 +212,43 @@ class _FakePaho:
     def connect(self, host: str, port: int = 1883, keepalive: int = 60) -> MQTTErrorCode:
         """Open a session and schedule its CONNACK, as paho's executor connect does."""
         assert host and port > 0 and keepalive > 0
-        self._broker.connecting.set()
-        gate = self._broker.connect_gate
-        if gate is not None:
-            assert gate.wait(timeout=5), "the test never released the blocking connect"
-        self._open()
+        self.held_by_a_thread = True
+        try:
+            self._broker.connecting.set()
+            gate = self._broker.connect_gate
+            if gate is not None:
+                assert gate.wait(timeout=5), "the test never released the blocking connect"
+            session = self._open()
+        finally:
+            self.held_by_a_thread = False
+        self._answer(session)
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
     def reconnect(self) -> MQTTErrorCode:
         """paho closes the previous socket without reporting a disconnect, then opens another."""
-        error = self.next_reconnect_error
-        self.next_reconnect_error = None
-        self._close()
-        if error is not None:
-            raise error
-        self._open()
+        self.held_by_a_thread = True
+        try:
+            self._broker.reconnecting.set()
+            gate = self._broker.reconnect_gate
+            if gate is not None:
+                assert gate.wait(timeout=5), "the test never released the blocking reconnect"
+            error = self.next_reconnect_error
+            self.next_reconnect_error = None
+            self._close()
+            if error is not None:
+                raise error
+            session = self._open()
+        finally:
+            self.held_by_a_thread = False
+        self._answer(session)
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
+    def _record_if_held(self, call: str) -> None:
+        if self.held_by_a_thread:
+            self._broker.calls_while_held.append(call)
+
     def subscribe(self, topic: str | list[tuple[str, int]], qos: int = 0) -> tuple[MQTTErrorCode, int | None]:
+        self._record_if_held("subscribe")
         session = self.session
         if session is None or not session.open:
             return (MQTTErrorCode.MQTT_ERR_NO_CONN, None)
@@ -225,6 +256,7 @@ class _FakePaho:
         return (MQTTErrorCode.MQTT_ERR_SUCCESS, 1)
 
     def unsubscribe(self, topic: str | list[str]) -> tuple[MQTTErrorCode, int | None]:
+        self._record_if_held("unsubscribe")
         session = self.session
         if session is None or not session.open:
             return (MQTTErrorCode.MQTT_ERR_NO_CONN, None)
@@ -232,6 +264,7 @@ class _FakePaho:
         return (MQTTErrorCode.MQTT_ERR_SUCCESS, 1)
 
     def disconnect(self) -> MQTTErrorCode:
+        self._record_if_held("disconnect")
         self._close()
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
@@ -247,11 +280,19 @@ class _FakePaho:
                 None,
             )
 
-    def _open(self) -> None:
+    def _open(self) -> _Session:
         if self._broker.refusing:
             raise ConnectionRefusedError(61, "Connection refused")
         session = self._broker.open_session()
         self.session = session
+        return session
+
+    def _answer(self, session: _Session) -> None:
+        """Schedule the CONNACK for `session`, or hold it.
+
+        Only once the blocking call has returned: paho writes the CONNECT from the
+        loop's write callback after that, so no CONNACK can come sooner.
+        """
         if self._broker.holding_connacks:
             self._broker.held.append((self, session))
             return
@@ -266,6 +307,16 @@ class _FakePaho:
     def _close(self) -> None:
         if self.session is not None:
             self.session.open = False
+
+
+async def _let_the_loop_run() -> None:
+    """Run what the last call scheduled, while a gated executor call is still held.
+
+    Released at once, a gated call could finish before anything the loop had
+    yet to run, and a call that reached the held client would go unrecorded.
+    """
+    for _ in range(5):
+        await asyncio.sleep(0)
 
 
 async def _until(condition: Callable[[], bool], what: str, timeout: float = 10.0) -> None:
@@ -596,6 +647,7 @@ async def _close_while_connect_waits(panel: _Panel, waiting: Callable[[], bool],
     connecting = asyncio.create_task(panel.client.connect())
     await panel.until(waiting, "connect() to suspend")
     await panel.client.close()
+    await _let_the_loop_run()
     resume()
     with pytest.raises(SpanPanelConnectionError, match="Closed while connecting"):
         await asyncio.wait_for(connecting, timeout=5)
@@ -690,6 +742,7 @@ async def test_close_during_the_bridges_blocking_connect_reports_the_close() -> 
         panel.broker.connect_gate = gate
         await _close_while_connect_waits(panel, panel.broker.connecting.is_set, gate.set)
 
+        assert panel.broker.calls_while_held == [], "close() reached into a client the executor held"
         assert all(not session.open for session in panel.broker.sessions)
         assert all(session.subscribed == [] for session in panel.broker.sessions)
 
@@ -908,6 +961,7 @@ async def _disconnect_while_bridge_connects(
     connecting = asyncio.create_task(bridge.connect())
     await _until(waiting, "the bridge's connect() to suspend")
     await bridge.disconnect()
+    await _let_the_loop_run()
     resume()
     with pytest.raises(SpanPanelConnectionError, match="disconnect"):
         await asyncio.wait_for(connecting, timeout=5)
@@ -933,6 +987,7 @@ async def test_the_bridge_notices_a_disconnect_during_its_blocking_connect() -> 
 
         await _disconnect_while_bridge_connects(broker, bridge, broker.connecting.is_set, gate.set)
 
+    assert broker.calls_while_held == [], "disconnect() reached into a client the executor held"
     assert not bridge.is_connected()
     [session] = broker.sessions
     assert not session.open
@@ -1047,3 +1102,106 @@ async def test_a_rebuilt_clients_own_drop_is_noticed_and_reconnected() -> None:
         await bridge.disconnect()
 
     assert reconnected.subscribed == [_FLAT_FILTER]
+
+
+@contextlib.contextmanager
+def _unobserved_loop_errors() -> Iterator[list[dict[str, object]]]:
+    """Collect what the loop's exception handler is handed: an error no awaiter retrieved."""
+    loop = asyncio.get_running_loop()
+    seen: list[dict[str, object]] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: seen.append(context))
+    try:
+        yield seen
+    finally:
+        loop.set_exception_handler(previous)
+
+
+@pytest.mark.asyncio
+async def test_disconnect_during_a_blocking_reconnect_waits_for_the_thread_then_closes_its_socket() -> None:
+    """disconnect() leaves the client to the thread inside paho's reconnect(), and the socket it opens is closed after.
+
+    Before, disconnect() called paho's disconnect() on the loop while the thread
+    was inside reconnect() on the same client, with paho's locks removed, and
+    the socket that reconnect() went on to open was never closed.
+    """
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+        await bridge.connect()
+        gate = threading.Event()
+        broker.reconnect_gate = gate
+        broker.clients[-1].drop()
+        await _until(broker.reconnecting.is_set, "the blocking reconnect")
+
+        await bridge.disconnect()
+        await _let_the_loop_run()
+        gate.set()
+        await _until(lambda: not broker.clients[-1].held_by_a_thread, "the reconnect to return")
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    assert broker.calls_while_held == []
+    assert [session.open for session in broker.sessions] == [False, False]
+    assert not bridge.is_connected()
+    assert errors == []
+
+
+@pytest.mark.asyncio
+async def test_disconnect_during_a_rebuilds_blocking_connect_waits_for_the_thread_then_closes_its_socket() -> None:
+    """The rebuild path, where nothing closed the new client's socket at all once disconnect() had let it go."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+        await bridge.connect()
+        gate = threading.Event()
+        broker.connecting.clear()
+        broker.connect_gate = gate
+        [old] = broker.clients
+        old.next_reconnect_error = ssl.SSLError("handshake failed")
+        old.drop()
+        await _until(broker.connecting.is_set, "the rebuilt client's blocking connect")
+
+        await bridge.disconnect()
+        await _let_the_loop_run()
+        gate.set()
+        await _until(lambda: not broker.clients[-1].held_by_a_thread, "the rebuild's connect to return")
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    assert len(broker.clients) == 2, "precondition: the rebuild built a client"
+    assert broker.calls_while_held == []
+    assert [session.open for session in broker.sessions] == [False, False]
+    assert all(session.subscribed == [_FLAT_FILTER] for session in broker.sessions[:1])
+    assert broker.sessions[1].subscribed == []
+    assert not bridge.is_connected()
+    assert errors == []
+
+
+@pytest.mark.asyncio
+async def test_a_blocking_reconnect_that_fails_after_disconnect_is_not_reported_as_unretrieved() -> None:
+    """Its caller was cancelled, so nothing awaits the failure; the bridge takes it, rather than the loop reporting it on collection."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
+        bridge = _bridge()
+        await bridge.connect()
+        gate = threading.Event()
+        broker.reconnect_gate = gate
+        held = broker.clients[-1]
+        held.next_reconnect_error = ConnectionRefusedError(61, "Connection refused")
+        held.drop()
+        await _until(broker.reconnecting.is_set, "the blocking reconnect")
+
+        await bridge.disconnect()
+        await _let_the_loop_run()
+        gate.set()
+        await _until(lambda: not held.held_by_a_thread, "the reconnect to fail")
+        for _ in range(5):
+            await asyncio.sleep(0)
+        del held
+        gc.collect()
+        await asyncio.sleep(0)
+
+    assert errors == []

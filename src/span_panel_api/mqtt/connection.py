@@ -153,6 +153,9 @@ class AsyncMqttBridge:
         # The connect() in progress, by identity, until disconnect() abandons it.
         # See `_abandoned`.
         self._connect_attempt: object | None = None
+        # Clients a blocking call is running inside, in the executor. See
+        # `_run_blocking`: nothing on the loop calls into one until it returns.
+        self._executor_clients: set[AsyncMQTTClient] = set()
         # Reason code of the most recent refused CONNACK; `connect()` reads it.
         self._connack_refusal: ReasonCode | None = None
 
@@ -520,44 +523,32 @@ class AsyncMqttBridge:
                 keepalive=MQTT_KEEPALIVE_S,
             )
 
+        _LOGGER.debug("BRIDGE: Running connect in executor to %s:%s", self._host, self._port)
         try:
-            client.on_socket_open = self._on_socket_open_sync
-            client.on_socket_register_write = self._on_socket_register_write_sync
-            _LOGGER.debug("BRIDGE: Running connect in executor to %s:%s", self._host, self._port)
-            try:
-                await self._loop.run_in_executor(None, _blocking_connect)
-            except ssl.SSLCertVerificationError as exc:
-                # The pinned handshake failed on the very first attempt, which is
-                # what a CA rotated while the consumer was shut down looks like.
-                # Wrapped as a connection error this became a setup-retry loop
-                # with nothing for the user to act on, forever.
-                # `_diagnose_verification_failure` is what distinguishes it from an
-                # expired leaf or a moved host, and returns None for both of those
-                # so they keep their old retryable shape — announcing the moved
-                # host on its own channel on the way past.
-                fatal = await self._diagnose_verification_failure()
-                if fatal is not None:
-                    raise fatal from exc
-                raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                # paho raises OSError for TCP failures and transport-specific
-                # errors (e.g. WebsocketConnectionError) that do not inherit
-                # from OSError. Wrap all of them uniformly so callers only
-                # see the documented SpanPanelConnectionError.
-                raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
-            _LOGGER.debug("BRIDGE: Executor connect returned, waiting for CONNACK...")
-        finally:
-            # Switch to async-only socket callbacks now that we are
-            # back on the event loop thread.
-            client.on_socket_open = self._async_on_socket_open
-            client.on_socket_register_write = self._async_on_socket_register_write
-
-        if self._abandoned(attempt):
-            # disconnect() ran while the executor held the client, and the socket
-            # the executor then opened is one it could not reach. Closed here, on
-            # the loop, now that nothing else is using the client.
-            client.disconnect()
-            self._raise_if_abandoned(attempt)
+            await self._run_blocking(self._loop, client, _blocking_connect)
+        except ssl.SSLCertVerificationError as exc:
+            # The pinned handshake failed on the very first attempt, which is
+            # what a CA rotated while the consumer was shut down looks like.
+            # Wrapped as a connection error this became a setup-retry loop
+            # with nothing for the user to act on, forever.
+            # `_diagnose_verification_failure` is what distinguishes it from an
+            # expired leaf or a moved host, and returns None for both of those
+            # so they keep their old retryable shape — announcing the moved
+            # host on its own channel on the way past.
+            fatal = await self._diagnose_verification_failure()
+            if fatal is not None:
+                raise fatal from exc
+            raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # paho raises OSError for TCP failures and transport-specific
+            # errors (e.g. WebsocketConnectionError) that do not inherit
+            # from OSError. Wrap all of them uniformly so callers only
+            # see the documented SpanPanelConnectionError.
+            raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
+        _LOGGER.debug("BRIDGE: Executor connect returned, waiting for CONNACK...")
+        # A disconnect() while the executor held the client left it to the
+        # thread, and `_executor_returned` has closed it by now.
+        self._raise_if_abandoned(attempt)
 
         # Wait for CONNACK, or for disconnect(), which sets the same event.
         try:
@@ -600,12 +591,75 @@ class AsyncMqttBridge:
 
         self._resolve_pending_publishes(False, "bridge disconnected")
 
+        # Not a client a blocking call is still inside: paho runs with its locks
+        # removed, so only the thread may touch it. Letting it go is enough --
+        # `_executor_returned` closes it on the loop once the call returns.
         client = self._client
-        if client is not None:
+        if client is not None and client not in self._executor_clients:
             client.disconnect()
         self._connected = False
         self._client = None
         self._initial_connect_done = False
+
+    def _run_blocking(
+        self, loop: asyncio.AbstractEventLoop, client: AsyncMQTTClient, call: Callable[[], object]
+    ) -> asyncio.Future[object]:
+        """Run one blocking paho call on `client` in the executor: the only way this bridge does.
+
+        While the call runs the executor thread owns the client. Its socket
+        callbacks are the thread-safe bridges, and nothing on the loop calls into
+        it -- paho runs with its locks removed, so a second thread inside the
+        same client could corrupt it. `disconnect()` in particular only lets it
+        go.
+
+        The loop takes it back when the call returns (`_executor_returned`), not
+        when its caller resumes. Cancelling the caller does not stop the thread,
+        so the caller awaits a future the hand-back resolves rather than the
+        executor's own: a cancelled caller -- a reconnect task that disconnect()
+        cancelled -- cancels only its wait, and the hand-back still runs when the
+        thread is really done. Not `asyncio.shield`, which reports a failure that
+        arrives after its caller was cancelled through the loop's exception
+        handler; here that failure is the abandoned attempt's, and expected.
+        """
+        client.on_socket_open = self._on_socket_open_sync
+        client.on_socket_register_write = self._on_socket_register_write_sync
+        self._executor_clients.add(client)
+        caller: asyncio.Future[object] = loop.create_future()
+        loop.run_in_executor(None, call).add_done_callback(partial(self._executor_returned, client, caller))
+        return caller
+
+    def _executor_returned(
+        self, client: AsyncMQTTClient, caller: asyncio.Future[object], call: asyncio.Future[object]
+    ) -> None:
+        """Take `client` back on the loop once its blocking `call` has returned, then answer its `caller`.
+
+        Async socket callbacks again, and a client this bridge let go of while the
+        thread held it -- disconnect() ran meanwhile -- is disconnected here,
+        closing whatever socket the call went on to open. Only then is `caller`
+        given the call's outcome, so whoever awaits it resumes with the client
+        already back. A caller that was cancelled is told nothing: the outcome is
+        retrieved here, so a failure nobody is waiting for is not reported as
+        never retrieved.
+        """
+        self._executor_clients.discard(client)
+        client.on_socket_open = self._async_on_socket_open
+        client.on_socket_register_write = self._async_on_socket_register_write
+        if client is not self._client:
+            try:
+                client.disconnect()
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.debug("Disconnecting a let-go paho client raised", exc_info=True)
+        if call.cancelled():
+            if not caller.done():
+                caller.cancel()
+            return
+        failure = call.exception()
+        if caller.done():
+            return
+        if failure is not None:
+            caller.set_exception(failure)
+        else:
+            caller.set_result(call.result())
 
     def _abandoned(self, attempt: object) -> bool:
         """Whether disconnect() has abandoned the connect() that `attempt` identifies.
@@ -1135,8 +1189,6 @@ class AsyncMqttBridge:
             # a live session through `self._client`, and would otherwise reach
             # the (disconnected) old_client.
             new_client = self._make_paho_client(ssl_context)
-            new_client.on_socket_open = self._on_socket_open_sync
-            new_client.on_socket_register_write = self._on_socket_register_write_sync
             self._client = new_client
 
             def _blocking_connect() -> None:
@@ -1156,16 +1208,14 @@ class AsyncMqttBridge:
             # only from it, so holding a client whose session is over would leave
             # the live session's own disconnect unheard.
             try:
-                await self._loop.run_in_executor(None, _blocking_connect)
+                await self._run_blocking(self._loop, new_client, _blocking_connect)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 _LOGGER.warning("Client rebuild — initial connect failed: %s", exc)
                 # Restore the previous client so the loop keeps retrying
-                # with what it had. The new client's socket was never opened.
+                # with what it had. Whatever the failed connect left of the new
+                # one, `_executor_returned` has disconnected, as a let-go client.
                 self._client = old_client
                 return False
-            finally:
-                new_client.on_socket_open = self._async_on_socket_open
-                new_client.on_socket_register_write = self._async_on_socket_register_write
 
             _LOGGER.info("MQTT client rebuilt for reconnect (TLS=%s)", self._use_tls)
             return True
@@ -1198,14 +1248,12 @@ class AsyncMqttBridge:
         delay = MQTT_RECONNECT_MIN_DELAY_S
         failures_since_rebuild_attempt = 0
         while self._should_reconnect:
-            if not self._connected and self._client is not None:
+            client = self._client
+            if not self._connected and client is not None:
                 try:
                     if self._loop is None:
                         break
-                    # Use sync socket callbacks for executor reconnect
-                    self._client.on_socket_open = self._on_socket_open_sync
-                    self._client.on_socket_register_write = self._on_socket_register_write_sync
-                    await self._loop.run_in_executor(None, self._client.reconnect)
+                    await self._run_blocking(self._loop, client, client.reconnect)
                 except ssl.SSLCertVerificationError as exc:
                     # Certificate verification, specifically -- caught ahead of
                     # `ssl.SSLError` because it is a subclass, and separated from
@@ -1263,10 +1311,9 @@ class AsyncMqttBridge:
                     # behind a recovery action whose effect we cannot predict.
                     failures_since_rebuild_attempt += 1
                     _LOGGER.warning("Reconnect failed, retrying in %ss", delay, exc_info=True)
-                finally:
-                    if self._client is not None:
-                        self._client.on_socket_open = self._async_on_socket_open
-                        self._client.on_socket_register_write = self._async_on_socket_register_write
+                # The socket callbacks go back to the loop's in `_executor_returned`,
+                # when the thread is done, not here: a cancelled loop reaches this
+                # point while the thread may still be inside paho.
             else:
                 failures_since_rebuild_attempt = 0
             await asyncio.sleep(delay)

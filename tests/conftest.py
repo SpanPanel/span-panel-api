@@ -19,6 +19,7 @@ from paho.mqtt.reasoncodes import ReasonCode
 from expected_failures import EXPECTED_FAILURES
 import span_panel_api._http as _http_mod
 from span_panel_api.models import V2HomieSchema
+from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.control import ControlDeadlines
 from span_panel_api_schema_0.const import TOPIC_PREFIX, TYPE_CIRCUIT, TYPE_CORE
 
@@ -272,6 +273,22 @@ async def mqtt_client_mock() -> AsyncGenerator[MagicMock, None]:
         mock_client.loop_misc.return_value = paho.MQTT_ERR_SUCCESS
 
         yield mock_client
+
+
+async def until_the_parser_exists(client: SpanMqttClient) -> None:
+    """Wait until connect() has built its parser, from which point a delivered message is read.
+
+    For a test that runs connect() in the background and feeds the tree through
+    `_on_message`: a message delivered before the parser exists is dropped. A
+    fixed sleep guessed at the moment, and connect() reaches the parser only
+    after resolving the adapter in a thread, which a loaded machine stretches
+    past any guess.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 5.0
+    while client.adapter is None:
+        assert loop.time() < deadline, "connect() never built its parser"
+        await asyncio.sleep(0.005)
 
 
 def acking_bridge() -> MagicMock:

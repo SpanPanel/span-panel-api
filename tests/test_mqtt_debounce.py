@@ -18,7 +18,7 @@ import pytest
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.models import MqttClientConfig
 
-from conftest import MINIMAL_DESCRIPTION, SERIAL, TOPIC_PREFIX_SERIAL
+from conftest import MINIMAL_DESCRIPTION, SERIAL, TOPIC_PREFIX_SERIAL, until_the_parser_exists
 
 
 def _make_client(snapshot_interval: float = 1.0) -> SpanMqttClient:
@@ -38,7 +38,7 @@ def _make_client(snapshot_interval: float = 1.0) -> SpanMqttClient:
 async def _connect_client(client: SpanMqttClient, mqtt_client_mock: MagicMock) -> None:
     """Connect the client and bring Homie to ready state."""
     connect_task = asyncio.create_task(client.connect())
-    await asyncio.sleep(0.05)
+    await until_the_parser_exists(client)
     client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
     client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
     await asyncio.wait_for(connect_task, timeout=5.0)

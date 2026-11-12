@@ -78,6 +78,8 @@ class _Session:
     """The topic of every PUBLISH the broker sent on this session."""
     filters: list[str] = field(default_factory=list)
     """The filters currently held for this session."""
+    qos: dict[str, int] = field(default_factory=dict)
+    """The QoS each filter was last subscribed at."""
     open: bool = True
 
 
@@ -124,9 +126,10 @@ class _Broker:
         self.sessions.append(session)
         return session
 
-    def subscribe(self, client: _FakePaho, session: _Session, filters: list[str]) -> None:
-        for topic_filter in filters:
+    def subscribe(self, client: _FakePaho, session: _Session, filters: list[tuple[str, int]]) -> None:
+        for topic_filter, qos in filters:
             session.subscribed.append(topic_filter)
+            session.qos[topic_filter] = qos
             if topic_filter not in session.filters:
                 session.filters.append(topic_filter)
             for topic, payload in self.retained.items():
@@ -207,11 +210,10 @@ class _FakePaho:
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
     def subscribe(self, topic: str | list[tuple[str, int]], qos: int = 0) -> tuple[MQTTErrorCode, int | None]:
-        assert qos == 0
         session = self.session
         if session is None or not session.open:
             return (MQTTErrorCode.MQTT_ERR_NO_CONN, None)
-        self._broker.subscribe(self, session, [topic] if isinstance(topic, str) else [name for name, _ in topic])
+        self._broker.subscribe(self, session, [(topic, qos)] if isinstance(topic, str) else list(topic))
         return (MQTTErrorCode.MQTT_ERR_SUCCESS, 1)
 
     def unsubscribe(self, topic: str | list[str]) -> tuple[MQTTErrorCode, int | None]:
@@ -258,17 +260,22 @@ class _FakePaho:
             self.session.open = False
 
 
+async def _until(condition: Callable[[], bool], what: str, timeout: float = 10.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not condition():
+        if loop.time() > deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        await asyncio.sleep(0.01)
+
+
 @dataclass
 class _Panel:
     client: SpanMqttClient
     broker: _Broker
 
     async def until(self, condition: Callable[[], bool], what: str, timeout: float = 10.0) -> None:
-        deadline = self.broker.loop.time() + timeout
-        while not condition():
-            if self.broker.loop.time() > deadline:
-                raise AssertionError(f"timed out waiting for {what}")
-            await asyncio.sleep(0.01)
+        await _until(condition, what, timeout)
 
     async def quiesce(self) -> None:
         """Wait until every delivery the broker scheduled has been made and handled."""
@@ -756,3 +763,124 @@ async def test_a_parser_whose_topics_are_refused_is_not_installed() -> None:
 
     assert client.adapter is None
     assert broker.sessions == []
+
+
+_CONSUMER_TOPIC = "homeassistant/status"
+"""A topic a consumer of the bridge subscribes to itself, outside any parser's set."""
+
+
+async def _reconnected(broker: _Broker) -> _Session:
+    """Drop the latest session and return the one the bridge's reconnect opens."""
+    opened = len(broker.sessions)
+    broker.clients[-1].drop()
+    await _until(lambda: len(broker.sessions) == opened + 1, "the reconnected session")
+    return broker.sessions[-1]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_adds_a_topic_once_and_every_later_session_renews_it() -> None:
+    """The 3.8.0 method, kept: one SUBSCRIBE for a topic not yet held, none for one that is, and each renewed once."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+        await bridge.connect()
+        [first] = broker.sessions
+
+        bridge.subscribe(_CONSUMER_TOPIC)
+        assert first.subscribed == [_FLAT_FILTER, _CONSUMER_TOPIC]
+        bridge.subscribe(_CONSUMER_TOPIC)
+        bridge.subscribe(_FLAT_FILTER)
+        assert first.subscribed == [_FLAT_FILTER, _CONSUMER_TOPIC], "a topic already held sends nothing"
+
+        second = await _reconnected(broker)
+        await bridge.disconnect()
+
+    assert sorted(second.subscribed) == sorted([_FLAT_FILTER, _CONSUMER_TOPIC])
+
+
+@pytest.mark.asyncio
+async def test_subscribe_before_connect_is_sent_by_the_connack() -> None:
+    """In 3.8.0 this was dropped: with no paho client yet there was nothing to send it on, and nothing kept it."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.subscribe(_CONSUMER_TOPIC)
+        await bridge.connect()
+        await bridge.disconnect()
+
+    assert broker.sessions[0].subscribed == [_CONSUMER_TOPIC]
+
+
+@pytest.mark.asyncio
+async def test_replacing_the_set_never_drops_what_subscribe_added() -> None:
+    """A parser swap replaces its own topics; a consumer's are not its to drop, even one both held."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+        await bridge.connect()
+        [first] = broker.sessions
+        bridge.subscribe(_CONSUMER_TOPIC)
+        bridge.subscribe(_FLAT_FILTER)
+
+        bridge.set_subscriptions([_PARENT_CHILD_FILTER])
+
+        assert first.unsubscribed == []
+        assert sorted(first.filters) == sorted([_FLAT_FILTER, _CONSUMER_TOPIC, _PARENT_CHILD_FILTER])
+
+        bridge.set_subscriptions([])
+        assert first.unsubscribed == [_PARENT_CHILD_FILTER], "the set's own topic goes when the set lets it go"
+
+        second = await _reconnected(broker)
+        await bridge.disconnect()
+
+    assert sorted(second.subscribed) == sorted([_FLAT_FILTER, _CONSUMER_TOPIC])
+
+
+@pytest.mark.asyncio
+async def test_subscribe_honours_its_qos_and_a_topic_is_held_at_the_highest_asked() -> None:
+    """3.8.0 passed `qos` to paho. A topic asked for at a higher QoS than it is held at is subscribed again, at that QoS; never lower."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+        await bridge.connect()
+        [first] = broker.sessions
+
+        bridge.subscribe(_CONSUMER_TOPIC, qos=1)
+        bridge.subscribe(_FLAT_FILTER, qos=1)
+        bridge.subscribe(_FLAT_FILTER, qos=0)
+        assert first.subscribed == [_FLAT_FILTER, _CONSUMER_TOPIC, _FLAT_FILTER]
+        assert first.qos == {_FLAT_FILTER: 1, _CONSUMER_TOPIC: 1}
+
+        bridge.set_subscriptions([_FLAT_FILTER])
+        assert first.qos[_FLAT_FILTER] == 1, "a new consumer of the set does not lower what another asked for"
+
+        second = await _reconnected(broker)
+        await bridge.disconnect()
+
+    assert second.qos == {_FLAT_FILTER: 1, _CONSUMER_TOPIC: 1}
+
+
+@pytest.mark.parametrize(
+    ("topic", "qos"),
+    [
+        pytest.param("", 0, id="empty-filter"),
+        pytest.param("ebus/#/core", 0, id="malformed-filter"),
+        pytest.param("a/b", 3, id="no-such-qos"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_subscribe_refuses_what_mqtt_would_where_it_is_called(topic: str, qos: int) -> None:
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+
+        with pytest.raises(ValueError, match="(?i)topic filter|qos"):
+            bridge.subscribe(topic, qos=qos)
+
+        await bridge.connect()
+        await bridge.disconnect()
+
+    assert broker.sessions[0].subscribed == [], "a refused call records nothing"

@@ -140,8 +140,12 @@ class AsyncMqttBridge:
         # `_resolve_pending_publishes` when the outbound queue ceases to exist.
         self._pending_publishes: dict[int, asyncio.Future[bool]] = {}
 
-        # What every session is subscribed to. See `set_subscriptions`.
-        self._subscriptions: tuple[str, ...] = ()
+        # What every session is subscribed to, in two parts with one writer each:
+        # the set `set_subscriptions` replaces whole, and the topics `subscribe`
+        # adds, at the QoS asked, which nothing removes. `_held` combines them, and
+        # nothing but this bridge sends a SUBSCRIBE. See `set_subscriptions`.
+        self._subscription_set: tuple[str, ...] = ()
+        self._added: dict[str, int] = {}
 
         self._connected = False
         self._client: AsyncMQTTClient | None = None
@@ -576,7 +580,7 @@ class AsyncMqttBridge:
         self._initial_connect_done = False
 
     def set_subscriptions(self, topics: Sequence[str]) -> None:
-        """Make `topics` the subscription of every session this bridge opens, replacing the last one.
+        """Make `topics` the set every session of this bridge is subscribed to, replacing the last set given here.
 
         The bridge owns subscription because it is the one place that sees each
         session begin. Every connection is a clean session, so the broker keeps
@@ -599,13 +603,19 @@ class AsyncMqttBridge:
         left is unsubscribed because overlapping filters each deliver their own
         copy of every message they share.
 
+        Topics added with `subscribe` are not part of the set and are never
+        dropped by replacing it: a parser swap replaces the parser's topics, and
+        a consumer's are not its to remove. A topic in both is held once, at the
+        higher QoS, and stays while either holds it.
+
         Live means the CONNACK has arrived, not merely that a socket is open: paho
         sends a SUBSCRIBE on a socket still waiting for its CONNACK, and that
         CONNACK would then subscribe the session a second time.
 
-        Topics are subscribed at QoS 0. Call this on the event loop, like every
-        other call into this bridge: paho runs there with its locks removed (see
-        `AsyncMQTTClient`), so a call from another thread would race it.
+        The set's topics are subscribed at QoS 0. Call this on the event loop,
+        like every other call into this bridge: paho runs there with its locks
+        removed (see `AsyncMQTTClient`), so a call from another thread would race
+        it.
 
         Raises:
             TypeError: `topics` is one string. It is a `Sequence[str]` to the
@@ -623,23 +633,70 @@ class AsyncMqttBridge:
         wanted = tuple(dict.fromkeys(topics))
         for topic in wanted:
             _check_topic_filter(topic)
-        previous = self._subscriptions
-        self._subscriptions = wanted
+        previous = self._subscription_set
+        self._subscription_set = wanted
         client = self._client
         if client is None or not self._connected:
             return
-        self._subscribe_session(client)
-        departed = [topic for topic in previous if topic not in self._subscriptions]
+        held = self._held()
+        if wanted:
+            _LOGGER.debug("MQTT subscribing to %s", ", ".join(wanted))
+            client.subscribe([(topic, held[topic]) for topic in wanted])
+        departed = [topic for topic in previous if topic not in held]
         if departed:
             _LOGGER.debug("MQTT unsubscribing from %s", ", ".join(departed))
             client.unsubscribe(departed)
 
-    def _subscribe_session(self, client: paho.Client) -> None:
-        """Send the subscription on `client`'s session, as one SUBSCRIBE."""
-        if not self._subscriptions:
+    def subscribe(self, topic: str, qos: int = 0) -> None:
+        """Add `topic` at `qos` to what every session of this bridge is subscribed to, for the bridge's life.
+
+        Kept from 3.8.0 for a caller that subscribes a topic of its own, and now
+        held the way `set_subscriptions` holds its set: subscribed at once on a
+        live session, and on every later CONNACK. In 3.8.0 it was one SUBSCRIBE
+        on the current session only, dropped with no paho client to send it on
+        and gone after the next reconnect.
+
+        A topic already held at `qos` or higher sends nothing: a second
+        SUBSCRIBE would only replay its retained messages. It is still recorded
+        as this caller's, so replacing the set with `set_subscriptions` -- a
+        parser swap -- never drops it. Asked for at a higher QoS than it is held
+        at, it is subscribed again at that QoS, since nothing else would grant
+        it; a lower one changes nothing. Nothing removes a topic added here.
+
+        Call this on the event loop, as `set_subscriptions` says.
+
+        Raises:
+            ValueError: `topic` is not a valid MQTT topic filter, or `qos` is
+                not 0, 1 or 2. Refused here, before anything is recorded, for
+                the reason `set_subscriptions` gives.
+        """
+        _check_topic_filter(topic)
+        if qos not in (0, 1, 2):
+            raise ValueError(f"MQTT has no QoS {qos!r}: a subscription is at QoS 0, 1 or 2")
+        before = self._held().get(topic)
+        self._added[topic] = max(qos, self._added.get(topic, 0))
+        if before is not None and before >= qos:
             return
-        _LOGGER.debug("MQTT subscribing to %s", ", ".join(self._subscriptions))
-        client.subscribe([(topic, 0) for topic in self._subscriptions])
+        client = self._client
+        if client is None or not self._connected:
+            return
+        _LOGGER.debug("MQTT subscribing to %s at QoS %d", topic, qos)
+        client.subscribe([(topic, qos)])
+
+    def _held(self) -> dict[str, int]:
+        """Every topic a session is subscribed to, at the highest QoS either part asks of it."""
+        held = dict.fromkeys(self._subscription_set, 0)
+        for topic, qos in self._added.items():
+            held[topic] = max(qos, held.get(topic, 0))
+        return held
+
+    def _subscribe_session(self, client: paho.Client) -> None:
+        """Send the whole subscription on `client`'s session, as one SUBSCRIBE."""
+        held = self._held()
+        if not held:
+            return
+        _LOGGER.debug("MQTT subscribing to %s", ", ".join(held))
+        client.subscribe(list(held.items()))
 
     def publish(self, topic: str, payload: str) -> asyncio.Future[bool] | None:
         """Hand one QoS-1 control message to paho, or refuse to hand it over.

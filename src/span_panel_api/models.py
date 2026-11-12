@@ -1347,15 +1347,17 @@ class SpanPanelSnapshot:
     which declares no roles.
     """
 
-    publishes_shared_meters: bool = False
-    """Whether any circuit declares `meter/shared-with-device-ids`.
+    publishes_shared_meters: bool | None = None
+    """Whether any circuit declares `meter/shared-with-device-ids`, or `None` where the adapter does not say.
 
     The declaration decides, not the value: a panel model that describes its
     multi-load breakers declares the list on every circuit, a standard breaker
     included, and publishes a value only where a meter is shared. Such a panel
     publishes each circuit of a multi-load breaker as its own device with its
-    own rating. `False` where no circuit declares the list, as on MAIN 32, and
-    on the flat schema, which declares none.
+    own rating. `False` where no circuit declares the list, as on MAIN 32.
+    `None` where the adapter does not answer -- the flat schema's, one older
+    than this field, a hand-built snapshot -- and the consumer must treat it as
+    not known, never as `False`.
     """
 
     # `shed/policy`, v1.0 only: how the panel decides what to shed, and the two

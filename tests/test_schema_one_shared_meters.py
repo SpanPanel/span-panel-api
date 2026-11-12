@@ -148,9 +148,16 @@ def test_a_panel_with_no_circuit_declaring_the_list_does_not() -> None:
     assert _snapshot(hosted_circuit("c-1", (1,)), hosted_circuit("c-2", (3,))).publishes_shared_meters is False
 
 
-def test_main_32_and_the_flat_schema_do_not() -> None:
-    reference = replay(parent_child_tree(), _REFERENCE_PANEL).build_snapshot()
+def test_the_reference_tree_declares_no_shared_meter_list() -> None:
+    assert replay(parent_child_tree(), _REFERENCE_PANEL).build_snapshot().publishes_shared_meters is False
+
+
+def test_an_adapter_that_does_not_say_reads_unknown() -> None:
+    """The flat adapter sets nothing, as an adapter older than the field would not.
+
+    `False` there would tell a consumer the panel does not describe its
+    multi-load breakers, which nothing has said.
+    """
     flat = SchemaZeroAdapter(serial_number="sim-40t-001", schema=flat_schema(40)).build_snapshot()
 
-    assert reference.publishes_shared_meters is False
-    assert flat.publishes_shared_meters is False
+    assert flat.publishes_shared_meters is None

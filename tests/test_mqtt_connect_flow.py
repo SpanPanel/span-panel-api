@@ -235,12 +235,27 @@ class TestBridgeConnackRefusal:
 
 class TestBridgeSubscribePublish:
     @pytest.mark.asyncio
-    async def test_subscribe_after_connect(self, mqtt_client_mock: MagicMock) -> None:
+    async def test_subscriptions_set_before_connect_are_sent_by_the_connack(self, mqtt_client_mock: MagicMock) -> None:
         bridge = _make_bridge()
+        bridge.set_subscriptions(["test/topic"])
+        mqtt_client_mock.subscribe.assert_not_called()
+
         await bridge.connect()
 
-        bridge.subscribe("test/topic", qos=1)
-        mqtt_client_mock.subscribe.assert_called_once_with("test/topic", qos=1)
+        mqtt_client_mock.subscribe.assert_called_once_with([("test/topic", 0)])
+
+    @pytest.mark.asyncio
+    async def test_subscriptions_set_on_a_live_session_are_sent_at_once(self, mqtt_client_mock: MagicMock) -> None:
+        """A new consumer on a live session is subscribed now, and a filter it no longer wants is dropped."""
+        bridge = _make_bridge()
+        bridge.set_subscriptions(["old/topic"])
+        await bridge.connect()
+        mqtt_client_mock.subscribe.reset_mock()
+
+        bridge.set_subscriptions(["test/topic"])
+
+        mqtt_client_mock.subscribe.assert_called_once_with([("test/topic", 0)])
+        mqtt_client_mock.unsubscribe.assert_called_once_with(["old/topic"])
 
     @pytest.mark.asyncio
     async def test_publish_after_connect(self, mqtt_client_mock: MagicMock) -> None:
@@ -580,9 +595,17 @@ class TestSpanMqttClientConnect:
 
         mqtt_client_mock.subscribe.reset_mock()
 
-        # Simulate reconnection
-        client._on_connection_change(True)
-        mqtt_client_mock.subscribe.assert_called_once()
+        # Simulate reconnection: a fresh CONNACK, which opens a new clean session
+        bridge = client._bridge
+        assert bridge is not None
+        bridge._on_connect(
+            mqtt_client_mock,
+            None,
+            ConnectFlags(session_present=False),
+            ReasonCode(packetType=2, aName="Success"),
+            None,
+        )
+        mqtt_client_mock.subscribe.assert_called_once_with([(f"{TOPIC_PREFIX_SERIAL}/#", 0)])
 
         await client.close()
 
@@ -1091,7 +1114,8 @@ class TestBridgeRebuildHardening:
     ) -> None:
         """The bridge's `_client` reference must point at the new client
         before the executor await — so a CONNACK arriving during the await
-        sees the right client when callbacks dispatch to bridge.subscribe."""
+        finds it as the live client that `publish` and `set_subscriptions`
+        act through."""
         monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.01)
         bridge = _make_bridge()
         await bridge.connect()

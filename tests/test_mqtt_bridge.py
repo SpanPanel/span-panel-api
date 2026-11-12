@@ -52,11 +52,12 @@ class TestBridgeConstruction:
 
 
 class TestBridgeSubscribePublish:
-    """Verify subscribe/publish with no client are safe no-ops."""
+    """Verify setting a subscription and publishing with no client are safe."""
 
-    def test_subscribe_no_client(self) -> None:
+    def test_set_subscriptions_no_client(self) -> None:
+        """Recorded for the first CONNACK, with nothing to send it on yet."""
         bridge = _make_bridge()
-        bridge.subscribe("test/topic")  # Should not raise
+        bridge.set_subscriptions(["test/topic"])  # Should not raise
 
     def test_publish_no_client(self) -> None:
         bridge = _make_bridge()

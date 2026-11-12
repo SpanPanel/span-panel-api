@@ -24,7 +24,7 @@ only once the new panel is publishing, so it is the first moment the answer exis
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import asyncio
 from typing import Any
@@ -85,11 +85,13 @@ class _Adapter:
 
 
 class _Bridge:
-    def __init__(self) -> None:
-        self.subscribed: list[str] = []
+    """Records the subscription the client hands the bridge."""
 
-    def subscribe(self, topic: str, qos: int = 0) -> None:
-        self.subscribed.append(topic)
+    def __init__(self) -> None:
+        self.subscriptions: list[str] = []
+
+    def set_subscriptions(self, topics: Sequence[str]) -> None:
+        self.subscriptions = list(topics)
 
 
 def _client(initial: str | None) -> tuple[SpanMqttClient, _Bridge]:
@@ -148,7 +150,7 @@ async def test_the_new_parsers_topics_are_subscribed() -> None:
     with patch("span_panel_api.mqtt.client.get_homie_schema", return_value=_Schema("1.0")):
         await _panel_publishes_version(client, "1.0")
 
-    assert "topics/for/1.0" in bridge.subscribed
+    assert bridge.subscriptions == ["topics/for/1.0"]
 
 
 @pytest.mark.asyncio

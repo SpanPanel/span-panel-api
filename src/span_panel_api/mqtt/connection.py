@@ -10,7 +10,7 @@ Follows Home Assistant core's async MQTT pattern:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 import logging
 import ssl
@@ -113,6 +113,9 @@ class AsyncMqttBridge:
         # by `_on_publish` one at a time, and wholesale by
         # `_resolve_pending_publishes` when the outbound queue ceases to exist.
         self._pending_publishes: dict[int, asyncio.Future[bool]] = {}
+
+        # What every session is subscribed to. See `set_subscriptions`.
+        self._subscriptions: tuple[str, ...] = ()
 
         self._connected = False
         self._client: AsyncMQTTClient | None = None
@@ -546,10 +549,49 @@ class AsyncMqttBridge:
         self._client = None
         self._initial_connect_done = False
 
-    def subscribe(self, topic: str, qos: int = 0) -> None:
-        """Subscribe to a topic. Must be called after connect()."""
-        if self._client is not None:
-            self._client.subscribe(topic, qos=qos)
+    def set_subscriptions(self, topics: Sequence[str]) -> None:
+        """Make `topics` the subscription of every session this bridge opens, replacing the last one.
+
+        The bridge owns subscription because it is the one place that sees each
+        session begin. Every connection is a clean session, so the broker keeps
+        nothing from the one before, and `_on_connect` subscribes the set on each
+        CONNACK that accepts a connection -- the initial connect, each reconnect,
+        each rebuilt client. That is the only place a beginning session is
+        subscribed, so none is left without the subscription and none starts
+        with it twice.
+
+        Twice would not be harmless. The broker answers a SUBSCRIBE for a filter
+        it already holds by replacing the subscription and sending every
+        retained message on it again, which for the panel's filter is its whole
+        tree.
+
+        With no session up this only records the set, for the next CONNACK. On a
+        live session it subscribes every topic in the set now, one already held
+        included, then unsubscribes each topic that left. That is the call for a
+        new consumer of the tree: a parser built for another schema generation
+        has seen none of it, and the SUBSCRIBE is what delivers it. A topic that
+        left is unsubscribed because overlapping filters each deliver their own
+        copy of every message they share.
+
+        Topics are subscribed at QoS 0.
+        """
+        previous = self._subscriptions
+        self._subscriptions = tuple(dict.fromkeys(topics))
+        client = self._client
+        if client is None or not self._connected:
+            return
+        self._subscribe_session(client)
+        departed = [topic for topic in previous if topic not in self._subscriptions]
+        if departed:
+            _LOGGER.debug("MQTT unsubscribing from %s", ", ".join(departed))
+            client.unsubscribe(departed)
+
+    def _subscribe_session(self, client: paho.Client) -> None:
+        """Send the subscription on `client`'s session, as one SUBSCRIBE."""
+        if not self._subscriptions:
+            return
+        _LOGGER.debug("MQTT subscribing to %s", ", ".join(self._subscriptions))
+        client.subscribe([(topic, 0) for topic in self._subscriptions])
 
     def publish(self, topic: str, payload: str) -> asyncio.Future[bool] | None:
         """Hand one QoS-1 control message to paho, or refuse to hand it over.
@@ -755,13 +797,21 @@ class AsyncMqttBridge:
 
     def _on_connect(
         self,
-        _client: paho.Client,
+        client: paho.Client,
         _userdata: object,
         _flags: ConnectFlags,
         reason_code: ReasonCode,
         _properties: Properties | None,
     ) -> None:
-        """Handle CONNACK from broker."""
+        """Handle CONNACK from broker.
+
+        paho calls this once per CONNACK, and an accepted CONNACK is a new clean
+        session, so this is where each session is subscribed: once, on the client
+        whose session it is, and before anyone is told the broker is connected.
+        A CONNACK with no disconnect reported before it is still a new session --
+        paho's `reconnect()` closes the socket it replaces without one -- so it is
+        subscribed like any other.
+        """
         connected = not reason_code.is_failure
         self._connected = connected
 
@@ -776,6 +826,7 @@ class AsyncMqttBridge:
             if self._reconnect_task is not None:
                 self._reconnect_task.cancel()
                 self._reconnect_task = None
+            self._subscribe_session(client)
         else:
             self._connack_refusal = reason_code
             _LOGGER.warning("MQTT connection refused: %s", reason_code)
@@ -906,10 +957,11 @@ class AsyncMqttBridge:
                     _LOGGER.debug("Old paho client disconnect raised", exc_info=True)
 
             # Build fresh client and assign it BEFORE the executor await so
-            # that a CONNACK arriving during the await sees the right client.
-            # Without this, the _on_connect → re-subscribe path would route
-            # through self._client which would still be the (disconnected)
-            # old_client, and the new client's subscription would never run.
+            # that a CONNACK arriving during the await finds it as the live
+            # client. `_on_connect` subscribes the client that sent the CONNACK
+            # whatever this holds, but `publish` and `set_subscriptions` act on
+            # a live session through `self._client`, and would otherwise reach
+            # the (disconnected) old_client.
             new_client = self._make_paho_client(ssl_context)
             new_client.on_socket_open = self._on_socket_open_sync
             new_client.on_socket_register_write = self._on_socket_register_write_sync

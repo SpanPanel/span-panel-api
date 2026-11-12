@@ -434,8 +434,8 @@ class TestSpanMqttClientConnect:
         # Start connect in background — it will wait for Homie ready
         connect_task = asyncio.create_task(client.connect())
 
-        # Let the bridge connect complete
-        await asyncio.sleep(0.05)
+        # Messages are read once connect() has built its parser
+        await _until_the_parser_exists(client)
 
         # Feed Homie messages via _on_message to trigger ready detection.
         # Description first (not yet ready), then state (transitions to ready).
@@ -500,7 +500,7 @@ class TestSpanMqttClientConnect:
                 patch("span_panel_api.mqtt.client.version", side_effect=_version),
             ):
                 connect_task = asyncio.create_task(client.connect())
-                await asyncio.sleep(0.05)
+                await _until_the_parser_exists(client)
                 client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
                 client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
                 await asyncio.wait_for(connect_task, timeout=5.0)
@@ -531,7 +531,7 @@ class TestSpanMqttClientConnect:
         client = _make_span_client()
 
         connect_task = asyncio.create_task(client.connect())
-        await asyncio.sleep(0.05)
+        await _until_the_parser_exists(client)
 
         # With the circuit declared: a command aimed at an id the panel never
         # published is refused, so a publishing test needs a panel that carries
@@ -551,7 +551,7 @@ class TestSpanMqttClientConnect:
         client = _make_span_client()
 
         connect_task = asyncio.create_task(client.connect())
-        await asyncio.sleep(0.05)
+        await _until_the_parser_exists(client)
 
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", DESCRIPTION_WITH_CIRCUIT)
         # Named, or connect() spends its whole circuit-name wait on this one.
@@ -567,7 +567,7 @@ class TestSpanMqttClientConnect:
         client = _make_span_client()
 
         connect_task = asyncio.create_task(client.connect())
-        await asyncio.sleep(0.05)
+        await _until_the_parser_exists(client)
 
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
@@ -601,7 +601,7 @@ class TestSpanMqttClientConnect:
         client = _make_span_client()
 
         connect_task = asyncio.create_task(client.connect())
-        await asyncio.sleep(0.05)
+        await _until_the_parser_exists(client)
 
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
@@ -935,7 +935,7 @@ class TestSpanMqttClientAccumulatorReset:
         client = _make_span_client()
 
         connect_task = asyncio.create_task(client.connect())
-        await asyncio.sleep(0.05)
+        await _until_the_parser_exists(client)
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
         await asyncio.wait_for(connect_task, timeout=5.0)
@@ -961,7 +961,7 @@ class TestSpanMqttClientAccumulatorReset:
         client = _make_span_client()
 
         connect_task = asyncio.create_task(client.connect())
-        await asyncio.sleep(0.05)
+        await _until_the_parser_exists(client)
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
         client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
         await asyncio.wait_for(connect_task, timeout=5.0)

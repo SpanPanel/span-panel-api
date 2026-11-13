@@ -1083,6 +1083,8 @@ async def test_subscribe_honours_its_qos_and_a_topic_is_held_at_the_highest_aske
         pytest.param("", 0, id="empty-filter"),
         pytest.param("ebus/#/core", 0, id="malformed-filter"),
         pytest.param("a/b", 3, id="no-such-qos"),
+        pytest.param("a/b", 1.0, id="float-qos"),
+        pytest.param("a/b", True, id="bool-qos"),
     ],
 )
 @pytest.mark.asyncio
@@ -1541,3 +1543,23 @@ async def test_closing_the_client_does_not_tell_its_consumers_the_panel_was_lost
     await panel.quiesce()
 
     assert edges == [True]
+
+
+@pytest.mark.asyncio
+async def test_a_topic_subscribed_between_connect_and_connack_is_sent_once_by_the_connack() -> None:
+    """As for `set_subscriptions`: paho would send it on the socket awaiting its CONNACK, and the CONNACK would send it again."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        broker.holding_connacks = True
+        connecting = asyncio.create_task(bridge.connect())
+        await _until(lambda: bool(broker.held), "the CONNECT")
+        [awaiting] = broker.sessions
+
+        bridge.subscribe(_CONSUMER_TOPIC)
+        assert awaiting.subscribed == [], "nothing may be subscribed before the CONNACK"
+        broker.release_connacks()
+        await asyncio.wait_for(connecting, timeout=5)
+        await bridge.disconnect()
+
+    assert awaiting.subscribed == [_CONSUMER_TOPIC]

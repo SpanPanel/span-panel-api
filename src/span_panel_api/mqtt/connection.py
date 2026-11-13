@@ -828,11 +828,12 @@ class AsyncMqttBridge:
 
         Raises:
             ValueError: `topic` is not a valid MQTT topic filter, or `qos` is
-                not 0, 1 or 2. Refused here, before anything is recorded, for
-                the reason `set_subscriptions` gives.
+                not the integer 0, 1 or 2 -- `1.0` and `True` compare equal to
+                1 and are refused all the same. Refused here, before anything
+                is recorded, for the reason `set_subscriptions` gives.
         """
         _check_topic_filter(topic)
-        if qos not in (0, 1, 2):
+        if isinstance(qos, bool) or not isinstance(qos, int) or qos not in (0, 1, 2):
             raise ValueError(f"MQTT has no QoS {qos!r}: a subscription is at QoS 0, 1 or 2")
         before = self._held().get(topic)
         self._added[topic] = max(qos, self._added.get(topic, 0))

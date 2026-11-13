@@ -544,11 +544,11 @@ class AsyncMqttBridge:
             # see the documented SpanPanelConnectionError.
             raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
         _LOGGER.debug("BRIDGE: Executor connect returned, waiting for CONNACK...")
-        # A disconnect() while the executor held the client left it to the
-        # thread, and `_executor_returned` has closed it by now.
-        self._raise_if_abandoned(attempt)
 
-        # Wait for CONNACK, or for disconnect(), which sets the same event.
+        # Wait for CONNACK, or for disconnect(), which sets the same event. A
+        # disconnect() while the executor held the client has already set it --
+        # and `_executor_returned` has closed the client -- so this returns at
+        # once and the check below reports the abandoned attempt.
         try:
             await asyncio.wait_for(connack.wait(), timeout=MQTT_CONNECT_TIMEOUT_S)
         except TimeoutError as exc:

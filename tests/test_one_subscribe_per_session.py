@@ -26,6 +26,7 @@ import logging
 import socket
 import ssl
 import threading
+from typing import Protocol
 from unittest.mock import patch
 
 from paho.mqtt.client import ConnectFlags, DisconnectFlags, MQTTMessage, topic_matches_sub
@@ -90,6 +91,12 @@ ConnackHandler = Callable[["_FakePaho", object, ConnectFlags, ReasonCode, Proper
 DisconnectHandler = Callable[["_FakePaho", object, DisconnectFlags, ReasonCode, Properties | None], None]
 MessageHandler = Callable[["_FakePaho", object, MQTTMessage], None]
 SocketHandler = Callable[["_FakePaho", object, "_FakeSocket"], None]
+
+
+class _HasFileno(Protocol):
+    """What the event loop's reader and writer methods take besides a bare descriptor number."""
+
+    def fileno(self) -> int: ...
 
 
 class _FakeSocket:
@@ -1864,7 +1871,8 @@ async def test_a_failed_rebuild_leaves_the_old_client_its_keepalive_once_it_reco
         old.next_reconnect_error = ssl.SSLError("handshake failed")
         old.drop()
         await _until(lambda: len(broker.sessions) == 3 and bridge.is_connected(), "the old client's reconnect")
-        assert bridge._client is old, "precondition: the failed rebuild left the old client in place"
+        assert len(broker.clients) == 2, "precondition: the rebuild built a client"
+        assert old.session is broker.sessions[-1], "precondition: the failed rebuild left the old client in place"
         assert old.loop_misc_without_socket > 0, "precondition: the timer ticked while the old client had no socket"
 
         await _ticks(old, "the old client's keepalive")
@@ -1880,7 +1888,7 @@ async def test_a_socket_close_whose_unwatching_raises_still_reports_the_disconne
     real_remove_reader = loop.remove_reader
     raised: list[int] = []
 
-    def remove_reader_raising_once(fd: object) -> bool:
+    def remove_reader_raising_once(fd: int | _HasFileno) -> bool:
         if not raised:
             raised.append(1)
             raise RuntimeError("File descriptor is used by transport")

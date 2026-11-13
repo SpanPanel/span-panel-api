@@ -63,6 +63,44 @@ def _nothing_to_restore() -> None:
     """What `_stop_watching` returns for a client with no open socket to give back."""
 
 
+def _attempt(failures: list[Exception], step: Callable[[], object]) -> None:
+    """Take one step of a hand-back, keeping what it raised in `failures` rather than letting it end the rest."""
+    try:
+        step()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        failures.append(exc)
+
+
+def _answer(caller: asyncio.Future[object], call: asyncio.Future[object], failures: list[Exception]) -> None:
+    """Give `caller` the outcome of its blocking `call`, taking into account what the hand-back's `failures` were.
+
+    A call that failed or was cancelled gives the caller that outcome. A call
+    that succeeded gives it the hand-back's first failure, if there was one:
+    the client is not fully back on the loop, and the caller's own failure
+    handling -- the reconnect loop's retry, connect()'s error -- is what deals
+    with that. A caller already done is told nothing, but the call's outcome
+    is retrieved, so a failure nobody is waiting for is not reported as never
+    retrieved. Every failure the caller is not given is logged here, as no
+    one else will see it.
+    """
+    unheard = failures
+    if call.cancelled():
+        if not caller.done():
+            caller.cancel()
+    else:
+        failure = call.exception()
+        if not caller.done():
+            if failure is not None:
+                caller.set_exception(failure)
+            elif failures:
+                caller.set_exception(failures[0])
+                unheard = failures[1:]
+            else:
+                caller.set_result(call.result())
+    for exc in unheard:
+        _LOGGER.warning("Handing a paho client back to the event loop raised", exc_info=exc)
+
+
 def _check_topic_filter(topic: str) -> None:
     """Refuse what MQTT 3.1.1 does not accept as a topic filter (section 4.7).
 
@@ -723,35 +761,30 @@ class AsyncMqttBridge:
         the call, a `reconnect()` that refused its host before closing anything.
         A client this bridge let go of while the thread held it -- disconnect()
         ran meanwhile -- is then disconnected here, closing whatever socket the
-        call went on to open. Only then is `caller` given the call's outcome, so
-        whoever awaits it resumes with the client already back. A caller that
-        was cancelled is told nothing: the outcome is retrieved here, so a
-        failure nobody is waiting for is not reported as never retrieved.
+        call went on to open. Only then is `caller` answered (see `_answer`), so
+        whoever awaits it resumes with the client already back.
+
+        Each step is taken whether or not one before it raised, and the caller
+        is answered however they went: a caller left waiting is a reconnect loop
+        waiting for ever on an attempt long over, which tries nothing again.
+        What a step raised goes to the caller, or to the log. A let-go client's
+        failed disconnect is logged, never given to its caller: that caller is
+        an abandoned attempt, which reports its abandonment, not this.
         """
         self._executor_clients.discard(client)
-        self._give_loop_socket_callbacks(client)
-        for event in events:
-            try:
-                event()
-            except Exception:  # pylint: disable=broad-exception-caught
-                _LOGGER.warning("Replaying a socket event of a blocking paho call raised", exc_info=True)
-        watch_again()
-        if client is not self._client:
-            try:
-                client.disconnect()
-            except Exception:  # pylint: disable=broad-exception-caught
-                _LOGGER.debug("Disconnecting a let-go paho client raised", exc_info=True)
-        if call.cancelled():
-            if not caller.done():
-                caller.cancel()
-            return
-        failure = call.exception()
-        if caller.done():
-            return
-        if failure is not None:
-            caller.set_exception(failure)
-        else:
-            caller.set_result(call.result())
+        failures: list[Exception] = []
+        try:
+            _attempt(failures, partial(self._give_loop_socket_callbacks, client))
+            for event in events:
+                _attempt(failures, event)
+            _attempt(failures, watch_again)
+            if client is not self._client:
+                try:
+                    client.disconnect()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _LOGGER.warning("Disconnecting a paho client this bridge let go of raised", exc_info=True)
+        finally:
+            _answer(caller, call, failures)
 
     def _give_loop_socket_callbacks(self, client: paho.Client) -> None:
         """Hand `client` the loop's own socket callbacks, for paho to call on the loop."""

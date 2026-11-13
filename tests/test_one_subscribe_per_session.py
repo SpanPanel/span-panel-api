@@ -2083,3 +2083,147 @@ async def test_the_misc_timer_does_not_tick_through_an_outage(
 
     assert broker.clients == [client], "precondition: no rebuild inside the window"
     assert ticks_without_a_socket == 0, "the misc timer ticked into a client with no socket"
+
+
+@pytest.mark.asyncio
+async def test_a_hand_back_whose_rearm_raises_still_answers_the_reconnect_loop(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The reconnect refused its host and kept its socket; giving the loop that socket back raised.
+
+    The hand-back stopped there and never answered its caller, so the
+    reconnect loop waited for ever on an attempt long over, and with the kept
+    socket unwatched no CONNACK could reach it either: the bridge never
+    connected again. The caller is given the attempt's own failure, and the
+    re-arm's is logged.
+    """
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
+    caplog.set_level(logging.WARNING, logger="span_panel_api.mqtt.connection")
+    loop = asyncio.get_running_loop()
+    broker = _Broker(loop, _FLAT_TREE)
+    broker.real_sockets = True
+    real_add_reader = loop.add_reader
+    refusal = RuntimeError("File descriptor is used by transport")
+    refused: list[int] = []
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
+        bridge = _bridge()
+        await bridge.connect()
+        broker.holding_connacks = True
+        [client] = broker.clients
+        client.drop()
+        await _until(lambda: len(broker.sessions) == 2, "the first reconnect's CONNECT")
+        await _until(lambda: not bridge._executor_clients, "its hand-back")
+        awaiting = client.socket()
+        assert awaiting is not None
+        gate = threading.Event()
+        broker.reconnecting.clear()
+        broker.reconnect_gate = gate
+        broker.reconnect_fails_before_closing = ValueError("Invalid host.")
+        await _until(broker.reconnecting.is_set, "the second reconnect")
+
+        def add_reader_refusing_the_rearm(fd: int | _HasFileno, callback: Callable[..., object], *args: object) -> None:
+            if fd is awaiting and not refused:
+                refused.append(1)
+                raise refusal
+            real_add_reader(fd, callback, *args)
+
+        with patch.object(loop, "add_reader", side_effect=add_reader_refusing_the_rearm):
+            broker.reconnect_gate = None
+            gate.set()
+            await _until(lambda: not bridge._executor_clients, "the second reconnect's hand-back")
+        assert refused == [1], "precondition: giving the loop the kept socket back raised"
+
+        await _until(lambda: len(broker.sessions) == 3, "the reconnect loop's next attempt")
+        broker.release_connacks()
+        await _until(bridge.is_connected, "the CONNACK")
+        await bridge.disconnect()
+
+    assert errors == [], "the hand-back's failure reached the event loop instead of the bridge's log"
+    assert any(record.exc_info is not None and record.exc_info[1] is refusal for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_hand_back_whose_replay_raises_is_a_failed_attempt_to_the_reconnect_loop(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The reconnect succeeded, but the loop could not take its new socket: the reconnect loop hears that as the attempt failing.
+
+    Told the attempt succeeded, the loop counted a reconnect whose socket
+    nothing was reading as a good one, and reset the count of failures that
+    leads it to rebuild the client.
+    """
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
+    caplog.set_level(logging.WARNING, logger="span_panel_api.mqtt.connection")
+    loop = asyncio.get_running_loop()
+    broker = _Broker(loop, _FLAT_TREE)
+    broker.real_sockets = True
+    real_add_reader = loop.add_reader
+    refusal = RuntimeError("File descriptor is used by transport")
+    refused: list[int] = []
+
+    def add_reader_refusing_once(fd: int | _HasFileno, callback: Callable[..., object], *args: object) -> None:
+        if not refused:
+            refused.append(1)
+            raise refusal
+        real_add_reader(fd, callback, *args)
+
+    def heard_as_a_failed_attempt() -> bool:
+        return any(
+            record.getMessage().startswith("Reconnect failed")
+            and record.exc_info is not None
+            and record.exc_info[1] is refusal
+            for record in caplog.records
+        )
+
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
+        bridge = _bridge()
+        await bridge.connect()
+        # Held, so the hand-back answers the loop before any CONNACK could end its wait.
+        broker.holding_connacks = True
+        [client] = broker.clients
+        with patch.object(loop, "add_reader", side_effect=add_reader_refusing_once):
+            client.drop()
+            await _until(heard_as_a_failed_attempt, "the reconnect loop to hear the hand-back's failure")
+        await bridge.disconnect()
+
+    assert refused == [1], "precondition: replaying the new socket's open raised"
+    assert errors == [], "the hand-back's failure reached the event loop instead of its caller"
+
+
+@pytest.mark.asyncio
+async def test_a_let_go_client_whose_disconnect_raises_is_reported(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The hand-back closes a client disconnect() let go of while a thread held it; that raising is a warning, with its traceback.
+
+    Its caller is an abandoned attempt, given its own outcome, so the failure
+    is the bridge's to report: a client it could not close may keep its socket
+    open.
+    """
+    caplog.set_level(logging.WARNING, logger="span_panel_api.mqtt.connection")
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    refusal = OSError(9, "Bad file descriptor")
+
+    def disconnect_refusing() -> MQTTErrorCode:
+        raise refusal
+
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
+        bridge = _bridge()
+        await bridge.connect()
+        gate = threading.Event()
+        broker.reconnect_gate = gate
+        held = broker.clients[-1]
+        held.drop()
+        await _until(broker.reconnecting.is_set, "the blocking reconnect")
+        cancelled = await _and_what_it_cancels(bridge.disconnect())
+        assert "span_mqtt_reconnect" in cancelled, "precondition: disconnect() cancelled the reconnect loop"
+        monkeypatch.setattr(held, "disconnect", disconnect_refusing)
+
+        gate.set()
+        await _until(lambda: not bridge._executor_clients, "the hand-back")
+
+    assert errors == [], "the failed disconnect reached the event loop instead of the bridge's log"
+    assert any(
+        record.levelno >= logging.WARNING and record.exc_info is not None and record.exc_info[1] is refusal
+        for record in caplog.records
+    ), "the let-go client's failed disconnect was not reported"

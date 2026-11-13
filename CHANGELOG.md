@@ -14,6 +14,11 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 - **`SpanCircuitSnapshot.breaker_rating_declared`** says whether a circuit declares a breaker rating, so a consumer can tell a rating the panel does not publish from one that has not arrived yet; `None` where the adapter does not say.
 - **`SpanPanelSnapshot.publishes_shared_meters`** says whether any circuit declares `meter/shared-with-device-ids`, so a consumer can tell a panel that describes its multi-load breakers from one, such as MAIN 32, that publishes each as a single circuit;
   `None` where the adapter does not say, as with `span-panel-api-schema-0` or a `span-panel-api-schema-1` older than 1.5.0.
+- **`AsyncMqttBridge.set_subscriptions()` sets the topics every connection the bridge opens is subscribed to**, replacing what it set before and never dropping a topic `subscribe()` added.
+
+### Changed
+
+- **`AsyncMqttBridge.subscribe()` sends nothing for a topic the bridge already holds at that QoS or higher**, where every call sent a SUBSCRIBE and the broker replayed the topic's retained messages each time.
 
 ### Fixed
 

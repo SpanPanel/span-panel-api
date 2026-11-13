@@ -22,6 +22,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 import contextlib
 import gc
 from dataclasses import dataclass, field
+import logging
 import socket
 import ssl
 import threading
@@ -288,6 +289,11 @@ class _FakePaho:
     @property
     def held_by_a_thread(self) -> bool:
         return self._holder is not None
+
+    @property
+    def wants_to_write(self) -> bool:
+        """Whether paho has asked the loop to watch this client's socket for writing and not yet withdrawn it."""
+        return self._write_registered
 
     def setup(self) -> None:
         """The lock swap `AsyncMQTTClient` does; nothing to swap here."""
@@ -1890,3 +1896,88 @@ async def test_a_socket_close_whose_unwatching_raises_still_reports_the_disconne
         await bridge.disconnect()
 
     assert raised == [1], "precondition: the unwatching raised"
+
+
+@pytest.mark.asyncio
+async def test_keepalive_survives_a_reconnect_that_replaced_a_socket_awaiting_its_connack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The replaced socket's close and the new socket's open are taken back in the order paho made them.
+
+    Taken in reverse, the close would stop the misc timer the open had just
+    left running, and the new session would get no keepalives.
+    """
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        broker.holding_connacks = True
+        [client] = broker.clients
+        client.drop()
+        await _until(lambda: len(broker.sessions) == 2, "the first reconnect's CONNECT")
+        await _until(lambda: len(broker.sessions) == 3, "the reconnect replacing the socket awaiting its CONNACK")
+        broker.release_connacks()
+        await _until(bridge.is_connected, "the CONNACK")
+
+        await _ticks(client, "the live session's keepalive")
+        await bridge.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_an_idle_connected_socket_is_not_watched_for_writing() -> None:
+    """Once the CONNECT is written paho asks the loop to stop watching for writing, and the loop must hear it.
+
+    Left watched, a socket that is always writable wakes the loop on every
+    turn: an idle connection spinning a core.
+    """
+    loop = asyncio.get_running_loop()
+    broker = _Broker(loop, _FLAT_TREE)
+    broker.real_sockets = True
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        [client] = broker.clients
+        sock = client.socket()
+        assert sock is not None
+        await _until(lambda: not client.wants_to_write, "the CONNECT to be written")
+
+        watched_for_writing = loop.remove_writer(sock)
+        await bridge.disconnect()
+
+    assert not watched_for_writing, "an idle socket was left watched for writing"
+
+
+@pytest.mark.asyncio
+async def test_the_misc_timer_does_not_tick_through_an_outage(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """With the socket gone the timer stops, rather than calling into a client that has nothing to keep alive.
+
+    The window opens once the first refused reconnect has been handed back
+    and logged. Nothing holds the client from then until the next attempt,
+    half a minute away, so a tick still pending would call paho rather than
+    look again later. Every tick is scheduled one second ahead, and the loop
+    runs timers in the order they fall due, so the sleep after it ends only
+    once any tick pending when the window opened has run.
+    """
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 30.0)
+    caplog.set_level(logging.WARNING, logger="span_panel_api.mqtt.connection")
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        [client] = broker.clients
+        await _ticks(client, "the keepalive before the outage")
+        broker.refusing = True
+        client.drop()
+        await _until(
+            lambda: any(record.getMessage().startswith("Reconnect failed") for record in caplog.records),
+            "the first refused reconnect, handed back",
+        )
+        await asyncio.sleep(1.01)
+        ticks_without_a_socket = client.loop_misc_without_socket
+        await bridge.disconnect()
+
+    assert broker.clients == [client], "precondition: no rebuild inside the window"
+    assert ticks_without_a_socket == 0, "the misc timer ticked into a client with no socket"

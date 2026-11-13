@@ -18,10 +18,11 @@ and what it sent back, which is what the packet log measured.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 import contextlib
 import gc
 from dataclasses import dataclass, field
+from functools import partial
 import logging
 import socket
 import ssl
@@ -179,21 +180,37 @@ class _Broker:
         self.holding_closes = False
         """While set, a DISCONNECT that `disconnect()` queued waits in `held_closes` for `release_closes`."""
         self.held_closes: list[Callable[[], None]] = []
-        self.pending = 0
-        """Deliveries and DISCONNECT writes scheduled and not yet made."""
+        self._pending = 0
+        self._pending_lock = threading.Lock()
+
+    @property
+    def pending(self) -> int:
+        """Packets scheduled on the loop and not yet made: deliveries, CONNACKs and DISCONNECT writes."""
+        return self._pending
+
+    def later(self, action: Callable[[], None]) -> None:
+        """Run `action` on the loop, from whichever thread schedules it, counted in `pending` until it has run.
+
+        The count is taken where the packet is scheduled, so no packet on its
+        way can be missed by a test waiting for `pending` to reach nothing. A
+        CONNACK is scheduled from the executor thread, hence the lock.
+        """
+        with self._pending_lock:
+            self._pending += 1
+
+        def run() -> None:
+            with self._pending_lock:
+                self._pending -= 1
+            action()
+
+        self.loop.call_soon_threadsafe(run)
 
     def defer(self, action: Callable[[], None]) -> None:
         """Run `action` on the loop later, as paho writes a queued packet from the loop's write callback."""
         if self.holding_closes:
             self.held_closes.append(action)
             return
-        self.pending += 1
-
-        def run() -> None:
-            self.pending -= 1
-            action()
-
-        self.loop.call_soon_threadsafe(run)
+        self.later(action)
 
     def release_closes(self) -> None:
         self.holding_closes = False
@@ -205,7 +222,7 @@ class _Broker:
         self.holding_connacks = False
         held, self.held = self.held, []
         for client, session in held:
-            self.loop.call_soon_threadsafe(client.connack, session)
+            self.later(partial(client.connack, session))
 
     def client(
         self, *, callback_api_version: CallbackAPIVersion, transport: MqttTransport, reconnect_on_failure: bool
@@ -251,11 +268,9 @@ class _Broker:
                     self._schedule(client, session, topic, payload)
 
     def _schedule(self, client: _FakePaho, session: _Session, topic: str, payload: str) -> None:
-        self.pending += 1
-        self.loop.call_soon_threadsafe(self._deliver, client, session, topic, payload)
+        self.later(partial(self._deliver, client, session, topic, payload))
 
     def _deliver(self, client: _FakePaho, session: _Session, topic: str, payload: str) -> None:
-        self.pending -= 1
         if not session.open or client.on_message is None:
             return
         session.delivered.append(topic)
@@ -481,7 +496,7 @@ class _FakePaho:
         if self._broker.holding_connacks:
             self._broker.held.append((self, session))
             return
-        self._broker.loop.call_soon_threadsafe(self.connack, session)
+        self._broker.later(partial(self.connack, session))
 
     def connack(self, session: _Session) -> None:
         """The broker's answer to the CONNECT that opened `session`, if that session is still this client's."""
@@ -490,14 +505,44 @@ class _FakePaho:
         self.on_connect(self, None, ConnectFlags(session_present=False), ReasonCode(PacketTypes.CONNACK, "Success"), None)
 
 
-async def _let_the_loop_run() -> None:
-    """Run what the last call scheduled, while a gated executor call is still held.
+async def _and_what_it_cancels(call: Awaitable[None]) -> list[str]:
+    """Await `call`, then every task it cancelled to its end, and name those tasks.
 
-    Released at once, a gated call could finish before anything the loop had
-    yet to run, and a call that reached the held client would go unrecorded.
+    For a close or disconnect made while a gated executor call is still held. A
+    cancelled task is only asked to stop, and runs its way out on later turns
+    of the loop; ended before the gate opens, anything it did on the way out
+    into the held client was done while the client was held, and recorded as
+    such.
     """
-    for _ in range(5):
-        await asyncio.sleep(0)
+    running: set[asyncio.Task[object]] = asyncio.all_tasks()
+    await call
+    cancelled = [task for task in running if task.cancelling()]
+    await _until(lambda: all(task.done() for task in cancelled), "the tasks it cancelled to end")
+    return [task.get_name() for task in cancelled]
+
+
+async def _after_a_poll() -> None:
+    """Return once the loop has polled its sockets since this was called.
+
+    A watched socket that is readable now has had its reader called by then:
+    one poll reports every ready socket, and the loop calls all their readers
+    before the task awaiting this resumes.
+    """
+    loop = asyncio.get_running_loop()
+    probe, poke = socket.socketpair()
+    polled: asyncio.Future[None] = loop.create_future()
+
+    def heard() -> None:
+        loop.remove_reader(probe)
+        polled.set_result(None)
+
+    with probe, poke:
+        loop.add_reader(probe, heard)
+        try:
+            poke.send(b"\0")
+            await polled
+        finally:
+            loop.remove_reader(probe)
 
 
 async def _until(condition: Callable[[], bool], what: str, timeout: float = 10.0) -> None:
@@ -518,10 +563,14 @@ class _Panel:
         await _until(condition, what, timeout)
 
     async def quiesce(self) -> None:
-        """Wait until every delivery the broker scheduled has been made and handled."""
-        await self.until(lambda: self.broker.pending == 0, "the broker's deliveries")
-        for _ in range(5):
-            await asyncio.sleep(0)
+        """Wait until every packet the broker scheduled has been made and handled.
+
+        Each is handled where it is made, and anything handling one sends --
+        the SUBSCRIBE a CONNACK brings, the replay a SUBSCRIBE brings -- is
+        counted inside that same callback, so the count never reads nothing
+        while a packet is still on its way.
+        """
+        await self.until(lambda: self.broker.pending == 0, "the broker's packets")
 
 
 @contextlib.asynccontextmanager
@@ -869,8 +918,7 @@ async def _close_while_connect_waits(panel: _Panel, waiting: Callable[[], bool],
     """
     connecting = asyncio.create_task(panel.client.connect())
     await panel.until(waiting, "connect() to suspend")
-    await panel.client.close()
-    await _let_the_loop_run()
+    await _and_what_it_cancels(panel.client.close())
     resume()
     with pytest.raises(SpanPanelConnectionError, match="Closed while connecting"):
         await asyncio.wait_for(connecting, timeout=5)
@@ -1185,14 +1233,11 @@ async def _disconnect_while_bridge_connects(
     """Start the bridge's connect(), disconnect it once `waiting` says connect() is suspended, then let it resume."""
     connecting = asyncio.create_task(bridge.connect())
     await _until(waiting, "the bridge's connect() to suspend")
-    await bridge.disconnect()
-    await _let_the_loop_run()
+    await _and_what_it_cancels(bridge.disconnect())
     resume()
     with pytest.raises(SpanPanelConnectionError, match="disconnect"):
         await asyncio.wait_for(connecting, timeout=5)
     await _until(lambda: broker.pending == 0, "the broker's deliveries")
-    for _ in range(5):
-        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -1277,8 +1322,9 @@ async def test_a_replaced_clients_late_disconnect_does_not_end_the_rebuilt_sessi
     await panel.quiesce()
     assert edges == [True, False, True], "precondition: rebuilt and announced"
 
+    # Acting on it would show at once: the False edge and the bridge marked
+    # disconnected are both made inside drop().
     old.drop()
-    await asyncio.sleep(0.1)
     await panel.quiesce()
 
     assert edges == [True, False, True]
@@ -1360,8 +1406,8 @@ async def test_disconnect_during_a_blocking_reconnect_waits_for_the_thread_then_
         broker.clients[-1].drop()
         await _until(broker.reconnecting.is_set, "the blocking reconnect")
 
-        await bridge.disconnect()
-        await _let_the_loop_run()
+        cancelled = await _and_what_it_cancels(bridge.disconnect())
+        assert "span_mqtt_reconnect" in cancelled, "precondition: disconnect() cancelled the reconnect loop"
         gate.set()
         await _until(lambda: not bridge._executor_clients, "the hand-back")
         await _until(lambda: broker.pending == 0, "the let-go client's DISCONNECT write")
@@ -1388,8 +1434,8 @@ async def test_disconnect_during_a_rebuilds_blocking_connect_waits_for_the_threa
         old.drop()
         await _until(broker.connecting.is_set, "the rebuilt client's blocking connect")
 
-        await bridge.disconnect()
-        await _let_the_loop_run()
+        cancelled = await _and_what_it_cancels(bridge.disconnect())
+        assert "span_mqtt_reconnect" in cancelled, "precondition: disconnect() cancelled the reconnect loop"
         gate.set()
         await _until(lambda: not bridge._executor_clients, "the hand-back")
         await _until(lambda: broker.pending == 0, "the let-go client's DISCONNECT write")
@@ -1417,8 +1463,8 @@ async def test_a_blocking_reconnect_that_fails_after_disconnect_is_not_reported_
         held.drop()
         await _until(broker.reconnecting.is_set, "the blocking reconnect")
 
-        await bridge.disconnect()
-        await _let_the_loop_run()
+        cancelled = await _and_what_it_cancels(bridge.disconnect())
+        assert "span_mqtt_reconnect" in cancelled, "precondition: disconnect() cancelled the reconnect loop"
         gate.set()
         await _until(lambda: not bridge._executor_clients, "the hand-back")
         del held
@@ -1453,6 +1499,9 @@ async def test_a_reconnect_replacing_a_socket_still_awaiting_its_connack_leaves_
         broker.reconnect_gate = gate
         await _until(broker.reconnecting.is_set, "the second reconnect, replacing the socket awaiting its CONNACK")
 
+        # The misc timer was started by the first reconnect's socket, before this
+        # hold began, and ticks a second after it was last scheduled; the loop runs
+        # timers in the order they fall due, so this outlasts a tick.
         await asyncio.sleep(1.2)
         gate.set()
         await _until(lambda: len(broker.sessions) == 3, "the second reconnect's CONNECT")
@@ -1516,7 +1565,7 @@ async def test_the_loop_stops_reading_a_clients_socket_while_a_thread_is_inside_
         await _until(broker.reconnecting.is_set, "the second reconnect")
 
         awaiting.make_readable()
-        await asyncio.sleep(0.05)
+        await _after_a_poll()
         gate.set()
         await _until(lambda: not bridge._executor_clients, "the hand-back")
         broker.reconnect_gate = None
@@ -1570,16 +1619,12 @@ async def test_a_let_go_clients_socket_closing_late_leaves_the_bridges_next_conn
         await _until(lambda: broker.pending == 0, "the abandoned client's DISCONNECT write")
         broker.release_connacks()
         await asyncio.wait_for(connecting, timeout=5)
-        live = broker.clients[-1]
-        misc = live.loop_misc_calls
-        await asyncio.sleep(1.2)
-        ticked = live.loop_misc_calls > misc
+        await _ticks(broker.clients[-1], "the live session's keepalive, which the late close must leave running")
         await bridge.disconnect()
         await _until(lambda: broker.pending == 0, "the live client's DISCONNECT write")
 
     assert [session.open for session in broker.sessions] == [False, False]
     assert broker.sessions[1].subscribed == [_FLAT_FILTER]
-    assert ticked, "the late close cancelled the live session's misc timer"
 
 
 @pytest.mark.asyncio
@@ -1648,13 +1693,13 @@ async def test_cancelling_connect_during_the_wait_for_ready_ends_that_wait() -> 
     async with _serving(never_ready, flat_schema()) as panel:
         connecting = asyncio.create_task(panel.client.connect())
         await panel.until(lambda: bool(ready_waits()), "connect() to wait for a ready tree")
+        [ready] = ready_waits()
 
         connecting.cancel()
         with pytest.raises(asyncio.CancelledError):
             await connecting
-        await asyncio.sleep(0)
 
-        assert ready_waits() == []
+        await panel.until(ready.done, "the ready wait to end with connect()")
 
 
 @pytest.mark.asyncio
@@ -1845,6 +1890,9 @@ async def test_a_bridge_reused_after_an_abandoned_connect_keeps_its_live_session
         broker.connect_gate = gate
         await _disconnect_while_bridge_connects(broker, bridge, broker.connecting.is_set, gate.set)
         broker.connect_gate = None
+        # The abandoned socket started the misc timer when it was handed back,
+        # before the helper returned, and its tick falls due within a second of
+        # that; the loop runs timers in the order they fall due.
         await asyncio.sleep(1.2)
 
         await bridge.connect()

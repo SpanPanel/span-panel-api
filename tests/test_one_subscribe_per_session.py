@@ -1292,9 +1292,8 @@ async def test_disconnect_during_a_blocking_reconnect_waits_for_the_thread_then_
         await bridge.disconnect()
         await _let_the_loop_run()
         gate.set()
-        await _until(lambda: not broker.clients[-1].held_by_a_thread, "the reconnect to return")
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await _until(lambda: not bridge._executor_clients, "the hand-back")
+        await _until(lambda: broker.pending == 0, "the let-go client's DISCONNECT write")
 
     assert broker.calls_while_held == []
     assert [session.open for session in broker.sessions] == [False, False]
@@ -1321,9 +1320,8 @@ async def test_disconnect_during_a_rebuilds_blocking_connect_waits_for_the_threa
         await bridge.disconnect()
         await _let_the_loop_run()
         gate.set()
-        await _until(lambda: not broker.clients[-1].held_by_a_thread, "the rebuild's connect to return")
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await _until(lambda: not bridge._executor_clients, "the hand-back")
+        await _until(lambda: broker.pending == 0, "the let-go client's DISCONNECT write")
 
     assert len(broker.clients) == 2, "precondition: the rebuild built a client"
     assert broker.calls_while_held == []
@@ -1351,12 +1349,9 @@ async def test_a_blocking_reconnect_that_fails_after_disconnect_is_not_reported_
         await bridge.disconnect()
         await _let_the_loop_run()
         gate.set()
-        await _until(lambda: not held.held_by_a_thread, "the reconnect to fail")
-        for _ in range(5):
-            await asyncio.sleep(0)
+        await _until(lambda: not bridge._executor_clients, "the hand-back")
         del held
         gc.collect()
-        await asyncio.sleep(0)
 
     assert errors == []
 

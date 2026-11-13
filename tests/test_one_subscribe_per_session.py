@@ -512,11 +512,14 @@ async def _and_what_it_cancels(call: Awaitable[None]) -> list[str]:
     cancelled task is only asked to stop, and runs its way out on later turns
     of the loop; ended before the gate opens, anything it did on the way out
     into the held client was done while the client was held, and recorded as
-    such.
+    such. The tasks looked at are those running before the call and those
+    still running after it, so a task the call both started and cancelled is
+    waited for too.
     """
     running: set[asyncio.Task[object]] = asyncio.all_tasks()
     await call
-    cancelled = [task for task in running if task.cancelling()]
+    still_running: set[asyncio.Task[object]] = asyncio.all_tasks()
+    cancelled = [task for task in running | still_running if task.cancelling()]
     await _until(lambda: all(task.done() for task in cancelled), "the tasks it cancelled to end")
     return [task.get_name() for task in cancelled]
 
@@ -1550,7 +1553,7 @@ async def test_the_loop_stops_reading_a_clients_socket_while_a_thread_is_inside_
     monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
     broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
     broker.real_sockets = True
-    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
         bridge = _bridge()
         await bridge.connect()
         broker.holding_connacks = True
@@ -1572,6 +1575,7 @@ async def test_the_loop_stops_reading_a_clients_socket_while_a_thread_is_inside_
         await bridge.disconnect()
 
     assert broker.calls_while_held == [], "the loop read a client the executor thread was inside"
+    assert errors == [], "a step of the bridge raised into the event loop"
 
 
 @pytest.mark.asyncio
@@ -1757,7 +1761,7 @@ async def test_a_hand_back_never_unwatches_a_descriptor_someone_else_took_meanwh
     broker = _Broker(loop, _FLAT_TREE)
     broker.real_sockets = True
     heard: list[bytes] = []
-    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
         bridge = _bridge()
         await bridge.connect()
         broker.holding_connacks = True
@@ -1786,6 +1790,7 @@ async def test_a_hand_back_never_unwatches_a_descriptor_someone_else_took_meanwh
     peer.close()
 
     assert heard == [b"still here"]
+    assert errors == [], "a step of the bridge raised into the event loop"
 
 
 @pytest.mark.asyncio
@@ -1794,7 +1799,7 @@ async def test_a_blocking_reconnect_that_never_closes_its_socket_leaves_it_watch
     monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
     broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
     broker.real_sockets = True
-    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
         bridge = _bridge()
         await bridge.connect()
         broker.holding_connacks = True
@@ -1813,6 +1818,8 @@ async def test_a_blocking_reconnect_that_never_closes_its_socket_leaves_it_watch
         await _until(lambda: awaiting.bytes_read > 0, "the loop to read that socket again")
         await bridge.disconnect()
 
+    assert errors == [], "a step of the bridge raised into the event loop"
+
 
 @pytest.mark.asyncio
 async def test_a_reconnect_the_executor_refuses_gives_the_loop_its_socket_back(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1830,7 +1837,7 @@ async def test_a_reconnect_the_executor_refuses_gives_the_loop_its_socket_back(m
             raise RuntimeError("cannot schedule new futures after shutdown")
         return real_run_in_executor(executor, call)
 
-    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
         bridge = _bridge()
         await bridge.connect()
         broker.holding_connacks = True
@@ -1846,6 +1853,8 @@ async def test_a_reconnect_the_executor_refuses_gives_the_loop_its_socket_back(m
             await _until(lambda: awaiting.bytes_read > 0, "the loop to read that socket again")
         await bridge.disconnect()
 
+    assert errors == [], "a step of the bridge raised into the event loop"
+
 
 @pytest.mark.asyncio
 async def test_a_socket_paho_closes_on_the_loop_is_no_longer_watched() -> None:
@@ -1853,7 +1862,7 @@ async def test_a_socket_paho_closes_on_the_loop_is_no_longer_watched() -> None:
     loop = asyncio.get_running_loop()
     broker = _Broker(loop, _FLAT_TREE)
     broker.real_sockets = True
-    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
         bridge = _bridge()
         await bridge.connect()
         [client] = broker.clients
@@ -1867,6 +1876,7 @@ async def test_a_socket_paho_closes_on_the_loop_is_no_longer_watched() -> None:
         await bridge.disconnect()
 
     assert not still_watched, "the closed socket's descriptor was left watched"
+    assert errors == [], "a step of the bridge raised into the event loop"
 
 
 async def _ticks(client: _FakePaho, what: str) -> None:
@@ -1942,7 +1952,7 @@ async def test_a_socket_close_whose_unwatching_raises_still_reports_the_disconne
             raise RuntimeError("File descriptor is used by transport")
         return real_remove_reader(fd)
 
-    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
         bridge = _bridge()
         await bridge.connect()
         [client] = broker.clients
@@ -1952,6 +1962,42 @@ async def test_a_socket_close_whose_unwatching_raises_still_reports_the_disconne
         await bridge.disconnect()
 
     assert raised == [1], "precondition: the unwatching raised"
+    assert errors == [], "a step of the bridge raised into the event loop"
+
+
+@pytest.mark.asyncio
+async def test_reconnects_that_replace_real_sockets_leave_the_bridge_reconnecting(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Each reconnect closes the socket it was given on the thread, and its hand-back must still finish.
+
+    Ended early, the hand-back left its caller -- the reconnect loop -- waiting
+    for ever: with the session it had opened never answered, nothing tried
+    again. Here no CONNACK comes until two reconnects have replaced sockets,
+    then a second drop must be reconnected as the first was.
+    """
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
+    caplog.set_level(logging.WARNING, logger="span_panel_api.mqtt.connection")
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    broker.real_sockets = True
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client), _unobserved_loop_errors() as errors:
+        bridge = _bridge()
+        await bridge.connect()
+        [client] = broker.clients
+        broker.holding_connacks = True
+        client.drop()
+        await _until(lambda: len(broker.sessions) == 4, "two reconnects, each replacing a socket awaiting its CONNACK")
+        await _until(lambda: not bridge._executor_clients, "the last one's hand-back")
+        broker.release_connacks()
+        await _until(bridge.is_connected, "the CONNACK")
+
+        client.drop()
+        await _until(lambda: len(broker.sessions) == 5 and bridge.is_connected(), "the reconnect after the second drop")
+        await bridge.disconnect()
+
+    assert errors == [], "a step of the hand-back raised into the event loop"
+    failed = [record.getMessage() for record in caplog.records if record.exc_info]
+    assert failed == [], "a reconnect that replaced its socket was reported as failing"
 
 
 @pytest.mark.asyncio

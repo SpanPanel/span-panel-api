@@ -1018,21 +1018,29 @@ class AsyncMqttBridge:
         """Handle socket close on the loop."""
         self._socket_closed(client, sock.fileno())
 
-    def _socket_closed(self, _client: paho.Client, fileno: int) -> None:
-        """A socket closed: stop reading it, and end a connect still waiting on it.
+    def _socket_closed(self, client: paho.Client, fileno: int) -> None:
+        """A socket of `client` closed: stop reading it, and end a connect still waiting on it.
 
         Takes the descriptor rather than the socket because a close replayed
         from a blocking call (see `_run_blocking`) arrives after paho has closed
         the socket, which then has none.
+
+        A client this bridge no longer holds only stops being read, as its
+        CONNACK and its disconnect change nothing (see `_on_connect`). Its
+        socket can close after the bridge has started connecting again -- an
+        abandoned connect's DISCONNECT written late -- and the connect waiting
+        now, and the misc timer the new socket started, are not its to end.
         """
         if self._loop is None:
+            return
+        if fileno > -1:
+            self._loop.remove_reader(fileno)
+        if client is not self._client:
             return
         # Ensure connect event is signaled if socket closes early
         if self._connect_event is not None and not self._connect_event.is_set():
             self._connected = False
             self._connect_event.set()
-        if fileno > -1:
-            self._loop.remove_reader(fileno)
         if self._misc_timer is not None:
             self._misc_timer.cancel()
             self._misc_timer = None

@@ -263,6 +263,7 @@ class _FakePaho:
         self.next_reconnect_error: OSError | ssl.SSLError | None = None
         self.disconnect_calls = 0
         self.loop_read_calls = 0
+        self.loop_misc_calls = 0
         self._holder: threading.Thread | None = None
         self._sock: _FakeSocket | None = None
         self._write_registered = False
@@ -375,6 +376,7 @@ class _FakePaho:
 
     def loop_misc(self) -> MQTTErrorCode:
         self._record_if_held("loop_misc")
+        self.loop_misc_calls += 1
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
     def disconnect(self) -> MQTTErrorCode:
@@ -1465,3 +1467,42 @@ async def test_the_loop_reads_the_socket_a_blocking_connect_opened() -> None:
         sock.make_readable()
         await _until(lambda: client.loop_read_calls > reads, "the loop to read the socket")
         await bridge.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_a_let_go_clients_socket_closing_late_leaves_the_bridges_next_connect_alone() -> None:
+    """An abandoned connect's socket closes after the bridge has started connecting again; that close is not the new one's.
+
+    Acted on, it ended the new connect's wait for its CONNACK as a failure --
+    `MQTT connection failed` while the broker was accepting -- and cancelled the
+    misc timer the new socket had started, leaving that session without
+    keepalives.
+    """
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+        gate = threading.Event()
+        broker.connect_gate = gate
+        broker.holding_closes = True
+        await _disconnect_while_bridge_connects(broker, bridge, broker.connecting.is_set, gate.set)
+        assert broker.held_closes, "precondition: the abandoned client's DISCONNECT is still unwritten"
+        broker.connect_gate = None
+        broker.holding_connacks = True
+        connecting = asyncio.create_task(bridge.connect())
+        await _until(lambda: bool(broker.held), "the second connect to await its CONNACK")
+
+        broker.release_closes()
+        await _until(lambda: broker.pending == 0, "the abandoned client's DISCONNECT write")
+        broker.release_connacks()
+        await asyncio.wait_for(connecting, timeout=5)
+        live = broker.clients[-1]
+        misc = live.loop_misc_calls
+        await asyncio.sleep(1.2)
+        ticked = live.loop_misc_calls > misc
+        await bridge.disconnect()
+        await _until(lambda: broker.pending == 0, "the live client's DISCONNECT write")
+
+    assert [session.open for session in broker.sessions] == [False, False]
+    assert broker.sessions[1].subscribed == [_FLAT_FILTER]
+    assert ticked, "the late close cancelled the live session's misc timer"

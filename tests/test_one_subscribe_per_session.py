@@ -1506,3 +1506,38 @@ async def test_a_let_go_clients_socket_closing_late_leaves_the_bridges_next_conn
     assert [session.open for session in broker.sessions] == [False, False]
     assert broker.sessions[1].subscribed == [_FLAT_FILTER]
     assert ticked, "the late close cancelled the live session's misc timer"
+
+
+@pytest.mark.asyncio
+async def test_a_bridges_own_disconnect_tells_its_user_once() -> None:
+    """As in 3.8.0, a direct user of the bridge hears connected=False after its own disconnect(), and only once.
+
+    paho's own report of that disconnect now comes from a client the bridge has
+    let go of, and is ignored, so the bridge says it itself.
+    """
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    edges: list[bool] = []
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_connection_callback(edges.append)
+        await bridge.connect()
+
+        await bridge.disconnect()
+        assert edges == [True, False]
+        await _until(lambda: broker.pending == 0, "paho's own report of the disconnect")
+        await bridge.disconnect()
+
+    assert edges == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_closing_the_client_does_not_tell_its_consumers_the_panel_was_lost(panel: _Panel) -> None:
+    """As in 3.8.0: close() is the consumer's own act, not an outage to be told about."""
+    edges: list[bool] = []
+    panel.client.register_connection_callback(edges.append)
+    await _connected(panel)
+
+    await panel.client.close()
+    await panel.quiesce()
+
+    assert edges == [True]

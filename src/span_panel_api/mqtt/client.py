@@ -684,8 +684,14 @@ class SpanMqttClient:
             )
 
     async def close(self) -> None:
-        """Disconnect from broker and clean up."""
+        """Disconnect from broker and clean up.
+
+        Not live before the bridge disconnects, so the `False` the bridge then
+        reports is no edge: closing is the consumer's own act, and its
+        connection callbacks are not told the panel was lost, as in 3.8.0.
+        """
         self._streaming = False
+        self._live = False
         self._cancel_snapshot_timer()
         for task in self._background_tasks:
             task.cancel()
@@ -693,7 +699,6 @@ class SpanMqttClient:
         if self._bridge is not None:
             await self._bridge.disconnect()
             self._bridge = None
-        self._live = False
 
     async def ping(self) -> bool:
         """Check if MQTT connection is alive and device is ready.

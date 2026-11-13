@@ -570,7 +570,14 @@ class AsyncMqttBridge:
         Also abandons a connect() in progress: it raises `SpanPanelConnectionError`
         at its next step rather than go on to connect, and its wait for a CONNACK
         ends here rather than running out.
+
+        A bridge that was connected tells its connection callback `False` here,
+        once. paho reports the disconnect only after it has written the
+        DISCONNECT, from a client this bridge has by then let go of and so
+        ignores (see `_on_disconnect`); the callback hears it from here instead,
+        as it did from paho in 3.8.0.
         """
+        was_connected = self._connected
         self._should_reconnect = False
         self._connect_attempt = None
         connack = self._connect_event
@@ -598,6 +605,8 @@ class AsyncMqttBridge:
         self._connected = False
         self._client = None
         self._initial_connect_done = False
+        if was_connected and self._connection_callback is not None:
+            self._connection_callback(False)
 
     def _run_blocking(
         self, loop: asyncio.AbstractEventLoop, client: AsyncMQTTClient, call: Callable[[], object]

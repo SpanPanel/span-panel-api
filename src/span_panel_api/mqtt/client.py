@@ -589,10 +589,15 @@ class SpanMqttClient:
         ready = self._loop.create_task(_until_set(self._ready_event), name="span_mqtt_wait_ready")
         self._background_tasks.add(ready)
         ready.add_done_callback(self._background_tasks.discard)
-        done, _ = await asyncio.wait([ready], timeout=MQTT_READY_TIMEOUT_S)
+        try:
+            done, _ = await asyncio.wait([ready], timeout=MQTT_READY_TIMEOUT_S)
+        finally:
+            # The wait is this call's own: it ends with the call however the call
+            # ends -- timed out, or connect() itself cancelled.
+            if not ready.done():
+                ready.cancel()
         await self._stop_if_closed(bridge)
         if not done:
-            ready.cancel()
             await self.close()
             raise SpanPanelConnectionError(f"Timed out waiting for Homie device ready ({self._serial_number})")
 

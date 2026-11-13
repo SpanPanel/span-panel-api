@@ -1563,3 +1563,23 @@ async def test_a_topic_subscribed_between_connect_and_connack_is_sent_once_by_th
         await bridge.disconnect()
 
     assert awaiting.subscribed == [_CONSUMER_TOPIC]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_connect_during_the_wait_for_ready_ends_that_wait() -> None:
+    """The ready wait runs as a task of its own; a cancelled connect() must not leave it behind."""
+    never_ready = {f"{TOPIC_PREFIX_SERIAL}/$description": MINIMAL_DESCRIPTION}
+
+    def ready_waits() -> list[asyncio.Task[object]]:
+        return [task for task in asyncio.all_tasks() if task.get_name() == "span_mqtt_wait_ready" and not task.done()]
+
+    async with _serving(never_ready, flat_schema()) as panel:
+        connecting = asyncio.create_task(panel.client.connect())
+        await panel.until(lambda: bool(ready_waits()), "connect() to wait for a ready tree")
+
+        connecting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await connecting
+        await asyncio.sleep(0)
+
+        assert ready_waits() == []

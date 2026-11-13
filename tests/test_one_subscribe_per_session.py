@@ -101,6 +101,7 @@ class _FakeSocket:
 
     def __init__(self, real: bool) -> None:
         self._pair = socket.socketpair() if real else None
+        self.bytes_read = 0
 
     def fileno(self) -> int:
         return self._pair[0].fileno() if self._pair is not None else -1
@@ -114,7 +115,7 @@ class _FakeSocket:
         if self._pair is not None:
             self._pair[0].setblocking(False)
             try:
-                self._pair[0].recv(4096)
+                self.bytes_read += len(self._pair[0].recv(4096))
             except BlockingIOError:
                 pass
 
@@ -159,6 +160,10 @@ class _Broker:
         executor's inside a blocking call; a loop-only handler there would touch
         the event loop from the wrong thread.
         """
+        self.reconnect_fails_before_closing: Exception | None = None
+        """When set, the next blocking reconnect raises this before closing the socket it holds, as paho does on a bad host."""
+        self.after_closing_in_reconnect: Callable[[], None] | None = None
+        """Called on the thread once a blocking reconnect has closed the old socket and before it opens the next."""
         self.connect_fails_after_opening: OSError | None = None
         """When set, the next blocking connect opens its socket and then raises this, leaving the socket open."""
         self.real_sockets = False
@@ -323,9 +328,16 @@ class _FakePaho:
             gate = self._broker.reconnect_gate
             if gate is not None:
                 assert gate.wait(timeout=5), "the test never released the blocking reconnect"
+            early = self._broker.reconnect_fails_before_closing
+            self._broker.reconnect_fails_before_closing = None
+            if early is not None:
+                raise early
             error = self.next_reconnect_error
             self.next_reconnect_error = None
             self._sock_close()
+            after_closing = self._broker.after_closing_in_reconnect
+            if after_closing is not None:
+                after_closing()
             if error is not None:
                 raise error
             session = self._open()
@@ -528,6 +540,47 @@ def _bridge() -> AsyncMqttBridge:
         serial_number=SERIAL,
         use_tls=False,
     )
+
+
+_LOOP_OPERATIONS = (
+    "add_reader",
+    "remove_reader",
+    "add_writer",
+    "remove_writer",
+    "call_soon",
+    "call_at",
+    "call_later",
+    # What `TimerHandle.cancel()` calls: cancelling the misc timer off the loop.
+    "_timer_handle_cancelled",
+)
+
+
+@pytest.fixture(autouse=True)
+async def _the_loop_is_driven_only_from_its_own_thread() -> AsyncIterator[None]:
+    """Every event-loop operation in these tests is made on the loop's thread.
+
+    The thread-safe way in is `call_soon_threadsafe`, which is left alone. A
+    loop operation from the executor thread -- a socket callback acting there
+    rather than being recorded for the hand-back, whatever it is called -- is a
+    failure of the test that made it.
+    """
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.current_thread()
+    off_loop: list[str] = []
+    with contextlib.ExitStack() as patches:
+        for name in _LOOP_OPERATIONS:
+            original: Callable[..., object] = getattr(loop, name)
+
+            def guarded(
+                *args: object, _name: str = name, _original: Callable[..., object] = original, **kwargs: object
+            ) -> object:
+                if threading.current_thread() is not loop_thread:
+                    off_loop.append(_name)
+                return _original(*args, **kwargs)
+
+            patches.enter_context(patch.object(loop, name, guarded))
+        yield
+    assert off_loop == [], f"event-loop operations made off the loop's thread: {off_loop}"
 
 
 @pytest.fixture(autouse=True)
@@ -1605,3 +1658,149 @@ async def test_a_rebuild_whose_connect_fails_closes_what_that_connect_opened() -
 
     failed = broker.sessions[1]
     assert broker.clients[1].socket() is None and not failed.open, "the failed connect's socket was left open"
+
+
+def _parked_after_closing(
+    broker: _Broker,
+) -> tuple[threading.Event, threading.Event, list[tuple[socket.socket, socket.socket]]]:
+    """Park the next blocking reconnect after it closes the old socket, having opened a socket pair of its own meanwhile.
+
+    The pair stands in for anything else in the process: the lowest free
+    descriptors are the ones the close just freed, so it takes them.
+    """
+    closed = threading.Event()
+    resume = threading.Event()
+    taken: list[tuple[socket.socket, socket.socket]] = []
+
+    def after_closing() -> None:
+        taken.append(socket.socketpair())
+        closed.set()
+        assert resume.wait(timeout=5), "the test never resumed the reconnect"
+
+    broker.after_closing_in_reconnect = after_closing
+    return closed, resume, taken
+
+
+@pytest.mark.asyncio
+async def test_a_hand_back_never_unwatches_a_descriptor_someone_else_took_meanwhile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reconnect closed the old socket on the thread; its number went to another socket before the hand-back.
+
+    Unwatching by the remembered number would stop the loop reading that other
+    socket -- another panel's bridge, Home Assistant's own MQTT, a resolver --
+    which would then never hear from its peer again.
+    """
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
+    loop = asyncio.get_running_loop()
+    broker = _Broker(loop, _FLAT_TREE)
+    broker.real_sockets = True
+    heard: list[bytes] = []
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        broker.holding_connacks = True
+        [client] = broker.clients
+        client.drop()
+        await _until(lambda: len(broker.sessions) == 2, "the first reconnect's CONNECT")
+        awaiting = client.socket()
+        assert awaiting is not None
+        freed = awaiting.fileno()
+        closed, resume, taken = _parked_after_closing(broker)
+        await _until(closed.is_set, "the second reconnect to close the awaiting socket")
+        [(other, peer)] = taken
+        assert other.fileno() == freed or peer.fileno() == freed, "precondition: the freed number was taken"
+        mine = other if other.fileno() == freed else peer
+        theirs = peer if mine is other else other
+        loop.add_reader(mine, lambda: heard.append(mine.recv(16)))
+
+        resume.set()
+        await _until(lambda: not bridge._executor_clients, "the hand-back")
+        theirs.send(b"still here")
+        await _until(lambda: bool(heard), "the other socket to be read")
+        loop.remove_reader(mine)
+        broker.after_closing_in_reconnect = None
+        await bridge.disconnect()
+    other.close()
+    peer.close()
+
+    assert heard == [b"still here"]
+
+
+@pytest.mark.asyncio
+async def test_a_blocking_reconnect_that_never_closes_its_socket_leaves_it_watched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """paho refuses a bad host before closing the socket it holds; the hand-back gives the loop that socket back."""
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    broker.real_sockets = True
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        broker.holding_connacks = True
+        [client] = broker.clients
+        client.drop()
+        await _until(lambda: len(broker.sessions) == 2, "the first reconnect's CONNECT")
+        awaiting = client.socket()
+        assert awaiting is not None
+        broker.reconnecting.clear()
+        broker.reconnect_fails_before_closing = ValueError("Invalid host.")
+        await _until(broker.reconnecting.is_set, "the second reconnect")
+        await _until(lambda: not bridge._executor_clients, "its hand-back")
+        assert client.socket() is awaiting, "precondition: the failed reconnect kept its socket"
+
+        awaiting.make_readable()
+        await _until(lambda: awaiting.bytes_read > 0, "the loop to read that socket again")
+        await bridge.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_a_reconnect_the_executor_refuses_gives_the_loop_its_socket_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The loop stopped watching the client's open socket to hand it to a thread; refused, the call never ran, so it is watched again."""
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
+    loop = asyncio.get_running_loop()
+    broker = _Broker(loop, _FLAT_TREE)
+    broker.real_sockets = True
+    real_run_in_executor = loop.run_in_executor
+    refusals: list[int] = []
+
+    def refuse_once(executor: None, call: Callable[[], object]) -> asyncio.Future[object]:
+        if not refusals:
+            refusals.append(1)
+            raise RuntimeError("cannot schedule new futures after shutdown")
+        return real_run_in_executor(executor, call)
+
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        broker.holding_connacks = True
+        [client] = broker.clients
+        client.drop()
+        await _until(lambda: len(broker.sessions) == 2, "the first reconnect's CONNECT")
+        await _until(lambda: not bridge._executor_clients, "its hand-back")
+        awaiting = client.socket()
+        assert awaiting is not None
+        with patch.object(loop, "run_in_executor", side_effect=refuse_once):
+            await _until(lambda: bool(refusals), "the refused reconnect")
+            awaiting.make_readable()
+            await _until(lambda: awaiting.bytes_read > 0, "the loop to read that socket again")
+        await bridge.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_a_socket_paho_closes_on_the_loop_is_no_longer_watched() -> None:
+    """A dropped connection's socket leaves no watcher behind for whatever takes its number next."""
+    loop = asyncio.get_running_loop()
+    broker = _Broker(loop, _FLAT_TREE)
+    broker.real_sockets = True
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        [client] = broker.clients
+        sock = client.socket()
+        assert sock is not None
+        number = sock.fileno()
+
+        client.drop()
+        # Checked at once, before anything else can run and take the number.
+        still_watched = loop.remove_reader(number)
+        await bridge.disconnect()
+
+    assert not still_watched, "the closed socket's descriptor was left watched"

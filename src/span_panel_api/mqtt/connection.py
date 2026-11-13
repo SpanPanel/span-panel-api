@@ -721,13 +721,12 @@ class AsyncMqttBridge:
         made replayed through them, in order. The socket the call was given is
         watched again if the call left it open -- an executor that never ran
         the call, a `reconnect()` that refused its host before closing anything.
-        A client this bridge let go of
-        while the thread held it -- disconnect() ran meanwhile -- is then
-        disconnected here, closing whatever socket the call went on to open.
-        Only then is `caller` given the call's outcome, so whoever awaits it
-        resumes with the client already back. A caller that was cancelled is
-        told nothing: the outcome is retrieved here, so a failure nobody is
-        waiting for is not reported as never retrieved.
+        A client this bridge let go of while the thread held it -- disconnect()
+        ran meanwhile -- is then disconnected here, closing whatever socket the
+        call went on to open. Only then is `caller` given the call's outcome, so
+        whoever awaits it resumes with the client already back. A caller that
+        was cancelled is told nothing: the outcome is retrieved here, so a
+        failure nobody is waiting for is not reported as never retrieved.
         """
         self._executor_clients.discard(client)
         self._give_loop_socket_callbacks(client)

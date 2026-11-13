@@ -266,6 +266,8 @@ async def mqtt_client_mock() -> AsyncGenerator[MagicMock, None]:
         mock_client.connect.side_effect = _connect
         mock_client.reconnect.side_effect = _reconnect
         mock_client.subscribe.return_value = (0, 1)
+        # A fresh paho client holds no socket until it connects.
+        mock_client.socket.return_value = None
         mock_client.publish.side_effect = _publish
         mock_client.disconnect.return_value = 0
         mock_client.loop_read.return_value = 0

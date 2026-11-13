@@ -22,6 +22,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 import contextlib
 import gc
 from dataclasses import dataclass, field
+import socket
 import ssl
 import threading
 from unittest.mock import patch
@@ -87,6 +88,40 @@ class _Session:
 ConnackHandler = Callable[["_FakePaho", object, ConnectFlags, ReasonCode, Properties | None], None]
 DisconnectHandler = Callable[["_FakePaho", object, DisconnectFlags, ReasonCode, Properties | None], None]
 MessageHandler = Callable[["_FakePaho", object, MQTTMessage], None]
+SocketHandler = Callable[["_FakePaho", object, "_FakeSocket"], None]
+
+
+class _FakeSocket:
+    """What paho hands its socket callbacks.
+
+    No descriptor by default, so the bridge registers none. With `real`, one end
+    of a socket pair, so the loop's reader and writer are really registered and
+    a test can make the socket readable from the other end.
+    """
+
+    def __init__(self, real: bool) -> None:
+        self._pair = socket.socketpair() if real else None
+
+    def fileno(self) -> int:
+        return self._pair[0].fileno() if self._pair is not None else -1
+
+    def make_readable(self) -> None:
+        assert self._pair is not None, "only a real socket can be made readable"
+        self._pair[1].send(b"\x00")
+
+    def drain(self) -> None:
+        """Read what the other end sent, as paho's `loop_read` would."""
+        if self._pair is not None:
+            self._pair[0].setblocking(False)
+            try:
+                self._pair[0].recv(4096)
+            except BlockingIOError:
+                pass
+
+    def close(self) -> None:
+        if self._pair is not None:
+            for end in self._pair:
+                end.close()
 
 
 class _Broker:
@@ -111,13 +146,45 @@ class _Broker:
         self.reconnect_gate: threading.Event | None = None
         """As `connect_gate`, for a blocking reconnect."""
         self.calls_while_held: list[str] = []
-        """Every call that reached a client while a blocking connect or reconnect was inside it.
+        """Every call that reached a client from another thread while a blocking connect or reconnect was inside it.
 
         paho runs with its locks removed, so the thread holding a client is the
         only one that may call into it; anything listed here came from another.
         """
+        self.loop_thread = threading.current_thread()
+        self.loop_only_off_loop: list[str] = []
+        """Every one of the bridge's loop-only socket handlers (`_async_*`) that paho had to call off the loop.
+
+        paho calls a socket callback on whichever thread it is running on, the
+        executor's inside a blocking call; a loop-only handler there would touch
+        the event loop from the wrong thread.
+        """
+        self.real_sockets = False
+        """While set, clients open sockets the loop really registers. See `_FakeSocket`."""
+        self.holding_closes = False
+        """While set, a DISCONNECT that `disconnect()` queued waits in `held_closes` for `release_closes`."""
+        self.held_closes: list[Callable[[], None]] = []
         self.pending = 0
-        """Deliveries scheduled and not yet made."""
+        """Deliveries and DISCONNECT writes scheduled and not yet made."""
+
+    def defer(self, action: Callable[[], None]) -> None:
+        """Run `action` on the loop later, as paho writes a queued packet from the loop's write callback."""
+        if self.holding_closes:
+            self.held_closes.append(action)
+            return
+        self.pending += 1
+
+        def run() -> None:
+            self.pending -= 1
+            action()
+
+        self.loop.call_soon_threadsafe(run)
+
+    def release_closes(self) -> None:
+        self.holding_closes = False
+        held, self.held_closes = self.held_closes, []
+        for action in held:
+            self.defer(action)
 
     def release_connacks(self) -> None:
         self.holding_connacks = False
@@ -183,22 +250,35 @@ class _Broker:
 
 
 class _FakePaho:
-    """The slice of paho the bridge drives, opening sessions on a `_Broker` instead of a socket."""
+    """The slice of paho the bridge drives, opening sessions on a `_Broker` instead of a socket.
+
+    Socket callbacks are made where paho makes them: on the executor thread
+    inside a blocking `connect()` or `reconnect()`, on the loop for a dropped
+    connection or a written DISCONNECT.
+    """
 
     def __init__(self, broker: _Broker) -> None:
         self._broker = broker
         self.session: _Session | None = None
         self.next_reconnect_error: OSError | ssl.SSLError | None = None
-        self.held_by_a_thread = False
+        self.disconnect_calls = 0
+        self.loop_read_calls = 0
+        self._holder: threading.Thread | None = None
+        self._sock: _FakeSocket | None = None
+        self._write_registered = False
         self.on_connect: ConnackHandler | None = None
         self.on_disconnect: DisconnectHandler | None = None
         self.on_message: MessageHandler | None = None
-        # Assigned by the bridge and never called: no real socket is opened.
+        self.on_socket_open: SocketHandler | None = None
+        self.on_socket_close: SocketHandler | None = None
+        self.on_socket_register_write: SocketHandler | None = None
+        self.on_socket_unregister_write: SocketHandler | None = None
+        # Assigned by the bridge and never called: nothing here publishes.
         self.on_publish: object = None
-        self.on_socket_open: object = None
-        self.on_socket_close: object = None
-        self.on_socket_register_write: object = None
-        self.on_socket_unregister_write: object = None
+
+    @property
+    def held_by_a_thread(self) -> bool:
+        return self._holder is not None
 
     def setup(self) -> None:
         """The lock swap `AsyncMQTTClient` does; nothing to swap here."""
@@ -209,24 +289,28 @@ class _FakePaho:
     def tls_set_context(self, context: ssl.SSLContext | None = None) -> None:
         """TLS is not negotiated with this broker."""
 
+    def socket(self) -> _FakeSocket | None:
+        return self._sock
+
     def connect(self, host: str, port: int = 1883, keepalive: int = 60) -> MQTTErrorCode:
-        """Open a session and schedule its CONNACK, as paho's executor connect does."""
+        """paho's `connect()` is its `reconnect()` with the address recorded first."""
         assert host and port > 0 and keepalive > 0
-        self.held_by_a_thread = True
+        self._holder = threading.current_thread()
         try:
             self._broker.connecting.set()
             gate = self._broker.connect_gate
             if gate is not None:
                 assert gate.wait(timeout=5), "the test never released the blocking connect"
+            self._sock_close()
             session = self._open()
         finally:
-            self.held_by_a_thread = False
+            self._holder = None
         self._answer(session)
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
     def reconnect(self) -> MQTTErrorCode:
         """paho closes the previous socket without reporting a disconnect, then opens another."""
-        self.held_by_a_thread = True
+        self._holder = threading.current_thread()
         try:
             self._broker.reconnecting.set()
             gate = self._broker.reconnect_gate
@@ -234,23 +318,33 @@ class _FakePaho:
                 assert gate.wait(timeout=5), "the test never released the blocking reconnect"
             error = self.next_reconnect_error
             self.next_reconnect_error = None
-            self._close()
+            self._sock_close()
             if error is not None:
                 raise error
             session = self._open()
         finally:
-            self.held_by_a_thread = False
+            self._holder = None
         self._answer(session)
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
     def _record_if_held(self, call: str) -> None:
-        if self.held_by_a_thread:
+        holder = self._holder
+        if holder is not None and threading.current_thread() is not holder:
             self._broker.calls_while_held.append(call)
+
+    def _call_socket(self, callback: SocketHandler | None, sock: _FakeSocket) -> None:
+        """Make a socket callback on the calling thread, as paho does, noting a loop-only handler off the loop."""
+        if callback is None:
+            return
+        name = getattr(callback, "__name__", "")
+        if name.startswith("_async_") and threading.current_thread() is not self._broker.loop_thread:
+            self._broker.loop_only_off_loop.append(name)
+        callback(self, None, sock)
 
     def subscribe(self, topic: str | list[tuple[str, int]], qos: int = 0) -> tuple[MQTTErrorCode, int | None]:
         self._record_if_held("subscribe")
         session = self.session
-        if session is None or not session.open:
+        if self._sock is None or session is None or not session.open:
             return (MQTTErrorCode.MQTT_ERR_NO_CONN, None)
         self._broker.subscribe(self, session, [(topic, qos)] if isinstance(topic, str) else list(topic))
         return (MQTTErrorCode.MQTT_ERR_SUCCESS, 1)
@@ -258,34 +352,87 @@ class _FakePaho:
     def unsubscribe(self, topic: str | list[str]) -> tuple[MQTTErrorCode, int | None]:
         self._record_if_held("unsubscribe")
         session = self.session
-        if session is None or not session.open:
+        if self._sock is None or session is None or not session.open:
             return (MQTTErrorCode.MQTT_ERR_NO_CONN, None)
         self._broker.unsubscribe(session, [topic] if isinstance(topic, str) else list(topic))
         return (MQTTErrorCode.MQTT_ERR_SUCCESS, 1)
 
+    def loop_read(self) -> MQTTErrorCode:
+        self._record_if_held("loop_read")
+        self.loop_read_calls += 1
+        if self._sock is not None:
+            self._sock.drain()
+        return MQTTErrorCode.MQTT_ERR_SUCCESS
+
+    def loop_write(self) -> MQTTErrorCode:
+        """Write what is queued; with nothing left, paho stops asking to write."""
+        self._record_if_held("loop_write")
+        sock = self._sock
+        if sock is not None and self._write_registered:
+            self._write_registered = False
+            self._call_socket(self.on_socket_unregister_write, sock)
+        return MQTTErrorCode.MQTT_ERR_SUCCESS
+
+    def loop_misc(self) -> MQTTErrorCode:
+        self._record_if_held("loop_misc")
+        return MQTTErrorCode.MQTT_ERR_SUCCESS
+
     def disconnect(self) -> MQTTErrorCode:
+        """Queue a DISCONNECT, which the loop writes later; then paho reports the disconnect and closes the socket."""
         self._record_if_held("disconnect")
-        self._close()
+        self.disconnect_calls += 1
+        if self._sock is None:
+            return MQTTErrorCode.MQTT_ERR_NO_CONN
+        self._register_write()
+        self._broker.defer(self._disconnect_written)
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
     def drop(self) -> None:
-        """The network goes away under an open session: paho closes the socket and reports it."""
-        self._close()
+        """The network goes away under an open session: paho closes the socket, then reports it."""
+        self._sock_close()
+        self._report_disconnect(ReasonCode(PacketTypes.DISCONNECT, "Unspecified error"))
+
+    def _disconnect_written(self) -> None:
+        if self._sock is None:
+            return
+        self._report_disconnect(ReasonCode(PacketTypes.DISCONNECT, "Normal disconnection"))
+        self._sock_close()
+
+    def _report_disconnect(self, reason: ReasonCode) -> None:
         if self.on_disconnect is not None:
-            self.on_disconnect(
-                self,
-                None,
-                DisconnectFlags(is_disconnect_packet_from_server=False),
-                ReasonCode(PacketTypes.DISCONNECT, "Unspecified error"),
-                None,
-            )
+            self.on_disconnect(self, None, DisconnectFlags(is_disconnect_packet_from_server=False), reason, None)
 
     def _open(self) -> _Session:
         if self._broker.refusing:
             raise ConnectionRefusedError(61, "Connection refused")
         session = self._broker.open_session()
         self.session = session
+        sock = _FakeSocket(self._broker.real_sockets)
+        self._sock = sock
+        self._call_socket(self.on_socket_open, sock)
+        self._register_write()  # the CONNECT, queued
         return session
+
+    def _register_write(self) -> None:
+        sock = self._sock
+        if sock is None or self._write_registered:
+            return
+        self._write_registered = True
+        self._call_socket(self.on_socket_register_write, sock)
+
+    def _sock_close(self) -> None:
+        """paho's `_sock_close`: unregister the write if registered, then report the close, on the calling thread."""
+        sock = self._sock
+        if sock is None:
+            return
+        self._sock = None
+        if self.session is not None:
+            self.session.open = False
+        if self._write_registered:
+            self._write_registered = False
+            self._call_socket(self.on_socket_unregister_write, sock)
+        self._call_socket(self.on_socket_close, sock)
+        sock.close()
 
     def _answer(self, session: _Session) -> None:
         """Schedule the CONNACK for `session`, or hold it.
@@ -303,10 +450,6 @@ class _FakePaho:
         if session is not self.session or not session.open or self.on_connect is None:
             return
         self.on_connect(self, None, ConnectFlags(session_present=False), ReasonCode(PacketTypes.CONNACK, "Success"), None)
-
-    def _close(self) -> None:
-        if self.session is not None:
-            self.session.open = False
 
 
 async def _let_the_loop_run() -> None:
@@ -363,6 +506,7 @@ async def _serving(tree: dict[str, str], schema: V2HomieSchema | None, use_tls: 
             yield _Panel(client, broker)
         finally:
             await client.close()
+    assert broker.loop_only_off_loop == [], "paho called a loop-only socket handler on the executor thread"
 
 
 def _bridge() -> AsyncMqttBridge:
@@ -1205,3 +1349,119 @@ async def test_a_blocking_reconnect_that_fails_after_disconnect_is_not_reported_
         await asyncio.sleep(0)
 
     assert errors == []
+
+
+@pytest.mark.asyncio
+async def test_a_reconnect_replacing_a_socket_still_awaiting_its_connack_leaves_the_loop_out_of_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """paho closes the old socket from the executor thread, and the loop must not reach into the client meanwhile.
+
+    The close callbacks run on the thread, so they must be the thread-safe
+    forms; and the misc timer, ticking each second, must not call into the
+    client while the thread is inside it. Held past one tick to show that.
+    """
+    # Long enough between attempts to gate the second one before it starts.
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        bridge.set_subscriptions([_FLAT_FILTER])
+        await bridge.connect()
+        broker.holding_connacks = True
+        broker.clients[-1].drop()
+        await _until(lambda: len(broker.sessions) == 2, "the first reconnect's CONNECT")
+        awaiting = broker.sessions[1]
+        gate = threading.Event()
+        broker.reconnecting.clear()
+        broker.reconnect_gate = gate
+        await _until(broker.reconnecting.is_set, "the second reconnect, replacing the socket awaiting its CONNACK")
+
+        await asyncio.sleep(1.2)
+        gate.set()
+        await _until(lambda: len(broker.sessions) == 3, "the second reconnect's CONNECT")
+        broker.reconnect_gate = None
+        broker.release_connacks()
+        await _until(bridge.is_connected, "the CONNACK")
+        await _until(lambda: not bridge._executor_clients, "the hand-back")
+        replaced, live = broker.sessions[1], broker.sessions[2]
+        await bridge.disconnect()
+
+    assert broker.loop_only_off_loop == [], "a loop-only socket handler ran on the executor thread"
+    assert broker.calls_while_held == [], "the loop called into a client the executor thread was inside"
+    assert awaiting is replaced and not replaced.open
+    assert replaced.subscribed == []
+    assert live.subscribed == [_FLAT_FILTER]
+
+
+@pytest.mark.asyncio
+async def test_a_blocking_call_the_executor_refuses_leaves_the_client_to_the_loop() -> None:
+    """The client is the thread's only once the executor has taken the call; refused, it stays the loop's.
+
+    Held regardless, it would be marked as inside a call that never ran, and
+    disconnect() would leave it alone for a hand-back that never comes.
+    """
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    loop = asyncio.get_running_loop()
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        with (
+            patch.object(loop, "run_in_executor", side_effect=RuntimeError("cannot schedule new futures after shutdown")),
+            pytest.raises(SpanPanelConnectionError),
+        ):
+            await bridge.connect()
+        [client] = broker.clients
+
+        await bridge.disconnect()
+
+    assert client.disconnect_calls == 1, "disconnect() treated a client no thread holds as held"
+
+
+@pytest.mark.asyncio
+async def test_the_loop_stops_reading_a_clients_socket_while_a_thread_is_inside_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Data on the socket a reconnect is about to replace must not have the loop read the client meanwhile."""
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 0.3)
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    broker.real_sockets = True
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        broker.holding_connacks = True
+        [client] = broker.clients
+        client.drop()
+        await _until(lambda: len(broker.sessions) == 2, "the first reconnect's CONNECT")
+        awaiting = client.socket()
+        assert awaiting is not None
+        gate = threading.Event()
+        broker.reconnecting.clear()
+        broker.reconnect_gate = gate
+        await _until(broker.reconnecting.is_set, "the second reconnect")
+
+        awaiting.make_readable()
+        await asyncio.sleep(0.05)
+        gate.set()
+        await _until(lambda: not bridge._executor_clients, "the hand-back")
+        broker.reconnect_gate = None
+        await bridge.disconnect()
+
+    assert broker.calls_while_held == [], "the loop read a client the executor thread was inside"
+
+
+@pytest.mark.asyncio
+async def test_the_loop_reads_the_socket_a_blocking_connect_opened() -> None:
+    """The socket the executor opened is registered on the loop once the call returns, or no CONNACK is ever read."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    broker.real_sockets = True
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        [client] = broker.clients
+        sock = client.socket()
+        assert sock is not None
+        reads = client.loop_read_calls
+
+        sock.make_readable()
+        await _until(lambda: client.loop_read_calls > reads, "the loop to read the socket")
+        await bridge.disconnect()

@@ -447,9 +447,7 @@ class AsyncMqttBridge:
         )
         client.setup()
         client.username_pw_set(self._username, self._password)
-        # Wire socket callbacks (async versions by default)
-        client.on_socket_close = self._async_on_socket_close
-        client.on_socket_unregister_write = self._async_on_socket_unregister_write
+        self._give_loop_socket_callbacks(client)
         # Wire MQTT callbacks (run directly on event loop — no thread dispatch)
         client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect
@@ -606,44 +604,89 @@ class AsyncMqttBridge:
     ) -> asyncio.Future[object]:
         """Run one blocking paho call on `client` in the executor: the only way this bridge does.
 
-        While the call runs the executor thread owns the client. Its socket
-        callbacks are the thread-safe bridges, and nothing on the loop calls into
-        it -- paho runs with its locks removed, so a second thread inside the
-        same client could corrupt it. `disconnect()` in particular only lets it
-        go.
+        While the call runs the executor thread owns the client, and nothing on
+        the loop calls into it: paho runs with its locks removed, so a second
+        thread inside the same client could corrupt it. The loop stops watching
+        the socket it was reading for this client, `disconnect()` only lets the
+        client go, and the misc timer passes it over.
 
-        The loop takes it back when the call returns (`_executor_returned`), not
-        when its caller resumes. Cancelling the caller does not stop the thread,
-        so the caller awaits a future the hand-back resolves rather than the
-        executor's own: a cancelled caller -- a reconnect task that disconnect()
-        cancelled -- cancels only its wait, and the hand-back still runs when the
-        thread is really done. Not `asyncio.shield`, which reports a failure that
-        arrives after its caller was cancelled through the loop's exception
-        handler; here that failure is the abandoned attempt's, and expected.
+        paho makes socket callbacks on whichever thread it is running on, the
+        executor's inside this call: opening the new socket and queueing its
+        CONNECT, and -- in `reconnect()` -- closing the one it replaces. Each is
+        recorded rather than acted on, and `_executor_returned` replays them in
+        order once the call has returned, so every socket the call touched is
+        registered or released on the loop, after the thread is done.
+
+        The loop takes the client back when the call returns, not when its
+        caller resumes. Cancelling the caller does not stop the thread, so the
+        caller awaits a future the hand-back resolves rather than the
+        executor's own: a cancelled caller -- a reconnect task that
+        disconnect() cancelled -- cancels only its wait, and the hand-back still
+        runs when the thread is really done. Not `asyncio.shield`, which reports
+        a failure that arrives after its caller was cancelled through the loop's
+        exception handler; here that failure is the abandoned attempt's, and
+        expected.
         """
-        client.on_socket_open = self._on_socket_open_sync
-        client.on_socket_register_write = self._on_socket_register_write_sync
+        events: list[Callable[[], None]] = []
+
+        def opened(opener: paho.Client, userdata: object, sock: SocketLike) -> None:
+            events.append(partial(self._async_on_socket_open, opener, userdata, sock))
+
+        def write_registered(writer: paho.Client, userdata: object, sock: SocketLike) -> None:
+            events.append(partial(self._async_on_socket_register_write, writer, userdata, sock))
+
+        def write_unregistered(writer: paho.Client, _userdata: object, sock: SocketLike) -> None:
+            # Read now: paho closes the socket as soon as the callbacks return.
+            events.append(partial(self._socket_write_unregistered, writer, sock.fileno()))
+
+        def closed(closer: paho.Client, _userdata: object, sock: SocketLike) -> None:
+            events.append(partial(self._socket_closed, closer, sock.fileno()))
+
+        watched = client.socket()
+        watched_fileno = watched.fileno() if watched is not None else -1
+        client.on_socket_open = opened
+        client.on_socket_register_write = write_registered
+        client.on_socket_unregister_write = write_unregistered
+        client.on_socket_close = closed
+        try:
+            call_future = loop.run_in_executor(None, call)
+        except BaseException:
+            # Refused before a thread took it: the client is still the loop's.
+            self._give_loop_socket_callbacks(client)
+            raise
         self._executor_clients.add(client)
+        if watched_fileno > -1:
+            loop.remove_reader(watched_fileno)
+            loop.remove_writer(watched_fileno)
         caller: asyncio.Future[object] = loop.create_future()
-        loop.run_in_executor(None, call).add_done_callback(partial(self._executor_returned, client, caller))
+        call_future.add_done_callback(partial(self._executor_returned, client, caller, events))
         return caller
 
     def _executor_returned(
-        self, client: AsyncMQTTClient, caller: asyncio.Future[object], call: asyncio.Future[object]
+        self,
+        client: AsyncMQTTClient,
+        caller: asyncio.Future[object],
+        events: list[Callable[[], None]],
+        call: asyncio.Future[object],
     ) -> None:
         """Take `client` back on the loop once its blocking `call` has returned, then answer its `caller`.
 
-        Async socket callbacks again, and a client this bridge let go of while the
-        thread held it -- disconnect() ran meanwhile -- is disconnected here,
-        closing whatever socket the call went on to open. Only then is `caller`
-        given the call's outcome, so whoever awaits it resumes with the client
-        already back. A caller that was cancelled is told nothing: the outcome is
-        retrieved here, so a failure nobody is waiting for is not reported as
-        never retrieved.
+        The loop's own socket callbacks again, and the socket events the call
+        made replayed through them, in order. A client this bridge let go of
+        while the thread held it -- disconnect() ran meanwhile -- is then
+        disconnected here, closing whatever socket the call went on to open.
+        Only then is `caller` given the call's outcome, so whoever awaits it
+        resumes with the client already back. A caller that was cancelled is
+        told nothing: the outcome is retrieved here, so a failure nobody is
+        waiting for is not reported as never retrieved.
         """
         self._executor_clients.discard(client)
-        client.on_socket_open = self._async_on_socket_open
-        client.on_socket_register_write = self._async_on_socket_register_write
+        self._give_loop_socket_callbacks(client)
+        for event in events:
+            try:
+                event()
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.warning("Replaying a socket event of a blocking paho call raised", exc_info=True)
         if client is not self._client:
             try:
                 client.disconnect()
@@ -660,6 +703,13 @@ class AsyncMqttBridge:
             caller.set_exception(failure)
         else:
             caller.set_result(call.result())
+
+    def _give_loop_socket_callbacks(self, client: paho.Client) -> None:
+        """Hand `client` the loop's own socket callbacks, for paho to call on the loop."""
+        client.on_socket_open = self._async_on_socket_open
+        client.on_socket_register_write = self._async_on_socket_register_write
+        client.on_socket_unregister_write = self._async_on_socket_unregister_write
+        client.on_socket_close = self._async_on_socket_close
 
     def _abandoned(self, attempt: object) -> bool:
         """Whether disconnect() has abandoned the connect() that `attempt` identifies.
@@ -938,17 +988,19 @@ class AsyncMqttBridge:
         loop = self._loop
 
         def _async_misc() -> None:
-            if self._client is not None and self._client.loop_misc() == paho.MQTT_ERR_SUCCESS:
+            client = self._client
+            if client is None:
+                return
+            if client in self._executor_clients:
+                # A thread is inside it: look again next second rather than call in.
+                self._misc_timer = loop.call_at(loop.time() + 1, _async_misc)
+                return
+            if client.loop_misc() == paho.MQTT_ERR_SUCCESS:
                 self._misc_timer = loop.call_at(loop.time() + 1, _async_misc)
 
         self._misc_timer = loop.call_at(loop.time() + 1, _async_misc)
 
-    # -- Socket open/close (sync bridges for executor, async for event loop) --
-
-    def _on_socket_open_sync(self, client: paho.Client, userdata: object, sock: SocketLike) -> None:
-        """Handle socket open during executor connect — bridge to event loop."""
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._async_on_socket_open, client, userdata, sock)
+    # -- Socket open/close, on the loop (see `_run_blocking` for the executor) --
 
     def _async_on_socket_open(self, client: paho.Client, _userdata: object, sock: SocketLike) -> None:
         """Handle socket open on the event loop."""
@@ -962,27 +1014,30 @@ class AsyncMqttBridge:
         # Drain initial buffer immediately
         self._async_reader_callback(client)
 
-    def _async_on_socket_close(self, _client: paho.Client, _userdata: object, sock: SocketLike) -> None:
-        """Handle socket close — remove reader, cancel misc timer."""
+    def _async_on_socket_close(self, client: paho.Client, _userdata: object, sock: SocketLike) -> None:
+        """Handle socket close on the loop."""
+        self._socket_closed(client, sock.fileno())
+
+    def _socket_closed(self, _client: paho.Client, fileno: int) -> None:
+        """A socket closed: stop reading it, and end a connect still waiting on it.
+
+        Takes the descriptor rather than the socket because a close replayed
+        from a blocking call (see `_run_blocking`) arrives after paho has closed
+        the socket, which then has none.
+        """
         if self._loop is None:
             return
         # Ensure connect event is signaled if socket closes early
         if self._connect_event is not None and not self._connect_event.is_set():
             self._connected = False
             self._connect_event.set()
-        fileno = sock.fileno()
         if fileno > -1:
-            self._loop.remove_reader(sock)
+            self._loop.remove_reader(fileno)
         if self._misc_timer is not None:
             self._misc_timer.cancel()
             self._misc_timer = None
 
     # -- Socket write registration ------------------------------------------
-
-    def _on_socket_register_write_sync(self, client: paho.Client, userdata: object, sock: SocketLike) -> None:
-        """Register socket for writing during executor connect."""
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._async_on_socket_register_write, client, userdata, sock)
 
     def _async_on_socket_register_write(self, client: paho.Client, _userdata: object, sock: SocketLike) -> None:
         """Register the socket for writing on the event loop."""
@@ -992,13 +1047,16 @@ class AsyncMqttBridge:
         if fileno > -1:
             self._loop.add_writer(sock, partial(self._async_writer_callback, client))
 
-    def _async_on_socket_unregister_write(self, _client: paho.Client, _userdata: object, sock: SocketLike) -> None:
-        """Unregister the socket for writing."""
+    def _async_on_socket_unregister_write(self, client: paho.Client, _userdata: object, sock: SocketLike) -> None:
+        """Unregister the socket for writing, on the loop."""
+        self._socket_write_unregistered(client, sock.fileno())
+
+    def _socket_write_unregistered(self, _client: paho.Client, fileno: int) -> None:
+        """Stop watching a socket for writing, by descriptor for the reason `_socket_closed` gives."""
         if self._loop is None:
             return
-        fileno = sock.fileno()
         if fileno > -1:
-            self._loop.remove_writer(sock)
+            self._loop.remove_writer(fileno)
 
     # -- MQTT callbacks (run directly on event loop) ------------------------
 

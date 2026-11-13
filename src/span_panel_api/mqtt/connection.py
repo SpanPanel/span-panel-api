@@ -1033,12 +1033,20 @@ class AsyncMqttBridge:
         _LOGGER.debug("MQTT loop error: %s", paho.error_string(status))
 
     def _async_start_misc_periodic(self) -> None:
-        """Start the periodic loop_misc() timer (1-second interval)."""
+        """Start the periodic loop_misc() timer (1-second interval).
+
+        `_misc_timer` is set exactly while a tick is scheduled: each tick clears
+        it before anything else, and only rescheduling sets it again. A tick
+        that stops -- no client, or paho answering that the client has no
+        socket -- therefore leaves nothing behind that reads as a timer still
+        running, and the next socket opened starts a fresh one.
+        """
         if self._loop is None:
             return
         loop = self._loop
 
         def _async_misc() -> None:
+            self._misc_timer = None
             client = self._client
             if client is None:
                 return
@@ -1067,11 +1075,16 @@ class AsyncMqttBridge:
 
     def _async_on_socket_close(self, client: paho.Client, _userdata: object, sock: SocketLike) -> None:
         """Handle socket close on the loop: paho calls this before it closes the socket, so the socket is still its own."""
-        # The bookkeeping first, so a removal that raised could not leave it undone.
+        # The bookkeeping first, so a removal that raised could not leave it undone,
+        # and a removal that raised is kept from paho: it would end paho's close
+        # there, before it reports the disconnect, and the bridge would never hear.
         self._socket_gone(client)
         loop = self._loop
         if loop is not None and sock.fileno() > -1:
-            loop.remove_reader(sock)
+            try:
+                loop.remove_reader(sock)
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.warning("Could not stop watching a closed MQTT socket", exc_info=True)
 
     def _socket_gone(self, client: paho.Client) -> None:
         """A socket of `client` closed: end a connect still waiting on it, and stop the misc timer.

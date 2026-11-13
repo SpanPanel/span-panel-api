@@ -271,6 +271,7 @@ class _FakePaho:
         self.disconnect_calls = 0
         self.loop_read_calls = 0
         self.loop_misc_calls = 0
+        self.loop_misc_without_socket = 0
         self._holder: threading.Thread | None = None
         self._sock: _FakeSocket | None = None
         self._write_registered = False
@@ -393,7 +394,11 @@ class _FakePaho:
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
     def loop_misc(self) -> MQTTErrorCode:
+        """paho answers MQTT_ERR_NO_CONN with no socket, and the bridge's misc timer then stops."""
         self._record_if_held("loop_misc")
+        if self._sock is None:
+            self.loop_misc_without_socket += 1
+            return MQTTErrorCode.MQTT_ERR_NO_CONN
         self.loop_misc_calls += 1
         return MQTTErrorCode.MQTT_ERR_SUCCESS
 
@@ -1804,3 +1809,84 @@ async def test_a_socket_paho_closes_on_the_loop_is_no_longer_watched() -> None:
         await bridge.disconnect()
 
     assert not still_watched, "the closed socket's descriptor was left watched"
+
+
+async def _ticks(client: _FakePaho, what: str) -> None:
+    """Wait for `client`'s keepalive: the misc timer calling paho's loop_misc on it, once a second."""
+    ticks = client.loop_misc_calls
+    await _until(lambda: client.loop_misc_calls > ticks, what, timeout=3.0)
+
+
+@pytest.mark.asyncio
+async def test_a_bridge_reused_after_an_abandoned_connect_keeps_its_live_session_alive() -> None:
+    """More than a second after the abandoned connect, the next session still gets its keepalives.
+
+    The abandoned client's socket started the misc timer; with nobody to tick for
+    it stopped, and a handle left set read as a timer still running, so the next
+    socket started none and the broker dropped the session for its keepalive.
+    """
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        gate = threading.Event()
+        broker.connect_gate = gate
+        await _disconnect_while_bridge_connects(broker, bridge, broker.connecting.is_set, gate.set)
+        broker.connect_gate = None
+        await asyncio.sleep(1.2)
+
+        await bridge.connect()
+        await _ticks(broker.clients[-1], "the live session's keepalive")
+        await bridge.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_rebuild_leaves_the_old_client_its_keepalive_once_it_reconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The failed rebuild's client started the misc timer; once the old client reconnects, the timer ticks for it.
+
+    The reconnect comes more than a second later, so the timer has ticked once
+    for the old client while it had no socket and stopped.
+    """
+    monkeypatch.setattr("span_panel_api.mqtt.connection.MQTT_RECONNECT_MIN_DELAY_S", 1.3)
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        [old] = broker.clients
+        broker.connect_fails_after_opening = ConnectionResetError(54, "Connection reset by peer")
+        old.next_reconnect_error = ssl.SSLError("handshake failed")
+        old.drop()
+        await _until(lambda: len(broker.sessions) == 3 and bridge.is_connected(), "the old client's reconnect")
+        assert bridge._client is old, "precondition: the failed rebuild left the old client in place"
+        assert old.loop_misc_without_socket > 0, "precondition: the timer ticked while the old client had no socket"
+
+        await _ticks(old, "the old client's keepalive")
+        await bridge.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_a_socket_close_whose_unwatching_raises_still_reports_the_disconnect() -> None:
+    """paho reports the disconnect only after the socket-close callback returns; a removal that raised must not stop it."""
+    loop = asyncio.get_running_loop()
+    broker = _Broker(loop, _FLAT_TREE)
+    broker.real_sockets = True
+    real_remove_reader = loop.remove_reader
+    raised: list[int] = []
+
+    def remove_reader_raising_once(fd: object) -> bool:
+        if not raised:
+            raised.append(1)
+            raise RuntimeError("File descriptor is used by transport")
+        return real_remove_reader(fd)
+
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        [client] = broker.clients
+        with patch.object(loop, "remove_reader", side_effect=remove_reader_raising_once):
+            client.drop()
+        await _until(lambda: len(broker.sessions) == 2 and bridge.is_connected(), "the reconnect")
+        await bridge.disconnect()
+
+    assert raised == [1], "precondition: the unwatching raised"

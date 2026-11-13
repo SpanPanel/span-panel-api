@@ -1287,10 +1287,15 @@ class AsyncMqttBridge:
                 await self._run_blocking(self._loop, new_client, _blocking_connect)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 _LOGGER.warning("Client rebuild — initial connect failed: %s", exc)
-                # Restore the previous client so the loop keeps retrying
-                # with what it had. Whatever the failed connect left of the new
-                # one, `_executor_returned` has disconnected, as a let-go client.
+                # Restore the previous client so the loop keeps retrying with
+                # what it had, and close whatever the failed connect left of the
+                # new one. The hand-back has run, so no thread holds it, and it
+                # did not close the client then: it was still `self._client`.
                 self._client = old_client
+                try:
+                    new_client.disconnect()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _LOGGER.debug("Disconnecting the failed rebuild's client raised", exc_info=True)
                 return False
 
             _LOGGER.info("MQTT client rebuilt for reconnect (TLS=%s)", self._use_tls)

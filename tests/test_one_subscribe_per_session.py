@@ -159,6 +159,8 @@ class _Broker:
         executor's inside a blocking call; a loop-only handler there would touch
         the event loop from the wrong thread.
         """
+        self.connect_fails_after_opening: OSError | None = None
+        """When set, the next blocking connect opens its socket and then raises this, leaving the socket open."""
         self.real_sockets = False
         """While set, clients open sockets the loop really registers. See `_FakeSocket`."""
         self.holding_closes = False
@@ -304,6 +306,10 @@ class _FakePaho:
                 assert gate.wait(timeout=5), "the test never released the blocking connect"
             self._sock_close()
             session = self._open()
+            failure = self._broker.connect_fails_after_opening
+            self._broker.connect_fails_after_opening = None
+            if failure is not None:
+                raise failure
         finally:
             self._holder = None
         self._answer(session)
@@ -1583,3 +1589,24 @@ async def test_cancelling_connect_during_the_wait_for_ready_ends_that_wait() -> 
         await asyncio.sleep(0)
 
         assert ready_waits() == []
+
+
+@pytest.mark.asyncio
+async def test_a_rebuild_whose_connect_fails_closes_what_that_connect_opened() -> None:
+    """The loop goes on with the old client; the new one, whose socket the failed connect left open, is closed."""
+    broker = _Broker(asyncio.get_running_loop(), _FLAT_TREE)
+    with patch("span_panel_api.mqtt.connection.AsyncMQTTClient", broker.client):
+        bridge = _bridge()
+        await bridge.connect()
+        [old] = broker.clients
+        broker.connect_fails_after_opening = ConnectionResetError(54, "Connection reset by peer")
+        old.next_reconnect_error = ssl.SSLError("handshake failed")
+
+        old.drop()
+        await _until(lambda: len(broker.clients) == 2, "the rebuild's client")
+        await _until(lambda: len(broker.sessions) == 3, "the old client's next reconnect")
+        await _until(lambda: broker.pending == 0, "the failed client's DISCONNECT write")
+        await bridge.disconnect()
+
+    failed = broker.sessions[1]
+    assert broker.clients[1].socket() is None and not failed.open, "the failed connect's socket was left open"

@@ -435,8 +435,11 @@ unregister = client.register_leaf_mismatch_callback(moved)
 would otherwise see only an outage. It fires at most once per outage and is re-armed by the next successful connect. An expired leaf reports nothing, because nothing anyone does helps and the panel recovers on its own once it has the time again. Neither
 handshake can re-anchor anything: both are diagnostic, and the pin is the pin whatever the panel served.
 
-The bootstrap REST calls take an `ssl_context` for the same purpose. `download_ca_cert` is the one exception and stays on plain HTTP — it fetches the anchor everything else is checked against, so it has nothing to check itself against, and its result must
-be fingerprint-confirmed out of band before it is trusted.
+The bootstrap REST calls take an `ssl_context` for the same purpose. `download_ca_cert` is the one exception and stays on plain HTTP — it fetches the anchor everything else is checked against, so it has nothing to check itself against. Its result is a
+candidate, not an anchor: nothing in the response authenticates it, so a caller that stores it without comparing its fingerprint against one obtained another way is trusting on first use, and should say so.
+
+Pass the context built from the same PEM to `SpanMqttClient` or `create_span_client` as `ssl_context` as well. A client whose broker connection uses TLS pinned by `ca_pem`, and whose `ssl_context` is not set, reads its schema over unverified plaintext HTTP
+and logs one `WARNING` saying so; those reads carry no credential.
 
 ### Pending-State Detection
 

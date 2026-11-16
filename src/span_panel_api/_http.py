@@ -32,14 +32,19 @@ DEFAULT_HTTPS_PORT = 443
 #: whether the panel speaks v2 at all, and `get_v2_status` reads the same answer
 #: for a caller that already knows it does. Named here rather than spelled out in
 #: each, so the two cannot drift apart the way their parsers had. Load-bearing
-#: for `_warn_plaintext_transport`'s exemption: a request to this path is the
-#: one the warning stays silent for, so a change here changes what warns.
+#: for `_warn_plaintext_transport`'s exemption: a request to this path is one of
+#: the three the warning stays silent for, so a change here changes what warns.
 V2_STATUS_PATH = "/api/v2/status"
 
 #: Exempt from the plaintext warning alongside `V2_STATUS_PATH`, named here
 #: because the transport is what grants the exemption. See
 #: `_warn_plaintext_transport`.
 CA_CERT_PATH = "/api/v2/certificate/ca"
+
+#: Exempt from the plaintext warning alongside the two above, and named here for
+#: the same reason. See `_warn_plaintext_transport` for why, and for what the
+#: exemption leaves a consumer to do.
+HOMIE_SCHEMA_PATH = "/api/v2/homie/schema"
 
 #: The verbs the bootstrap API uses. Spelled as a `Literal` rather than passed
 #: through to `client.request()` so the dispatch below stays exhaustive and each
@@ -174,44 +179,89 @@ def _reset_plaintext_warnings() -> None:
     _warned_plaintext_hosts.clear()
 
 
-def _warn_plaintext_transport(host: str, path: str, ssl_context: ssl.SSLContext | None) -> None:
-    """Say out loud, once per panel, that its bootstrap traffic is not encrypted.
-
-    **Two endpoints are exempt, and neither claims the once-per-host slot.**
-    The warning exists so an operator can tell a security property is off when
-    it could be on, and for both there is no "on". The CA download fetches the
-    very anchor verification would need — an unverified-TLS wrapping is
-    readable and forgeable by the same active on-path attacker, the payload is
-    a public certificate, and its authenticity control is the leaf check
-    callers run *after* the fetch. The status endpoint is the detection probe:
-    most prominently the request discovery makes against a device nobody has
-    configured, where no pin can exist because trust-on-first-use has not
-    happened and the only action available is configuring the panel — whose
-    flow pins before any credential moves, with a person confirming the
-    fingerprint. Neither call carries a credential in either direction, and
-    warning on them named credentials they never carry: the CA download's line
-    is what issue span#264 reported, and the status probe's is what a merely
-    *advertising* unconfigured panel produced at every boot.
-
-    Two limits of the status exemption, stated rather than implied. The body
-    informs decisions — `proximityProven`, the serial an identity check reads —
-    and a plaintext answer is one anything on the path can write; the controls
-    for that are the panel's own registration gate and the pin the consumer's
-    flow acquires before a credential moves, not a log line. And a consumer
-    *can* probe a configured, pinned panel's status without its context; the
-    exemption means no warning will point that out, so a consumer owes every
-    probe of a configured host the entry's own transport. Not marking the host matters as
-    much as not warning — the probe runs first in every flow and a diagnostic
-    re-read runs on pinned entries, and neither may spend the slot a
-    credential-bearing call needs later.
+def _warn_plaintext_transport(
+    host: str,
+    path: str,
+    ssl_context: ssl.SSLContext | None,
+    *,
+    json: dict[str, str] | None,
+    headers: dict[str, str] | None,
+) -> None:
+    """Say out loud, once per panel, that its credential-bearing bootstrap traffic is not encrypted.
 
     In the same voice as the MQTT bridge's unpinned-CA warning, and for the same
     reason: a security property that is off by default is only a decision if the
     operator can tell it is off. ``ssl_context=None`` puts the request on
-    plaintext ``http://``, and two of these calls carry credentials --
-    registration sends the panel passphrase and brings the broker password back,
-    and passphrase rotation sends a bearer token and brings the new broker
-    password back -- so anything on the path reads all of it.
+    plaintext ``http://``, and every call that still warns carries a credential
+    that anything on the path reads: registration sends the panel passphrase,
+    when it is given one, and brings an access token and the broker password
+    back; passphrase rotation sends a bearer token and brings the new broker
+    password back; and the three FQDN calls each send a bearer token.
+
+    **Three endpoints are exempt, by the shape of the request, and none of them
+    claims the once-per-host slot.** A request is exempt only when its path is
+    one of the three *and* it sends no header and no body. None of the three
+    does today, so none carries a credential in either direction, and warning
+    on them named credentials they never carry. The exemption reads the
+    request rather than the path alone so that a credential added to one of
+    these calls later -- a bearer header on the schema read, say -- warns by
+    construction, instead of depending on somebody remembering to narrow the
+    exemption. What it can read is the request: it rests on none of the three
+    answering with a credential, which none of them, being unauthenticated,
+    has any reason to. Each path is exempt on its own ground.
+
+    The CA download has no "on" to warn about. It fetches the very anchor
+    verification would need: an unverified-TLS wrapping is readable and
+    forgeable by the same active on-path attacker, the payload is a public
+    certificate, and its authenticity control is the leaf check callers run
+    *after* the fetch. Its warning is the line issue span#264 reported.
+
+    The status endpoint is the detection probe, most prominently the request
+    discovery makes against a device nobody has configured. No pin can exist
+    there, because trust-on-first-use has not happened, and the only action
+    available is configuring the panel, whose flow pins before any credential
+    moves. That pin is trust on first use, not a confirmation: at first
+    contact there is nothing to compare the fingerprint against. Its warning
+    is what a merely *advertising* unconfigured panel produced at every boot.
+
+    The schema read does have an "on", and is exempt because it carries no
+    credential and the decision it drives is checked elsewhere, not because it
+    cannot be protected. A forged answer can steer which parser reads the
+    panel, and two controls stand against that. The consumer this exemption
+    is for, Home Assistant, reads it unpinned in its config flow to refuse
+    firmware it cannot drive before a credential moves, and reads it again at
+    setup over the entry's pinned transport, where it refuses a flat panel.
+    And a session cross-checks the REST schema generation against the one the
+    panel publishes over MQTT once its tree is complete, refusing a
+    disagreement (`SpanMqttClient._assert_transports_agree_on_schema_generation`).
+    Its warning named the passphrase and the broker password the first time
+    each panel was discovered or added after a start, and spent the slot that
+    the registration behind it needed. A session's own schema reads keep a
+    signal of their own: `SpanMqttClient` warns once when its broker
+    connection uses TLS pinned by `MqttClientConfig.ca_pem` and its schema
+    reads have no `ssl_context`. Every other posture in which a session reads
+    its schema unverified already has a line from the bridge, which warns
+    about a broker connection without TLS and about a TLS one without a
+    pinned CA.
+
+    The limits of these exemptions, stated rather than implied. The status body
+    informs decisions -- `proximityProven`, the serial an identity check reads
+    -- and a plaintext answer is one anything on the path can write; the
+    controls for that are the panel's own registration gate and the pin the
+    consumer's flow acquires before a credential moves, not a log line. A
+    forged schema also reaches past the parser choice, where neither control
+    above follows it: the schema-0 adapter takes the panel size and its field
+    metadata from the schema's `types`. Home Assistant refuses flat firmware,
+    so the exposure is another consumer of that adapter that reads the schema
+    without the entry's own transport. And a consumer *can* probe a
+    configured, pinned panel's status, or read its schema, without its
+    context; the exemption means no warning will point that out, so a
+    consumer owes every status probe and every schema read of a configured
+    host the entry's own transport. Not marking the host matters as
+    much as not warning -- the probe runs first in every flow, the schema read
+    runs before registration in a config flow, and a diagnostic re-read runs
+    on pinned entries, and none of them may spend the slot a
+    credential-bearing call needs later.
 
     **Called from the transport, not from the calls that bootstrap a client.**
     Warning at the call sites meant each new call site had to remember to, and
@@ -221,17 +271,17 @@ def _warn_plaintext_transport(host: str, path: str, ssl_context: ssl.SSLContext 
 
     **Scoped to the panel, not to the request or the client object.** Per
     request is a line somebody filters out. Per client object looks tighter and
-    is worse, because the CA download runs on every MQTT reconnect and builds a
-    fresh client each time -- so that key would produce a warning per reconnect,
-    which is precisely what the bridge's own once-per-bridge warning exists to
-    avoid. The panel is the thing the warning is actually about.
+    is worse, because a call made without an injected client builds a fresh
+    one each time -- so that key would warn on every such call, which is per
+    request under another name. The panel is the thing the warning is actually
+    about.
 
     The credential itself is never named. This is a warning *about* a secret,
     not a place to put one.
     """
     if ssl_context is not None:
         return
-    if path in (CA_CERT_PATH, V2_STATUS_PATH):
+    if path in (CA_CERT_PATH, V2_STATUS_PATH, HOMIE_SCHEMA_PATH) and json is None and headers is None:
         return
     if host in _warned_plaintext_hosts:
         return
@@ -342,7 +392,7 @@ async def _request(
     caller that supplied it.
     """
     url = _build_url(host, port, path, ssl_context)
-    _warn_plaintext_transport(host, path, ssl_context)
+    _warn_plaintext_transport(host, path, ssl_context, json=json, headers=headers)
     try:
         async with _get_client(httpx_client, timeout, ssl_context) as client:
             match method:

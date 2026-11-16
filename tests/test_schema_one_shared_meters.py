@@ -113,3 +113,51 @@ def test_a_flat_panel_shares_nothing() -> None:
 
     assert all(circuit.meter_shared_with is None for circuit in snapshot.circuits.values())
     assert shared_meter_groups(snapshot.circuits) == {}
+
+
+# --- whether a panel publishes shared meters structurally ---------------------
+
+
+def test_a_panel_whose_circuits_declare_a_shared_meter_publishes_shared_meters() -> None:
+    assert _snapshot(*shared_pair("c-1", "c-2")).publishes_shared_meters is True
+
+
+def test_a_declared_list_with_no_value_still_marks_the_panel() -> None:
+    """The declaration decides: a standard breaker declares the list and publishes no value."""
+    first, second = shared_pair("c-1", "c-2")
+    snapshot = _snapshot(
+        without_values(first, "meter/shared-with-device-ids"),
+        without_values(second, "meter/shared-with-device-ids"),
+    )
+
+    assert snapshot.publishes_shared_meters is True
+
+
+def test_a_list_naming_no_known_circuit_still_marks_the_panel() -> None:
+    assert _snapshot(hosted_circuit("c-1", (1,), meter_shared_with=("ghost",))).publishes_shared_meters is True
+
+
+def test_only_the_meter_list_counts() -> None:
+    """A relay shared with nothing on the meter says nothing about how the meters are described."""
+    snapshot = _snapshot(hosted_circuit("c-1", (1,), relay_shared_with=("c-2",)), hosted_circuit("c-2", (3,)))
+
+    assert snapshot.publishes_shared_meters is False
+
+
+def test_a_panel_with_no_circuit_declaring_the_list_does_not() -> None:
+    assert _snapshot(hosted_circuit("c-1", (1,)), hosted_circuit("c-2", (3,))).publishes_shared_meters is False
+
+
+def test_the_reference_tree_declares_no_shared_meter_list() -> None:
+    assert replay(parent_child_tree(), _REFERENCE_PANEL).build_snapshot().publishes_shared_meters is False
+
+
+def test_an_adapter_that_does_not_say_reads_unknown() -> None:
+    """The flat adapter sets nothing, as an adapter older than the field would not.
+
+    `False` there would tell a consumer the panel does not describe its
+    multi-load breakers, which nothing has said.
+    """
+    flat = SchemaZeroAdapter(serial_number="sim-40t-001", schema=flat_schema(40)).build_snapshot()
+
+    assert flat.publishes_shared_meters is None

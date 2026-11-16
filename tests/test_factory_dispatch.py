@@ -13,7 +13,14 @@ from span_panel_api.dispatch import select_adapter_key
 from span_panel_api.mqtt.client import SpanMqttClient
 from span_panel_api.mqtt.models import MqttClientConfig
 
-from conftest import MINIMAL_DESCRIPTION, SERIAL, TOPIC_PREFIX_SERIAL, flat_schema, parent_child_schema
+from conftest import (
+    MINIMAL_DESCRIPTION,
+    SERIAL,
+    TOPIC_PREFIX_SERIAL,
+    flat_schema,
+    parent_child_schema,
+    until_the_parser_exists,
+)
 
 
 def test_absent_data_model_version_selects_schema_zero() -> None:
@@ -169,7 +176,7 @@ async def test_diagnostics_properties_before_and_after_connect(mqtt_client_mock:
     client._schema_dispatch_reason = "data-model-version absent (flat schema)"  # pylint: disable=protected-access
 
     connect_task = asyncio.create_task(client.connect())
-    await asyncio.sleep(0.05)
+    await until_the_parser_exists(client)
     client._on_message(f"{TOPIC_PREFIX_SERIAL}/$description", MINIMAL_DESCRIPTION)
     client._on_message(f"{TOPIC_PREFIX_SERIAL}/$state", "ready")
     await asyncio.wait_for(connect_task, timeout=5.0)

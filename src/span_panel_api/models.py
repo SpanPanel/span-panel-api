@@ -64,6 +64,13 @@ class SpanCircuitSnapshot:
     is_240v: bool | None = False
     current_a: float | None = None
     breaker_rating_a: float | None = None
+    # Whether the circuit's description declares a breaker rating, as distinct
+    # from whether its value has arrived. `True`: declared, so `breaker_rating_a`
+    # is `None` only until the retained value lands. `False`: the panel
+    # publishes no rating for this circuit. `None`: the adapter does not say
+    # (flat, REST, a hand-built snapshot) and the consumer must treat it as
+    # not known, never as `False`.
+    breaker_rating_declared: bool | None = None
     always_on: bool = False  # v2 new: circuit/always-on
     relay_requester: str = "UNKNOWN"  # v2 new: circuit/relay-requester
     # Epoch seconds at which the reading last changed, as received over MQTT.
@@ -1338,6 +1345,19 @@ class SpanPanelSnapshot:
     before publishing it, or declares a role other than solar, still marks the
     panel as one that says where its solar is. `False` on the flat schema,
     which declares no roles.
+    """
+
+    publishes_shared_meters: bool | None = None
+    """Whether any circuit declares `meter/shared-with-device-ids`, or `None` where the adapter does not say.
+
+    The declaration decides, not the value: a panel model that describes its
+    multi-load breakers declares the list on every circuit, a standard breaker
+    included, and publishes a value only where a meter is shared. Such a panel
+    publishes each circuit of a multi-load breaker as its own device with its
+    own rating. `False` where no circuit declares the list, as on MAIN 32.
+    `None` where the adapter does not answer -- the flat schema's, one older
+    than this field, a hand-built snapshot -- and the consumer must treat it as
+    not known, never as `False`.
     """
 
     # `shed/policy`, v1.0 only: how the panel decides what to shed, and the two

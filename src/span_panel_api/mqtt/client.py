@@ -125,6 +125,11 @@ def _discard_verification(verification: _Verification, acknowledged: asyncio.Fut
         verification.observed.set_result(False)
 
 
+async def _until_set(event: asyncio.Event) -> None:
+    """Return once `event` is set: a wait that can run as a task of its own, and be cancelled."""
+    await event.wait()
+
+
 def _metadata_for_the_log() -> tuple[list[str], str]:
     """Every distribution-metadata read connect() needs, in one place.
 
@@ -310,12 +315,26 @@ class SpanMqttClient:
         await asyncio.to_thread(resolve_adapter, adapter_key, dispatch_reason)
 
     def _build_adapter(self, schema: V2HomieSchema) -> SchemaAdapter:
-        """Construct the parser for this session.
+        """Construct the parser for this session, and subscribe the bridge to its topics.
 
-        Called from connect() and from the reconnect path — the only two
-        places a parser is built today. Both await ``_preload_adapter`` first,
-        so the resolve below is a cache hit and this stays safe to call from a
-        synchronous context.
+        Called from connect(), from the pre-rebuild hook and from a generation
+        swap — every place a parser is built. connect() and the swap await
+        ``_preload_adapter`` first, and the hook rebuilds from the schema one of
+        them resolved, so the resolve below is a cache hit and this stays safe to
+        call from a synchronous context.
+
+        Handing the topics to the bridge here, rather than at each caller, is
+        what ties a subscription to every parser: the bridge subscribes each
+        session to them on its CONNACK, and a live session at once, which is how
+        a parser swapped in mid-session receives the tree it has not seen. They
+        are handed over before the parser is installed, so topics the bridge
+        refuses leave the previous parser and its subscription in place.
+
+        connect() creates the bridge before building the first parser, and
+        gives up rather than connect a bridge that close() let go of while
+        connect() was suspended (see `_stop_if_closed`). Between them, no
+        session opens without the topics of the parser it feeds. A parser built
+        after close() has no bridge to hand them to, and none is needed.
 
         With no injected factory this dispatches on the schema rather than
         assuming the flat adapter. That matters because a client can be built
@@ -336,6 +355,8 @@ class SpanMqttClient:
                 whose schema major cannot be determined.
             SpanPanelAdapterMissingError: No adapter_factory was supplied and no
                 installed package registers the key this panel needs.
+            ValueError: The parser names a topic that is not a valid MQTT
+                topic filter (see `AsyncMqttBridge.set_subscriptions`).
         """
         factory = self._adapter_factory
         if factory is None:
@@ -343,9 +364,12 @@ class SpanMqttClient:
             self._data_model_version = schema.data_model_version
             self._schema_dispatch_reason = dispatch_reason
             factory = resolve_adapter(adapter_key, dispatch_reason)
-        self._adapter = factory(self._serial_number, schema)
-        self._observe(self._adapter)
-        return self._adapter
+        adapter = factory(self._serial_number, schema)
+        if self._bridge is not None:
+            self._bridge.set_subscriptions(adapter.topics_to_subscribe())
+        self._adapter = adapter
+        self._observe(adapter)
+        return adapter
 
     @property
     def adapter(self) -> SchemaAdapter | None:
@@ -444,19 +468,61 @@ class SpanMqttClient:
         """Connect to MQTT broker and wait for Homie device ready.
 
         Flow:
-        1. Fetch Homie schema to determine panel size
-        2. Create AsyncMqttBridge with broker credentials
-        3. Connect to MQTT broker
-        4. Subscribe to the adapter's topics
+        1. Create AsyncMqttBridge with broker credentials
+        2. Fetch Homie schema to determine panel size
+        3. Build the adapter, which hands the bridge its topics
+        4. Connect to MQTT broker, whose CONNACK the bridge subscribes on
         5. Wait for $state==ready and $description parsed
+
+        close() may land while this is suspended at any of its awaits. It then
+        stops before the next of its steps -- building the parser, connecting
+        the bridge, waiting on the panel, returning -- rather than go on to
+        connect a bridge nothing can close or report a connection the caller
+        has already closed (see `_stop_if_closed`). A close() during a wait --
+        for the broker, for the tree, for its labels -- ends that wait.
 
         Raises:
             SpanPanelAuthError: The broker refused the credentials
-            SpanPanelConnectionError: Cannot connect or device not ready
+            SpanPanelConnectionError: Cannot connect, device not ready, or
+                close() was called while connecting
             SpanPanelTimeoutError: Connection or ready timed out
         """
         self._loop = asyncio.get_running_loop()
         self._ready_event = asyncio.Event()
+
+        # Before the adapter, because building one is what gives the bridge the
+        # topics every session subscribes to (see `_build_adapter`).
+        _LOGGER.debug(
+            "MQTT: Creating bridge to %s:%s (serial=%s)",
+            self._broker_config.broker_host,
+            self._broker_config.effective_port,
+            self._serial_number,
+        )
+        bridge = AsyncMqttBridge(
+            host=self._broker_config.broker_host,
+            port=self._broker_config.effective_port,
+            username=self._broker_config.username,
+            password=self._broker_config.password,
+            panel_host=self._host,
+            serial_number=self._serial_number,
+            transport=self._broker_config.transport,
+            use_tls=self._broker_config.use_tls,
+            loop=self._loop,
+            panel_http_port=self._panel_http_port,
+            ca_pem=self._broker_config.ca_pem,
+        )
+        self._bridge = bridge
+
+        # Wire message handler
+        bridge.set_message_callback(self._on_message)
+        bridge.set_connection_callback(self._on_connection_change)
+        bridge.set_fatal_error_callback(self._on_fatal_error)
+        bridge.set_leaf_mismatch_callback(self._on_leaf_mismatch)
+        # Pre-rebuild hook: reset Homie accumulator before the bridge swaps
+        # paho clients, so retained messages on the new subscription start
+        # from a clean slate (no stale `$state=disconnected` cached from
+        # the original outage).
+        bridge.set_pre_rebuild_callback(self._on_pre_rebuild)
 
         # create_span_client already fetched this to dispatch on; refetching
         # would be a second call to the same unauthenticated endpoint for a
@@ -465,6 +531,10 @@ class SpanMqttClient:
         schema = self._schema if self._schema is not None else await self._fetch_schema()
         self._schema = schema
         await self._preload_adapter(schema)
+        # After both awaits the build waits on, with none between this and the
+        # build, so the parser's topics go to this bridge and a client closed
+        # before it had a parser does not grow one.
+        await self._stop_if_closed(bridge)
         adapter = self._build_adapter(schema)
 
         # Both halves of this line read distribution metadata off disk, and both
@@ -476,6 +546,7 @@ class SpanMqttClient:
         # Threaded on their own account rather than relying on the preload above,
         # which skips discovery entirely when a factory was injected.
         installed, library_version = await asyncio.to_thread(_metadata_for_the_log)
+        await self._stop_if_closed(bridge)
         _LOGGER.info(
             "MQTT adapter selected: %s (span-panel-api %s)\n  data-model-version: %r\n  reason: %s\n  installed: %s",
             adapter.schema_major,
@@ -498,55 +569,37 @@ class SpanMqttClient:
         self._schema_hash = new_hash
         self._previous_schema_types = schema.types
 
-        _LOGGER.debug(
-            "MQTT: Creating bridge to %s:%s (serial=%s)",
-            self._broker_config.broker_host,
-            self._broker_config.effective_port,
-            self._serial_number,
-        )
-
-        self._bridge = AsyncMqttBridge(
-            host=self._broker_config.broker_host,
-            port=self._broker_config.effective_port,
-            username=self._broker_config.username,
-            password=self._broker_config.password,
-            panel_host=self._host,
-            serial_number=self._serial_number,
-            transport=self._broker_config.transport,
-            use_tls=self._broker_config.use_tls,
-            loop=self._loop,
-            panel_http_port=self._panel_http_port,
-            ca_pem=self._broker_config.ca_pem,
-        )
-
-        # Wire message handler
-        self._bridge.set_message_callback(self._on_message)
-        self._bridge.set_connection_callback(self._on_connection_change)
-        self._bridge.set_fatal_error_callback(self._on_fatal_error)
-        self._bridge.set_leaf_mismatch_callback(self._on_leaf_mismatch)
-        # Pre-rebuild hook: reset Homie accumulator before the bridge swaps
-        # paho clients, so retained messages on the new subscription start
-        # from a clean slate (no stale `$state=disconnected` cached from
-        # the original outage).
-        self._bridge.set_pre_rebuild_callback(self._on_pre_rebuild)
-
-        # Connect to broker
+        # Connect to broker. Its CONNACK is what subscribes the session, to the
+        # topics `_build_adapter` gave the bridge; nothing here subscribes again,
+        # since every SUBSCRIBE makes the broker replay the whole retained tree.
         _LOGGER.debug("MQTT: Connecting to broker...")
-        await self._bridge.connect()
-        _LOGGER.debug("MQTT: Broker connected, subscribing...")
-
-        # Subscribe to all device topics
-        topics = self._require_adapter().topics_to_subscribe()
-        for topic in topics:
-            self._bridge.subscribe(topic, qos=0)
-        _LOGGER.debug("MQTT: Subscribed to %s, waiting for Homie ready...", topics)
-
-        # Wait for Homie ready state
+        # The bridge raises rather than return from a connect that close()
+        # disconnected, so only its failure needs checking: one that close() caused
+        # reports the close.
         try:
-            await asyncio.wait_for(self._ready_event.wait(), timeout=MQTT_READY_TIMEOUT_S)
-        except TimeoutError as exc:
+            await bridge.connect()
+        except SpanPanelError:
+            await self._stop_if_closed(bridge)
+            raise
+        _LOGGER.debug("MQTT: Broker connected, waiting for Homie ready...")
+
+        # Wait for Homie ready state. A background task, as the label wait below
+        # is, so that close() -- which cancels every one -- ends it at once rather
+        # than leaving it to run out.
+        ready = self._loop.create_task(_until_set(self._ready_event), name="span_mqtt_wait_ready")
+        self._background_tasks.add(ready)
+        ready.add_done_callback(self._background_tasks.discard)
+        try:
+            done, _ = await asyncio.wait([ready], timeout=MQTT_READY_TIMEOUT_S)
+        finally:
+            # The wait is this call's own: it ends with the call however the call
+            # ends -- timed out, or connect() itself cancelled.
+            if not ready.done():
+                ready.cancel()
+        await self._stop_if_closed(bridge)
+        if not done:
             await self.close()
-            raise SpanPanelConnectionError(f"Timed out waiting for Homie device ready ({self._serial_number})") from exc
+            raise SpanPanelConnectionError(f"Timed out waiting for Homie device ready ({self._serial_number})")
 
         _LOGGER.debug("MQTT: Homie device ready, waiting for its labels...")
 
@@ -556,14 +609,35 @@ class SpanMqttClient:
         # caller can take carries them.
         # `wait` rather than awaiting the task: `close()` cancels it, and that must
         # end this wait rather than surface here as a cancellation of connect().
+        # The close is then reported as one, below.
         settle = self._settle_task
         if settle is not None:
             await asyncio.wait([settle])
             if not settle.cancelled():
                 settle.result()
+        await self._stop_if_closed(bridge)
 
         self._assert_transports_agree_on_schema_generation()
         _LOGGER.debug("MQTT: Connection fully established")
+
+    async def _stop_if_closed(self, bridge: AsyncMqttBridge) -> None:
+        """End connect() if close() let go of `bridge` while connect() was suspended.
+
+        close() disconnects the bridge it finds and drops it, and a connect()
+        suspended at that moment holds the only other reference. Going on would
+        connect it: a session nobody reads, its reconnect loop armed, that no
+        later close() can reach -- and, before the parser is built, one with no
+        subscription at all. So this disconnects `bridge`, which is harmless
+        when close() already has, and raises rather than let connect() report a
+        connection the caller has closed.
+
+        Raises:
+            SpanPanelConnectionError: close() was called while connecting.
+        """
+        if self._bridge is bridge:
+            return
+        await bridge.disconnect()
+        raise SpanPanelConnectionError(f"Closed while connecting ({self._serial_number})")
 
     def _assert_transports_agree_on_schema_generation(self) -> None:
         """Refuse a panel whose two schema-generation signals disagree.
@@ -615,8 +689,14 @@ class SpanMqttClient:
             )
 
     async def close(self) -> None:
-        """Disconnect from broker and clean up."""
+        """Disconnect from broker and clean up.
+
+        Not live before the bridge disconnects, so the `False` the bridge then
+        reports is no edge: closing is the consumer's own act, and its
+        connection callbacks are not told the panel was lost, as in 3.8.0.
+        """
         self._streaming = False
+        self._live = False
         self._cancel_snapshot_timer()
         for task in self._background_tasks:
             task.cancel()
@@ -624,7 +704,6 @@ class SpanMqttClient:
         if self._bridge is not None:
             await self._bridge.disconnect()
             self._bridge = None
-        self._live = False
 
     async def ping(self) -> bool:
         """Check if MQTT connection is alive and device is ready.
@@ -1472,27 +1551,26 @@ class SpanMqttClient:
     def _on_connection_change(self, connected: bool) -> None:
         """Handle MQTT connection state change (called from asyncio loop).
 
-        Re-subscribes to the wildcard topic on reconnect (pre-existing
-        behavior), then fans out an edge-only notification to registered
-        connection callbacks. Duplicate state transitions are suppressed
-        so subscribers only see real edges.
+        Fans out an edge-only notification to registered connection
+        callbacks. Duplicate state transitions are suppressed so subscribers
+        only see real edges.
+
+        Subscribing is not this handler's job. The bridge subscribes each
+        session on the CONNACK that opened it, before this runs, and
+        subscribing again here would not be harmless: the broker answers every
+        SUBSCRIBE by replaying the whole retained tree, so each one adds another
+        copy of the tree to the burst a connection receives.
 
         On disconnect, any pending snapshot-debounce timer is cancelled
         so a stale timer cannot dispatch a post-disconnect snapshot.
         """
-        # Re-subscribe runs on every connected=True, including duplicates —
-        # paho may re-emit connected events after session restoration, and
-        # re-subscribing is broker-benign. Callback fan-out below is
-        # edge-only (see the guard after this block).
         if connected:
             _LOGGER.debug("MQTT connection established")
-            if self._bridge is not None and self._adapter is not None:
-                for topic in self._adapter.topics_to_subscribe():
-                    self._bridge.subscribe(topic, qos=0)
             # A reconnect can be a different panel generation than the one we
-            # dispatched on. Checked only on a real edge, because paho re-emits
-            # connected=True after session restoration and refetching the schema
-            # on each of those would be a HTTP round trip per duplicate.
+            # dispatched on. Checked only on a real edge: connected=True can repeat
+            # with no disconnect between, when paho's `reconnect()` replaces a
+            # socket without reporting one, and refetching the schema on each of
+            # those would be a HTTP round trip per duplicate.
             if not self._live:
                 self._schedule_redispatch()
         else:
@@ -1754,14 +1832,15 @@ class SpanMqttClient:
         # skips that branch, and would go on reporting the generation it started with
         # after having been rebuilt for a different one.
         self._data_model_version = schema.data_model_version
-        adapter = self._build_adapter(schema)
+        # The new parser has seen none of the tree, so it needs the replay a
+        # SUBSCRIBE brings. `_build_adapter` hands the bridge its topics, which on a
+        # live session subscribes them at once and drops the old generation's
+        # filter, and between sessions waits for the next CONNACK.
+        self._build_adapter(schema)
         # Ready is a property of the tree, and this is a different tree. Leaving the
         # old event set would let `is_ready()` answer for a parser that has not seen
         # a single message yet.
         self._ready_event = asyncio.Event()
-        if self._bridge is not None:
-            for topic in adapter.topics_to_subscribe():
-                self._bridge.subscribe(topic, qos=0)
 
         # Announced after the swap, so a consumer inspecting the client from inside
         # the callback sees the generation it is being told about. Iterate a copy —
@@ -1780,8 +1859,10 @@ class SpanMqttClient:
         old paho client is torn down and the new one is wired up. Discards
         any stale `$state=disconnected` cached during the outage so the
         new subscription's retained messages repopulate from a clean slate.
-        The fresh adapter is unsettled by construction, so nothing is
-        dispatched from it until its labels have passed the readiness gate.
+        The fresh adapter hands its topics to the bridge, which subscribes the
+        rebuilt client's session on its CONNACK. It is unsettled by
+        construction, so nothing is dispatched from it until its labels have
+        passed the readiness gate.
 
         Schema-derived state (`_schema`, `_schema_hash`,
         `_previous_schema_types`) is intentionally preserved — the Homie

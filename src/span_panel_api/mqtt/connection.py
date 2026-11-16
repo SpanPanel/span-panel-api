@@ -10,7 +10,7 @@ Follows Home Assistant core's async MQTT pattern:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 import logging
 import ssl
@@ -54,6 +54,74 @@ _LOGGER = logging.getLogger(__name__)
 # password" (0x86) and "Not authorized" (0x87). paho reports the MQTT 3.1.1
 # return codes 4 and 5 as these same MQTT 5 reason codes.
 _CONNACK_AUTH_REFUSALS = frozenset({0x86, 0x87})
+
+# The longest UTF-8 string an MQTT packet can carry (MQTT 3.1.1, section 1.5.3).
+_MQTT_MAX_STRING_BYTES = 65535
+
+
+def _nothing_to_restore() -> None:
+    """What `_stop_watching` returns for a client with no open socket to give back."""
+
+
+def _attempt(failures: list[Exception], step: Callable[[], object]) -> None:
+    """Take one step of a hand-back, keeping what it raised in `failures` rather than letting it end the rest."""
+    try:
+        step()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        failures.append(exc)
+
+
+def _answer(caller: asyncio.Future[object], call: asyncio.Future[object], failures: list[Exception]) -> None:
+    """Give `caller` the outcome of its blocking `call`, taking into account what the hand-back's `failures` were.
+
+    A call that failed or was cancelled gives the caller that outcome. A call
+    that succeeded gives it the hand-back's first failure, if there was one:
+    the client is not fully back on the loop, and the caller's own failure
+    handling -- the reconnect loop's retry, connect()'s error -- is what deals
+    with that. A caller already done is told nothing, but the call's outcome
+    is retrieved, so a failure nobody is waiting for is not reported as never
+    retrieved. Every failure the caller is not given is logged here, as no
+    one else will see it.
+    """
+    unheard = failures
+    if call.cancelled():
+        if not caller.done():
+            caller.cancel()
+    else:
+        failure = call.exception()
+        if not caller.done():
+            if failure is not None:
+                caller.set_exception(failure)
+            elif failures:
+                caller.set_exception(failures[0])
+                unheard = failures[1:]
+            else:
+                caller.set_result(call.result())
+    for exc in unheard:
+        _LOGGER.warning("Handing a paho client back to the event loop raised", exc_info=exc)
+
+
+def _check_topic_filter(topic: str) -> None:
+    """Refuse what MQTT 3.1.1 does not accept as a topic filter (section 4.7).
+
+    A filter is at least one character, carries no null character, and fits an
+    MQTT string. `#` is a whole level and the last one; `+` is a whole level.
+
+    Raises:
+        ValueError: `topic` is not a valid topic filter, saying why.
+    """
+    if not topic:
+        raise ValueError("A topic filter cannot be empty")
+    if "\x00" in topic:
+        raise ValueError(f"Topic filter {topic!r} contains a null character")
+    if len(topic.encode("utf-8")) > _MQTT_MAX_STRING_BYTES:
+        raise ValueError(f"Topic filter {topic[:40]!r}... is longer than the {_MQTT_MAX_STRING_BYTES} bytes MQTT allows")
+    levels = topic.split("/")
+    for index, level in enumerate(levels):
+        if "#" in level and (level != "#" or index != len(levels) - 1):
+            raise ValueError(f"Topic filter {topic!r} uses '#' other than as its whole last level")
+        if "+" in level and level != "+":
+            raise ValueError(f"Topic filter {topic!r} uses '+' other than as a whole level")
 
 
 class AsyncMqttBridge:
@@ -114,9 +182,22 @@ class AsyncMqttBridge:
         # `_resolve_pending_publishes` when the outbound queue ceases to exist.
         self._pending_publishes: dict[int, asyncio.Future[bool]] = {}
 
+        # What every session is subscribed to, in two parts with one writer each:
+        # the set `set_subscriptions` replaces whole, and the topics `subscribe`
+        # adds, at the QoS asked, which nothing removes. `_held` combines them, and
+        # nothing but this bridge sends a SUBSCRIBE. See `set_subscriptions`.
+        self._subscription_set: tuple[str, ...] = ()
+        self._added: dict[str, int] = {}
+
         self._connected = False
         self._client: AsyncMQTTClient | None = None
         self._connect_event: asyncio.Event | None = None
+        # The connect() in progress, by identity, until disconnect() abandons it.
+        # See `_abandoned`.
+        self._connect_attempt: object | None = None
+        # Clients a blocking call is running inside, in the executor. See
+        # `_run_blocking`: nothing on the loop calls into one until it returns.
+        self._executor_clients: set[AsyncMQTTClient] = set()
         # Reason code of the most recent refused CONNACK; `connect()` reads it.
         self._connack_refusal: ReasonCode | None = None
 
@@ -408,9 +489,7 @@ class AsyncMqttBridge:
         )
         client.setup()
         client.username_pw_set(self._username, self._password)
-        # Wire socket callbacks (async versions by default)
-        client.on_socket_close = self._async_on_socket_close
-        client.on_socket_unregister_write = self._async_on_socket_unregister_write
+        self._give_loop_socket_callbacks(client)
         # Wire MQTT callbacks (run directly on event loop — no thread dispatch)
         client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect
@@ -430,7 +509,8 @@ class AsyncMqttBridge:
         Raises:
             SpanPanelAuthError: The broker refused the username or password
                 (CONNACK "Bad user name or password" or "Not authorized").
-            SpanPanelConnectionError: Cannot connect to broker.
+            SpanPanelConnectionError: Cannot connect to broker, or disconnect()
+                was called while connecting.
             SpanPanelTimeoutError: Connection timed out.
             SpanPanelCAChangedError: The panel is pinned and now advertises a
                 different CA. If the CA rotated while the consumer was down, the
@@ -441,7 +521,10 @@ class AsyncMqttBridge:
         if self._loop is None:
             self._loop = asyncio.get_running_loop()
 
-        self._connect_event = asyncio.Event()
+        attempt = object()
+        self._connect_attempt = attempt
+        connack = asyncio.Event()
+        self._connect_event = connack
         self._connack_refusal = None
         self._should_reconnect = True
 
@@ -461,59 +544,59 @@ class AsyncMqttBridge:
                 ssl_context = build_panel_ssl_context(ca_pem)
             except (ssl.SSLError, ValueError) as exc:
                 raise SpanPanelConnectionError(f"Failed to build SSL context for {self._panel_host}") from exc
+        # Before a paho client exists, so a disconnect() during the CA fetch -- which
+        # had no client to disconnect -- does not leave one connecting after it.
+        self._raise_if_abandoned(attempt)
 
-        self._client = self._make_paho_client(ssl_context)
+        # Held locally as well as on `self._client`: disconnect() clears the
+        # attribute, and everything below must still reach the client it built.
+        client = self._make_paho_client(ssl_context)
+        self._client = client
 
         # Connect in executor (blocking: DNS, TCP, TLS handshake).
         # During executor connect, socket callbacks bridge to the event
         # loop via call_soon_threadsafe.
         def _blocking_connect() -> None:
-            if self._client is None:
-                raise RuntimeError("MQTT client not initialised before connect")
-            self._client.connect(
+            client.connect(
                 host=self._host,
                 port=self._port,
                 keepalive=MQTT_KEEPALIVE_S,
             )
 
+        _LOGGER.debug("BRIDGE: Running connect in executor to %s:%s", self._host, self._port)
         try:
-            self._client.on_socket_open = self._on_socket_open_sync
-            self._client.on_socket_register_write = self._on_socket_register_write_sync
-            _LOGGER.debug("BRIDGE: Running connect in executor to %s:%s", self._host, self._port)
-            try:
-                await self._loop.run_in_executor(None, _blocking_connect)
-            except ssl.SSLCertVerificationError as exc:
-                # The pinned handshake failed on the very first attempt, which is
-                # what a CA rotated while the consumer was shut down looks like.
-                # Wrapped as a connection error this became a setup-retry loop
-                # with nothing for the user to act on, forever.
-                # `_diagnose_verification_failure` is what distinguishes it from an
-                # expired leaf or a moved host, and returns None for both of those
-                # so they keep their old retryable shape — announcing the moved
-                # host on its own channel on the way past.
-                fatal = await self._diagnose_verification_failure()
-                if fatal is not None:
-                    raise fatal from exc
-                raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
-            except Exception as exc:  # pylint: disable=broad-exception-caught
-                # paho raises OSError for TCP failures and transport-specific
-                # errors (e.g. WebsocketConnectionError) that do not inherit
-                # from OSError. Wrap all of them uniformly so callers only
-                # see the documented SpanPanelConnectionError.
-                raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
-            _LOGGER.debug("BRIDGE: Executor connect returned, waiting for CONNACK...")
-        finally:
-            # Switch to async-only socket callbacks now that we are
-            # back on the event loop thread.
-            self._client.on_socket_open = self._async_on_socket_open
-            self._client.on_socket_register_write = self._async_on_socket_register_write
+            await self._run_blocking(self._loop, client, _blocking_connect)
+        except ssl.SSLCertVerificationError as exc:
+            # The pinned handshake failed on the very first attempt, which is
+            # what a CA rotated while the consumer was shut down looks like.
+            # Wrapped as a connection error this became a setup-retry loop
+            # with nothing for the user to act on, forever.
+            # `_diagnose_verification_failure` is what distinguishes it from an
+            # expired leaf or a moved host, and returns None for both of those
+            # so they keep their old retryable shape — announcing the moved
+            # host on its own channel on the way past.
+            fatal = await self._diagnose_verification_failure()
+            if fatal is not None:
+                raise fatal from exc
+            raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            # paho raises OSError for TCP failures and transport-specific
+            # errors (e.g. WebsocketConnectionError) that do not inherit
+            # from OSError. Wrap all of them uniformly so callers only
+            # see the documented SpanPanelConnectionError.
+            raise SpanPanelConnectionError(f"Cannot connect to MQTT broker at {self._host}:{self._port}: {exc}") from exc
+        _LOGGER.debug("BRIDGE: Executor connect returned, waiting for CONNACK...")
 
-        # Wait for CONNACK
+        # Wait for CONNACK, or for disconnect(), which sets the same event. A
+        # disconnect() while the executor held the client has already set it --
+        # and `_executor_returned` has closed the client -- so this returns at
+        # once and the check below reports the abandoned attempt.
         try:
-            await asyncio.wait_for(self._connect_event.wait(), timeout=MQTT_CONNECT_TIMEOUT_S)
+            await asyncio.wait_for(connack.wait(), timeout=MQTT_CONNECT_TIMEOUT_S)
         except TimeoutError as exc:
             await self.disconnect()
             raise SpanPanelTimeoutError(f"Timed out connecting to MQTT broker at {self._host}:{self._port}") from exc
+        self._raise_if_abandoned(attempt)
 
         if not self._connected:
             refusal = self._connack_refusal
@@ -524,8 +607,24 @@ class AsyncMqttBridge:
         self._initial_connect_done = True
 
     async def disconnect(self) -> None:
-        """Disconnect from the MQTT broker."""
+        """Disconnect from the MQTT broker.
+
+        Also abandons a connect() in progress: it raises `SpanPanelConnectionError`
+        at its next step rather than go on to connect, and its wait for a CONNACK
+        ends here rather than running out.
+
+        A bridge that was connected tells its connection callback `False` here,
+        once. paho reports the disconnect only after it has written the
+        DISCONNECT, from a client this bridge has by then let go of and so
+        ignores (see `_on_disconnect`); the callback hears it from here instead,
+        as it did from paho in 3.8.0.
+        """
+        was_connected = self._connected
         self._should_reconnect = False
+        self._connect_attempt = None
+        connack = self._connect_event
+        if connack is not None and not connack.is_set():
+            connack.set()
 
         # Cancel reconnect task
         if self._reconnect_task is not None:
@@ -539,17 +638,300 @@ class AsyncMqttBridge:
 
         self._resolve_pending_publishes(False, "bridge disconnected")
 
+        # Not a client a blocking call is still inside: paho runs with its locks
+        # removed, so only the thread may touch it. Letting it go is enough --
+        # `_executor_returned` closes it on the loop once the call returns.
         client = self._client
-        if client is not None:
+        if client is not None and client not in self._executor_clients:
             client.disconnect()
         self._connected = False
         self._client = None
         self._initial_connect_done = False
+        if was_connected and self._connection_callback is not None:
+            self._connection_callback(False)
+
+    def _run_blocking(
+        self, loop: asyncio.AbstractEventLoop, client: AsyncMQTTClient, call: Callable[[], object]
+    ) -> asyncio.Future[object]:
+        """Run one blocking paho call on `client` in the executor: the only way this bridge does.
+
+        While the call runs the executor thread owns the client, and nothing on
+        the loop calls into it: paho runs with its locks removed, so a second
+        thread inside the same client could corrupt it. The loop stops watching
+        the socket it was reading for this client, `disconnect()` only lets the
+        client go, and the misc timer passes it over.
+
+        paho makes socket callbacks on whichever thread it is running on, the
+        executor's inside this call: opening the new socket and queueing its
+        CONNECT, and -- in `reconnect()` -- closing the one it replaces. An open
+        is recorded and replayed by `_executor_returned` once the call has
+        returned, so the loop starts watching the new socket after the thread is
+        done. A close needs nothing from the loop but the bridge's own
+        bookkeeping: the loop stopped watching this client's socket before the
+        call, while it was certainly still open, and watches none the call opens
+        until the hand-back.
+
+        Nothing is ever keyed by a descriptor number. Once paho closes a socket
+        its number is free for anything else in the process -- another panel's
+        bridge, Home Assistant's own MQTT, a resolver -- so the loop acts only on
+        a socket object it knows to be open: the client's, unwatched before the
+        call; one the call opened, registered after it and only while it is
+        still open; and the client's again if the call left it open, watched
+        again exactly as it was.
+
+        The loop takes the client back when the call returns, not when its
+        caller resumes. Cancelling the caller does not stop the thread, so the
+        caller awaits a future the hand-back resolves rather than the
+        executor's own: a cancelled caller -- a reconnect task that
+        disconnect() cancelled -- cancels only its wait, and the hand-back still
+        runs when the thread is really done. Not `asyncio.shield`, which reports
+        a failure that arrives after its caller was cancelled through the loop's
+        exception handler; here that failure is the abandoned attempt's, and
+        expected.
+        """
+        events: list[Callable[[], None]] = []
+
+        def opened(opener: paho.Client, userdata: object, sock: SocketLike) -> None:
+            events.append(partial(self._async_on_socket_open, opener, userdata, sock))
+
+        def write_registered(writer: paho.Client, userdata: object, sock: SocketLike) -> None:
+            events.append(partial(self._async_on_socket_register_write, writer, userdata, sock))
+
+        def write_unregistered(_writer: paho.Client, _userdata: object, _sock: SocketLike) -> None:
+            """Nothing to replay: no socket of this client is watched while the call runs."""
+
+        def closed(closer: paho.Client, _userdata: object, _sock: SocketLike) -> None:
+            events.append(partial(self._socket_gone, closer))
+
+        # Before the call is submitted, so before the thread can close the socket.
+        watch_again = self._stop_watching(loop, client)
+        client.on_socket_open = opened
+        client.on_socket_register_write = write_registered
+        client.on_socket_unregister_write = write_unregistered
+        client.on_socket_close = closed
+        try:
+            call_future = loop.run_in_executor(None, call)
+        except BaseException:
+            # Refused before a thread took it: the client is still the loop's.
+            self._give_loop_socket_callbacks(client)
+            watch_again()
+            raise
+        self._executor_clients.add(client)
+        caller: asyncio.Future[object] = loop.create_future()
+        call_future.add_done_callback(partial(self._executor_returned, client, watch_again, caller, events))
+        return caller
+
+    def _stop_watching(self, loop: asyncio.AbstractEventLoop, client: paho.Client) -> Callable[[], None]:
+        """Stop the loop reading and writing `client`'s socket, and return what gives the loop that socket back.
+
+        By the socket object, while it is open: its descriptor is its own until
+        paho closes it. The returned call restores exactly the watchers this
+        took away, and only for that same socket while it is still open and
+        still the client's -- a call that closed or replaced it gets nothing back.
+        """
+        sock = client.socket()
+        if sock is None or sock.fileno() < 0:
+            return _nothing_to_restore
+        reading = loop.remove_reader(sock)
+        writing = loop.remove_writer(sock)
+
+        def watch_again() -> None:
+            if client.socket() is not sock or sock.fileno() < 0:
+                return
+            if reading:
+                loop.add_reader(sock, partial(self._async_reader_callback, client))
+            if writing:
+                loop.add_writer(sock, partial(self._async_writer_callback, client))
+
+        return watch_again
+
+    def _executor_returned(
+        self,
+        client: AsyncMQTTClient,
+        watch_again: Callable[[], None],
+        caller: asyncio.Future[object],
+        events: list[Callable[[], None]],
+        call: asyncio.Future[object],
+    ) -> None:
+        """Take `client` back on the loop once its blocking `call` has returned, then answer its `caller`.
+
+        The loop's own socket callbacks again, and the socket events the call
+        made replayed through them, in order. The socket the call was given is
+        watched again if the call left it open -- an executor that never ran
+        the call, a `reconnect()` that refused its host before closing anything.
+        A client this bridge let go of while the thread held it -- disconnect()
+        ran meanwhile -- is then disconnected here, closing whatever socket the
+        call went on to open. Only then is `caller` answered (see `_answer`), so
+        whoever awaits it resumes with the client already back.
+
+        Each step is taken whether or not one before it raised, and the caller
+        is answered however they went: a caller left waiting is a reconnect loop
+        waiting for ever on an attempt long over, which tries nothing again.
+        What a step raised goes to the caller, or to the log. A let-go client's
+        failed disconnect is logged, never given to its caller: that caller is
+        an abandoned attempt, which reports its abandonment, not this.
+        """
+        self._executor_clients.discard(client)
+        failures: list[Exception] = []
+        try:
+            _attempt(failures, partial(self._give_loop_socket_callbacks, client))
+            for event in events:
+                _attempt(failures, event)
+            _attempt(failures, watch_again)
+            if client is not self._client:
+                try:
+                    client.disconnect()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _LOGGER.warning("Disconnecting a paho client this bridge let go of raised", exc_info=True)
+        finally:
+            _answer(caller, call, failures)
+
+    def _give_loop_socket_callbacks(self, client: paho.Client) -> None:
+        """Hand `client` the loop's own socket callbacks, for paho to call on the loop."""
+        client.on_socket_open = self._async_on_socket_open
+        client.on_socket_register_write = self._async_on_socket_register_write
+        client.on_socket_unregister_write = self._async_on_socket_unregister_write
+        client.on_socket_close = self._async_on_socket_close
+
+    def _abandoned(self, attempt: object) -> bool:
+        """Whether disconnect() has abandoned the connect() that `attempt` identifies.
+
+        A token rather than a flag because connect() may be called again after a
+        disconnect(): each attempt carries its own, and only a disconnect() made
+        after it began abandons it.
+        """
+        return self._connect_attempt is not attempt
+
+    def _raise_if_abandoned(self, attempt: object) -> None:
+        """End a connect() that disconnect() abandoned while it was suspended.
+
+        Raises:
+            SpanPanelConnectionError: disconnect() was called while connecting.
+        """
+        if self._abandoned(attempt):
+            raise SpanPanelConnectionError(
+                f"disconnect() was called while connecting to the MQTT broker at {self._host}:{self._port}"
+            )
+
+    def set_subscriptions(self, topics: Sequence[str]) -> None:
+        """Make `topics` the set every session of this bridge is subscribed to, replacing the last set given here.
+
+        The bridge owns subscription because it is the one place that sees each
+        session begin. Every connection is a clean session, so the broker keeps
+        nothing from the one before, and `_on_connect` subscribes the set on each
+        CONNACK that accepts a connection -- the initial connect, each reconnect,
+        each rebuilt client. That is the only place a beginning session is
+        subscribed, so none is left without the subscription and none starts
+        with it twice.
+
+        Twice would not be harmless. The broker answers a SUBSCRIBE for a filter
+        it already holds by replacing the subscription and sending every
+        retained message on it again, which for the panel's filter is its whole
+        tree.
+
+        With no session up this only records the set, for the next CONNACK. On a
+        live session it subscribes every topic in the set now, one already held
+        included, then unsubscribes each topic that left. That is the call for a
+        new consumer of the tree: a parser built for another schema generation
+        has seen none of it, and the SUBSCRIBE is what delivers it. A topic that
+        left is unsubscribed because overlapping filters each deliver their own
+        copy of every message they share.
+
+        Topics added with `subscribe` are not part of the set and are never
+        dropped by replacing it: a parser swap replaces the parser's topics, and
+        a consumer's are not its to remove. A topic in both is held once, at the
+        higher QoS, and stays while either holds it.
+
+        Live means the CONNACK has arrived, not merely that a socket is open: paho
+        sends a SUBSCRIBE on a socket still waiting for its CONNACK, and that
+        CONNACK would then subscribe the session a second time.
+
+        The set's topics are subscribed at QoS 0. Call this on the event loop,
+        like every other call into this bridge: paho runs there with its locks
+        removed (see `AsyncMQTTClient`), so a call from another thread would race
+        it.
+
+        Raises:
+            TypeError: `topics` is one string. It is a `Sequence[str]` to the
+                type checker, and read as one would subscribe each character
+                as a filter of its own.
+            ValueError: A topic is not a valid MQTT topic filter. Refused here,
+                before anything is recorded. Accepted, it would fail only at
+                the next CONNACK, inside `_on_connect`: paho's own refusal
+                escapes the read callback there and the connect it belongs to
+                times out, and a null character, which paho does not check, is
+                one MQTT requires the broker to close the connection over.
+        """
+        if isinstance(topics, str):
+            raise TypeError(f"set_subscriptions takes a sequence of topic filters, not one string: {topics!r}")
+        wanted = tuple(dict.fromkeys(topics))
+        for topic in wanted:
+            _check_topic_filter(topic)
+        previous = self._subscription_set
+        self._subscription_set = wanted
+        client = self._client
+        if client is None or not self._connected:
+            return
+        held = self._held()
+        if wanted:
+            _LOGGER.debug("MQTT subscribing to %s", ", ".join(wanted))
+            client.subscribe([(topic, held[topic]) for topic in wanted])
+        departed = [topic for topic in previous if topic not in held]
+        if departed:
+            _LOGGER.debug("MQTT unsubscribing from %s", ", ".join(departed))
+            client.unsubscribe(departed)
 
     def subscribe(self, topic: str, qos: int = 0) -> None:
-        """Subscribe to a topic. Must be called after connect()."""
-        if self._client is not None:
-            self._client.subscribe(topic, qos=qos)
+        """Add `topic` at `qos` to what every session of this bridge is subscribed to, for the bridge's life.
+
+        Kept from 3.8.0 for a caller that subscribes a topic of its own, and now
+        held the way `set_subscriptions` holds its set: subscribed at once on a
+        live session, and on every later CONNACK. In 3.8.0 it was one SUBSCRIBE
+        on the current session only, dropped with no paho client to send it on
+        and gone after the next reconnect.
+
+        A topic already held at `qos` or higher sends nothing: a second
+        SUBSCRIBE would only replay its retained messages. It is still recorded
+        as this caller's, so replacing the set with `set_subscriptions` -- a
+        parser swap -- never drops it. Asked for at a higher QoS than it is held
+        at, it is subscribed again at that QoS, since nothing else would grant
+        it; a lower one changes nothing. Nothing removes a topic added here.
+
+        Call this on the event loop, as `set_subscriptions` says.
+
+        Raises:
+            ValueError: `topic` is not a valid MQTT topic filter, or `qos` is
+                not the integer 0, 1 or 2 -- `1.0` and `True` compare equal to
+                1 and are refused all the same. Refused here, before anything
+                is recorded, for the reason `set_subscriptions` gives.
+        """
+        _check_topic_filter(topic)
+        if isinstance(qos, bool) or not isinstance(qos, int) or qos not in (0, 1, 2):
+            raise ValueError(f"MQTT has no QoS {qos!r}: a subscription is at QoS 0, 1 or 2")
+        before = self._held().get(topic)
+        self._added[topic] = max(qos, self._added.get(topic, 0))
+        if before is not None and before >= qos:
+            return
+        client = self._client
+        if client is None or not self._connected:
+            return
+        _LOGGER.debug("MQTT subscribing to %s at QoS %d", topic, qos)
+        client.subscribe([(topic, qos)])
+
+    def _held(self) -> dict[str, int]:
+        """Every topic a session is subscribed to, at the highest QoS either part asks of it."""
+        held = dict.fromkeys(self._subscription_set, 0)
+        for topic, qos in self._added.items():
+            held[topic] = max(qos, held.get(topic, 0))
+        return held
+
+    def _subscribe_session(self, client: paho.Client) -> None:
+        """Send the whole subscription on `client`'s session, as one SUBSCRIBE."""
+        held = self._held()
+        if not held:
+            return
+        _LOGGER.debug("MQTT subscribing to %s", ", ".join(held))
+        client.subscribe(list(held.items()))
 
     def publish(self, topic: str, payload: str) -> asyncio.Future[bool] | None:
         """Hand one QoS-1 control message to paho, or refuse to hand it over.
@@ -683,23 +1065,33 @@ class AsyncMqttBridge:
         _LOGGER.debug("MQTT loop error: %s", paho.error_string(status))
 
     def _async_start_misc_periodic(self) -> None:
-        """Start the periodic loop_misc() timer (1-second interval)."""
+        """Start the periodic loop_misc() timer (1-second interval).
+
+        `_misc_timer` is set exactly while a tick is scheduled: each tick clears
+        it before anything else, and only rescheduling sets it again. A tick
+        that stops -- no client, or paho answering that the client has no
+        socket -- therefore leaves nothing behind that reads as a timer still
+        running, and the next socket opened starts a fresh one.
+        """
         if self._loop is None:
             return
         loop = self._loop
 
         def _async_misc() -> None:
-            if self._client is not None and self._client.loop_misc() == paho.MQTT_ERR_SUCCESS:
+            self._misc_timer = None
+            client = self._client
+            if client is None:
+                return
+            if client in self._executor_clients:
+                # A thread is inside it: look again next second rather than call in.
+                self._misc_timer = loop.call_at(loop.time() + 1, _async_misc)
+                return
+            if client.loop_misc() == paho.MQTT_ERR_SUCCESS:
                 self._misc_timer = loop.call_at(loop.time() + 1, _async_misc)
 
         self._misc_timer = loop.call_at(loop.time() + 1, _async_misc)
 
-    # -- Socket open/close (sync bridges for executor, async for event loop) --
-
-    def _on_socket_open_sync(self, client: paho.Client, userdata: object, sock: SocketLike) -> None:
-        """Handle socket open during executor connect — bridge to event loop."""
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._async_on_socket_open, client, userdata, sock)
+    # -- Socket open/close, on the loop (see `_run_blocking` for the executor) --
 
     def _async_on_socket_open(self, client: paho.Client, _userdata: object, sock: SocketLike) -> None:
         """Handle socket open on the event loop."""
@@ -713,27 +1105,39 @@ class AsyncMqttBridge:
         # Drain initial buffer immediately
         self._async_reader_callback(client)
 
-    def _async_on_socket_close(self, _client: paho.Client, _userdata: object, sock: SocketLike) -> None:
-        """Handle socket close — remove reader, cancel misc timer."""
-        if self._loop is None:
+    def _async_on_socket_close(self, client: paho.Client, _userdata: object, sock: SocketLike) -> None:
+        """Handle socket close on the loop: paho calls this before it closes the socket, so the socket is still its own."""
+        # The bookkeeping first, so a removal that raised could not leave it undone,
+        # and a removal that raised is kept from paho: it would end paho's close
+        # there, before it reports the disconnect, and the bridge would never hear.
+        self._socket_gone(client)
+        loop = self._loop
+        if loop is not None and sock.fileno() > -1:
+            try:
+                loop.remove_reader(sock)
+            except Exception:  # pylint: disable=broad-exception-caught
+                _LOGGER.warning("Could not stop watching a closed MQTT socket", exc_info=True)
+
+    def _socket_gone(self, client: paho.Client) -> None:
+        """A socket of `client` closed: end a connect still waiting on it, and stop the misc timer.
+
+        Only for the client this bridge holds, as its CONNACK and its disconnect
+        are heard only from it (see `_on_connect`). A let-go client's socket can
+        close after the bridge has started connecting again -- an abandoned
+        connect's DISCONNECT written late -- and the connect waiting now, and
+        the misc timer the new socket started, are not its to end.
+        """
+        if client is not self._client:
             return
         # Ensure connect event is signaled if socket closes early
         if self._connect_event is not None and not self._connect_event.is_set():
             self._connected = False
             self._connect_event.set()
-        fileno = sock.fileno()
-        if fileno > -1:
-            self._loop.remove_reader(sock)
         if self._misc_timer is not None:
             self._misc_timer.cancel()
             self._misc_timer = None
 
     # -- Socket write registration ------------------------------------------
-
-    def _on_socket_register_write_sync(self, client: paho.Client, userdata: object, sock: SocketLike) -> None:
-        """Register socket for writing during executor connect."""
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._async_on_socket_register_write, client, userdata, sock)
 
     def _async_on_socket_register_write(self, client: paho.Client, _userdata: object, sock: SocketLike) -> None:
         """Register the socket for writing on the event loop."""
@@ -744,24 +1148,38 @@ class AsyncMqttBridge:
             self._loop.add_writer(sock, partial(self._async_writer_callback, client))
 
     def _async_on_socket_unregister_write(self, _client: paho.Client, _userdata: object, sock: SocketLike) -> None:
-        """Unregister the socket for writing."""
-        if self._loop is None:
-            return
-        fileno = sock.fileno()
-        if fileno > -1:
-            self._loop.remove_writer(sock)
+        """Unregister the socket for writing, on the loop, by the socket while it is still open."""
+        loop = self._loop
+        if loop is not None and sock.fileno() > -1:
+            loop.remove_writer(sock)
 
     # -- MQTT callbacks (run directly on event loop) ------------------------
 
     def _on_connect(
         self,
-        _client: paho.Client,
+        client: paho.Client,
         _userdata: object,
         _flags: ConnectFlags,
         reason_code: ReasonCode,
         _properties: Properties | None,
     ) -> None:
-        """Handle CONNACK from broker."""
+        """Handle CONNACK from broker.
+
+        paho calls this once per CONNACK, and an accepted CONNACK is a new clean
+        session, so this is where each session is subscribed: once, on the client
+        whose session it is, and before anyone is told the broker is connected.
+        A CONNACK with no disconnect reported before it is still a new session --
+        paho's `reconnect()` closes the socket it replaces without one -- so it is
+        subscribed like any other.
+
+        A CONNACK from a client this bridge no longer holds changes nothing: one
+        whose connect() disconnect() abandoned, or one a rebuild replaced. Its
+        socket is already being closed, and acting on it would mark the bridge
+        connected and subscribe a session nothing reads.
+        """
+        if client is not self._client:
+            _LOGGER.debug("MQTT CONNACK from a client this bridge has let go of; ignored")
+            return
         connected = not reason_code.is_failure
         self._connected = connected
 
@@ -776,6 +1194,7 @@ class AsyncMqttBridge:
             if self._reconnect_task is not None:
                 self._reconnect_task.cancel()
                 self._reconnect_task = None
+            self._subscribe_session(client)
         else:
             self._connack_refusal = reason_code
             _LOGGER.warning("MQTT connection refused: %s", reason_code)
@@ -790,13 +1209,24 @@ class AsyncMqttBridge:
 
     def _on_disconnect(
         self,
-        _client: paho.Client,
+        client: paho.Client,
         _userdata: object,
         _flags: DisconnectFlags,
         reason_code: ReasonCode,
         _properties: Properties | None,
     ) -> None:
-        """Handle disconnect from broker."""
+        """Handle disconnect from broker.
+
+        A disconnect reported by a client this bridge no longer holds changes
+        nothing, as its CONNACK would not (see `_on_connect`): that client's
+        session already ended when it was let go of. Acted on, a rebuild's
+        replaced client reporting late would mark the bridge disconnected under
+        the new client's live session, tell consumers the panel was lost, and
+        start a reconnect that replaced that session.
+        """
+        if client is not self._client:
+            _LOGGER.debug("MQTT disconnect from a client this bridge has let go of; ignored")
+            return
         self._connected = False
         if reason_code.is_failure:
             _LOGGER.warning("MQTT disconnected abnormally: %s", reason_code)
@@ -906,13 +1336,12 @@ class AsyncMqttBridge:
                     _LOGGER.debug("Old paho client disconnect raised", exc_info=True)
 
             # Build fresh client and assign it BEFORE the executor await so
-            # that a CONNACK arriving during the await sees the right client.
-            # Without this, the _on_connect → re-subscribe path would route
-            # through self._client which would still be the (disconnected)
-            # old_client, and the new client's subscription would never run.
+            # that a CONNACK arriving during the await finds it as the live
+            # client. `_on_connect` subscribes the client that sent the CONNACK
+            # whatever this holds, but `publish` and `set_subscriptions` act on
+            # a live session through `self._client`, and would otherwise reach
+            # the (disconnected) old_client.
             new_client = self._make_paho_client(ssl_context)
-            new_client.on_socket_open = self._on_socket_open_sync
-            new_client.on_socket_register_write = self._on_socket_register_write_sync
             self._client = new_client
 
             def _blocking_connect() -> None:
@@ -922,24 +1351,29 @@ class AsyncMqttBridge:
                     keepalive=MQTT_KEEPALIVE_S,
                 )
 
+            # A CancelledError here -- bridge teardown or _on_connect cancelling us
+            # mid-rebuild -- passes the clause below, as a BaseException, and
+            # propagates with `self._client` as it is: neither leaves the old
+            # client to restore. disconnect() has let every client go, and putting
+            # the old one back would undo that; a CONNACK from the new client made
+            # it the live one. The bridge acts through `self._client` -- `publish`,
+            # `set_subscriptions` -- and `_on_connect` and `_on_disconnect` hear
+            # only from it, so holding a client whose session is over would leave
+            # the live session's own disconnect unheard.
             try:
-                await self._loop.run_in_executor(None, _blocking_connect)
-            except asyncio.CancelledError:
-                # Bridge teardown or _on_connect cancelled us mid-rebuild.
-                # Restore the previous client reference so post-teardown
-                # state stays consistent, then re-raise — CancelledError
-                # must propagate to keep the loop's cancel semantics intact.
-                self._client = old_client
-                raise
+                await self._run_blocking(self._loop, new_client, _blocking_connect)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 _LOGGER.warning("Client rebuild — initial connect failed: %s", exc)
-                # Restore the previous client so the loop keeps retrying
-                # with what it had. The new client's socket was never opened.
+                # Restore the previous client so the loop keeps retrying with
+                # what it had, and close whatever the failed connect left of the
+                # new one. The hand-back has run, so no thread holds it, and it
+                # did not close the client then: it was still `self._client`.
                 self._client = old_client
+                try:
+                    new_client.disconnect()
+                except Exception:  # pylint: disable=broad-exception-caught
+                    _LOGGER.debug("Disconnecting the failed rebuild's client raised", exc_info=True)
                 return False
-            finally:
-                new_client.on_socket_open = self._async_on_socket_open
-                new_client.on_socket_register_write = self._async_on_socket_register_write
 
             _LOGGER.info("MQTT client rebuilt for reconnect (TLS=%s)", self._use_tls)
             return True
@@ -972,14 +1406,12 @@ class AsyncMqttBridge:
         delay = MQTT_RECONNECT_MIN_DELAY_S
         failures_since_rebuild_attempt = 0
         while self._should_reconnect:
-            if not self._connected and self._client is not None:
+            client = self._client
+            if not self._connected and client is not None:
                 try:
                     if self._loop is None:
                         break
-                    # Use sync socket callbacks for executor reconnect
-                    self._client.on_socket_open = self._on_socket_open_sync
-                    self._client.on_socket_register_write = self._on_socket_register_write_sync
-                    await self._loop.run_in_executor(None, self._client.reconnect)
+                    await self._run_blocking(self._loop, client, client.reconnect)
                 except ssl.SSLCertVerificationError as exc:
                     # Certificate verification, specifically -- caught ahead of
                     # `ssl.SSLError` because it is a subclass, and separated from
@@ -1037,10 +1469,9 @@ class AsyncMqttBridge:
                     # behind a recovery action whose effect we cannot predict.
                     failures_since_rebuild_attempt += 1
                     _LOGGER.warning("Reconnect failed, retrying in %ss", delay, exc_info=True)
-                finally:
-                    if self._client is not None:
-                        self._client.on_socket_open = self._async_on_socket_open
-                        self._client.on_socket_register_write = self._async_on_socket_register_write
+                # The socket callbacks go back to the loop's in `_executor_returned`,
+                # when the thread is done, not here: a cancelled loop reaches this
+                # point while the thread may still be inside paho.
             else:
                 failures_since_rebuild_attempt = 0
             await asyncio.sleep(delay)

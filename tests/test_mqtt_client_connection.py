@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import logging
 
 import pytest
@@ -30,7 +31,8 @@ class _FakeBridge(AsyncMqttBridge):
     """Minimal bridge stub for get_snapshot() and fan-out tests.
 
     Bypasses AsyncMqttBridge.__init__ (which does TLS/CA/network setup) —
-    only is_connected() and subscribe() are invoked on this stub.
+    only is_connected() and set_subscriptions() are invoked on this stub,
+    and the second is recorded so a test can show it was not.
     """
 
     def __init__(self, connected: bool = True) -> None:
@@ -39,21 +41,22 @@ class _FakeBridge(AsyncMqttBridge):
         # No terminal failure: get_snapshot() and ping() consult this before the
         # liveness checks, so a stub that omits it is a bridge with no answer.
         self._fatal_error = None
-        self.subscribed_topics: list[tuple[str, int]] = []
+        self.subscriptions_set: list[list[str]] = []
 
     def is_connected(self) -> bool:
         return self._connected
 
-    def subscribe(self, topic: str, qos: int = 0) -> None:
-        self.subscribed_topics.append((topic, qos))
+    def set_subscriptions(self, topics: Sequence[str]) -> None:
+        self.subscriptions_set.append(list(topics))
 
 
 class _FakeAdapter:
-    """Minimal SchemaAdapter stub for get_snapshot()/resubscribe tests.
+    """Minimal SchemaAdapter stub for get_snapshot() and connection-edge tests.
 
     Only the methods SpanMqttClient actually calls on the adapter are
     implemented: is_ready() and build_snapshot() for liveness/dispatch
-    tests, topics_to_subscribe() for resubscribe tests.
+    tests, topics_to_subscribe() so a handler that wrongly subscribed would
+    have topics to subscribe with.
     """
 
     def __init__(self, ready: bool = True, snapshot: SpanPanelSnapshot | None = None) -> None:
@@ -216,7 +219,12 @@ class TestConnectionEventDispatch:
         assert order == ["first", "second"]
         assert first not in client._connection_callbacks
 
-    def test_reconnect_triggers_resubscribe_and_callback(self) -> None:
+    def test_reconnect_notifies_without_subscribing(self) -> None:
+        """The bridge subscribed the session on its CONNACK; the notification asks for nothing more.
+
+        Each SUBSCRIBE makes the broker replay the whole retained tree, so a
+        handler that subscribed here would double every reconnect's burst.
+        """
         client = _make_client()
         bridge = _FakeBridge(connected=True)
         client._bridge = bridge
@@ -227,18 +235,11 @@ class TestConnectionEventDispatch:
 
         client._on_connection_change(True)
 
-        expected_topic = WILDCARD_TOPIC_FMT.format(serial="test-serial")
-        assert len(bridge.subscribed_topics) == 1
-        assert bridge.subscribed_topics[0] == (expected_topic, 0)
+        assert bridge.subscriptions_set == []
         assert calls == [True]
 
-    def test_resubscribe_fires_even_on_duplicate_true(self) -> None:
-        """Duplicate connected=True still triggers re-subscribe (intentional).
-
-        Paho may re-emit connected events; re-subscribing is broker-benign
-        and ensures subscriptions survive session restoration. Callback
-        fan-out is separately edge-only.
-        """
+    def test_duplicate_true_neither_subscribes_nor_notifies(self) -> None:
+        """A repeated connected=True is no edge for subscribers and no reason to subscribe."""
         client = _make_client()
         bridge = _FakeBridge(connected=True)
         client._bridge = bridge
@@ -249,8 +250,7 @@ class TestConnectionEventDispatch:
 
         client._on_connection_change(True)
 
-        # Re-subscribe fires (side effect preserved) but no callback edge
-        assert len(bridge.subscribed_topics) == 1
+        assert bridge.subscriptions_set == []
         assert calls == []
 
 

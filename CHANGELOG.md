@@ -7,6 +7,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.9.0]
+
+Snapshots say whether a circuit declares a breaker rating and whether a panel publishes shared meters, and each broker connection subscribes once.
+
+### Added
+
+- **`SpanCircuitSnapshot.breaker_rating_declared`** says whether a circuit declares a breaker rating, so a consumer can tell a rating the panel does not publish from one that has not arrived yet; `None` where the adapter does not say.
+- **`SpanPanelSnapshot.publishes_shared_meters`** says whether any circuit declares `meter/shared-with-device-ids`, so a consumer can tell a panel that describes its multi-load breakers from one, such as MAIN 32, that publishes each as a single circuit;
+  `None` where the adapter does not say, as with `span-panel-api-schema-0` or a `span-panel-api-schema-1` older than 1.5.0.
+- **`AsyncMqttBridge.set_subscriptions()` sets the topics every connection the bridge opens is subscribed to**, replacing what it set before and never dropping a topic `subscribe()` added.
+
+### Changed
+
+- **`AsyncMqttBridge.subscribe()` sends nothing for a topic the bridge already holds at that QoS or higher**, where every call sent a SUBSCRIBE and the broker replayed the topic's retained messages each time.
+- **The `schema-1` extra requires `span-panel-api-schema-1` 1.5.0 or newer**, the adapter that fills `breaker_rating_declared` and `publishes_shared_meters`.
+
+### Fixed
+
+- **Each broker connection subscribes once, so the panel's retained tree arrives once per connection**, where `connect()` subscribed twice and received the whole tree twice, and a panel that changes schema generation while connected no longer has every
+  message under its own device delivered twice until the next reconnect.
+- **`connect()` raises `SpanPanelConnectionError` when `close()` is called while it is connecting**, where it could carry on and return as if connected, raise `AttributeError`, or wait for the panel and report a timeout.
+- **`AsyncMqttBridge.connect()` raises `SpanPanelConnectionError` when `disconnect()` is called while it is connecting**, where it could raise `AttributeError` or carry on and connect.
+- **`AsyncMqttBridge.subscribe()` keeps its topic subscribed on every later connection**, where the subscription ended with the connection it was made on and was lost if made before the first.
+
 ## [3.8.0]
 
 Snapshot fields that held a fabricated constant can now be unknown, and with `span-panel-api-schema-0` 1.3.0 and `span-panel-api-schema-1` 1.4.0 or newer the parsers report them as unknown and stop synthesising unoccupied positions.

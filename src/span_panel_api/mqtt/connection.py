@@ -160,6 +160,8 @@ class AsyncMqttBridge:
         # `MqttClientConfig.ca_pem` for why `None` is still allowed.
         self._ca_pem = ca_pem
         self._warned_unpinned = False
+        # Once per bridge, as `_warned_unpinned` is. See `_warn_plaintext_broker`.
+        self._warned_plaintext = False
 
         # Terminal state. Set only for a failure that retrying cannot fix, which
         # today means exactly one thing: the panel's advertised CA no longer
@@ -342,6 +344,35 @@ class AsyncMqttBridge:
             )
         return await download_ca_cert(self._panel_host, port=self._panel_http_port)
 
+    def _warn_plaintext_broker(self) -> None:
+        """Say once per bridge that its broker connection is not encrypted at all.
+
+        ``use_tls=False`` puts the whole session on plaintext: the CONNECT
+        packet carries the broker username and password, and every message
+        after it -- every reading the panel publishes and every command sent
+        to it -- crosses the network readable, and writable, by anything on the
+        path. Nothing else on the MQTT side says so: its only other warning is
+        about the trust anchor, and a bridge without TLS resolves none.
+
+        Once per bridge, the scope `_trust_anchor_pem` gives the unpinned-CA
+        warning and for its reason: a bridge outlives every reconnect, and a
+        line per reconnect through a day-long outage is a log nobody reads.
+        Said from `connect()`, which every bridge passes through before its
+        reconnect loop exists; a rebuild keeps the transport it was given.
+        """
+        if self._warned_plaintext:
+            return
+        self._warned_plaintext = True
+        _LOGGER.warning(
+            "MQTT connection to %s:%s for %s is not encrypted: use_tls is False, so the broker "
+            "username and password, all panel data and every command sent to the panel cross the "
+            "network in plaintext, readable by anything on the path. Set MqttClientConfig.use_tls "
+            "to connect over TLS.",
+            self._host,
+            self._port,
+            self._panel_host,
+        )
+
     async def _diagnose_verification_failure(self) -> SpanPanelCAChangedError | None:
         """Say what a certificate-verification failure actually was.
 
@@ -504,7 +535,8 @@ class AsyncMqttBridge:
 
         Resolves the TLS trust anchor — the configured pin, or a fetch from the
         panel when there is none — configures TLS, connects via executor
-        (blocking I/O), and waits for CONNACK.
+        (blocking I/O), and waits for CONNACK. Without TLS it resolves no
+        anchor, and warns once per bridge that the connection is plaintext.
 
         Raises:
             SpanPanelAuthError: The broker refused the username or password
@@ -544,6 +576,8 @@ class AsyncMqttBridge:
                 ssl_context = build_panel_ssl_context(ca_pem)
             except (ssl.SSLError, ValueError) as exc:
                 raise SpanPanelConnectionError(f"Failed to build SSL context for {self._panel_host}") from exc
+        else:
+            self._warn_plaintext_broker()
         # Before a paho client exists, so a disconnect() during the CA fetch -- which
         # had no client to disconnect -- does not leave one connecting after it.
         self._raise_if_abandoned(attempt)

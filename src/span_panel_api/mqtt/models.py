@@ -29,6 +29,10 @@ class MqttClientConfig:
     Separate from ``create_span_client``'s ``ssl_context``, which anchors the
     *REST* calls, because the two secure different transports. They are the same
     panel CA; a caller holding the PEM supplies both from it.
+
+    ``use_tls=False`` drops TLS from the broker connection altogether, so
+    ``ca_pem`` pins nothing, and the bridge logs a warning once per bridge that
+    the broker credentials and all panel traffic cross in plaintext.
     """
 
     broker_host: str

@@ -259,10 +259,10 @@ class TestItIsSaidOnce:
         appeared the first time each panel was discovered or added after a
         start, for a read that carries neither, and spent the slot the
         registration behind it needed. Unlike the other two it does have an
-        "on"; it is exempt
-        because its integrity is controlled elsewhere, by the consumer's own
-        read over the pinned transport and by the session's cross-check of the
-        REST generation against the MQTT one. What the exemption drops for a
+        "on"; it is exempt because it carries no credential and the decision it
+        drives is checked elsewhere, by the consumer's own read over the pinned
+        transport and by the session's cross-check of the REST generation
+        against the MQTT one. What the exemption drops for a
         session is said by the session instead (see
         `TestTheSessionSaysWhatTheExemptionDrops`).
         """

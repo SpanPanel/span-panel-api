@@ -11,7 +11,7 @@ Pre-releases are not listed separately. A beta is a step towards the next public
 
 ## [1.5.0]
 
-Requires `span-panel-api` **3.9.0 or newer**, whose circuit snapshot carries the field this parser now fills.
+Requires `span-panel-api` **3.9.0 or newer**, whose snapshots carry the fields this parser now fills.
 
 ### Added
 

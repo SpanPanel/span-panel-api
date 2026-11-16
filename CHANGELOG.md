@@ -9,6 +9,8 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 
 ## [3.9.0]
 
+Snapshots say whether a circuit declares a breaker rating and whether a panel publishes shared meters, and each broker connection subscribes once.
+
 ### Added
 
 - **`SpanCircuitSnapshot.breaker_rating_declared`** says whether a circuit declares a breaker rating, so a consumer can tell a rating the panel does not publish from one that has not arrived yet; `None` where the adapter does not say.
@@ -19,6 +21,7 @@ beta corrected in an earlier beta does not appear at all: from the point of view
 ### Changed
 
 - **`AsyncMqttBridge.subscribe()` sends nothing for a topic the bridge already holds at that QoS or higher**, where every call sent a SUBSCRIBE and the broker replayed the topic's retained messages each time.
+- **The `schema-1` extra requires `span-panel-api-schema-1` 1.5.0 or newer**, the adapter that fills `breaker_rating_declared` and `publishes_shared_meters`.
 
 ### Fixed
 

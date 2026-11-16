@@ -21,7 +21,7 @@ import uuid
 
 import httpx
 
-from ._http import CA_CERT_PATH, V2_STATUS_PATH, _Reply, _request
+from ._http import CA_CERT_PATH, HOMIE_SCHEMA_PATH, V2_STATUS_PATH, _Reply, _request
 from .exceptions import (
     SpanPanelAPIError,
     SpanPanelAuthError,
@@ -413,14 +413,14 @@ async def download_ca_cert(
     """Download the PEM CA certificate from the SPAN Panel.
 
     **This call is unauthenticated and unverified by construction, and its
-    result must be fingerprint-confirmed by the caller before it is trusted.**
-    It is the bootstrap: it fetches the very anchor everything else is checked
-    against, so there is nothing for it to check itself against. Anything on the
-    path between here and the panel can answer it with a CA of its own, and the
-    response carries no evidence that would distinguish that from the real one.
-    Whoever calls this owes the trust decision -- comparing the fingerprint
-    against one recorded out of band, or against one pinned on a previous
-    install -- and until that is done the PEM is a candidate, not an anchor.
+    result is a candidate, not an anchor.** It is the bootstrap: it fetches the
+    very anchor everything else is checked against, so there is nothing for it
+    to check itself against. Anything on the path between here and the panel
+    can answer it with a CA of its own, and nothing in the response
+    authenticates it or distinguishes that from the real one. A caller that
+    stores it without comparing its fingerprint against one obtained another
+    way -- recorded out of band, or pinned on a previous install -- is trusting
+    on first use, and should say so.
 
     ``ssl_context`` exists here for the caller that *already holds* the anchor
     and wants a second copy over a verified channel: refetching to compare
@@ -520,7 +520,11 @@ async def get_homie_schema(
 ) -> V2HomieSchema:
     """Fetch the Homie property schema from the SPAN Panel.
 
-    This endpoint is unauthenticated.
+    This endpoint is unauthenticated, and carries no credential in either
+    direction. Without ``ssl_context`` it is read over plaintext HTTP and, unlike
+    the calls that do carry one, says nothing about it, so read a configured
+    panel's schema over that panel's own transport. See
+    ``_warn_plaintext_transport``.
 
     Args:
         host: IP address or hostname of the SPAN Panel
@@ -545,7 +549,7 @@ async def get_homie_schema(
         "GET",
         host,
         port,
-        "/api/v2/homie/schema",
+        HOMIE_SCHEMA_PATH,
         timeout=timeout,
         httpx_client=httpx_client,
         ssl_context=ssl_context,

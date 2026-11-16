@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Pre-releases are not listed separately. A beta is a step towards the next public version, so its changes are folded into that version's entry as they land and are described against the **last public release**, never against the beta before it. What one
 beta corrected in an earlier beta does not appear at all: from the point of view of somebody upgrading between released versions, it never happened.
 
+## [3.9.1]
+
+Reading a panel's schema without an `ssl_context` no longer logs a warning naming credentials the read never carries, and the two postures for which that warning was the only line now warn for themselves: a broker connection without TLS, and a pinned TLS
+broker beside REST calls without an `ssl_context`.
+
+### Added
+
+- **`AsyncMqttBridge` logs one warning per bridge when its broker connection has no TLS (`use_tls=False`)**, saying that the broker username and password, all panel data and every command cross the network in plaintext, where the bridge said nothing.
+- **`SpanMqttClient` logs one warning per client when `MqttClientConfig.ca_pem` pins its TLS broker connection and no `ssl_context` pins its REST calls**, saying that its schema reads go over unverified plaintext HTTP, which in that posture nothing else
+  reports.
+
+### Changed
+
+- **`get_homie_schema` no longer logs the plaintext-transport warning or uses up the once-per-panel warning slot**, which 3.4.0 and 3.4.1 had kept, because the read carries no credential in either direction and the slot it used belongs to the registration
+  behind it.
+
 ## [3.9.0]
 
 Snapshots say whether a circuit declares a breaker rating and whether a panel publishes shared meters, and each broker connection subscribes once.

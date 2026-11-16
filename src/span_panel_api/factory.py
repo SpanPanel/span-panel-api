@@ -70,6 +70,10 @@ async def create_span_client(
 
             Separate from ``MqttClientConfig.ca_pem``, which anchors the *broker*
             connection. Both are the same panel CA; supply both, from one PEM.
+            Over a broker connection with TLS, supplying only one is logged as a
+            warning: by the bridge when ``ca_pem`` is missing, and by the client
+            when this is. A broker connection without TLS pins nothing, and the
+            bridge warns about it whatever is supplied.
 
     Returns:
         A connected-ready SpanMqttClient instance.

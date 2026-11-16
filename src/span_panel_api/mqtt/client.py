@@ -197,6 +197,9 @@ class SpanMqttClient:
         # certificate and its broker's with the one CA. `None` keeps these fetches
         # on plaintext HTTP, which is 3.0.1's behaviour.
         self._ssl_context = ssl_context
+        # Once per client, as the bridge's unpinned-CA warning is once per
+        # bridge. See `_warn_if_schema_reads_unverified`.
+        self._warned_unverified_schema = False
         # How long each setter waits for the panel to report the change back.
         # Injectable so a test asserting a refusal does not pay a real deadline.
         self._control_deadlines = control_deadlines or ControlDeadlines()
@@ -285,6 +288,50 @@ class SpanMqttClient:
             port=port,
             httpx_client=self._httpx_client,
             ssl_context=self._ssl_context,
+        )
+
+    def _warn_if_schema_reads_unverified(self) -> None:
+        """Say once that this client's schema reads are unverified, when nothing else would.
+
+        The transport's plaintext warning does not speak for the schema read,
+        which carries no credential and whose parser decision is checked
+        elsewhere (see `_http._warn_plaintext_transport`). That leaves one
+        posture with no line at all. A consumer whose broker connection uses
+        TLS pinned by `MqttClientConfig.ca_pem`, and who passes no
+        `ssl_context`, has this client read the panel's schema over plaintext
+        HTTP, and the bridge says nothing because it is pinned. Every other
+        posture already has its line, or nothing unverified to report: a broker
+        connection without TLS gets the bridge's plaintext warning, which
+        `ca_pem` cannot silence because without TLS it pins nothing; a TLS one
+        without `ca_pem` gets the bridge's unpinned-CA warning; and with an
+        `ssl_context` the schema read is verified.
+
+        **Once per client, the scope the bridge's own warning has, for the same
+        reason.** The client outlives every reconnect and every redispatch
+        refetch, as the bridge outlives every reconnect, so the line is said
+        once per session rather than once per read. A reload builds a new
+        client and says it again, as it builds a new bridge that does, so each
+        load of an entry that is not fully pinned logs one line about its
+        posture, whatever it lacks. Per host would go quiet after the
+        first load while the bridge's line went on repeating.
+
+        **Said from `connect()`, not from `_fetch_schema`.** `create_span_client`
+        reads the schema before this client exists and hands it in, so a
+        warning at the fetch would say nothing about that read, and nothing at
+        all until the panel changed schema generation.
+        """
+        broker = self._broker_config
+        if self._ssl_context is not None or not broker.use_tls or broker.ca_pem is None:
+            return
+        if self._warned_unverified_schema:
+            return
+        self._warned_unverified_schema = True
+        _LOGGER.warning(
+            "Homie schema reads for %s are not verified: MqttClientConfig.ca_pem pins the broker "
+            "connection, but no ssl_context was supplied, so this client reads the panel's schema "
+            "over plaintext HTTP. No credential is sent or received by those reads. Pass the same "
+            "CA as ssl_context to verify them.",
+            self._host,
         )
 
     async def _preload_adapter(self, schema: V2HomieSchema) -> None:
@@ -528,6 +575,11 @@ class SpanMqttClient:
         # would be a second call to the same unauthenticated endpoint for a
         # value that cannot have changed. A directly-constructed client has no
         # schema yet, so it fetches here and dispatches in _build_adapter.
+        #
+        # Warned first, and whichever way the schema arrives: the line is about
+        # this client's own schema reads, and a schema handed in leaves their
+        # posture as it was.
+        self._warn_if_schema_reads_unverified()
         schema = self._schema if self._schema is not None else await self._fetch_schema()
         self._schema = schema
         await self._preload_adapter(schema)
